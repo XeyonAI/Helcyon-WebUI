@@ -1976,79 +1976,76 @@ async function openChat(filename) {
       const messageDiv = button.closest('.message');
       const contentEl = messageDiv.querySelector('.model-text, .user-text');
       
-      // Try to get the original message text from the data attribute
-      let messageText = messageDiv.getAttribute('data-original-text');
+      let messageText = '';
       
-      // Fallback: if no data attribute, extract from rendered content
-      if (!messageText) {
-          messageText = '';
-          
-          // Iterate through all child nodes to preserve structure
-          contentEl.childNodes.forEach(node => {
-              if (node.nodeType === Node.ELEMENT_NODE) {
-                  // Handle italics/emphasis - restore asterisks
-                  if (node.tagName === 'EM' || node.tagName === 'I') {
-                      messageText += `*${node.textContent.trim()}*`;
+      // Process all child nodes
+      contentEl.childNodes.forEach(node => {
+          if (node.nodeType === Node.ELEMENT_NODE) {
+              // Handle italics/emphasis - restore asterisks
+              if (node.tagName === 'EM' || node.tagName === 'I') {
+                  messageText += `*${node.textContent.trim()}*`;
+              }
+              // Handle paragraphs
+              else if (node.tagName === 'P') {
+                  const text = node.innerHTML
+                      .replace(/<em>(.*?)<\/em>/g, '*$1*')
+                      .replace(/<i>(.*?)<\/i>/g, '*$1*')
+                      .replace(/<[^>]+>/g, '');
+                  if (text.trim().length > 0) {
+                      messageText += text.trim() + '\n\n';
                   }
-                  // Handle paragraphs
-                  else if (node.tagName === 'P') {
-                      const text = node.innerHTML
+              }
+              // Handle ordered lists
+              else if (node.tagName === 'OL') {
+                  node.querySelectorAll('li').forEach((li, index) => {
+                      const text = li.innerHTML
                           .replace(/<em>(.*?)<\/em>/g, '*$1*')
                           .replace(/<i>(.*?)<\/i>/g, '*$1*')
                           .replace(/<[^>]+>/g, '');
-                      if (text.trim().length > 0) {
-                          messageText += text.trim() + '\n\n';
-                      }
-                  }
-                  // Handle ordered lists
-                  else if (node.tagName === 'OL') {
-                      node.querySelectorAll('li').forEach((li, index) => {
-                          const text = li.innerHTML
-                              .replace(/<em>(.*?)<\/em>/g, '*$1*')
-                              .replace(/<i>(.*?)<\/i>/g, '*$1*')
-                              .replace(/<[^>]+>/g, '');
-                          messageText += `${index + 1}. ${text.trim()}\n`;
-                      });
-                      messageText += '\n';
-                  }
-                  // Handle unordered lists
-                  else if (node.tagName === 'UL') {
-                      node.querySelectorAll('li').forEach(li => {
-                          const text = li.innerHTML
-                              .replace(/<em>(.*?)<\/em>/g, '*$1*')
-                              .replace(/<i>(.*?)<\/i>/g, '*$1*')
-                              .replace(/<[^>]+>/g, '');
-                          messageText += `• ${text.trim()}\n`;
-                      });
-                      messageText += '\n';
-                  }
-                  // Handle code blocks
-                  else if (node.tagName === 'PRE' || node.tagName === 'CODE') {
-                      messageText += node.textContent.trim() + '\n\n';
-                  }
-                  // Fallback for other elements
-                  else {
-                      const text = node.innerHTML
+                      messageText += `${index + 1}. ${text.trim()}\n`;
+                  });
+                  messageText += '\n';
+              }
+              // Handle unordered lists
+              else if (node.tagName === 'UL') {
+                  node.querySelectorAll('li').forEach(li => {
+                      const text = li.innerHTML
                           .replace(/<em>(.*?)<\/em>/g, '*$1*')
                           .replace(/<i>(.*?)<\/i>/g, '*$1*')
                           .replace(/<[^>]+>/g, '');
-                      if (text.trim().length > 0) {
-                          messageText += text.trim() + '\n\n';
-                      }
+                      messageText += `• ${text.trim()}\n`;
+                  });
+                  messageText += '\n';
+              }
+              // Handle code blocks
+              else if (node.tagName === 'PRE' || node.tagName === 'CODE') {
+                  messageText += node.textContent.trim() + '\n\n';
+              }
+              // Fallback for other elements
+              else {
+                  const text = node.innerHTML
+                      .replace(/<em>(.*?)<\/em>/g, '*$1*')
+                      .replace(/<i>(.*?)<\/i>/g, '*$1*')
+                      .replace(/<[^>]+>/g, '');
+                  if (text.trim().length > 0) {
+                      messageText += text.trim() + ' ';
                   }
               }
-              // Handle raw text nodes
-              else if (node.nodeType === Node.TEXT_NODE) {
-                  const text = node.textContent.trim();
-                  if (text.length > 0) {
-                      messageText += text + ' ';
-                  }
+          }
+          // Handle raw text nodes
+          else if (node.nodeType === Node.TEXT_NODE) {
+              const text = node.textContent.trim();
+              if (text.length > 0) {
+                  messageText += text + ' ';
               }
-          });
-      }
+          }
+      });
       
-      // Clean up excessive newlines and spaces
-      messageText = messageText.trim().replace(/\n{3,}/g, '\n\n');
+      // Clean up: add paragraph breaks after sentences
+      messageText = messageText
+          .replace(/\.\s+/g, '.\n\n')  // Sentence ends get double line break
+          .replace(/\n{3,}/g, '\n\n')  // Max 2 line breaks
+          .trim();
       
       const originalHTML = button.innerHTML;
       
@@ -2063,8 +2060,6 @@ async function openChat(filename) {
           setTimeout(() => button.innerHTML = originalHTML, 1500);
       });
   }
-  
-  
   // ==================================================
   // DELETE MESSAGE
   // ==================================================
