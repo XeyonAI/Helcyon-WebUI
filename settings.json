@@ -1,0 +1,7 @@
+{
+  "llama_server_url": "http://localhost:5000",
+  "temperature": 0.8,
+  "max_tokens": 4096,
+  "top_p": 0.95,
+  "repeat_penalty": 1.1
+}

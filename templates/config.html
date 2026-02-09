@@ -1,0 +1,1166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Helcyon Config</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body id="config-page">
+  <div id="top-bar">
+    <div style="display: flex; align-items: center;">
+      <strong style="font-size: 1.4rem; font-style: italic; font-weight: 700; color: #eee; letter-spacing: 0.4px;">
+        Helcyon-AI Chat - Free Edition
+      </strong>
+    </div>
+    <a id="settings-link" href="/">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+        <polyline points="9 22 9 12 15 12 15 22"></polyline>
+      </svg>
+    </a>
+  </div>
+
+  <div id="main">
+    <!-- Left Sidebar: Sampling Settings -->
+    <div id="sampling-sidebar">
+      <h3>Sampling Settings</h3>
+
+      <label>Temperature:</label>
+      <input type="number" id="temperature" step="0.05" min="0" max="2" />
+
+      <label>Max Tokens:</label>
+      <input type="number" id="max_tokens" step="50" min="50" max="8192" />
+
+      <label>Top P:</label>
+      <input type="number" id="top_p" step="0.05" min="0" max="1" />
+
+      <label>Repeat Penalty:</label>
+      <input type="number" id="repeat_penalty" step="0.01" min="0.8" max="2" />
+
+      <button id="saveSettingsBtn" style="background-color: #1f5a3a; border-color: #248050; color: white;">💾 Save Settings</button>
+    </div>
+
+    <!-- Main Center Column -->
+    <div id="container">
+      <h3>Global System Prompt</h3>
+      <label>System Prompt:</label>
+      <textarea id="global-system-prompt"
+                placeholder="Global system prompt text here..."></textarea>
+      <button id="saveGlobalSystemPromptBtn" style="background-color: #1f5a3a; border-color: #248050; color: white;">💾 Save System Prompt</button>
+      <hr />
+
+	  <div id="character-select-bar">
+		<h3>Select Character</h3>
+	    <select id="character-select"></select>
+	  </div>
+
+      <label>Name:</label>
+      <input type="text" id="character-name" />
+
+      <label>Main Prompt:</label>
+      <textarea id="main-prompt"></textarea>
+
+      <label>Description:</label>
+      <textarea id="description"></textarea>
+
+      <label>Tagline:</label>
+      <input type="text" id="tagline" />
+
+      <label>Scenario:</label>
+      <textarea id="scenario"></textarea>
+
+      <label>Post History Instructions:</label>
+      <textarea id="post-history"></textarea>
+
+      <label>Character Note:</label>
+      <textarea id="character-note"></textarea>
+
+      <label>Example Dialogue:</label>
+      <textarea id="example-dialog"></textarea>
+
+      <!-- 🔥 TOKEN COUNTER PANEL - INSERTED HERE -->
+      <div id="token-counter-panel" style="
+        background: #1a1a1a;
+        border: 1px solid #333;
+        border-radius: 8px;
+        padding: 15px;
+        margin-top: 20px;
+        margin-bottom: 20px;
+      ">
+        <h3 style="margin-top: 0; font-size: 16px; color: #fff;">Token Usage</h3>
+        
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px;">
+          <div>
+            <span style="color: #aaa;">Description:</span>
+            <span id="tokens-description" class="token-count">0</span>
+          </div>
+          <div>
+            <span style="color: #aaa;">Main Prompt:</span>
+            <span id="tokens-main-prompt" class="token-count">0</span>
+          </div>
+          <div>
+            <span style="color: #aaa;">Scenario:</span>
+            <span id="tokens-scenario" class="token-count">0</span>
+          </div>
+          <div>
+            <span style="color: #aaa;">Post-History:</span>
+            <span id="tokens-post-history" class="token-count">0</span>
+          </div>
+          <div>
+            <span style="color: #aaa;">Character Note:</span>
+            <span id="tokens-character-note" class="token-count">0</span>
+          </div>
+          <div>
+            <span style="color: #aaa;">Example Dialogue:</span>
+            <span id="tokens-example-dialogue" class="token-count">0</span>
+          </div>
+        </div>
+        
+        <div style="
+          margin-top: 15px;
+          padding-top: 15px;
+          border-top: 1px solid #333;
+          font-size: 15px;
+          font-weight: 600;
+        ">
+          <span style="color: #aaa;">Total Tokens:</span>
+          <span id="tokens-total" class="token-count" style="font-size: 18px;">0</span>
+          <span id="token-status" style="margin-left: 10px; font-size: 12px;"></span>
+        </div>
+      </div>
+      <!-- 🔥 END TOKEN COUNTER -->
+
+      <label>Image Filename (in /static/images):</label>
+      <input type="text" id="image" oninput="updateImagePreview()" />
+      <br />
+      <img id="preview-img" src="" alt="Preview"
+        style="width:64px;height:64px;border-radius:8px;display:none;margin-top:0.5rem;" />
+
+      <button onclick="saveCharacter()" style="background-color: #1f5a3a; border-color: #248050; color: white; margin-right: 10px;">💾 Save Character</button>
+      <button id="duplicate-char-btn" style="background-color: #3a4a5a; border-color: #4a5a6a; color: white; margin-left: 10px;">📋 Duplicate</button>
+      <button id="rename-char-btn" style="background-color: #5a4a1f; border-color: #806024; color: white; margin-left: 10px;">✏️ Rename</button>
+      <button id="delete-char-btn" class="clear-btn" style="margin-left: 10px;">🗑️ Delete Character</button>
+
+      <hr />
+
+      <!-- CHARACTER EXPORT/IMPORT SECTION -->
+      <h3>📦 Import/Export Characters</h3>
+      <div class="export-import-section">
+        <!-- Export Button -->
+        <div class="export-group">
+          <label>Export Current Character as PNG Card</label>
+          <button id="export-char-btn" style="background-color: #1f3a5a; border-color: #245080; color: white;">⬇️ Export Character</button>
+        </div>
+        
+        <!-- Import Button -->
+        <div class="import-group">
+          <label>Import Character from PNG Card</label>
+          <input type="file" id="import-char-input" accept=".png" style="display: none;">
+          <button id="import-char-btn" style="background-color: #3a4a5a; border-color: #4a5a6a; color: white;">⬆️ Import Character</button>
+        </div>
+        
+        <small style="color: #aaa; display: block; margin-top: 10px;">
+          PNG cards contain both the image and all character data. Compatible with SillyTavern and other UIs.
+        </small>
+      </div>
+
+      <hr />
+      
+      <hr />
+
+<!-- NEW CHARACTER CREATION SECTION -->
+        <h3>Create New Character</h3>
+        <div id="create-character">
+          <label>Character Name:</label>
+          <input type="text" id="new-char-name" placeholder="e.g. Luna" />
+
+          <label>Description:</label>
+          <textarea id="new-char-description" placeholder="Short bio or purpose"></textarea>
+
+          <label>Main Prompt:</label>
+          <textarea id="new-char-mainprompt" placeholder="Core personality or style instructions"></textarea>
+
+          <label>Character Image:</label>
+          <input type="file" id="new-char-image-upload" accept="image/*" />
+          <img id="new-char-preview" src="" alt="Preview"
+            style="width:64px;height:64px;border-radius:8px;display:none;margin-top:0.5rem;" />
+
+          <button onclick="createCharacter()" style="background-color: #1f5a3a; border-color: #248050; color: white;">✨ Create Character</button>
+        </div>
+
+        <hr />
+
+<!-- User Persona Section -->
+      <label for="userSelect" style="font-size: 20px; font-weight: bold; color: #fff; display: block; margin-bottom: 0.5rem;">User Persona:</label>
+      <select id="userSelect"></select>
+      <button id="saveUserBtn" style="background-color: #1f3a5a; border-color: #245080; color: white;">Set Active User</button>
+
+      <hr />
+
+      <!-- User Persona Editor -->
+      <div id="user-editor">
+        <h3>User Persona Details</h3>
+
+        <label for="user-display">Display Name:</label>
+        <input type="text" id="user-display" placeholder="Your name here" />
+
+        <label for="user-bio">Bio / Description:</label>
+        <textarea id="user-bio" placeholder="Write something about yourself..."></textarea>
+
+        <label for="user-image-upload">Profile Image:</label>
+        <input type="file" id="user-image-upload" accept="image/*" onchange="previewUserImage(this)" />
+        <img id="user-image-preview" src="" alt="Preview"
+          style="width:64px;height:64px;border-radius:50%;display:none;margin-top:0.5rem;" />
+
+        <button id="saveUserDetailsBtn" style="background-color: #1f5a3a; border-color: #248050; color: white;">💾 Save Details</button>
+      </div>
+
+      <hr />
+
+      <!-- CREATE NEW USER PERSONA -->
+      <div id="create-user-section">
+        <h3>Create New User Persona</h3>
+
+        <label for="new-user-name">User Name:</label>
+        <input type="text" id="new-user-name" placeholder="e.g. Chris, Alex, Sam" />
+
+        <label for="new-user-display">Display Name:</label>
+        <input type="text" id="new-user-display" placeholder="Full name or nickname" />
+
+        <label for="new-user-bio">Bio / Description:</label>
+        <textarea id="new-user-bio" placeholder="Write something about this user..." rows="6"></textarea>
+
+        <label for="new-user-image-upload">Profile Image:</label>
+        <input type="file" id="new-user-image-upload" accept="image/*" onchange="previewNewUserImage(this)" />
+        <img id="new-user-image-preview" src="" alt="Preview"
+          style="width:64px;height:64px;border-radius:50%;display:none;margin-top:0.5rem;" />
+
+        <button onclick="createNewUser()" style="background-color: #1f5a3a; border-color: #248050; color: white;">✨ Create User Persona</button>
+      </div>
+
+      <hr />
+
+      <!-- DELETE USER PERSONA -->
+      <div id="delete-user-section">
+        <h3>Delete User Persona</h3>
+        <p style="color: #aaa; font-size: 13px;">
+          ⚠️ Warning: This will permanently delete the selected user persona.
+        </p>
+        <button id="delete-user-btn" class="clear-btn" onclick="deleteUserPersona()">🗑️ Delete Selected User</button>
+      </div>
+    </div>
+
+
+  <!-- JavaScript will go here (next step) -->
+</body>
+</html>
+
+<script>
+  let currentCharacter = {};
+
+  // --- GLOBAL SYSTEM PROMPT MANAGEMENT ---
+  async function loadGlobalSystemPrompt() {
+    try {
+      const res = await fetch('/system_prompt.txt');
+      if (!res.ok) throw new Error('Failed to fetch system_prompt.txt');
+      const text = await res.text();
+      document.getElementById('global-system-prompt').value = text.trim();
+    } catch (err) {
+      console.error('Error loading global system prompt:', err);
+    }
+  }
+
+  async function saveGlobalSystemPrompt() {
+    const text = document.getElementById('global-system-prompt').value.trim();
+    try {
+      const res = await fetch('/system_prompt.txt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        body: text
+      });
+      if (res.ok) alert('✅ System prompt saved!');
+      else alert('⚠️ Error saving system prompt.');
+    } catch (err) {
+      console.error('Error saving global system prompt:', err);
+    }
+  }
+
+  // --- CHARACTER MANAGEMENT ---
+  async function loadCharacterList() {
+    const select = document.getElementById("character-select");
+    try {
+      const response = await fetch("/list_characters");
+      if (!response.ok) throw new Error("Failed to fetch character list");
+      const characters = await response.json();
+      select.innerHTML = "";
+      characters.forEach((name) => {
+        const option = document.createElement("option");
+        option.value = name;
+        option.textContent = name;
+        select.appendChild(option);
+      });
+      
+      if (characters.length) {
+        const lastChar = localStorage.getItem('lastCharacter');
+        const defaultChar = (lastChar && characters.includes(lastChar)) ? lastChar : characters[0];
+        
+        console.log('📂 Config page loading character:', defaultChar);
+        
+        await loadCharacter(defaultChar);
+        document.getElementById("character-select").value = defaultChar;
+        loadCharacterMemory();
+      } else {
+        console.warn("No characters found in /characters/");
+      }
+    } catch (err) {
+      console.error("Failed to load character list:", err);
+    }
+  }
+
+  async function loadCharacter(name) {
+    const select = document.getElementById("character-select");
+    select.value = name;
+    
+    localStorage.setItem('lastCharacter', name);
+    
+    currentCharacter = {};
+    try {
+      const response = await fetch(`/characters/${name}.json?cacheBust=${Date.now()}`);
+      if (!response.ok) throw new Error("Character file not found");
+      const data = await response.json();
+      currentCharacter = data;
+      document.getElementById("character-name").value = data.name || "";
+      document.getElementById("main-prompt").value = data.main_prompt || "";
+      document.getElementById("description").value = data.description || "";
+      document.getElementById("tagline").value = data.tagline || "";
+      document.getElementById("scenario").value = data.scenario || "";
+      document.getElementById("post-history").value = data.post_history || "";
+      document.getElementById("character-note").value = data.character_note || "";
+      document.getElementById("example-dialog").value = data.example_dialogue || "";
+      document.getElementById("image").value = data.image || "";
+      updateImagePreview();
+    } catch (err) {
+      console.error("Error loading character:", err);
+    }
+  }
+
+  function updateImagePreview() {
+    const img = document.getElementById("preview-img");
+    const filename = document.getElementById("image").value.trim();
+    if (filename) {
+      img.src = `/static/images/${filename}`;
+      img.style.display = "block";
+    } else {
+      img.style.display = "none";
+    }
+  }
+
+  async function saveCharacter() {
+    const name = document.getElementById("character-select").value;
+    if (!name) return alert("Select a character first.");
+    const updated = {
+      name: document.getElementById("character-name").value,
+      main_prompt: document.getElementById("main-prompt").value,
+      description: document.getElementById("description").value,
+      tagline: document.getElementById("tagline").value,
+      scenario: document.getElementById("scenario").value,
+      post_history: document.getElementById("post-history").value,
+      character_note: document.getElementById("character-note").value,
+      example_dialogue: document.getElementById("example-dialog").value,
+      image: document.getElementById("image").value,
+    };
+    try {
+      const res = await fetch(`/characters/${name}.json`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updated),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      alert("Character saved successfully.");
+    } catch (err) {
+      console.error(err);
+      alert("Failed to save character.");
+    }
+  }
+
+  // --- IMAGE UPLOAD HELPER ---
+  async function uploadCharacterImage(file) {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const res = await fetch("/upload_image", { method: "POST", body: formData });
+      const result = await res.json();
+      if (result.status === "ok") {
+        console.log("Image uploaded:", result.filename);
+        return result.filename;
+      } else {
+        alert("Image upload failed: " + (result.error || "unknown error"));
+        return "";
+      }
+    } catch (err) {
+      console.error("Upload failed:", err);
+      alert("Failed to upload image.");
+      return "";
+    }
+  }
+
+  // --- CREATE CHARACTER ---
+  async function createCharacter() {
+    const name = document.getElementById("new-char-name").value.trim();
+    const description = document.getElementById("new-char-description").value.trim();
+    const main_prompt = document.getElementById("new-char-mainprompt").value.trim();
+    const fileInput = document.getElementById("new-char-image-upload");
+    let image = "";
+
+    if (!name) {
+      alert("Character name is required.");
+      return;
+    }
+
+    if (fileInput && fileInput.files.length > 0) {
+      image = await uploadCharacterImage(fileInput.files[0]);
+    }
+
+    try {
+      const res = await fetch("/create_character", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, description, main_prompt, image }),
+      });
+      const result = await res.json();
+
+      if (result.status === "ok") {
+        alert(`Character "${name}" created successfully!`);
+        document.getElementById("new-char-name").value = "";
+        document.getElementById("new-char-description").value = "";
+        document.getElementById("new-char-mainprompt").value = "";
+        if (fileInput) fileInput.value = "";
+        await loadCharacterList();
+      } else {
+        alert("Error creating character: " + (result.error || "Unknown error"));
+      }
+    } catch (err) {
+      console.error("Failed to create character:", err);
+      alert("Error creating character.");
+    }
+  }
+
+// ============================================================
+// CHARACTER EXPORT/IMPORT
+// ============================================================
+
+// Export current character as PNG card
+document.getElementById('export-char-btn').addEventListener('click', async function() {
+  const dropdown = document.getElementById('character-select');
+  const charName = dropdown.value;
+  
+  if (!charName) {
+    alert('Please select a character first.');
+    return;
+  }
+  
+  try {
+    // Trigger download
+    window.location.href = `/export_character/${charName}`;
+    console.log(`✅ Exporting character: ${charName}`);
+  } catch (err) {
+    console.error('Export error:', err);
+    alert('Failed to export character: ' + err.message);
+  }
+});
+
+// Import character from PNG card
+document.getElementById('import-char-btn').addEventListener('click', function() {
+  document.getElementById('import-char-input').click();
+});
+
+document.getElementById('import-char-input').addEventListener('change', async function(e) {
+  const file = e.target.files[0];
+  
+  if (!file) return;
+  
+  if (!file.name.toLowerCase().endsWith('.png')) {
+    alert('Please select a PNG file.');
+    return;
+  }
+  
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    const res = await fetch('/import_character', {
+      method: 'POST',
+      body: formData
+    });
+    
+    const result = await res.json();
+    
+    if (result.error) {
+      alert('Import failed: ' + result.error);
+      return;
+    }
+    
+    console.log(`✅ Imported character: ${result.name}`);
+    alert(`Character "${result.name}" imported successfully!`);
+    
+    // Reload character list and select the new character
+    await loadCharacterList();
+    document.getElementById('character-select').value = result.name;
+    await loadCharacter(result.name);
+    
+  } catch (err) {
+    console.error('Import error:', err);
+    alert('Failed to import character: ' + err.message);
+  }
+  
+  // Reset file input
+  e.target.value = '';
+});
+
+// ============================================================
+// DELETE CHARACTRER
+// ============================================================
+
+// Delete Character
+document.getElementById('delete-char-btn').addEventListener('click', async function() {
+  const dropdown = document.getElementById('character-select');
+  const charName = dropdown.value;
+  
+  if (!charName) {
+    alert('Please select a character first.');
+    return;
+  }
+  
+  // Confirm deletion
+  if (!confirm(`Are you sure you want to permanently delete "${charName}"?\n\nThis will delete:\n- Character data\n- Character image\n- All associated files\n\nThis cannot be undone.`)) {
+    return;
+  }
+  
+  try {
+    const res = await fetch(`/delete_character/${charName}`, {
+      method: 'DELETE'
+    });
+    
+    const result = await res.json();
+    
+    if (result.error) {
+      alert('Delete failed: ' + result.error);
+      return;
+    }
+    
+    console.log(`✅ Deleted character: ${charName}`);
+    alert(`Character "${charName}" deleted successfully.`);
+    
+    // Reload character list and clear the form
+    await loadCharacterList();
+    
+    // Clear all input fields
+    document.getElementById('character-name').value = '';
+    document.getElementById('main-prompt').value = '';
+    document.getElementById('description').value = '';
+    document.getElementById('tagline').value = '';
+    document.getElementById('scenario').value = '';
+    document.getElementById('post-history').value = '';
+    document.getElementById('character-note').value = '';
+    document.getElementById('example-dialog').value = '';
+    document.getElementById('image').value = '';
+    document.getElementById('preview-img').style.display = 'none';
+    
+  } catch (err) {
+    console.error('Delete error:', err);
+    alert('Failed to delete character: ' + err.message);
+  }
+});
+
+
+
+  // --- USER PERSONA MANAGEMENT ---
+  async function loadUserList() {
+    const userSelect = document.getElementById("userSelect");
+    try {
+      const res = await fetch("/users/index.json");
+      const users = await res.json();
+      userSelect.innerHTML = "";
+      users.forEach((u) => {
+        const opt = document.createElement("option");
+        opt.value = u;
+        opt.textContent = u;
+        userSelect.appendChild(opt);
+      });
+
+      if (users.length > 0) {
+        const activeUser = await getActiveUser();
+        if (activeUser && users.includes(activeUser)) {
+          userSelect.value = activeUser;
+        } else {
+          userSelect.value = users[0];
+        }
+        loadUserDetails(userSelect.value);
+      }
+    } catch (err) {
+      console.error("Failed to load user list:", err);
+    }
+  }
+
+  async function getActiveUser() {
+    try {
+      const res = await fetch("/get_active_user");
+      const data = await res.json();
+      return data.active_user || null;
+    } catch (err) {
+      console.error("Failed to get active user:", err);
+      return null;
+    }
+  }
+
+  // ✅ PREVIEW USER IMAGE
+  function previewUserImage(input) {
+    const preview = document.getElementById('user-image-preview');
+    if (input.files && input.files[0]) {
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        preview.src = e.target.result;
+        preview.style.display = 'block';
+      };
+      reader.readAsDataURL(input.files[0]);
+    }
+  }
+
+  async function loadUserDetails(name) {
+    try {
+      const res = await fetch(`/get_user/${name}`);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      document.getElementById("user-display").value = data.display_name || name;
+      document.getElementById("user-bio").value = data.bio || "";
+      
+      // ✅ Load user image preview
+      const preview = document.getElementById("user-image-preview");
+      if (data.image) {
+        preview.src = `/static/images/${data.image}`;
+        preview.style.display = "block";
+      } else {
+        preview.style.display = "none";
+      }
+    } catch (err) {
+      console.error("Failed to load user details:", err);
+      document.getElementById("user-display").value = "";
+      document.getElementById("user-bio").value = "";
+    }
+  }
+
+  async function saveUserDetails() {
+    const name = document.getElementById("userSelect").value;
+    const display_name = document.getElementById("user-display").value.trim();
+    const bio = document.getElementById("user-bio").value.trim();
+    
+    // ✅ Handle image upload
+    const fileInput = document.getElementById("user-image-upload");
+    let image = "";
+    
+    if (fileInput && fileInput.files.length > 0) {
+      const formData = new FormData();
+      formData.append("file", fileInput.files[0]);
+      formData.append("character_name", name); // Use user name for filename
+      
+      try {
+        const uploadRes = await fetch("/upload_image", { method: "POST", body: formData });
+        const uploadResult = await uploadRes.json();
+        if (uploadResult.status === "ok") {
+          image = uploadResult.filename;
+        }
+      } catch (err) {
+        console.error("Image upload failed:", err);
+      }
+    }
+    
+    try {
+      const payload = { display_name, bio };
+      if (image) payload.image = image;
+      
+      const res = await fetch(`/save_user/${name}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const result = await res.json();
+      if (result.status === "ok") {
+        alert(`User "${name}" updated successfully!`);
+      } else {
+        alert("Error saving user: " + (result.error || "Unknown error"));
+      }
+    } catch (err) {
+      console.error("Failed to save user:", err);
+      alert("Error saving user details.");
+    }
+  }
+
+  async function setActiveUser() {
+    const name = document.getElementById("userSelect").value;
+    try {
+      const res = await fetch("/set_active_user", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user: name }),
+      });
+      const result = await res.json();
+      
+      if (result.success) {
+        // ✅ ADD THIS LINE - Update localStorage so chat page knows
+        localStorage.setItem('activeUserName', name);
+        
+        alert(`Active user set to "${name}"`);
+      } else {
+        alert("Error setting active user: " + (result.error || "Unknown error"));
+      }
+    } catch (err) {
+      console.error("Failed to set active user:", err);
+      alert("Error setting active user.");
+    }
+  }
+
+ 
+  
+  // --- SETTINGS MANAGEMENT (FIXED) ---
+  async function loadSettings() {
+    try {
+      const res = await fetch("/get_sampling_settings");
+      const settings = await res.json();
+      
+      // ✅ FIXED: Use getElementById instead of querySelector
+      document.getElementById('temperature').value = settings.temperature || 0.8;
+      document.getElementById('max_tokens').value = settings.max_tokens || 2048;
+      document.getElementById('top_p').value = settings.top_p || 0.95;
+      document.getElementById('repeat_penalty').value = settings.repeat_penalty || 1.05;
+      
+      console.log('✅ Loaded sampling settings:', settings);
+    } catch (err) {
+      console.error("Failed to load settings:", err);
+    }
+  }
+
+  async function saveSettings() {
+    try {
+      const settings = {
+        temperature: parseFloat(document.getElementById('temperature').value) || 0.8,
+        max_tokens: parseInt(document.getElementById('max_tokens').value) || 2048,
+        top_p: parseFloat(document.getElementById('top_p').value) || 0.95,
+        repeat_penalty: parseFloat(document.getElementById('repeat_penalty').value) || 1.05
+      };
+      
+      const res = await fetch("/save_sampling_settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings)
+      });
+      
+      if (res.ok) {
+        alert("✅ Settings saved successfully!");
+      } else {
+        alert("⚠️ Error saving settings.");
+      }
+    } catch (err) {
+      console.error("Failed to save settings:", err);
+      alert("Error saving settings.");
+    }
+  }
+
+  // --- INITIALIZATION ---
+  document.addEventListener("DOMContentLoaded", () => {
+    loadCharacterList();
+    loadUserList();
+    loadSettings();
+    loadGlobalSystemPrompt();
+
+    const refreshBtn = document.getElementById("refresh-memory");
+    if (refreshBtn) refreshBtn.addEventListener("click", loadCharacterMemory);
+
+    const sysBtn = document.getElementById("saveGlobalSystemPromptBtn");
+    if (sysBtn) sysBtn.addEventListener("click", saveGlobalSystemPrompt);
+
+    const select = document.getElementById("character-select");
+    if (select) {
+      select.addEventListener("change", () => {
+        const value = select.value;
+        if (value) {
+          loadCharacter(value);
+          loadCharacterMemory();
+        }
+      });
+    }
+
+    const saveUserBtn = document.getElementById("saveUserBtn");
+    if (saveUserBtn) saveUserBtn.addEventListener("click", setActiveUser);
+
+    const saveUserDetailsBtn = document.getElementById("saveUserDetailsBtn");
+    if (saveUserDetailsBtn) saveUserDetailsBtn.addEventListener("click", saveUserDetails);
+
+    const saveSettingsBtn = document.getElementById("saveSettingsBtn");
+    if (saveSettingsBtn) saveSettingsBtn.addEventListener("click", saveSettings);
+
+    const userSelect = document.getElementById("userSelect");
+    if (userSelect) {
+      userSelect.addEventListener("change", () => {
+        const selected = userSelect.value;
+        if (selected) loadUserDetails(selected);
+      });
+    }
+  });
+  
+
+  // ==================== DUPLICATE CHARACTER ====================
+  document.addEventListener('DOMContentLoaded', function() {
+    const duplicateBtn = document.getElementById('duplicate-char-btn');
+    
+    if (duplicateBtn) {
+      duplicateBtn.addEventListener('click', async function() {
+        const select = document.getElementById('character-select');
+        const currentChar = select.value;
+        
+        if (!currentChar) {
+          alert('Please select a character to duplicate.');
+          return;
+        }
+        
+        if (!confirm(`Duplicate "${currentChar}"?`)) {
+          return;
+        }
+        
+        try {
+          const res = await fetch(`/duplicate_character/${currentChar}`, {
+            method: 'POST'
+          });
+          
+          const data = await res.json();
+          
+          if (data.error) {
+            alert('Error: ' + data.error);
+            return;
+          }
+          
+          console.log('✅ Character duplicated:', data.new_name);
+          
+          // Reload character list
+          await loadCharacterList();
+          
+          // Switch to the new duplicate
+          select.value = data.new_name;
+          
+          // Trigger change event to load the character
+          select.dispatchEvent(new Event('change'));
+          
+          alert(`Character duplicated as "${data.new_name}"`);
+          
+        } catch (err) {
+          console.error('❌ Duplicate failed:', err);
+          alert('Failed to duplicate character.');
+        }
+      });
+    }
+  });  
+    
+  // ==================== RENAME CHARACTER ====================
+document.getElementById('rename-char-btn').addEventListener('click', async function() {
+  const dropdown = document.getElementById('character-select');
+  const oldName = dropdown.value;
+  
+  if (!oldName) {
+    alert('Please select a character first.');
+    return;
+  }
+  
+  const newName = prompt(`Rename "${oldName}" to:`, oldName);
+  
+  if (!newName || newName.trim() === '') {
+    return;
+  }
+  
+  if (newName.trim() === oldName) {
+    alert('Name unchanged.');
+    return;
+  }
+  
+  try {
+    const res = await fetch('/rename_character', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        old_name: oldName,
+        new_name: newName.trim()
+      })
+    });
+    
+    const data = await res.json();
+    
+    if (data.error) {
+      alert('Error: ' + data.error);
+      return;
+    }
+    
+    console.log('✅ Character renamed:', data.new_name);
+    alert(`Character renamed to "${data.new_name}"`);
+    
+    // Reload character list and select the renamed one
+    await loadCharacterList();
+    dropdown.value = data.new_name;
+    await loadCharacter(data.new_name);
+    
+  } catch (err) {
+    console.error('❌ Rename failed:', err);
+    alert('Failed to rename character.');
+  }
+});
+  
+  
+// ==================== TOKEN COUNTER (DEBUG VERSION) ====================
+let tokenCountTimeout = null;
+
+function updateTokenCount() {
+  console.log('🔵 updateTokenCount() called');
+  
+  // Clear existing timeout
+  if (tokenCountTimeout) {
+    clearTimeout(tokenCountTimeout);
+  }
+  
+  // Debounce - wait 300ms after user stops typing
+  tokenCountTimeout = setTimeout(async () => {
+    console.log('🔵 Making API call to /count_tokens');
+    
+    try {
+      // Gather all character field values
+      const data = {
+        description: document.getElementById('description')?.value || '',
+        main_prompt: document.getElementById('main-prompt')?.value || '',
+        scenario: document.getElementById('scenario')?.value || '',
+        example_dialogue: document.getElementById('example-dialog')?.value || '',
+        post_history: document.getElementById('post-history')?.value || '',
+        character_note: document.getElementById('character-note')?.value || ''
+      };
+      
+      console.log('📦 Data being sent:', data);
+      
+      // Call backend
+      const res = await fetch('/count_tokens', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      
+      console.log('📡 Response status:', res.status);
+      
+      const counts = await res.json();
+      console.log('📊 Token counts received:', counts);
+      
+      if (counts.error) {
+        console.error('❌ Token count error:', counts.error);
+        return;
+      }
+      
+      // Update displays
+      document.getElementById('tokens-description').textContent = counts.description;
+      document.getElementById('tokens-main-prompt').textContent = counts.main_prompt;
+      document.getElementById('tokens-scenario').textContent = counts.scenario;
+      document.getElementById('tokens-post-history').textContent = counts.post_history;
+      document.getElementById('tokens-character-note').textContent = counts.character_note;
+      document.getElementById('tokens-example-dialogue').textContent = counts.example_dialogue;
+      document.getElementById('tokens-total').textContent = counts.total;
+      
+      console.log('✅ Display updated successfully');
+      
+      // Color coding for total
+      const totalEl = document.getElementById('tokens-total');
+      const statusEl = document.getElementById('token-status');
+      
+      totalEl.className = 'token-count';
+      
+      if (counts.total < 1000) {
+        totalEl.style.color = '#28a745';  // Green
+        statusEl.textContent = '✓ Optimal';
+        statusEl.style.color = '#28a745';
+      } else if (counts.total < 2000) {
+        totalEl.style.color = '#ffc107';  // Amber
+        statusEl.textContent = '⚠ High';
+        statusEl.style.color = '#ffc107';
+      } else {
+        totalEl.style.color = '#dc3545';  // Red
+        statusEl.textContent = '⚠ Very High';
+        statusEl.style.color = '#dc3545';
+      }
+      
+    } catch (err) {
+      console.error('❌ Token count failed:', err);
+    }
+  }, 300);  // 300ms debounce
+}
+
+// Attach event listeners when config page loads
+document.addEventListener('DOMContentLoaded', function() {
+  console.log('🟢 DOMContentLoaded - Setting up token counter');
+  
+  // Get all the character editor fields
+  const fields = [
+    'description',
+    'main-prompt',
+    'scenario',
+    'example-dialog',
+    'post-history',
+    'character-note'
+  ];
+  
+  // Attach listeners to all fields
+  fields.forEach(fieldId => {
+    const field = document.getElementById(fieldId);
+    if (field) {
+      field.addEventListener('input', updateTokenCount);
+      console.log('✅ Attached token counter to:', fieldId);
+    } else {
+      console.warn('⚠️ Field not found:', fieldId);
+    }
+  });
+  
+  // Initial count on load
+  console.log('🔵 Running initial token count');
+  updateTokenCount();
+  console.log('✅ Token counter initialized');
+});
+
+// ==================================================
+// CREATE NEW USER PERSONA
+// ==================================================
+async function createNewUser() {
+  const name = document.getElementById('new-user-name').value.trim();
+  const displayName = document.getElementById('new-user-display').value.trim();
+  const bio = document.getElementById('new-user-bio').value.trim();
+  const fileInput = document.getElementById('new-user-image-upload');
+  
+  if (!name) {
+    alert('User name is required.');
+    return;
+  }
+  
+  let image = "";
+  
+  // Upload image if provided
+  if (fileInput && fileInput.files.length > 0) {
+    const formData = new FormData();
+    formData.append("file", fileInput.files[0]);
+    formData.append("character_name", name); // Use user name for filename
+    
+    try {
+      const uploadRes = await fetch("/upload_image", { method: "POST", body: formData });
+      const uploadResult = await uploadRes.json();
+      if (uploadResult.status === "ok") {
+        image = uploadResult.filename;
+      }
+    } catch (err) {
+      console.error("Image upload failed:", err);
+    }
+  }
+  
+  try {
+    const res = await fetch('/create_user', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: name,
+        display_name: displayName || name,
+        bio: bio,
+        image: image
+      })
+    });
+    
+    const result = await res.json();
+    
+    if (result.error) {
+      alert('Error creating user: ' + result.error);
+      return;
+    }
+    
+    console.log('✅ User created:', name);
+    alert(`User persona "${name}" created successfully!`);
+    
+    // Clear the form
+    document.getElementById('new-user-name').value = '';
+    document.getElementById('new-user-display').value = '';
+    document.getElementById('new-user-bio').value = '';
+    if (fileInput) fileInput.value = '';
+    document.getElementById('new-user-image-preview').style.display = 'none';
+    
+    // Reload user list and select the new user
+    await loadUserList();
+    document.getElementById('userSelect').value = name;
+    await loadUserDetails(name);
+    
+  } catch (err) {
+    console.error('Failed to create user:', err);
+    alert('Failed to create user.');
+  }
+}
+
+// ==================================================
+// PREVIEW NEW USER IMAGE
+// ==================================================
+function previewNewUserImage(input) {
+  const preview = document.getElementById('new-user-image-preview');
+  if (input.files && input.files[0]) {
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      preview.src = e.target.result;
+      preview.style.display = 'block';
+    };
+    reader.readAsDataURL(input.files[0]);
+  }
+}
+
+// ==================================================
+// DELETE USER PERSONA
+// ==================================================
+async function deleteUserPersona() {
+  const userSelect = document.getElementById('userSelect');
+  const userName = userSelect.value;
+  
+  if (!userName) {
+    alert('Please select a user to delete.');
+    return;
+  }
+  
+  // Confirm deletion
+  if (!confirm(`Are you sure you want to permanently delete user persona "${userName}"?\n\nThis cannot be undone.`)) {
+    return;
+  }
+  
+  try {
+    const res = await fetch(`/delete_user/${userName}`, {
+      method: 'DELETE'
+    });
+    
+    const result = await res.json();
+    
+    if (result.error) {
+      alert('Delete failed: ' + result.error);
+      return;
+    }
+    
+    console.log('✅ Deleted user:', userName);
+    alert(`User persona "${userName}" deleted successfully.`);
+    
+    // Clear the form
+    document.getElementById('user-display').value = '';
+    document.getElementById('user-bio').value = '';
+    document.getElementById('user-image-preview').style.display = 'none';
+    
+    // Reload user list
+    await loadUserList();
+    
+  } catch (err) {
+    console.error('Delete error:', err);
+    alert('Failed to delete user.');
+  }
+}
+
+
+</script>
+</body>
+</html>

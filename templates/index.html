@@ -1,0 +1,2388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Helcyon-WebUI</title>
+  <link rel="stylesheet" href="/static/style.css?v=5">
+  <!-- JS Utils -->
+  <script src="/static/js/utils.js" defer></script>
+</head>
+<body class="chat-page">
+  <!-- Top Bar -->
+  <div id="top-bar">
+    <div><strong>Helcyon-WebUI - Free Edition</strong></div>
+    <a id="settings-link" href="/config">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+        <circle cx="12" cy="12" r="3"></circle>
+      </svg>
+    </a>
+  </div>
+  <!-- Layout -->
+  <div id="app">
+    <!-- Sidebar -->
+    <div id="sidebar">
+      <div class="sidebar-header">
+        <h2>Chats</h2>
+        <button id="new-chat-btn">＋ New Chat</button>
+      </div>
+      <ul id="chat-list"></ul>
+      
+      <div id="sidebar-footer">
+        <button class="pro-feature-locked" onclick="showUpgradeModal('projects')">
+          📁 Projects <span class="pro-badge">PRO</span>
+        </button>
+        <button id="opening-line-btn" onclick="openOpeningLineModal()">💬 Opening Line</button>
+        <button id="author-note-btn" onclick="openAuthorNote()">📝 Author's Note</button>
+        <button class="pro-feature-locked" onclick="showUpgradeModal('memory')">
+          🧠 Memory <span class="pro-badge">PRO</span>
+        </button>
+      </div>
+      
+    </div>
+    <!-- Main -->
+    <div id="main">
+      <div id="container">
+        
+     
+        <!-- Character Bar -->
+        <div id="character-bar">
+          <img id="character-img" src="/static/images/cal.png" alt="Character">
+          <div>
+            <strong id="character-name">Cal</strong><br>
+            <small id="system-prompt">System prompt will appear here</small>
+          </div>
+          <select id="character-select"></select>
+        </div>
+        <!-- Chat -->
+        <div id="chat"></div>
+        <!-- Input -->
+        <div id="input-area">
+          <textarea id="user-input" placeholder="Type your message here..."></textarea>
+          <div id="button-row">
+            <button class="clear-btn" onclick="clearChat()">Clear Chat</button>
+            <button class="delete-btn" onclick="deleteLastMessages()">Delete Last</button>
+            <button class="regen-btn" onclick="regenerate()">Regenerate</button>
+            <button class="continue-btn" onclick="continueLast()">Continue</button>
+            <button class="send-btn" onclick="sendPrompt()">Send</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+<!-- Author's Note Modal -->
+  <div id="author-note-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Author's Note</h3>
+        <span class="close" onclick="closeAuthorNote()">&times;</span>
+      </div>
+      <div class="modal-body">
+        <textarea 
+          id="author-note" 
+          placeholder="Add scene direction, tone adjustments, style guidance...
+          
+Examples:
+- Write in a more playful, flirty tone
+- Keep responses under 3 paragraphs
+- Focus on sensory details and atmosphere"
+          rows="10"
+        ></textarea>
+        <small style="color: #aaa; display: block; margin-top: 8px;">
+          This note influences the next response. Saved per-chat.
+        </small>
+      </div>
+      <div class="modal-footer">
+        <button onclick="saveAuthorNote()" class="save-note-btn">Save & Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Opening Line Modal -->
+  <div id="opening-line-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Opening Line</h3>
+        <span class="close" onclick="closeOpeningLineModal()">&times;</span>
+      </div>
+      
+      <div class="modal-body">
+        <label>
+          <input type="checkbox" id="opening-line-enabled"> Enable opening line for new chats
+        </label>
+        
+        <div id="opening-lines-container">
+          <!-- Opening lines will be dynamically added here -->
+        </div>
+        
+        <button onclick="addOpeningLineField()" class="add-line-btn">
+          ➕ Add New Line
+        </button>
+      </div>
+      
+      <div class="modal-footer">
+        <button onclick="saveOpeningLines()" class="save-btn">Save</button>
+        <button onclick="closeOpeningLineModal()" class="cancel-btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+<!-- Upgrade Modal -->
+  <div id="upgrade-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Upgrade to Helcyon Pro</h3>
+        <span class="close" onclick="closeUpgradeModal()">&times;</span>
+      </div>
+      <div class="modal-body">
+        <div id="upgrade-content"></div>
+        <p style="text-align: center; margin-top: 20px; color: #888; font-size: 14px;">
+          One-time payment. No subscription. Yours forever.
+        </p>
+        <button class="upgrade-btn" onclick="window.open('https://xeyonai.gumroad.com/l/mzcllf', '_blank')">
+          Get Pro Version - £20
+        </button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Sidebar Logic -->
+
+<script>
+// Force cache clear
+if ('caches' in window) {
+  caches.keys().then(function(names) {
+    names.forEach(function(name) {
+      caches.delete(name);
+    });
+  });
+}
+console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
+
+  // ==================================================
+  // GLOBAL VARIABLES
+  // ==================================================
+  let currentChatFilename = null;
+  let currentCharacter = {};
+  let systemPrompt = '';
+  let activeUserName = 'User';
+  let currentCharName = "Cal";  
+  let lastPrompt = localStorage.getItem('lastPrompt') || '';
+  let isCreatingNewChat = false;
+  
+  // ==================================================
+  // LOAD ACTIVE USER
+  // ==================================================
+  async function loadActiveUser() {
+    try {
+      const res = await fetch('/get_active_user');
+      if (res.ok) {
+        const data = await res.json();
+        activeUserName = data.active_user || 'User';
+        localStorage.setItem('activeUserName', activeUserName);
+        
+        console.log('🔍 Fetching user data for:', activeUserName);
+        
+        // ✅ Load user image
+        const userRes = await fetch(`/get_user/${activeUserName}`);
+        const userData = await userRes.json();
+        
+        console.log('🔍 RAW USER DATA:', JSON.stringify(userData));
+        console.log('🔍 userData.image value:', userData.image);
+        console.log('🔍 Type of userData.image:', typeof userData.image);
+        
+        if (userData.image) {
+          localStorage.setItem('activeUserImage', userData.image);
+          console.log('✅ Loaded user image:', userData.image);
+        } else {
+          localStorage.setItem('activeUserImage', 'default.png');
+          console.log('⚠️ No image found, using default.png');
+        }
+      }
+    } catch (err) {
+      console.error('❌ Error loading active user:', err);
+      localStorage.setItem('activeUserImage', 'default.png');
+    }
+  }
+
+
+// ==================================================
+  // LOAD CHARACTERS
+  // ==================================================
+  async function loadCharacterList() {
+    const select = document.getElementById('character-select');
+    try {
+      const response = await fetch('/characters/index.json');
+      if (!response.ok) throw new Error('Failed to fetch character list');
+      const characters = await response.json();
+      select.innerHTML = '';
+      characters.forEach(name => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        select.appendChild(opt);
+      });
+      
+      // Cache character list for filename parsing
+      localStorage.setItem('characterListCache', JSON.stringify(characters));
+      
+      const lastChar = localStorage.getItem('lastCharacter');
+      const initialChar = lastChar && characters.includes(lastChar) ? lastChar : characters[0];
+      if (initialChar) {
+        select.value = initialChar;
+        await loadCharacter(initialChar);
+      }
+    } catch (err) {
+      console.error('Failed to load character list:', err);
+    }
+  }
+  
+  // ==================================================
+  // LOAD CHARACTER DATA
+  // ==================================================
+  async function loadCharacter(name, skipChatHistory = false) {
+    try {
+      const res = await fetch('/characters/' + name + '.json');
+      if (!res.ok) throw new Error('Character file not found');
+      const data = await res.json();
+      window.currentCharacter = data;
+      currentCharacter = data;
+      document.getElementById('character-img').src = '/static/images/' + data.image;
+      document.getElementById('character-name').textContent = data.name;
+      document.getElementById('system-prompt').textContent =
+        data.tagline || (data.main_prompt ? data.main_prompt.split('\n')[0] : '');
+      systemPrompt = data.system_prompt || '';
+      localStorage.setItem('lastCharacter', name);
+      
+      // Only load chat history if not opening from sidebar
+      if (!skipChatHistory) {
+        await loadChatHistory();
+      }
+    } catch (err) {
+      console.error('Error loading character:', err);
+    }
+  }
+
+// ==================================================
+// LOAD CHAT HISTORY  (with duplicate-filter for regen)
+// ==================================================
+async function loadChatHistory() {
+  try {
+    if (!currentCharacter.name) return;
+    const res = await fetch('/get_chat_history/' + currentCharacter.name);
+    if (!res.ok) throw new Error('Failed to fetch chat history');
+    const hist = await res.json();
+    const chat = document.getElementById('chat');
+    chat.innerHTML = '';
+    
+    const filtered = [];
+    let lastUserText = null;
+    
+    for (let i = 0; i < hist.length; i++) {
+      const entry = hist[i];
+      const userText = entry.user?.trim?.() || '';
+      if (userText && userText === lastUserText) {
+        if (
+          filtered.length >= 2 &&
+          filtered[filtered.length - 2].user === lastUserText
+        ) {
+          filtered.pop();
+          filtered.pop();
+        }
+      }
+      filtered.push(entry);
+      lastUserText = userText;
+    }
+    
+    const userName = localStorage.getItem('activeUserName') || activeUserName;
+    
+    // NEW: Build proper DOM elements instead of HTML strings
+    filtered.forEach(entry => {
+      // User message
+      const userDiv = document.createElement('div');
+      userDiv.className = 'message user-msg';
+      
+      const userStrong = document.createElement('strong');
+      userStrong.textContent = userName + ': ';
+      
+      const userText = document.createElement('span');
+      userText.className = 'user-text';
+      userText.textContent = entry.user;
+      
+      const userCopyBtn = document.createElement('button');
+      userCopyBtn.className = 'copy-btn';
+      userCopyBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+      </svg>`;
+      userCopyBtn.onclick = function() { copyMessage(this); };
+      
+      userDiv.appendChild(userStrong);
+      userDiv.appendChild(userText);
+      userDiv.appendChild(userCopyBtn);
+      chat.appendChild(userDiv);
+      
+      // Model message
+      const modelDiv = document.createElement('div');
+      modelDiv.className = 'message model-msg';
+      
+      const nameStrong = document.createElement('strong');
+      nameStrong.textContent = currentCharacter.name + ': ';
+      
+      const spanText = document.createElement('span');
+      spanText.className = 'model-text';
+      let html = marked.parse(entry.model);
+      html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
+      spanText.innerHTML = html;
+      
+      const modelCopyBtn = document.createElement('button');
+      modelCopyBtn.className = 'copy-btn';
+      modelCopyBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+      </svg>`;
+      modelCopyBtn.onclick = function() { copyMessage(this); };
+      
+      modelDiv.appendChild(nameStrong);
+      modelDiv.appendChild(spanText);
+      modelDiv.appendChild(modelCopyBtn);
+      chat.appendChild(modelDiv);
+
+    });
+    
+    chat.scrollTop = chat.scrollHeight;
+  } catch (err) {
+    console.error('Failed to load chat history:', err);
+  }
+}
+
+// ==================================================
+// PERSIST CURRENT CHAT STATE
+// ==================================================
+function persistChatState() {
+  if (currentChatFilename) {
+    localStorage.setItem('currentChatFilename', currentChatFilename);
+  }
+  if (currentCharacter && currentCharacter.name) {
+    localStorage.setItem('lastCharacter', currentCharacter.name);
+  }
+}
+
+
+  // ==================================================
+  // SIDE BAR CHAT LIST
+  // ==================================================
+  async function loadChats() {
+    const res = await fetch('/chats/list');
+    const chats = await res.json();
+    const list = document.getElementById('chat-list');
+    list.innerHTML = '';
+    
+    chats.forEach(chat => {
+      const li = document.createElement('li');
+      li.classList.add('chat-item');
+      li.dataset.filename = chat.filename;
+      
+      // Parse filename: "Character - Title - Date.txt"
+      const nameWithoutExt = chat.filename.replace('.txt', '');
+      const parts = nameWithoutExt.split(' - ');
+
+      let displayTitle = '';
+      let dateText = '';
+
+      // Extract character name (first part)
+      const characterName = parts[0];
+
+      // If we have 3+ parts: Character - Title - Date
+      if (parts.length >= 3) {
+        dateText = parts[parts.length - 1]; // Last part is date
+        const titlePart = parts.slice(1, -1).join(' - '); // Middle part
+        displayTitle = `${characterName} - ${titlePart}`; // Include character
+      } else if (parts.length === 2) {
+        // Just "Character - Title" (no date)
+        displayTitle = `${characterName} - ${parts[1]}`; // Include character
+      } else {
+        // Fallback - just show the whole thing minus .txt
+        displayTitle = nameWithoutExt;
+      }
+      
+      // Build chat item structure
+      const contentDiv = document.createElement('div');
+      contentDiv.classList.add('chat-item-content');
+      
+      const title = document.createElement('span');
+      title.textContent = displayTitle;
+      title.classList.add('chat-title');
+      
+      const metaDiv = document.createElement('div');
+      metaDiv.classList.add('chat-meta');
+      
+      if (dateText) {
+        const date = document.createElement('span');
+        date.textContent = dateText;
+        date.classList.add('chat-date');
+        metaDiv.appendChild(date);
+      }
+      
+      // Button container
+      const buttonContainer = document.createElement('div');
+      buttonContainer.classList.add('chat-buttons');
+      
+      // Duplicate button
+      const dup = document.createElement('span');
+      dup.textContent = '⧉';
+      dup.classList.add('duplicate-chat');
+      dup.title = 'Duplicate this chat';
+      
+      dup.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        
+        try {
+          const res = await fetch('/chats/copy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              source_filename: chat.filename,
+              new_title: '-Branch'
+            })
+          });
+          
+          const result = await res.json();
+          
+          if (result.error) {
+            throw new Error(result.error);
+          }
+          
+          console.log('✅ Chat duplicated:', result.new_filename);
+          
+          await loadChats();
+          await openChat(result.new_filename);
+          
+        } catch (err) {
+          console.error('❌ Duplicate failed:', err);
+          alert('Failed to duplicate chat: ' + err.message);
+        }
+      });
+      
+      // Delete button
+      const del = document.createElement('span');
+      del.textContent = '❌';
+      del.classList.add('delete-chat');
+      
+      del.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        
+        if (!confirm('Delete "' + displayTitle + '"?')) return;
+        
+        try {
+          await fetch('/chats/delete/' + chat.filename, { method: 'DELETE' });
+          loadChats();
+        } catch (err) {
+          console.error('Delete failed:', err);
+          alert('Failed to delete chat.');
+        }
+      });
+      
+      buttonContainer.appendChild(dup);
+      buttonContainer.appendChild(del);
+      metaDiv.appendChild(buttonContainer);
+      
+      // Assemble
+      contentDiv.appendChild(title);
+      contentDiv.appendChild(metaDiv);
+      
+      // Open chat on click - USE extractCharacterFromFilename()
+      li.addEventListener('click', () => {
+        const characterName = extractCharacterFromFilename(chat.filename);
+        
+        console.log('📂 Opening chat, setting lastCharacter to:', characterName);
+        localStorage.setItem('lastCharacter', characterName);
+        
+        const select = document.getElementById('character-select');
+        if (select) {
+          select.value = characterName;
+        }
+        
+        openChat(chat.filename);
+      });
+      
+      // Double-click to rename
+      title.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        
+        const chatItem = e.target.closest('.chat-item');
+        const existingInput = chatItem.querySelector('.rename-input');
+        
+        if (existingInput) {
+          existingInput.focus();
+          existingInput.select();
+          return;
+        }
+        
+        startRename(title, chat.filename, displayTitle);
+      });
+      
+      li.appendChild(contentDiv);
+      list.appendChild(li);
+    });
+  }
+  // ==================================================
+  // START RENAME (inline editing with locked character prefix and date)
+  // ==================================================
+    function startRename(element, filename, currentTitle) {
+    console.log('🚨🚨🚨 START RENAME CALLED - VERSION 3 🚨🚨🚨');
+    console.log('Filename:', filename);
+    
+    // If already renaming, don't start another rename
+    if (element.parentElement.querySelector('.rename-input')) {
+      return;
+    }
+
+    
+    const nameWithoutExt = filename.replace(".txt", "");
+    
+    // Get character list and sort by length (longest first)
+    const characterListCache = localStorage.getItem('characterListCache');
+    const availableChars = characterListCache ? JSON.parse(characterListCache) : [];
+    const sortedChars = availableChars.sort((a, b) => b.length - a.length);
+    
+    let characterPrefix = "";
+    let remainingText = nameWithoutExt;
+    
+    // Match character name
+    for (const charName of sortedChars) {
+      const prefixToMatch = charName + " - ";
+      if (nameWithoutExt.startsWith(prefixToMatch)) {
+        characterPrefix = prefixToMatch;
+        remainingText = nameWithoutExt.substring(prefixToMatch.length);
+        break;
+      }
+    }
+    
+
+
+// ✅ Simple date extraction - find last " - " followed by date pattern
+    let dateSuffix = "";
+    let editableTitle = remainingText;
+
+    // Find the LAST " - " in the string
+    const lastDashIndex = remainingText.lastIndexOf(" - ");
+
+    if (lastDashIndex !== -1) {
+      // Check if what comes after looks like a date (starts with capital letter + lowercase letters + space + numbers)
+      const afterDash = remainingText.substring(lastDashIndex + 3); // +3 to skip " - "
+      const looksLikeDate = /^[A-Z][a-z]{2}\s+\d{1,2}/.test(afterDash);
+      
+      if (looksLikeDate) {
+        dateSuffix = " - " + afterDash;
+        editableTitle = remainingText.substring(0, lastDashIndex);
+      }
+    }
+    
+    console.log('🔒 Character prefix (locked):', characterPrefix);
+    console.log('✏️ Editable title:', editableTitle);
+    console.log('📅 Date suffix (locked):', dateSuffix);
+    
+    // Create container to hold prefix + input + date
+    const container = document.createElement('div');
+    container.style.display = 'flex';
+    container.style.alignItems = 'center';
+    container.style.flex = '1';
+    container.style.gap = '0';
+    
+    // Character prefix label (locked)
+    const prefixLabel = document.createElement('span');
+    prefixLabel.textContent = characterPrefix;
+    prefixLabel.style.color = '#888';
+    prefixLabel.style.fontWeight = '600';
+    prefixLabel.style.fontSize = '12px';
+    
+    // Editable input
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = editableTitle;
+    input.classList.add('rename-input');
+    input.style.flex = '1';
+    input.style.minWidth = '100px';
+    
+    // Date suffix label (locked)
+    const dateLabel = document.createElement('span');
+    dateLabel.textContent = dateSuffix;
+    dateLabel.style.color = '#666';
+    dateLabel.style.fontSize = '10px';
+    dateLabel.style.marginLeft = '4px';
+    
+    // Build container
+    container.appendChild(prefixLabel);
+    container.appendChild(input);
+    if (dateSuffix) {
+      container.appendChild(dateLabel);
+    }
+    
+    // Replace title with container
+    element.replaceWith(container);
+    input.focus();
+    input.select();
+    
+    // Save on Enter or blur
+    const saveRename = async () => {
+      const newEditableTitle = input.value.trim();
+      
+      if (!newEditableTitle || newEditableTitle === editableTitle) {
+        loadChats();
+        return;
+      }
+      
+      // ✅ Build the new title: Character - CustomTitle - Date
+      const newTitle = characterPrefix + newEditableTitle + dateSuffix;
+      
+      console.log('💾 Saving rename:', filename, '→', newTitle);
+      
+      try {
+        const res = await fetch('/chats/rename', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            old_filename: filename,
+            new_name: newTitle
+          })
+        });
+        
+        const data = await res.json();
+        
+        if (data.error) {
+          alert('Rename failed: ' + data.error);
+        } else {
+          console.log('✅ Renamed:', filename, '→', data.new_filename);
+          
+          if (currentChatFilename === filename) {
+            currentChatFilename = data.new_filename;
+            console.log('📌 Updated currentChatFilename to:', currentChatFilename);
+          }
+        }
+        loadChats();
+        
+      } catch (err) {
+        console.error('Rename error:', err);
+        alert('Failed to rename chat.');
+        loadChats();
+      }
+    };
+    
+    input.addEventListener('blur', saveRename);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        saveRename();
+      } else if (e.key === 'Escape') {
+        loadChats();
+      }
+    });
+  }
+
+
+// ==================================================
+// EXTRACT CHARACTER NAME FROM FILENAME
+// ==================================================
+  function extractCharacterFromFilename(filename) {
+    console.log('🔍 Extracting character from:', filename);
+    
+    // Remove .txt extension
+    var nameWithoutExt = filename.replace(/\.txt$/, '');
+    
+    // Split by " - " (space-dash-space)
+    var parts = nameWithoutExt.split(' - ');
+    
+    if (parts.length >= 2) {
+      // For "Gem - basic - test chat", parts = ["Gem", "basic", "test chat"]
+      // We need to figure out where the character name ends and title begins
+      
+      // Strategy: Try combinations from longest to shortest
+      // First try "Gem - basic", then try "Gem"
+      for (var i = parts.length - 1; i >= 1; i--) {
+        var potentialCharName = parts.slice(0, i).join(' - ');
+        
+        // Check if this exists in our character list (synchronously check localStorage cache)
+        var charListCache = localStorage.getItem('characterListCache');
+        if (charListCache) {
+          var availableChars = JSON.parse(charListCache);
+          if (availableChars.includes(potentialCharName)) {
+            console.log('✅ Extracted (matched against character list):', potentialCharName);
+            return potentialCharName;
+          }
+        }
+      }
+      
+      // Fallback: assume everything before the LAST " - " is the character name
+      var lastDashIndex = nameWithoutExt.lastIndexOf(' - ');
+      if (lastDashIndex !== -1) {
+        var extracted = nameWithoutExt.substring(0, lastDashIndex).trim();
+        console.log('✅ Extracted (fallback - everything before last dash):', extracted);
+        return extracted;
+      }
+    }
+    
+    // Match "CharacterName_Title.txt" (underscore separator as fallback)
+    var underscoreMatch = filename.match(/^([^_]+)_/);
+    if (underscoreMatch) {
+      var extracted = underscoreMatch[1].trim();
+      console.log('✅ Extracted (underscore method):', extracted);
+      return extracted;
+    }
+    
+    // If no separator found, return null
+    console.warn('⚠️ Could not extract character from:', filename);
+    return null;
+  }
+  
+ 
+  // ==================================================
+  // SWITCH TO CHARACTER (update dropdown + load character data)
+  // ==================================================
+  async function switchToCharacter(characterName) {
+    var dropdown = document.getElementById('character-select');
+    
+    var option = Array.from(dropdown.options).find(function(opt) {
+      return opt.value.toLowerCase() === characterName.toLowerCase();
+    });
+    
+    if (!option) {
+      console.warn('⚠️ Character "' + characterName + '" not found in dropdown');
+      console.warn('Available characters:', Array.from(dropdown.options).map(o => o.value));
+      alert('Character "' + characterName + '" not found. Please select a valid character from the dropdown.');
+      return false;
+    }
+    
+    dropdown.value = option.value;
+    
+    try {
+      var res = await fetch('/get_character/' + option.value);
+      if (!res.ok) throw new Error('Failed to load character');
+      
+      var characterData = await res.json();
+      currentCharacter = characterData;
+      
+      document.getElementById('character-img').src = '/static/images/' + characterData.image;
+      document.getElementById('character-name').textContent = characterData.name;
+      document.getElementById('system-prompt').textContent = characterData.tagline || (characterData.main_prompt ? characterData.main_prompt.split('\n')[0] : '');
+      
+      console.log('✅ Switched to character: ' + characterName);
+      return true;
+      
+    } catch (err) {
+      console.error('Error loading character:', err);
+      return false;
+    }
+  }
+// ==================================================
+// OPEN CHAT
+// ==================================================
+async function openChat(filename) {
+  // 🔒 BLOCK if we're creating a new chat AND this isn't the new chat file
+  if (isCreatingNewChat && filename !== currentChatFilename) {
+    console.log('⛔ Blocked openChat - new chat creation in progress');
+    return;
+  }
+  
+  window.loadedChat = []; // 👈 CLEAR MEMORY FIRST
+  
+  try {
+    console.log('📂 Opening chat:', filename);
+    
+    var characterName = extractCharacterFromFilename(filename);
+    
+    if (!characterName) {
+      console.warn('⚠️ No character name detected in filename:', filename);
+      alert('Invalid chat filename format. Expected: "Character - Title.txt"');
+      return;
+    }
+    
+    console.log('🔄 Switching to character:', characterName);
+    
+    var switchSuccess = await switchToCharacter(characterName);
+    
+    if (!switchSuccess) {
+      console.error('❌ Cannot open chat - character does not exist');
+      return;
+    }
+    
+    var res = await fetch('/chats/open/' + filename);
+    var data = await res.json();
+    
+    if (data.error) {
+      alert("Chat not found.");
+      return;
+    }
+    
+    currentChatFilename = filename;
+    saveCurrentChatState();
+    
+    // ✅ Save to localStorage so chat persists across page navigation
+    localStorage.setItem('currentChatFilename', filename);
+    localStorage.setItem('lastCharacter', characterName);
+    
+    renderChatMessages(data.messages);
+    
+    // ✅ FIX: Load conversation history into memory for context
+    window.loadedChat = data.messages.map(function(msg) {
+      return {
+        role: msg.role,
+        content: msg.content
+      };
+    });
+    
+    console.log('💾 Loaded ' + window.loadedChat.length + ' messages into context');
+    
+    document.querySelectorAll(".chat-item").forEach(function(i) {
+      i.classList.remove("active");
+    });
+    
+    var chatItems = Array.from(document.querySelectorAll(".chat-item"));
+    var activeItem = chatItems.find(function(i) {
+      return i.dataset.filename === filename;
+    });
+    
+    if (activeItem) {
+      activeItem.classList.add("active");
+    }
+    
+    console.log('✅ Chat opened successfully:', filename);
+    
+    // ✅ FIXED: Only display opening line if chat is actually empty
+    if (data.messages.length === 0) {
+      displayOpeningLineInChat();
+    }
+    
+  } catch (err) {
+    console.error("❌ Error opening chat:", err);
+    alert('Failed to open chat: ' + err.message);
+  }
+}
+  // ==================================================
+  // CHAT RENDERER (with debug logging)
+  // ==================================================
+  function renderChatMessages(messages) {
+    console.log('🎨 renderChatMessages called with', messages.length, 'messages');
+    console.trace(); // 👈 Shows the call stack
+    
+    var chat = document.getElementById("chat");
+    
+    if (!chat) {
+      console.error('❌ Chat container #chat not found!');
+      return;
+    }
+
+    // ✅ Make sure we have character data loaded
+    if (!currentCharacter || !currentCharacter.name) {
+      console.error('❌ currentCharacter not loaded, cannot render messages');
+      return;
+    }
+
+    console.log('🔍 Starting render of ' + messages.length + ' messages');
+    
+    chat.innerHTML = "";
+    console.log('🧹 renderChatMessages: Cleared DOM, now rendering', messages.length, 'messages');
+    
+    var successCount = 0;
+    var charName = currentCharacter.name || 'Assistant';
+    var userName = localStorage.getItem('activeUserName') || activeUserName;
+    
+    messages.forEach(function(msg, index) {
+      if (!msg) {
+        console.warn('Skipping null message at index ' + index);
+        return;
+      }
+      
+      var role, content;
+      
+      if (typeof msg === "object" && msg.role) {
+        role = msg.role;
+        content = msg.content;
+      } 
+      else if (typeof msg === "string") {
+        if (msg.startsWith(charName + ":")) {
+          role = "model";
+          content = msg.split(":", 2)[1].trim();
+        } else if (msg.includes(":")) {
+          role = "user";
+          content = msg.split(":", 2)[1].trim();
+        } else {
+          role = "model";
+          content = msg;
+        }
+      } else {
+        console.warn('Unrecognized message type at index ' + index);
+        return;
+      }
+      
+      try {
+        // Create wrapper container for avatar + message
+        var wrapper = document.createElement("div");
+        wrapper.classList.add("message-wrapper");
+        
+        // Create the message bubble
+        var div = document.createElement("div");
+        div.classList.add("message");
+        
+        if (role === "user") {
+          wrapper.classList.add("user-wrapper");
+          div.classList.add("user-msg");
+          
+          // Create avatar
+          var userAvatar = document.createElement("img");
+          userAvatar.className = "avatar";
+          var userImageFile = localStorage.getItem('activeUserImage') || "default.png";
+          userAvatar.src = "/static/images/" + userImageFile;
+          userAvatar.alt = userName;
+          userAvatar.onerror = function() { 
+            this.src = '/static/images/default.png';
+          };
+          
+          var userStrong = document.createElement("strong");
+          userStrong.textContent = userName + ": ";
+          
+          var userSpan = document.createElement("span");
+          userSpan.className = "user-text";
+          
+          // Use Marked.js for consistent formatting
+          if (typeof marked !== "undefined") {
+            let html = marked.parse(content);
+            html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
+            userSpan.innerHTML = html;
+          } else {
+            var formatted = content.replace(/\*(.*?)\*/gs, "<em>$1</em>");
+            userSpan.innerHTML = formatted;
+          }
+          
+          var userCopyBtn = document.createElement("button");
+          userCopyBtn.className = "copy-btn";
+          userCopyBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+          userCopyBtn.onclick = function() { copyMessage(this); };
+          
+          var userDeleteBtn = document.createElement("button");
+          userDeleteBtn.className = "delete-msg-btn";
+          userDeleteBtn.innerHTML = '✕';
+          userDeleteBtn.title = "Delete this message";
+          userDeleteBtn.onclick = function() { deleteSpecificMessage(index); };
+          
+          div.appendChild(userStrong);
+          div.appendChild(userSpan);
+          div.appendChild(userCopyBtn);
+          div.appendChild(userDeleteBtn);
+          
+          wrapper.appendChild(userAvatar);
+          wrapper.appendChild(div);
+          
+        } else if (role === "model" || role === "assistant") {
+          wrapper.classList.add("model-wrapper");
+          div.classList.add("model-msg");
+          
+          // Create avatar
+          var modelAvatar = document.createElement("img");
+          modelAvatar.className = "avatar";
+          // ✅ Use the image field from currentCharacter
+          var imageFile = currentCharacter.image || "default.png";
+          modelAvatar.src = "/static/images/" + imageFile;
+          modelAvatar.alt = charName;
+          modelAvatar.onerror = function() { 
+            this.src = '/static/images/default.png';
+          };          
+          
+          var modelStrong = document.createElement("strong");
+          modelStrong.textContent = charName + ": ";
+          
+          var modelSpan = document.createElement("span");
+          modelSpan.className = "model-text";
+
+          // Use Marked.js for consistent formatting (same as live streaming)
+          if (typeof marked !== "undefined") {
+            let html = marked.parse(content);
+            html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
+            modelSpan.innerHTML = html;
+          } else {
+            // Fallback if Marked.js fails to load
+            var formatted = content.replace(/\*(.*?)\*/gs, "<em>$1</em>");
+            modelSpan.innerHTML = formatted;
+          }
+          
+          var modelCopyBtn = document.createElement("button");
+          modelCopyBtn.className = "copy-btn";
+          modelCopyBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+          modelCopyBtn.onclick = function() { copyMessage(this); };
+          
+          var modelDeleteBtn = document.createElement("button");
+          modelDeleteBtn.className = "delete-msg-btn";
+          modelDeleteBtn.innerHTML = '✕';
+          modelDeleteBtn.title = "Delete this message";
+          modelDeleteBtn.onclick = function() { deleteSpecificMessage(index); };
+          
+          div.appendChild(modelStrong);
+          div.appendChild(modelSpan);
+          div.appendChild(modelCopyBtn);
+          div.appendChild(modelDeleteBtn);
+                    
+          wrapper.appendChild(modelAvatar);
+          wrapper.appendChild(div);
+          
+        } else {
+          console.warn('Unknown role: ' + role);
+          return;
+        }
+        
+        chat.appendChild(wrapper);
+        successCount++;
+        
+      } catch (err) {
+        console.error('Error appending message ' + index + ':', err);
+      }
+    });
+    
+    console.log('✅ Successfully rendered ' + successCount + ' of ' + messages.length + ' messages');
+    chat.scrollTop = chat.scrollHeight;
+  }
+  
+  // ==================================================
+  // SAVE/RESTORE CURRENT CHAT STATE
+  // ==================================================
+  function saveCurrentChatState() {
+    if (currentChatFilename) {
+      localStorage.setItem('lastOpenChat', currentChatFilename);
+    }
+  }
+
+  async function restoreLastChat() {
+    var lastChat = localStorage.getItem('lastOpenChat');
+    if (!lastChat) {
+      console.log('ℹ️ No last chat to restore');
+      return;
+    }
+    
+    console.log('🔄 Attempting to restore last chat:', lastChat);
+    
+    var characterName = extractCharacterFromFilename(lastChat);
+    
+    if (!characterName) {
+      console.warn('⚠️ Cannot extract character from filename:', lastChat);
+      localStorage.removeItem('lastOpenChat');
+      return;
+    }
+    
+    var dropdown = document.getElementById('character-select');
+    var validChar = Array.from(dropdown.options).find(function(opt) {
+      return opt.value.toLowerCase() === characterName.toLowerCase();
+    });
+    
+    if (validChar) {
+      console.log('✅ Character exists, restoring chat');
+      await openChat(lastChat);
+    } else {
+      console.warn('⚠️ Cannot restore chat - character "' + characterName + '" no longer exists');
+      localStorage.removeItem('lastOpenChat');
+    }
+  }
+
+  // ==================================================
+  // SEND PROMPT (with auto-create chat)
+  // ==================================================
+  async function sendPrompt() {
+    console.log('🔴 sendPrompt() called');
+    console.trace(); // ← Shows the call stack
+    
+    if (!currentChatFilename) {
+      
+      var dropdown = document.getElementById('character-select');
+      var currentChar = dropdown.value;
+      
+      // ✅ MAKE SURE currentCharacter is loaded before creating chat
+      if (!currentCharacter || currentCharacter.name !== currentChar) {
+        console.log('⚠️ Character mismatch, reloading:', currentChar);
+        await loadCharacter(currentChar, true);
+      }
+      
+      console.log('🆕 Creating chat for character:', currentChar);
+      
+      try {
+        var res = await fetch('/chats/new', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ character: currentChar })
+        });
+        var data = await res.json();
+        
+        if (data.error) {
+          alert('Failed to create chat.');
+          return;
+        }
+        
+        currentChatFilename = data.filename;
+        console.log('✅ Auto-created chat:', currentChatFilename);
+        
+        saveCurrentChatState();
+        
+        // ✅ PERSIST TO LOCALSTORAGE
+        localStorage.setItem('currentChatFilename', currentChatFilename);
+        localStorage.setItem('lastCharacter', currentChar);
+        
+        await loadChats();
+        
+        var chatItems = document.querySelectorAll('.chat-item');
+        chatItems.forEach(function(item) {
+          if (item.dataset.filename === currentChatFilename) {
+            item.classList.add('active');
+          } else {
+            item.classList.remove('active');
+          }
+        });
+                
+      } catch (err) {
+        console.error('Error auto-creating chat:', err);
+        alert('Failed to create chat.');
+        return;
+      }
+    }
+    const box = document.getElementById('user-input');
+    const input = box.value.trim();
+    const chat = document.getElementById('chat');
+    if (!input) return;
+    
+    lastPrompt = input;
+    localStorage.setItem('lastPrompt', input);
+    const userName = localStorage.getItem('activeUserName') || activeUserName;
+    
+    // Create wrapper container for avatar + message
+    const userWrapper = document.createElement("div");
+    userWrapper.className = "message-wrapper user-wrapper";
+    
+    // ✅ Create USER avatar (use actual user image)
+    const userAvatar = document.createElement("img");
+    userAvatar.className = "avatar";
+    const userImageFile = localStorage.getItem('activeUserImage') || "default.png";
+    userAvatar.src = "/static/images/" + userImageFile;
+    userAvatar.alt = userName;
+    userAvatar.onerror = function() { 
+      this.src = '/static/images/default.png';
+    };
+        
+    // Build user message bubble with copy button
+    const userDiv = document.createElement("div");
+    userDiv.className = "message user-msg";
+    
+    const userStrong = document.createElement("strong");
+    userStrong.textContent = userName + ": ";
+    
+    const userSpan = document.createElement("span");
+    userSpan.className = "user-text";
+    const formattedUser = input.replace(/\*(.*?)\*/gs, "<em>$1</em>");
+    userSpan.innerHTML = formattedUser;
+    
+    const userCopyBtn = document.createElement("button");
+    userCopyBtn.className = "copy-btn";
+    userCopyBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+    userCopyBtn.onclick = function() { copyMessage(this); };
+    
+    userDiv.appendChild(userStrong);
+    userDiv.appendChild(userSpan);
+    userDiv.appendChild(userCopyBtn);
+    
+    // Assemble wrapper: avatar + message bubble
+    userWrapper.appendChild(userAvatar);
+    userWrapper.appendChild(userDiv);
+    
+    chat.appendChild(userWrapper);
+    chat.scrollTop = chat.scrollHeight;
+    
+    // ✅ FIX: Update window.loadedChat directly
+    if (!window.loadedChat) {
+      window.loadedChat = [];
+    }
+    window.loadedChat.push({ role: "user", content: input });
+
+    let contextMessages = window.loadedChat; // Use loadedChat directly
+    
+    box.value = '';
+    try {
+      await fetchAndDisplayResponse(input, chat);
+      // Save happens inside fetchAndDisplayResponse
+    } catch (err) {
+      console.error("⚠️ sendPrompt error:", err);
+      chat.innerHTML += '<div class="message error-msg">⚠️ Error sending message.</div>';
+    }
+  }
+// ==================================================
+// FETCH AND DISPLAY RESPONSE (WITH DEBUG LOGS)
+// ==================================================
+  async function fetchAndDisplayResponse(input, chat, isRegenerate = false) {
+    console.log('🚀🚀🚀 fetchAndDisplayResponse CALLED', new Date().getTime(), 'isRegenerate:', isRegenerate);
+    console.trace();
+    
+    try {
+      if (window.isSending) {
+        console.log('⛔ BLOCKED - already sending');
+        return;
+      }
+      window.isSending = true;
+      
+      if (!currentChatFilename) {
+        const res = await fetch('/chats/new', { method: 'POST' });
+        const data = await res.json();
+        if (data.filename) {
+          currentChatFilename = data.filename;
+          await loadChats();
+        }
+      }
+      
+      if (typeof marked === "undefined") {
+        console.warn("⚠️ Marked.js not found — falling back to plain text.");
+        window.marked = { parse: txt => txt };
+      }
+      
+      const dropdown = document.getElementById("character-select");
+      currentCharName = dropdown ? dropdown.value : (currentCharacter?.name || "Unknown");
+      
+      console.log('📤 Sending to /chat with character:', currentCharName);
+      console.log('📊 DEBUG: Sending conversation with', window.loadedChat.length, 'messages');
+      
+      const response = await fetch("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          character: currentCharName,
+          user_name: activeUserName,
+          current_chat_filename: currentChatFilename,
+          conversation_history: window.loadedChat,
+          author_note: localStorage.getItem(`author-note-${currentChatFilename}`) || '',
+          temperature: 0.8,
+          max_tokens: 4096,
+          stop: [],      
+        })
+      });
+      
+      if (!response.ok) {
+        chat.innerHTML += '<div class="message error-msg">⚠️ Server error.</div>';
+        return;
+      }
+      
+      console.log('📡 Response content-type:', response.headers.get("content-type"));
+      console.log('📡 Has body:', !!response.body);
+      
+      if (
+        !response.body ||
+        !response.headers.get("content-type")?.includes("text/event-stream")
+      ) {
+        console.log('📍 Taking NON-STREAMING path');
+        const data = await response.json();
+        const message = data.text || "⚠️ Unknown response";
+
+        const modelWrapper = document.createElement("div");
+        modelWrapper.className = "message-wrapper model-wrapper";
+        
+        const modelAvatar = document.createElement("img");
+        modelAvatar.className = "avatar";
+        const imageFile = currentCharacter?.image || currentCharName + ".png";
+        modelAvatar.src = "/static/images/" + imageFile;
+        modelAvatar.alt = currentCharName;
+        modelAvatar.onerror = function() { 
+          this.src = '/static/images/default.png';
+        };
+
+        const msgDiv = document.createElement("div");
+        msgDiv.className = "message model-msg";
+        msgDiv.dataset.id = chat.children.length;
+
+        const nameStrong = document.createElement("strong");
+        nameStrong.textContent = currentCharName + ': ';
+
+        const spanText = document.createElement("span");
+        spanText.className = "model-text";
+
+        const copyBtn = document.createElement("button");
+        copyBtn.className = "copy-btn";
+        copyBtn.textContent = "📋";
+        copyBtn.onclick = function() { copyMessage(this); };
+
+        msgDiv.appendChild(nameStrong);
+        msgDiv.appendChild(spanText);
+        msgDiv.appendChild(copyBtn);
+        
+        modelWrapper.appendChild(modelAvatar);
+        modelWrapper.appendChild(msgDiv);
+        
+        console.log('📍 NON-STREAMING: Appending wrapper to DOM');
+        chat.appendChild(modelWrapper);
+
+        if (!window.loadedChat) window.loadedChat = [];
+        
+        const isDuplicate = window.loadedChat.some(msg => 
+          msg.role === "assistant" && msg.content === message
+        );
+        
+        if (!isDuplicate) {
+          window.loadedChat.push({ role: "assistant", content: message });
+          console.log('✅ Added non-streaming response to loadedChat');
+        } else {
+          console.warn('⚠️ Skipped duplicate non-streaming response');
+        }
+        
+        await autoSaveCurrentChat();
+        return;
+      }
+
+      console.log('📍 Taking STREAMING path');
+      
+      const modelWrapper = document.createElement("div");
+      modelWrapper.className = "message-wrapper model-wrapper";
+      
+      const modelAvatar = document.createElement("img");
+      modelAvatar.className = "avatar";
+      const imageFile = currentCharacter?.image || currentCharName + ".png";
+      modelAvatar.src = "/static/images/" + imageFile;
+      modelAvatar.alt = currentCharName;
+      modelAvatar.onerror = function() { 
+        this.src = '/static/images/default.png';
+      };
+      
+      const msgDiv = document.createElement("div");
+      msgDiv.className = "message model-msg";
+      msgDiv.dataset.id = chat.children.length;
+
+      const nameStrong = document.createElement("strong");
+      nameStrong.textContent = currentCharName + ': ';
+
+      const spanText = document.createElement("span");
+      spanText.className = "model-text";
+
+      const copyBtn = document.createElement("button");
+      copyBtn.className = "copy-btn";
+      copyBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+      </svg>`;
+      copyBtn.onclick = function() { copyMessage(this); };
+      
+      msgDiv.appendChild(nameStrong);
+      msgDiv.appendChild(spanText);
+      msgDiv.appendChild(copyBtn);
+      
+      modelWrapper.appendChild(modelAvatar);
+      modelWrapper.appendChild(msgDiv);
+      
+      console.log('📍 STREAMING: Appending wrapper to DOM');
+      chat.appendChild(modelWrapper);
+      chat.scrollTop = chat.scrollHeight;
+
+      const streamEl = spanText;
+      
+      streamEl.style.wordWrap = 'break-word';
+      streamEl.style.overflowWrap = 'break-word';
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let fullMessage = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        fullMessage += chunk;
+        
+        let html = marked.parse(fullMessage);
+        html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
+        streamEl.innerHTML = html;
+
+        chat.scrollTop = chat.scrollHeight;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+
+      const userName = activeUserName || "User";
+      const charName = currentCharName || "Assistant";
+
+      const finalText = fullMessage
+        .replace(/<\|im_start\|>assistant/gi, "")
+        .replace(/<\|im_start\|>user/gi, "")
+        .replace(/<\|im_start\|>system/gi, "")
+        .replace(/<\|im_end\|>/gi, "")
+        .replace(/<\/\|im_end\|>/gi, "")
+        .replace(new RegExp(`^${userName}:\\s*`, 'gim'), "")
+        .replace(new RegExp(`^${charName}:\\s*`, 'gim'), "")
+        .replace(/^User:\s*/gim, "")
+        .replace(/^Assistant:\s*/gim, "")
+        .replace(/^[ \t]+/gm, "")
+        .trim();
+        
+      const html = marked.parse(finalText);
+      const cleanHtml = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
+      streamEl.innerHTML = cleanHtml;
+
+      if (!window.loadedChat) window.loadedChat = [];
+      
+      const isDuplicate = window.loadedChat.some(msg => 
+        msg.role === "assistant" && msg.content === finalText
+      );
+      
+      if (!isDuplicate) {
+        window.loadedChat.push({ role: "assistant", content: finalText });
+        console.log('✅ Added assistant response to loadedChat. Total messages:', window.loadedChat.length);
+      } else {
+        console.warn('⚠️ Skipped duplicate assistant response - already in loadedChat');
+        modelWrapper.remove();
+        console.log('🗑️ Removed duplicate DOM wrapper');
+      }
+
+      await autoSaveCurrentChat();
+
+      console.log('🔍 DEBUG END OF GENERATION:');
+      console.log('window.loadedChat length:', window.loadedChat.length);
+      console.log('DOM wrapper count:', document.querySelectorAll('.message-wrapper').length);
+
+    } catch (err) {
+      console.error("❌ Chat fetch error:", err);
+      chat.innerHTML += '<div class="message error-msg">⚠️ Failed to reach server.</div>';
+    } finally {
+      window.isSending = false;
+    }
+  }
+  
+  // ==================================================
+  // AUTO-SAVE CHAT MESSAGES TO FILE
+  // ==================================================
+  window.isSaving = false; // 🔒 GLOBAL LOCK to prevent concurrent saves
+
+  async function autoSaveCurrentChat() {
+    console.log('🔴🔴🔴 autoSaveCurrentChat CALLED 🔴🔴🔴');
+    console.log('🔴 currentChatFilename:', currentChatFilename);
+    console.log('🔴 window.loadedChat length:', window.loadedChat?.length || 0);
+    console.log('🔴 Called from:', new Error().stack);
+  
+  // rest of function...  
+  // rest of function...
+    // 🔒 If already saving, skip this call
+    if (window.isSaving) {
+      console.log('⚠️ Save already in progress, skipping duplicate save call');
+      return;
+    }
+    
+    window.isSaving = true; // Lock it
+    
+    try {
+      console.log('💾 ==================== AUTO-SAVE START ====================');
+      console.log('📦 window.loadedChat being saved:', JSON.stringify(window.loadedChat, null, 2));
+      console.log('📊 Number of messages:', window.loadedChat ? window.loadedChat.length : 0);
+      
+      if (!currentChatFilename) {
+        console.log('⚠️ No chat loaded, skipping auto-save');
+        window.isSaving = false;
+        return;
+      }
+      
+      if (!window.loadedChat || !Array.isArray(window.loadedChat)) {
+        console.log('⚠️ window.loadedChat is not valid');
+        window.isSaving = false;
+        return;
+      }
+      
+      // 🔒 PREVENT CONSECUTIVE ASSISTANT MESSAGES
+      for (let i = window.loadedChat.length - 1; i > 0; i--) {
+        const current = window.loadedChat[i];
+        const previous = window.loadedChat[i - 1];
+        
+        if (current.role === 'assistant' && previous.role === 'assistant') {
+          console.log('⚠️ REMOVING CONSECUTIVE ASSISTANT MESSAGE at index', i);
+          window.loadedChat.splice(i, 1);
+        }
+      }
+      
+      // 🔥 DEDUPLICATE loadedChat before saving
+      const seen = new Set();
+      const dedupedChat = [];
+      
+      for (let i = 0; i < window.loadedChat.length; i++) {
+        const msg = window.loadedChat[i];
+        const key = `${msg.role}:${msg.content}`;
+        
+        if (!seen.has(key)) {
+          seen.add(key);
+          dedupedChat.push(msg);
+        } else {
+          console.warn('⚠️ DUPLICATE DETECTED AND REMOVED:', msg);
+        }
+      }
+      
+      console.log(`📊 Original: ${window.loadedChat.length}, Deduped: ${dedupedChat.length}`);
+      
+      // Replace loadedChat with deduped version
+      window.loadedChat = dedupedChat;
+      
+      console.log('💾 Auto-saving messages to:', currentChatFilename);
+      console.log('📦 Messages to save:', JSON.stringify(dedupedChat, null, 2));
+      
+      var charName = extractCharacterFromFilename(currentChatFilename) || 'Assistant';
+      var userName = localStorage.getItem('activeUserName') || activeUserName;
+      
+      const messages = dedupedChat.map(msg => ({
+        role: msg.role,
+        content: msg.content,
+        speaker: msg.role === 'user' ? userName : charName
+      }));
+      
+      const res = await fetch('/chats/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: currentChatFilename,
+          messages: messages,
+          character: charName
+        })
+      });
+      
+      if (res.ok) {
+        console.log('✅ Messages auto-saved');
+      } else {
+        console.error('❌ Auto-save failed:', res.status);
+      }
+      
+      console.log('✅ Save request sent to Flask');
+      console.log('💾 ==================== AUTO-SAVE END ====================');
+      
+    } catch (err) {
+      console.error('❌ Auto-save error:', err);
+    } finally {
+      window.isSaving = false; // 🔓 Unlock
+    }
+  }
+  
+  // ==================================================
+  // CONTINUE LAST RESPONSE
+  // ==================================================
+  async function continueLast() {
+    const chat = document.getElementById('chat');
+    const msgs = chat.querySelectorAll('.model-msg');
+    if (!msgs.length) {
+      alert('No previous model message to continue.');
+      return;
+    }
+
+    const lastResponse =
+      msgs[msgs.length - 1].querySelector('.model-text')?.textContent.trim() ||
+      msgs[msgs.length - 1].textContent.replace(/^.*?:\s*/, '').trim();
+
+    try {
+      const continuationPrompt = 'Continue naturally from where you left off, keeping the same tone and flow:\n\n' + lastResponse;
+      await fetchAndDisplayResponse(continuationPrompt, chat);
+    } catch (err) {
+      console.error('⚠️ Continue error:', err);
+      chat.innerHTML += '<div class="message error-msg">⚠️ Error continuing chat.</div>';
+    }
+  }
+
+// ==================================================
+// REGENERATE LAST RESPONSE (FIXED - NO RENDER)
+// ==================================================
+  async function regenerate() {
+    // 🔒 WAIT if a save is already in progress
+    if (window.isSaving) {
+      console.log('⏳ Save in progress, waiting...');
+      let waited = 0;
+      while (window.isSaving && waited < 3000) {
+        await new Promise(r => setTimeout(r, 100));
+        waited += 100;
+      }
+      if (window.isSaving) {
+        alert('Previous save still in progress. Please wait and try again.');
+        return;
+      }
+    }
+    
+    console.log('🔄 REGENERATE START');
+    
+    const chat = document.getElementById('chat');
+    
+    // 1. Find last user message in window.loadedChat
+    if (!window.loadedChat || window.loadedChat.length === 0) {
+      alert('No chat history to regenerate from.');
+      return;
+    }
+    
+    let lastUserMessage = null;
+    let lastUserIndex = -1;
+    
+    // Find the LAST user message
+    for (let i = window.loadedChat.length - 1; i >= 0; i--) {
+      if (window.loadedChat[i].role === 'user') {
+        lastUserMessage = window.loadedChat[i].content;
+        lastUserIndex = i;
+        break;
+      }
+    }
+    
+    if (!lastUserMessage) {
+      alert('No user message found to regenerate from.');
+      return;
+    }
+    
+    console.log('🔍 Last user message:', lastUserMessage);
+    console.log('🗑️ Deleting everything after index', lastUserIndex);
+    
+    // 2. DELETE EVERYTHING after the last user message in window.loadedChat
+    window.loadedChat.splice(lastUserIndex + 1);
+    
+    console.log('📦 loadedChat after deletion:', window.loadedChat);
+    
+    // 3. 🔥 REMOVE ASSISTANT MESSAGES FROM DOM (don't re-render everything)
+    // Remove all message wrappers after the last user message
+    const wrappers = Array.from(chat.querySelectorAll('.message-wrapper'));
+    let foundLastUser = false;
+    
+    for (let i = wrappers.length - 1; i >= 0; i--) {
+      const wrapper = wrappers[i];
+      const isUserMsg = wrapper.classList.contains('user-wrapper');
+      
+      if (isUserMsg && !foundLastUser) {
+        foundLastUser = true;
+        continue; // Keep this user message
+      }
+      
+      if (foundLastUser) {
+        break; // Stop when we reach messages before the last user message
+      }
+      
+      // Remove this wrapper (it's an assistant message after the last user)
+      wrapper.remove();
+      console.log('🗑️ Removed wrapper from DOM');
+    }
+    
+    console.log('🎨 DOM cleaned (removed assistant messages only)');
+    
+    // 4. FORCE SAVE before regenerating
+    await autoSaveCurrentChat();
+    console.log('💾 Forced save BEFORE regeneration');
+    
+    // 5. Generate new response (will append to existing DOM)
+    try {
+      await fetchAndDisplayResponse(lastUserMessage, chat, true);
+      console.log('✅ Regeneration complete');
+    } catch (err) {
+      console.error('❌ Regenerate error:', err);
+      chat.innerHTML += '<div class="message error-msg">⚠️ Error regenerating response.</div>';
+    }
+  }
+  
+  // ==================================================
+  // OPENING LINE MODAL - DISK-BASED STORAGE
+  // ==================================================
+
+  async function openOpeningLineModal() {
+    const modal = document.getElementById('opening-line-modal');
+    const dropdown = document.getElementById('character-select');
+    const charName = dropdown.value;
+    
+    if (!charName) {
+      alert('Please select a character first.');
+      return;
+    }
+    
+    try {
+      // Load from disk
+      const res = await fetch(`/get_opening_lines/${charName}`);
+      const data = await res.json();
+      
+      document.getElementById('opening-line-enabled').checked = data.enabled;
+      
+      let lines = data.lines || [];
+      
+      // If no lines exist, add one empty field
+      if (lines.length === 0) {
+        lines = [''];
+      }
+      
+      // Render the lines
+      renderOpeningLines(lines);
+      
+      modal.style.display = 'block';
+      
+    } catch (err) {
+      console.error('Failed to load opening lines:', err);
+      alert('Failed to load opening lines.');
+    }
+  }
+
+  function closeOpeningLineModal() {
+    document.getElementById('opening-line-modal').style.display = 'none';
+  }
+
+  function renderOpeningLines(lines) {
+    const container = document.getElementById('opening-lines-container');
+    container.innerHTML = '';
+    
+    lines.forEach((line, index) => {
+      const lineDiv = document.createElement('div');
+      lineDiv.className = 'opening-line-item';
+      
+      const textarea = document.createElement('textarea');
+      textarea.value = line;
+      textarea.placeholder = `Opening line ${index + 1}...`;
+      textarea.dataset.index = index;
+      
+      const deleteBtn = document.createElement('button');
+      deleteBtn.textContent = '🗑️';
+      deleteBtn.title = 'Delete this line';
+      deleteBtn.onclick = function() {
+        if (lines.length === 1) {
+          alert('You must have at least one opening line field.');
+          return;
+        }
+        lineDiv.remove();
+      };
+      
+      lineDiv.appendChild(textarea);
+      lineDiv.appendChild(deleteBtn);
+      container.appendChild(lineDiv);
+    });
+  }
+
+  function addOpeningLineField() {
+    const container = document.getElementById('opening-lines-container');
+    
+    const lineDiv = document.createElement('div');
+    lineDiv.className = 'opening-line-item';
+    
+    const textarea = document.createElement('textarea');
+    textarea.placeholder = 'New opening line...';
+    
+    const deleteBtn = document.createElement('button');
+    deleteBtn.textContent = '🗑️';
+    deleteBtn.title = 'Delete this line';
+    deleteBtn.onclick = function() {
+      const items = document.querySelectorAll('.opening-line-item');
+      if (items.length === 1) {
+        alert('You must have at least one opening line field.');
+        return;
+      }
+      lineDiv.remove();
+    };
+    
+    lineDiv.appendChild(textarea);
+    lineDiv.appendChild(deleteBtn);
+    container.appendChild(lineDiv);
+    
+    textarea.focus();
+  }
+
+  async function saveOpeningLines() {
+    const dropdown = document.getElementById('character-select');
+    const charName = dropdown.value;
+    
+    if (!charName) {
+      alert('No character selected.');
+      return;
+    }
+    
+    const enabled = document.getElementById('opening-line-enabled').checked;
+    
+    // Collect all opening lines from textareas
+    const textareas = document.querySelectorAll('#opening-lines-container textarea');
+    const lines = Array.from(textareas)
+      .map(ta => ta.value.trim())
+      .filter(line => line.length > 0);
+    
+    if (enabled && lines.length === 0) {
+      alert('Please add at least one opening line or disable the feature.');
+      return;
+    }
+    
+    try {
+      // Save to disk
+      const res = await fetch('/save_opening_lines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          character: charName,
+          enabled: enabled,
+          lines: lines
+        })
+      });
+      
+      const result = await res.json();
+      
+      if (result.error) {
+        throw new Error(result.error);
+      }
+      
+      console.log(`✅ Saved ${lines.length} opening line(s) for ${charName}`);
+      
+      closeOpeningLineModal();
+      
+      // If chat is empty, refresh the opening line display
+      if (window.loadedChat && window.loadedChat.length === 0) {
+        document.getElementById('chat').innerHTML = '';
+        displayOpeningLineInChat();
+      }
+      
+    } catch (err) {
+      console.error('Failed to save opening lines:', err);
+      alert('Failed to save opening lines: ' + err.message);
+    }
+  }
+
+  // Close modal when clicking outside
+  window.onclick = function(event) {
+    const modal = document.getElementById('opening-line-modal');
+    if (event.target === modal) {
+      closeOpeningLineModal();
+    }
+  };
+// ==================================================
+// CLEAR CHAT (clear the actual file contents)
+// ==================================================
+  async function clearChat() {
+    if (!currentChatFilename) {
+      alert('No chat selected to clear.');
+      return;
+    }
+    
+    if (!confirm('Clear this chat completely? This will delete all messages from the file.')) return;
+    
+    try {
+      // Clear the file by sending empty messages array
+      const res = await fetch('/chats/update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: currentChatFilename,
+          messages: []  // Empty array = empty file
+        })
+      });
+      
+      const result = await res.json();
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to clear chat');
+      }
+      
+      // Clear the DOM
+      document.getElementById('chat').innerHTML = '';
+      
+      // ✅ NUKE MEMORY
+      window.loadedChat = [];
+      
+      console.log('✅ Chat file cleared:', currentChatFilename);
+      
+      // ✅ RE-DISPLAY OPENING LINE AFTER CLEAR
+      displayOpeningLineInChat();
+      
+    } catch (err) {
+      console.error('❌ Failed to clear chat:', err);
+      alert('Failed to clear chat: ' + err.message);
+    }
+  }
+  // ==================================================
+  // DELETE LAST MESSAGE
+  // ==================================================
+  async function deleteLastMessages(count = 1) {
+    // 🔒 Check lock before proceeding
+    if (window.isSaving) {
+      console.log('⏳ Save in progress, waiting...');
+      let waited = 0;
+      while (window.isSaving && waited < 3000) {
+        await new Promise(r => setTimeout(r, 100));
+        waited += 100;
+      }
+      if (window.isSaving) {
+        alert('Previous save still in progress. Please wait and try again.');
+        return;
+      }
+    }
+    
+    if (!window.loadedChat || !Array.isArray(window.loadedChat)) {
+      alert('No messages loaded.');
+      return;
+    }
+    
+    if (!currentChatFilename) {
+      alert('No chat file selected.');
+      return;
+    }
+    
+    // Remove last N messages from the array
+    for (let i = 0; i < count; i++) {
+      window.loadedChat.pop();
+    }
+    
+    // Update localStorage
+    const chatKey = `chat_${currentChatFilename}`;
+    localStorage.setItem(chatKey, JSON.stringify(window.loadedChat));
+    
+    // Update DOM (remove wrappers)
+    const chat = document.getElementById('chat');
+    const wrappers = chat.querySelectorAll('.message-wrapper');
+    for (let i = 0; i < count; i++) {
+      const wrapper = wrappers[wrappers.length - 1 - i];
+      if (wrapper) wrapper.remove();
+    }
+    
+    // Save to file (using the centralized auto-save with lock)
+    try {
+      await autoSaveCurrentChat();
+      console.log('✅ Deleted last message, ' + window.loadedChat.length + ' messages remaining');
+    } catch (err) {
+      console.error('❌ Failed to delete messages:', err);
+      alert('Failed to update chat file.');
+    }
+  }
+  // ==================================================
+  // ADD CHARACTER MEMORY
+  // ==================================================
+  async function addMemory(character, title, keywords, body) {
+    if (!character || !body) return;
+    try {
+      const res = await fetch('/append_character_memory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ character, title, keywords, body })
+      });
+      if (res.ok) console.log('🧠 Memory saved for ' + character);
+    } catch (err) {
+      console.error('❌ Error writing memory:', err);
+    }
+  }
+
+
+
+  // ==================================================
+  // COPY MESSAGE
+  // ==================================================
+  function copyMessage(button) {
+      const messageDiv = button.closest('.message');
+      const contentEl = messageDiv.querySelector('.model-text, .user-text');
+      
+      let messageText = '';
+      
+      // Iterate through all child nodes to preserve structure
+      contentEl.childNodes.forEach(node => {
+          if (node.nodeType === Node.ELEMENT_NODE) {
+              // Handle paragraphs
+              if (node.tagName === 'P') {
+                  const text = node.textContent.trim();
+                  if (text.length > 0) {
+                      messageText += text + '\n\n';
+                  }
+              }
+              // Handle ordered lists
+              else if (node.tagName === 'OL') {
+                  node.querySelectorAll('li').forEach((li, index) => {
+                      messageText += `${index + 1}. ${li.textContent.trim()}\n`;
+                  });
+                  messageText += '\n';
+              }
+              // Handle unordered lists
+              else if (node.tagName === 'UL') {
+                  node.querySelectorAll('li').forEach(li => {
+                      messageText += `• ${li.textContent.trim()}\n`;
+                  });
+                  messageText += '\n';
+              }
+              // Handle code blocks
+              else if (node.tagName === 'PRE' || node.tagName === 'CODE') {
+                  messageText += node.textContent.trim() + '\n\n';
+              }
+              // Fallback for other elements
+              else {
+                  const text = node.textContent.trim();
+                  if (text.length > 0) {
+                      messageText += text + '\n\n';
+                  }
+              }
+          }
+          // Handle raw text nodes
+          else if (node.nodeType === Node.TEXT_NODE) {
+              const text = node.textContent.trim();
+              if (text.length > 0) {
+                  messageText += text + '\n\n';
+              }
+          }
+      });
+      
+      // Clean up excessive newlines at the end
+      messageText = messageText.trim();
+      
+      const originalHTML = button.innerHTML;
+      
+      navigator.clipboard.writeText(messageText).then(() => {
+          button.textContent = '✓';
+          setTimeout(() => {
+              button.innerHTML = originalHTML;
+          }, 1500);
+      }).catch(err => {
+          console.error('Copy failed:', err);
+          button.textContent = '✗';
+          setTimeout(() => button.innerHTML = originalHTML, 1500);
+      });
+  }
+  
+  
+  // ==================================================
+  // DELETE MESSAGE
+  // ==================================================
+  
+  async function deleteSpecificMessage(messageIndex) {
+  if (!window.loadedChat || !Array.isArray(window.loadedChat)) {
+    alert('No chat loaded.');
+    return;
+  }
+  
+  if (!confirm('Delete this message?')) {
+    return;
+  }
+  
+  // Remove from loadedChat array
+  window.loadedChat.splice(messageIndex, 1);
+  
+  // Re-render the entire chat
+  renderChatMessages(window.loadedChat);
+  
+  // Save to file
+  try {
+    await autoSaveCurrentChat();
+    console.log('✅ Message deleted and chat saved');
+  } catch (err) {
+    console.error('❌ Failed to save after deleting message:', err);
+    alert('Failed to update chat file.');
+  }
+}
+
+// ==================================================
+// LOAD CHARACTER MEMORY (MODAL VERSION)
+// ==================================================
+async function loadCharacterMemory() {
+  const list = document.getElementById("memory-list");
+  if (!list) {
+    console.error('❌ memory-list element not found');
+    return;
+  }
+
+  const dropdown = document.getElementById('character-select');
+  const character = dropdown ? dropdown.value : (currentCharacter?.name || '');
+  
+  if (!character) {
+    list.innerHTML = '<p style="color: #666;">No character selected</p>';
+    return;
+  }
+
+  try {
+    const res = await fetch(`/get_character_memory?character=${encodeURIComponent(character)}`);
+    const data = await res.json();
+    
+    list.innerHTML = "";
+
+    if (!data.entries || data.entries.length === 0) {
+      list.innerHTML = '<p style="color: #666; font-size: 13px;">No memories saved yet.</p>';
+      return;
+    }
+
+    data.entries.forEach((entry, i) => {
+      const div = document.createElement("div");
+      div.className = "memory-entry";
+      div.innerHTML = `<button onclick="deleteMemory(${i})">✕</button>${entry}`;
+      list.appendChild(div);
+    });
+    
+    console.log(`✅ Loaded ${data.entries.length} memories for ${character}`);
+    
+  } catch (err) {
+    console.error('❌ Failed to load memories:', err);
+    list.innerHTML = '<p style="color: #f55;">Error loading memories</p>';
+  }
+}
+
+async function deleteMemory(index) {
+  const dropdown = document.getElementById('character-select');
+  const character = dropdown ? dropdown.value : (currentCharacter?.name || '');
+  
+  if (!character) return;
+  
+  await fetch(`/delete_character_memory`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ character, index })
+  });
+  
+  loadCharacterMemory();
+}  
+    
+  // ==================================================
+  // INITIALISE PAGE (UNIFIED)
+  // ==================================================
+  window.addEventListener("DOMContentLoaded", async function() {
+    
+    console.log('🟢 DOMContentLoaded fired');
+    
+    // Attach new chat button handler
+    const newChatBtn = document.getElementById('new-chat-btn');
+    if (newChatBtn) {
+      console.log('🟢 Found new-chat-btn, attaching listener');
+      newChatBtn.addEventListener('click', function(e) {
+        console.log('🔴 CLICK EVENT CAPTURED');
+        e.preventDefault();
+        e.stopPropagation();
+        createNewChat();
+      }, true);
+    } else {
+      console.error('❌ new-chat-btn not found!');
+    }
+    
+    // Initialize document upload handler
+    initDocumentUpload();
+    
+    // Configure Marked.js for cleaner output
+    if (typeof marked !== "undefined") {
+      marked.setOptions({
+        breaks: false,
+        gfm: true,
+        pedantic: false
+      });
+    }
+    
+    // Load user and character data
+    await loadActiveUser();
+    await loadCharacterList();
+    
+    
+    // Set up character dropdown change handler
+    // Set up character dropdown change handler
+    document.getElementById('character-select').addEventListener('change', async function() {
+      const selectedChar = this.value;
+      console.log('🔄 Character dropdown changed to:', selectedChar);
+      
+      localStorage.setItem('lastCharacter', selectedChar);
+      
+      // ✅ IMPORTANT: Clear the current chat when switching characters
+      currentChatFilename = null;
+      document.getElementById('chat').innerHTML = '';
+      localStorage.removeItem('lastOpenChat');
+      
+      // Remove active state from all chat items
+      document.querySelectorAll('.chat-item').forEach(function(item) {
+        item.classList.remove('active');
+      });
+      
+      // ✅ Load character data FIRST (updates currentCharacter global)
+      await loadCharacter(selectedChar, true);
+      
+      // ✅ Clear loadedChat memory
+      window.loadedChat = [];
+      
+      // ✅ NOW display opening line with correct character loaded
+      displayOpeningLineInChat();
+      
+      console.log('✅ Ready for new chat with', selectedChar);
+    });
+    
+    // Set up Enter key to send
+    const inputBox = document.getElementById('user-input');
+    inputBox.onkeydown = (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendPrompt();
+      }
+    };
+    
+     await loadChats(); // ✅ Wait for chat list to fully load first
+    
+    // ✅ Auto-restore last chat from localStorage
+    const savedChatFilename = localStorage.getItem('currentChatFilename');
+    const savedCharacter = localStorage.getItem('lastCharacter');
+    if (savedChatFilename && savedCharacter) {
+      setTimeout(async function() {
+        try {
+          const dropdown = document.getElementById('character-select');
+          const characterExists = Array.from(dropdown.options).some(opt => opt.value === savedCharacter);
+          
+          if (!characterExists) {
+            console.warn('⚠️ Character not found in dropdown:', savedCharacter);
+            localStorage.removeItem('currentChatFilename');
+            localStorage.removeItem('lastCharacter');
+            window.loadedChat = [];
+            return;
+          }
+          
+          const chatItems = document.querySelectorAll('.chat-item');
+          const chatExists = Array.from(chatItems).some(item => item.dataset.filename === savedChatFilename);
+          
+          if (!chatExists) {
+            console.warn('⚠️ Chat file not found:', savedChatFilename);
+            localStorage.removeItem('currentChatFilename');
+            localStorage.removeItem('lastCharacter');
+            window.loadedChat = [];
+            return;
+          }
+          
+          console.log('🔄 Restoring last chat:', savedChatFilename);
+          await openChat(savedChatFilename);
+          
+        } catch (err) {
+          console.error('❌ Error restoring chat:', err);
+          localStorage.removeItem('currentChatFilename');
+          localStorage.removeItem('lastCharacter');
+          window.loadedChat = [];
+        }
+      }, 300);
+      
+    } else {
+      restoreLastChat();
+    }
+    
+  });
+  
+  
+
+  // ==================================================
+  // CREATE NEW CHAT (Global function for onclick)
+  // ==================================================
+  async function createNewChat() {
+    console.log('🔴 BEFORE ANYTHING - currentChatFilename:', currentChatFilename);
+    console.log('🔴 BEFORE ANYTHING - window.loadedChat length:', window.loadedChat?.length || 0);
+  
+    console.log('🔵 NEW CHAT BUTTON CLICKED');
+    
+    // 🔒 LOCK: Prevent concurrent new chat operations
+    if (isCreatingNewChat) {
+      console.log('⛔ Already creating a chat, blocked duplicate');
+      return;
+    }
+    
+    isCreatingNewChat = true; // Lock it
+    
+    try {
+      var dropdown = document.getElementById('character-select');
+      var currentChar = dropdown.value;
+      
+      console.log('🔵 Calling /chats/new for:', currentChar);
+      
+      var res = await fetch('/chats/new', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ character: currentChar })
+      });
+      
+      var data = await res.json();
+      console.log('🔵 Response:', data);
+      
+      if (data.error) {
+        alert('Failed to create new chat.');
+        return;
+      }
+      
+      // ✅ Clear memory and DOM FIRST
+      window.loadedChat = [];
+      document.getElementById('chat').innerHTML = '';
+      
+      // ✅ Set the new filename
+      currentChatFilename = data.filename;
+      localStorage.setItem('currentChatFilename', currentChatFilename);
+      localStorage.setItem('lastCharacter', currentChar);
+      
+      console.log('🔵 Set currentChatFilename to:', currentChatFilename);
+      
+      // ✅ Reload chat list
+      await new Promise(r => setTimeout(r, 200));
+      await loadChats();
+      
+      // ✅ Open the new chat (displayOpeningLineInChat will save to the CORRECT file)
+      await openChat(data.filename);
+      
+      console.log('🔵 window.loadedChat after openChat:', window.loadedChat.length, 'messages');
+      
+      // ✅ Mark the new chat as active in sidebar
+      var chatItems = document.querySelectorAll('.chat-item');
+      var newChatItem = Array.from(chatItems).find(function(item) {
+        return item.dataset.filename === data.filename;
+      });
+      
+      if (newChatItem) {
+        newChatItem.classList.add('active');
+        
+        var titleElement = newChatItem.querySelector('.chat-title');
+        if (titleElement) {
+          setTimeout(function() {
+            startRename(titleElement, data.filename, titleElement.textContent);
+          }, 0);
+        }
+      }
+      
+      console.log('✅ New chat created successfully');
+      
+    } catch (err) {
+      console.error('❌ Error creating new chat:', err);
+      alert('Failed to create new chat.');
+    } finally {
+      isCreatingNewChat = false; // 🔓 ALWAYS unlock
+    }
+  }
+  
+// ==================================================
+// UPGRADE MODAL (PRO FEATURES)
+// ==================================================
+
+function showUpgradeModal(feature) {
+  const modal = document.getElementById('upgrade-modal');
+  const content = document.getElementById('upgrade-content');
+  
+  const features = {
+    projects: {
+      icon: "📁",
+      title: "Projects",
+      description: "Organize chats by topic, inject documents (PDF, DOCX, Markdown) for context, and keep everything structured.",
+      benefits: [
+        "Create unlimited projects",
+        "Load documents into chat context",
+        "Separate chat histories per project",
+        "Perfect for research, worldbuilding, and organized workflows"
+      ]
+    },
+    memory: {
+      icon: "🧠",
+      title: "Character Memory",
+      description: "Characters remember past conversations, important facts, and context across all chats.",
+      benefits: [
+        "Persistent character memory",
+        "Smart keyword-based recall",
+        "Automatic summarization",
+        "Builds deeper, more coherent conversations over time"
+      ]
+    }
+  };
+  
+  const f = features[feature];
+  content.innerHTML = `
+    <div style="text-align: center; margin-bottom: 20px;">
+      <div style="font-size: 64px; margin-bottom: 16px;">${f.icon}</div>
+      <h2 style="margin: 0 0 12px 0; color: #fff;">${f.title}</h2>
+      <p style="color: #aaa; font-size: 15px; line-height: 1.6;">${f.description}</p>
+    </div>
+    <ul style="list-style: none; padding: 0; margin: 20px 0;">
+      ${f.benefits.map(b => `
+        <li style="padding: 8px 0; color: #ccc; font-size: 14px;">
+          <span style="color: #667eea; margin-right: 8px;">✓</span>${b}
+        </li>
+      `).join('')}
+    </ul>
+  `;
+  
+  modal.style.display = 'block';
+}
+
+function closeUpgradeModal() {
+  document.getElementById('upgrade-modal').style.display = 'none';
+}
+
+// Close on outside click
+window.addEventListener('click', (e) => {
+  const modal = document.getElementById('upgrade-modal');
+  if (e.target === modal) {
+    closeUpgradeModal();
+  }
+});
+</script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</body>
+</html>
