@@ -1372,47 +1372,68 @@ async function openChat(filename) {
 
       const streamEl = spanText;
       
+      
       streamEl.style.wordWrap = 'break-word';
       streamEl.style.overflowWrap = 'break-word';
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder("utf-8");
       let fullMessage = "";
+      let cleanedMessage = "";
+
+      // Get user/char names for cleanup
+      const userName = activeUserName || "User";
+      const charName = currentCharName || "Assistant";
 
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-
+        
         const chunk = decoder.decode(value, { stream: true });
         fullMessage += chunk;
         
-        let html = marked.parse(fullMessage);
+        // Buffer text for TTS (sends complete sentences, not raw chunks)
+        if (typeof bufferTextForTTS === 'function') {
+          bufferTextForTTS(chunk);
+        }
+        
+        // 🔥 CLEAN THE TEXT DURING STREAMING - NOT AFTER!
+        cleanedMessage = fullMessage
+          .replace(/<\|im_start\|>assistant/gi, "")
+          .replace(/<\|im_start\|>user/gi, "")
+          .replace(/<\|im_start\|>system/gi, "")
+          .replace(/<\|im_end\|>/gi, "")
+          .replace(/<\/\|im_end\|>/gi, "")
+          .replace(new RegExp(`^${userName}:\\s*`, 'gim'), "")
+          .replace(new RegExp(`^${charName}:\\s*`, 'gim'), "")
+          .replace(/^User:\s*/gim, "")
+          .replace(/^Assistant:\s*/gim, "")
+          .replace(/^[ \t]+/gm, "")
+          .replace(/\n{3,}/g, "\n\n")  // ← NEW: Replace 3+ line breaks with exactly 2
+          .trim();
+        
+// Parse the CLEANED message with proper markdown handling
+        let html = marked.parse(cleanedMessage);
         html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
+        
+        // Ensure single asterisks render as italics (em tags)
+        // This catches any asterisks that marked.parse missed
+        html = html.replace(/\*([^*]+?)\*/g, '<em>$1</em>');
+        
         streamEl.innerHTML = html;
-
+        
         chat.scrollTop = chat.scrollHeight;
         await new Promise((r) => setTimeout(r, 25));
       }
 
-      const userName = activeUserName || "User";
-      const charName = currentCharName || "Assistant";
+      
+      // Flush remaining TTS buffer after streaming ends
+      if (typeof flushTTSBuffer === 'function') {
+        flushTTSBuffer();
+      }
 
-      const finalText = fullMessage
-        .replace(/<\|im_start\|>assistant/gi, "")
-        .replace(/<\|im_start\|>user/gi, "")
-        .replace(/<\|im_start\|>system/gi, "")
-        .replace(/<\|im_end\|>/gi, "")
-        .replace(/<\/\|im_end\|>/gi, "")
-        .replace(new RegExp(`^${userName}:\\s*`, 'gim'), "")
-        .replace(new RegExp(`^${charName}:\\s*`, 'gim'), "")
-        .replace(/^User:\s*/gim, "")
-        .replace(/^Assistant:\s*/gim, "")
-        .replace(/^[ \t]+/gm, "")
-        .trim();
-        
-      const html = marked.parse(finalText);
-      const cleanHtml = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
-      streamEl.innerHTML = cleanHtml;
+      // 🔥 NO RE-RENDER NEEDED - TEXT IS ALREADY CLEANED!
+      const finalText = cleanedMessage;
 
       if (!window.loadedChat) window.loadedChat = [];
       
