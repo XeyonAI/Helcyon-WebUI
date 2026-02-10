@@ -170,6 +170,26 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
   let currentCharName = "Cal";  
   let lastPrompt = localStorage.getItem('lastPrompt') || '';
   let isCreatingNewChat = false;
+
+// Ensure marked.js fallback is always available
+if (typeof marked === "undefined") {
+  console.warn("⚠️ Marked.js not found — using custom parser.");
+  window.marked = { 
+    parse: function(txt) {
+      // Split into paragraphs
+      return txt
+        .split('\n\n')
+        .map(para => para.trim())
+        .filter(para => para.length > 0)
+        .map(para => `<p>${para}</p>`)
+        .join('');
+    },
+    setOptions: function(opts) {
+      // Dummy function - our simple parser doesn't need options
+      return;
+    }
+  };
+}
   
   // ==================================================
   // LOAD ACTIVE USER
@@ -1419,18 +1439,17 @@ async function openChat(filename) {
           .replace(/^User:\s*/gim, "")
           .replace(/^Assistant:\s*/gim, "")
           .replace(/^[ \t]+/gm, "")
-          .replace(/\n{3,}/g, "\n\n")
           .trim();
-        
+
         // Parse the CLEANED message with proper markdown handling
         let html = marked.parse(cleanedMessage);
         html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
-        
+
         // Convert ALL single asterisks to <em> tags (roleplay actions)
         html = html.replace(/\*([^\n*]+?)\*/g, '<em>$1</em>');
-        
+
         streamEl.innerHTML = html;
-        
+                
         chat.scrollTop = chat.scrollHeight;
         await new Promise((r) => setTimeout(r, 25));
       }
