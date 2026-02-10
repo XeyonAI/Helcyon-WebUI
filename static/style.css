@@ -1537,6 +1537,16 @@ body {
   font-size: 13px;
 }
 
+
+.model-msg strong,
+.user-msg strong {
+  display: block;
+  margin-bottom: 12px !important;  
+  margin-right: 8px;
+  padding-right: 4px;
+}
+
+
 /* ==================== TOKEN COUNTER ==================== */
 .token-count {
   font-weight: 600;
