@@ -1062,18 +1062,22 @@ body {
 /* ==================== AUTHOR'S NOTE BUTTON ==================== */
 
 #sidebar-footer {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  width: 240px;  
+  position: relative;
+  bottom: auto;
+  left: auto;
+  width: 80%;
   background: #1a1a1a;
   border-top: 1px solid #333;
   padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 5px 12px;;
-  z-index: 100; 
+  padding: 5px 12px;
+  z-index: 100;
+  flex-shrink: 0;
+  margin-left: -20px;  /* ← ADD THIS: Offset the sidebar's padding */
+  margin-right: -10px;  /* ← ADD THIS */
+  width: calc(100% + 10px);  /* ← ADD THIS: Compensate for negative margins */
 }
 
 #opening-line-btn,
