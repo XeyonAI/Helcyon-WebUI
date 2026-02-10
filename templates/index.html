@@ -1232,8 +1232,18 @@ async function openChat(filename) {
       }
       
       if (typeof marked === "undefined") {
-        console.warn("⚠️ Marked.js not found — falling back to plain text.");
-        window.marked = { parse: txt => txt };
+        console.warn("⚠️ Marked.js not found — using custom parser.");
+        window.marked = { 
+          parse: function(txt) {
+            // Split into paragraphs
+            return txt
+              .split('\n\n')
+              .map(para => para.trim())
+              .filter(para => para.length > 0)
+              .map(para => `<p>${para}</p>`)
+              .join('');
+          }
+        };
       }
       
       const dropdown = document.getElementById("character-select");
@@ -1372,7 +1382,7 @@ async function openChat(filename) {
 
       const streamEl = spanText;
       
-      
+      streamEl.style.whiteSpace = 'pre-wrap';
       streamEl.style.wordWrap = 'break-word';
       streamEl.style.overflowWrap = 'break-word';
 
@@ -1409,16 +1419,15 @@ async function openChat(filename) {
           .replace(/^User:\s*/gim, "")
           .replace(/^Assistant:\s*/gim, "")
           .replace(/^[ \t]+/gm, "")
-          .replace(/\n{3,}/g, "\n\n")  // ← NEW: Replace 3+ line breaks with exactly 2
+          .replace(/\n{3,}/g, "\n\n")
           .trim();
         
-// Parse the CLEANED message with proper markdown handling
+        // Parse the CLEANED message with proper markdown handling
         let html = marked.parse(cleanedMessage);
         html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
         
-        // Ensure single asterisks render as italics (em tags)
-        // This catches any asterisks that marked.parse missed
-        html = html.replace(/\*([^*]+?)\*/g, '<em>$1</em>');
+        // Convert ALL single asterisks to <em> tags (roleplay actions)
+        html = html.replace(/\*([^\n*]+?)\*/g, '<em>$1</em>');
         
         streamEl.innerHTML = html;
         
@@ -1426,7 +1435,6 @@ async function openChat(filename) {
         await new Promise((r) => setTimeout(r, 25));
       }
 
-      
       // Flush remaining TTS buffer after streaming ends
       if (typeof flushTTSBuffer === 'function') {
         flushTTSBuffer();
