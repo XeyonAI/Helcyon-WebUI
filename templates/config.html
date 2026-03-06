@@ -3,15 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <title>Helcyon Config</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/style.css" />
 </head>
 <body id="config-page">
   <div id="top-bar">
-    <div style="display: flex; align-items: center;">
-      <strong style="font-size: 1.4rem; font-style: italic; font-weight: 700; color: #eee; letter-spacing: 0.4px;">
-        Helcyon-AI Chat - Free Edition
-      </strong>
-    </div>
+    <div><strong>Character Settings</strong></div>
     <a id="settings-link" href="/">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
@@ -34,10 +30,33 @@
       <label>Top P:</label>
       <input type="number" id="top_p" step="0.05" min="0" max="1" />
 
+      <label>Min P:</label>
+      <input type="number" id="min_p" step="0.01" min="0" max="1" />
+
+      <label>Top K:</label>
+      <input type="number" id="top_k" step="1" min="0" max="100" />
+
       <label>Repeat Penalty:</label>
       <input type="number" id="repeat_penalty" step="0.01" min="0.8" max="2" />
 
       <button id="saveSettingsBtn" style="background-color: #1f5a3a; border-color: #248050; color: white;">💾 Save Settings</button>
+
+      <hr style="margin: 20px 0; border-color: #333;">
+
+      <h3>TTS Engine</h3>
+
+      <label>Engine:</label>
+      <select id="tts-engine-select" style="width:100%; margin-bottom:8px;">
+        <option value="f5">F5-TTS</option>
+        <option value="xtts">XTTS v2</option>
+        <option value="kokoro">Kokoro</option>
+        <option value="none">None (Disabled)</option>
+      </select>
+
+      <div id="tts-engine-status" style="font-size:12px; color:#aaa; margin-bottom:10px;"></div>
+
+      <button id="saveTTSEngineBtn" style="background-color: #1f3a5a; border-color: #245080; color: white; width:100%;">💾 Save TTS Engine</button>
+
     </div>
 
     <!-- Main Center Column -->
@@ -80,7 +99,7 @@
 
       <!-- 🔥 TOKEN COUNTER PANEL - INSERTED HERE -->
       <div id="token-counter-panel" style="
-        background: #1a1a1a;
+        background: #1D262E;
         border: 1px solid #333;
         border-radius: 8px;
         padding: 15px;
@@ -136,11 +155,13 @@
       <img id="preview-img" src="" alt="Preview"
         style="width:64px;height:64px;border-radius:8px;display:none;margin-top:0.5rem;" />
 
+      <input type="file" id="char-img-replace-input" accept="image/*" style="display:none;" onchange="replaceCharacterImage(this)">
+      <button onclick="document.getElementById('char-img-replace-input').click()" style="background-color: #2a4a6a; border-color: #3a6a9a; color: white; margin-top: 6px; margin-bottom: 10px;">🖼️ Upload New Image</button>
+
       <button onclick="saveCharacter()" style="background-color: #1f5a3a; border-color: #248050; color: white; margin-right: 10px;">💾 Save Character</button>
       <button id="duplicate-char-btn" style="background-color: #3a4a5a; border-color: #4a5a6a; color: white; margin-left: 10px;">📋 Duplicate</button>
       <button id="rename-char-btn" style="background-color: #5a4a1f; border-color: #806024; color: white; margin-left: 10px;">✏️ Rename</button>
       <button id="delete-char-btn" class="clear-btn" style="margin-left: 10px;">🗑️ Delete Character</button>
-
       <hr />
 
       <!-- CHARACTER EXPORT/IMPORT SECTION -->
@@ -250,6 +271,9 @@
       </div>
     </div>
 
+  <!-- JavaScript will go here (next step) -->
+
+
 
   <!-- JavaScript will go here (next step) -->
 </body>
@@ -353,6 +377,45 @@
     } else {
       img.style.display = "none";
     }
+  }
+
+  async function replaceCharacterImage(input) {
+    const file = input.files[0];
+    if (!file) return;
+
+    const charName = document.getElementById('character-select').value;
+    if (!charName) {
+      alert('No character selected!');
+      input.value = '';
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetch(`/replace_character_image/${encodeURIComponent(charName)}`, {
+        method: 'POST',
+        body: formData
+      });
+      const data = await res.json();
+
+      if (data.status === 'ok') {
+        // Update the filename field
+        document.getElementById('image').value = data.image;
+        // Refresh the preview with cache-busting
+        const preview = document.getElementById('preview-img');
+        preview.src = `/static/images/${data.image}?v=${Date.now()}`;
+        preview.style.display = 'block';
+        console.log('✅ Character image replaced:', data.image);
+      } else {
+        alert('Failed to update image: ' + (data.error || 'Unknown error'));
+      }
+    } catch (err) {
+      console.error('❌ Image replace error:', err);
+      alert('Error uploading image');
+    }
+    input.value = '';
   }
 
   async function saveCharacter() {
@@ -730,9 +793,11 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       
       // ✅ FIXED: Use getElementById instead of querySelector
       document.getElementById('temperature').value = settings.temperature || 0.8;
-      document.getElementById('max_tokens').value = settings.max_tokens || 2048;
+      document.getElementById('max_tokens').value = settings.max_tokens || 4096;
       document.getElementById('top_p').value = settings.top_p || 0.95;
-      document.getElementById('repeat_penalty').value = settings.repeat_penalty || 1.05;
+      document.getElementById('min_p').value = settings.min_p || 0.05;
+      document.getElementById('top_k').value = settings.top_k || 40;
+      document.getElementById('repeat_penalty').value = settings.repeat_penalty || 1.1;
       
       console.log('✅ Loaded sampling settings:', settings);
     } catch (err) {
@@ -744,9 +809,11 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     try {
       const settings = {
         temperature: parseFloat(document.getElementById('temperature').value) || 0.8,
-        max_tokens: parseInt(document.getElementById('max_tokens').value) || 2048,
+        max_tokens: parseInt(document.getElementById('max_tokens').value) || 4096,
         top_p: parseFloat(document.getElementById('top_p').value) || 0.95,
-        repeat_penalty: parseFloat(document.getElementById('repeat_penalty').value) || 1.05
+        min_p: parseFloat(document.getElementById('min_p').value) || 0.05,
+        top_k: parseInt(document.getElementById('top_k').value) || 40,
+        repeat_penalty: parseFloat(document.getElementById('repeat_penalty').value) || 1.1,
       };
       
       const res = await fetch("/save_sampling_settings", {
@@ -772,6 +839,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     loadUserList();
     loadSettings();
     loadGlobalSystemPrompt();
+    loadTTSEngine();
 
     const refreshBtn = document.getElementById("refresh-memory");
     if (refreshBtn) refreshBtn.addEventListener("click", loadCharacterMemory);
@@ -798,6 +866,9 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
 
     const saveSettingsBtn = document.getElementById("saveSettingsBtn");
     if (saveSettingsBtn) saveSettingsBtn.addEventListener("click", saveSettings);
+
+    const saveTTSEngineBtn = document.getElementById("saveTTSEngineBtn");
+    if (saveTTSEngineBtn) saveTTSEngineBtn.addEventListener("click", saveTTSEngine);
 
     const userSelect = document.getElementById("userSelect");
     if (userSelect) {
@@ -977,15 +1048,15 @@ function updateTokenCount() {
       
       if (counts.total < 1000) {
         totalEl.style.color = '#28a745';  // Green
-        statusEl.textContent = '✓ Optimal';
+        statusEl.textContent = '✔ Optimal';
         statusEl.style.color = '#28a745';
       } else if (counts.total < 2000) {
         totalEl.style.color = '#ffc107';  // Amber
-        statusEl.textContent = '⚠ High';
+        statusEl.textContent = 'âš  High';
         statusEl.style.color = '#ffc107';
       } else {
         totalEl.style.color = '#dc3545';  // Red
-        statusEl.textContent = '⚠ Very High';
+        statusEl.textContent = 'âš  Very High';
         statusEl.style.color = '#dc3545';
       }
       
@@ -1160,6 +1231,56 @@ async function deleteUserPersona() {
   }
 }
 
+
+
+// ==================================================
+// TTS ENGINE SELECTOR
+// ==================================================
+async function loadTTSEngine() {
+  try {
+    const res = await fetch('/api/tts/engine');
+    const data = await res.json();
+    const select = document.getElementById('tts-engine-select');
+    if (select && data.engine) {
+      select.value = data.engine;
+    }
+    updateTTSEngineStatus(data.engine);
+  } catch (err) {
+    console.error('Failed to load TTS engine:', err);
+  }
+}
+
+function updateTTSEngineStatus(engine) {
+  const statusEl = document.getElementById('tts-engine-status');
+  if (!statusEl) return;
+  const labels = {
+    f5: '🟢 F5-TTS — fast, good quality',
+    xtts: '🟢 XTTS v2 — voice cloning',
+    kokoro: '🟢 Kokoro — lightweight, natural',
+    none: '🔴 TTS disabled'
+  };
+  statusEl.textContent = labels[engine] || engine;
+}
+
+async function saveTTSEngine() {
+  const select = document.getElementById('tts-engine-select');
+  const engine = select.value;
+  try {
+    const res = await fetch('/api/tts/engine', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ engine })
+    });
+    const data = await res.json();
+    if (data.engine) {
+      updateTTSEngineStatus(data.engine);
+      alert('✅ TTS engine set to: ' + data.engine.toUpperCase());
+    }
+  } catch (err) {
+    console.error('Failed to save TTS engine:', err);
+    alert('❌ Failed to save TTS engine');
+  }
+}
 
 </script>
 </body>

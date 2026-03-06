@@ -54,14 +54,27 @@ def list_chats():
     print(f"   Active project: {get_active_project()}")
     print(f"   Looking in: {chats_dir}")
     
-    files = sorted(os.listdir(chats_dir))
+    files = os.listdir(chats_dir)
     chats = []
     
     for f in files:
         if f.endswith(".txt"):
+            filepath = os.path.join(chats_dir, f)
+            
+            # Get file stats
+            stats = os.stat(filepath)
+            created = stats.st_ctime  # Creation time
+            modified = stats.st_mtime  # Last modified time
+            
             # Display full title including character name
             title = f.replace(".txt", "").replace("_", " ")
-            chats.append({"title": title, "filename": f})
+            
+            chats.append({
+                "title": title,
+                "filename": f,
+                "created": created,
+                "modified": modified
+            })
     
     print(f"Returning {len(chats)} chats")
     return jsonify(chats)

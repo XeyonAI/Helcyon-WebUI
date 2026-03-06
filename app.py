@@ -1,11 +1,13 @@
 from flask import Flask, request, jsonify, send_from_directory, render_template, Response
 from flask_cors import CORS
-import requests, os, json, re
-from datetime import datetime
+import requests, os, json, re, hashlib
+from datetime import datetime, timedelta
 from truncation import trim_chat_history
+from tts_routes import tts_bp
 from utils.session_handler import get_system_prompt, get_instruction_layer, get_tone_primer
+from whisper_routes import whisper_bp
 
-print("💡 Flask is using this app.py right now")
+print(f"💡 Flask is using: {os.path.abspath(__file__)}")
 
 # --------------------------------------------
 # Chat history trimming (simple message window)
@@ -24,15 +26,65 @@ def trim_chat_window(messages):
 app = Flask(__name__, static_folder="static", template_folder="templates")
 CORS(app)
 
+# Add CSP headers for TTS audio playback
+@app.after_request
+def add_security_headers(response):
+    response.headers['Content-Security-Policy'] = "default-src 'self' 'unsafe-inline' 'unsafe-eval'; media-src 'self' blob:; connect-src 'self'; img-src 'self' data: blob:"
+    return response
+
+
+# --------------------------------------------------
+# Serve style.css from root directory
+# --------------------------------------------------
+@app.route('/style.css')
+def serve_style():
+    return send_from_directory(os.path.dirname(__file__), 'style.css')
+
+# --------------------------------------------------
+# Serve files from root /utils folder
+# --------------------------------------------------
+@app.route('/utils/<path:filename>')
+def serve_utils(filename):
+    utils_dir = os.path.join(os.path.dirname(__file__), 'utils')
+    return send_from_directory(utils_dir, filename)
+
 # --------------------------------------------------
 # Register extra routes
 # --------------------------------------------------
 from extra_routes import extra
 from chat_routes import chat_bp
-# from project_routes import project_bp
 app.register_blueprint(extra)
 app.register_blueprint(chat_bp)
-# app.register_blueprint(project_bp)
+app.register_blueprint(tts_bp, url_prefix='/api/tts')
+app.register_blueprint(whisper_bp)
+
+# --------------------------------------------------
+# Load persisted chat history (if it exists)
+# --------------------------------------------------
+chat_history_path = "chat_history.json"
+
+if os.path.exists(chat_history_path):
+    try:
+        with open(chat_history_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            # Handle both formats gracefully
+            if isinstance(data, list):
+                # Convert old-style list into unified message objects
+                active_chat = []
+                for item in data:
+                    if "user" in item and "model" in item:
+                        active_chat.append({"role": "user", "content": item["user"]})
+                        active_chat.append({"role": "assistant", "content": item["model"]})
+                print(f"💾 Converted legacy chat_history.json ({len(active_chat)} messages)")
+            elif isinstance(data, dict):
+                active_chat = data.get("active_chat", [])
+            else:
+                active_chat = []
+    except Exception as e:
+        print(f"⚠️ Failed to load chat history: {e}")
+        active_chat = []
+else:
+    active_chat = []
 
 # --------------------------------------------------
 # App configuration and startup info
@@ -55,6 +107,9 @@ def get_current_model():
     global CURRENT_MODEL
     try:
         r = requests.get(f"{API_URL}/v1/models", timeout=5)
+        if r.status_code == 503:
+            print("⏳ llama.cpp still loading — will retry on first chat.")
+            return
         r.raise_for_status()
         data = r.json()
         if data.get("data"):
@@ -104,6 +159,9 @@ import requests, sys
 # --------------------------------------------------
 
 def stream_model_response(payload):
+    global abort_generation
+    abort_generation = False  # Reset flag at start
+    
     print("\n🧩 FULL PAYLOAD SENDING TO MODEL:", flush=True)
     print(json.dumps(payload, indent=2), flush=True)
     response = requests.post(
@@ -119,6 +177,12 @@ def stream_model_response(payload):
     all_text = []
     
     for line in response.iter_lines(chunk_size=1):
+        # Check abort flag
+        if abort_generation:
+            print("🛑 Generation aborted by user", flush=True)
+            response.close()  # Close the connection
+            break
+            
         if not line:
             continue
         try:
@@ -143,6 +207,72 @@ def stream_model_response(payload):
             continue
     
     print(f"\n🎯 DONE: {total_chunks} chunks, {len(''.join(all_text))} chars total", flush=True)
+
+# --------------------------------------------------
+# Stream vision/multimodal model response
+# Uses /v1/chat/completions (OpenAI-compatible)
+# --------------------------------------------------
+def stream_vision_response(payload):
+    global abort_generation
+    abort_generation = False
+
+    print("\n🖼️ VISION PAYLOAD SENDING TO MODEL:", flush=True)
+    response = requests.post(
+        f"{API_URL}/v1/chat/completions",
+        json=payload,
+        stream=True,
+        timeout=None
+    )
+    print(f"🔗 Vision response status: {response.status_code}", flush=True)
+
+    total_chunks = 0
+    all_text = []
+
+    for line in response.iter_lines(chunk_size=1):
+        if abort_generation:
+            print("🛑 Vision generation aborted by user", flush=True)
+            response.close()
+            break
+
+        if not line:
+            continue
+        try:
+            line_str = line.decode("utf-8").strip()
+
+            if line_str.startswith("data:"):
+                line_str = line_str[5:].strip()
+            if line_str == "[DONE]":
+                break
+
+            j = json.loads(line_str)
+            # /v1/chat/completions uses choices[0].delta.content
+            delta = j.get("choices", [{}])[0].get("delta", {})
+            chunk = delta.get("content", "")
+            total_chunks += 1
+
+            if chunk:
+                all_text.append(chunk)
+                yield chunk
+                sys.stdout.flush()
+
+        except Exception as e:
+            print(f"❌ Vision parse error: {e}", flush=True)
+            continue
+
+    print(f"\n🎯 VISION DONE: {total_chunks} chunks, {len(''.join(all_text))} chars total", flush=True)
+
+# --------------------------------------------------
+# Global abort flag for stopping generation
+# --------------------------------------------------
+abort_generation = False
+
+@app.route("/abort_generation", methods=["POST"])
+def abort_generation_endpoint():
+    """Stop the current generation immediately."""
+    global abort_generation
+    abort_generation = True
+    print("🛑 Generation abort requested")
+    return jsonify({"status": "aborted"}), 200   
     
 # --------------------------------------------------
 # Load Recent Chat (for Smart Memory Summarizer)
@@ -179,69 +309,6 @@ def load_recent_chat(character_name, max_turns=6):
 # --------------------------------------------------
 # Full Memory Trigger Handler (Detection Only + ChatML Cleanup)
 # --------------------------------------------------
-def handle_memory_trigger(text, character_name):
-    """
-    Detects whether the user input is a request to save something to memory.
-    Cleans ChatML formatting and returns True if a save-to-memory phrase is found.
-    """
-
-    # 🧹 Clean ChatML formatting out of the input
-    text = re.sub(r"<\|.*?\|>", "", text)  # Remove <|im_start|>, <|im_end|>, etc
-    text = re.sub(r"^system\n.*?\n", "", text, flags=re.DOTALL)  # Remove system block if present
-    text = re.sub(r"^user\n", "", text, flags=re.IGNORECASE)  # Remove leading 'user\n'
-    text = text.strip()
-
-    text_lower = text.lower()
-
-    # ✅ Must mention "memory" and include a save-like action
-    mentions_memory = "memory" in text_lower
-    trigger_patterns = [
-        r"(save|store|put|record|note|keep|log|memorize).{0,40}memory",
-        r"memory.{0,40}(save|store|put|record|note|keep|log|memorize)"
-    ]
-
-    is_trigger = any(re.search(pat, text_lower) for pat in trigger_patterns)
-
-    # Return True if both conditions met, else False
-    if mentions_memory and is_trigger:
-        print(f"🧩 Memory trigger detected for {character_name}: {text[:60]}...")
-        return True
-    return False
-
-
-
-    is_trigger = any(re.search(pat, text_lower) for pat in trigger_patterns)
-    if not (mentions_memory and is_trigger):
-        return None
-
-    # Extract a rough title from the first proper noun or phrase
-    title_match = re.search(r"(about|remember|note|save|store)\s+(.*?)($|\.|\n)", text, re.IGNORECASE)
-    title = title_match.group(2).strip().capitalize() if title_match else "Untitled"
-
-    # Keyword extraction — basic noun phrases
-    raw_keywords = re.findall(r"\b\w[\w\-']+\b", text)
-    excluded = {"the", "and", "this", "that", "can", "please", "you", "your", "in", "is", "to", "it", "for"}
-    keywords = [kw for kw in raw_keywords if kw.lower() not in excluded]
-    keywords = list(dict.fromkeys(keywords))  # Remove duplicates
-    keywords_line = ", ".join(keywords[:6]) + "."
-
-    # Final memory block
-    memory_block = (
-        f"# Memory: {title}\n"
-        f"Keywords: {keywords_line}\n\n"
-        f"{text}\n\n"
-    )
-
-    # Save to file
-    memory_dir = os.path.join(os.path.dirname(__file__), "Memories")
-    os.makedirs(memory_dir, exist_ok=True)
-    memory_path = os.path.join(memory_dir, f"{character_name.lower()}_memory.txt")
-
-    with open(memory_path, "a", encoding="utf-8") as f:
-        f.write(memory_block)
-
-    print(f"🧠 Saved formatted memory for {character_name}: {title}")
-    return "Got it — memory saved."
 
 
 # --------------------------------------------------
@@ -272,7 +339,19 @@ def chat():
     character_name = data.get("character", "").strip()
     user_name = data.get("user_name", "User")
     
-    # 🧹 Clean ChatML tags for trigger detection
+    
+    # Handle multimodal content (images) — extract text part only for processing
+    # Keep original for sending to model, use user_input_text for all string operations
+    if isinstance(user_input, list):
+        text_parts = [p.get("text", "") for p in user_input if p.get("type") == "text"]
+        user_input_text = " ".join(text_parts)
+    else:
+        user_input_text = user_input
+
+    # Reassign user_input to the text-only version for all downstream string processing
+    # The multimodal content is preserved in active_chat for the vision path
+    user_input = user_input_text
+
     clean_input = re.sub(r"<\|.*?\|>", "", user_input).strip()
     
     print(f"🔍 DEBUG: clean_input for memory detection: {clean_input[:100] if clean_input else '(empty)'}")
@@ -300,7 +379,13 @@ def chat():
     print(f"🔍 DEBUG: Received conversation_history from frontend:")
     print(f"🔍 DEBUG: Length: {len(active_chat)}")
     if active_chat:
-        print(f"🔍 DEBUG: Last message: {active_chat[-1]}")
+        last = active_chat[-1]
+        # Safe preview — don't dump base64 image data to console
+        if isinstance(last.get("content"), list):
+            preview = [p.get("type","?") + (":" + p.get("text","")[:60] if p.get("type")=="text" else "") for p in last["content"]]
+            print(f"🔍 DEBUG: Last message: role={last.get('role')} content=[{', '.join(preview)}]")
+        else:
+            print(f"🔍 DEBUG: Last message: role={last.get('role')} content={str(last.get('content',''))[:200]}")
 
     print(f"📜 Received {len(active_chat)} messages from frontend")
 
@@ -358,134 +443,6 @@ def chat():
     print("🧩 Loaded character file:", char_path)
     print("🧩 example_dialogue present:", "example_dialogue" in char_data)
     print("🧩 example_dialogue length:", len(char_data.get("example_dialogue", "")))
-# --- Smart memory trigger (save new memory if requested) ---
-    try:
-        if handle_memory_trigger(clean_input, character_name):
-            print(f"🔴 DEBUG: Memory trigger detected for {character_name}")
-            print(f"🔴 DEBUG: clean_input = {clean_input[:100]}")
-            
-            # Get the active project's chat directory
-            try:
-                print("🔴 DEBUG: Attempting to read _active_project.json...")
-                with open("projects/_active_project.json", "r", encoding="utf-8") as f:
-                    active_proj = json.load(f)
-                    project_name = active_proj.get("active_project", "")
-                    print(f"🔴 DEBUG: Active project name: {project_name}")
-                    if project_name:
-                        chat_dir = os.path.join("projects", project_name, "chats")
-                    else:
-                        chat_dir = "chats"  # Fallback to root
-            except Exception as e:
-                print(f"🔴 DEBUG: Failed to read active project: {e}")
-                chat_dir = "chats"  # Fallback if no active project
-            
-            print(f"🔴 DEBUG: Using chat_dir: {chat_dir}")
-            convo_text = ""
-            
-            try:
-                chat_files = [
-                    f for f in os.listdir(chat_dir) 
-                    if f.endswith('.txt') and character_name.lower() in f.lower()
-                ]
-                print(f"🔴 DEBUG: Found {len(chat_files)} .txt files in chats/")
-                print(f"🔴 DEBUG: Files found: {chat_files[:5]}")
-                
-                if chat_files:
-                    latest_file = max(chat_files, key=lambda f: os.path.getmtime(os.path.join(chat_dir, f)))
-                    chat_path = os.path.join(chat_dir, latest_file)
-                    print(f"🔴 DEBUG: Using chat file: {latest_file}")
-                    
-                    with open(chat_path, "r", encoding="utf-8") as f:
-                        lines = [l.strip() for l in f.readlines() if l.strip()]
-                    
-                    convo_text = "\n".join(lines[-20:])
-                    print(f"🔴 DEBUG: Extracted {len(convo_text)} chars from chat")
-                else:
-                    print("🔴 DEBUG: No chat files found!")
-                    convo_text = clean_input
-            except Exception as e:
-                print(f"🔴 DEBUG: Error reading chat file: {e}")
-                convo_text = clean_input
-                    
-            except Exception as e:
-                print(f"🔴 DEBUG: Error reading chat file: {e}")
-                convo_text = clean_input
-            
-            # Clean tags
-            convo_text = re.sub(r"<\|.*?\|>", "", convo_text)
-            
-            if not convo_text or len(convo_text.split()) < 3:
-                convo_text = clean_input
-                print("⚠️ convo_text empty, using clean_input instead.")
-            
-            print("🔴 DEBUG: Text going to summarizer (first 200 chars):")
-            print(convo_text[:200])
-
-            # Call summarizer
-            try:
-                summary_payload = {"text": convo_text, "user_name": user_display_name, "character": character_name}
-                print(f"🔴 DEBUG: Calling summarizer for {character_name}...")
-                
-                sum_resp = requests.post(
-                    "http://127.0.0.1:8081/summarize_for_memory",
-                    json=summary_payload,
-                    timeout=30,
-                )
-                
-                print(f"🔴 DEBUG: Summarizer response status: {sum_resp.status_code}")
-                sum_resp.raise_for_status()
-                
-                sum_data = sum_resp.json()
-                summary_block = sum_data.get("summary", "").strip() or "# Memory: Untitled\n\n"
-                print("🔴 DEBUG: Got summary block, length:", len(summary_block))
-                
-            except Exception as e:
-                print(f"🔴 DEBUG: Summarizer request failed: {e}")
-                summary_block = "# Memory: Untitled\n\n"
-
-            # Append to memory file
-            try:
-                mem_payload = {"character": character_name, "body": summary_block}
-                print(f"🔴 DEBUG: Appending memory for {character_name}...")
-                
-                res = requests.post(
-                    "http://127.0.0.1:8081/append_character_memory",
-                    json=mem_payload,
-                    timeout=30,
-                )
-                
-                print(f"🔴 DEBUG: Append response status: {res.status_code}")
-                
-                if res.status_code != 200:
-                    raise Exception(f"Non-200 append response: {res.status_code}")
-                    
-                print("✅ Memory saved successfully!")
-                
-            except Exception as e:
-                print(f"🔴 DEBUG: append_character_memory failed: {e}")
-                print("🔴 DEBUG: Falling back to direct file write...")
-                
-                # Fallback: write directly
-                mem_dir = os.path.join(os.path.dirname(__file__), "memories")
-                os.makedirs(mem_dir, exist_ok=True)
-                mem_path = os.path.join(mem_dir, f"{character_name.lower()}_memory.txt")
-                
-                with open(mem_path, "a", encoding="utf-8") as f:
-                    f.write(summary_block + "\n\n")
-                
-                print(f"✅ Memory saved via fallback to {mem_path}")
-
-            return Response(
-                "Got it, memory saved.\n\n",
-                content_type="text/event-stream; charset=utf-8",
-            )
-
-    except Exception as e:
-        print(f"🔴 DEBUG: Error during memory trigger: {e}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"text": "Error while saving memory."})
-        
     # --------------------------------------------------
     # Load Helcyon's core system layer (hardcoded)
     # --------------------------------------------------
@@ -495,31 +452,33 @@ def chat():
 
     print(f"⏰ Time context injected: {current_time}")
     
-    project_instructions = ""
-    project_documents = ""   
-    
-      
     # --------------------------------------------------
     # Load character card and build system_text
     # --------------------------------------------------
     char_context = ""
 
     try:
+        # Helper to strip stray ChatML tokens from any user-supplied text
+        def strip_chatml(text):
+            text = re.sub(r'<\|im_start\|>\w*', '', text)
+            text = re.sub(r'<\|im_end\|>', '', text)
+            return text.strip()
+
         # Build character context from JSON fields
         parts = []
 
         if char_data.get("name"):
             parts.append(f"Character Name: {char_data['name']}")
         if char_data.get("description"):
-            parts.append(f"Description: {char_data['description']}")
+            parts.append(f"Description: {strip_chatml(char_data['description'])}")
         if char_data.get("scenario"):
-            parts.append(f"Scenario: {char_data['scenario']}")
+            parts.append(f"Scenario: {strip_chatml(char_data['scenario'])}")
         if char_data.get("main_prompt"):
-            parts.append(char_data["main_prompt"])
+            parts.append(strip_chatml(char_data["main_prompt"]))
         
         # ✅ ADD POST-HISTORY INSTRUCTIONS
         if char_data.get("post_history"):
-            parts.append(f"\nPost-History Instructions:\n{char_data['post_history']}")
+            parts.append(f"\nPost-History Instructions:\n{strip_chatml(char_data['post_history'])}")
 
         char_context = "\n\n".join(parts)
 
@@ -550,7 +509,7 @@ def chat():
         # Build the system_text (WITHOUT example_dialogue yet)
         # Build the system_text (WITHOUT example_dialogue yet)
         system_text = (
-            f"{system_prompt}\n\n{project_instructions}{project_documents}{user_context}{char_context}\n\n{instruction}\n\n{tone_primer}"
+            f"{system_prompt}\n\n{user_context}{char_context}\n\n{instruction}\n\n{tone_primer}"
         )
 
         # 📊 LOG SYSTEM MESSAGE SIZE
@@ -572,86 +531,7 @@ def chat():
         print(f"⚠️ Failed to build character context: {e}")
         system_text = system_prompt
         
-    # --------------------------------------------------
-    # Load memory file and find relevant block
-    # --------------------------------------------------
-    def load_character_memory(character_name):
-        path = os.path.join("memories", f"{character_name.lower()}_memory.txt")
-        if not os.path.exists(path):
-            return ""
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
-
-    def extract_keywords_from_block(block):
-        """Extract keywords from a memory block's Keywords line."""
-        lines = block.split('\n')
-        for line in lines:
-            if line.strip().lower().startswith('keywords:'):
-                keywords_str = line.split(':', 1)[1].strip()
-                keywords = [kw.strip().lower() for kw in keywords_str.split(',')]
-                return keywords
-        return []
-
-    memory_text = load_character_memory(character_name)  # ← This line is CALLING the function
-    
-    chosen_blocks = []
-
-    if memory_text:
-        blocks = re.split(r"(?m)^# Memory:", memory_text)
-        user_input_lower = user_input.lower()
-        
-        # Score ALL memory blocks
-        scored_blocks = []
-        
-        for b in blocks:
-            if not b.strip():
-                continue
-                
-            keywords = extract_keywords_from_block(b)
-            
-            # Calculate match score
-            # Give MORE weight to specific/rare keywords, LESS to common ones
-            common_keywords = {'claire', 'chris', 'neville', '4d', '3d'}
-            
-            score = 0
-            matched_keywords = []
-            
-            for kw in keywords:
-                if kw in user_input_lower:
-                    # Rare keyword = 3 points, common keyword = 1 point
-                    if kw in common_keywords:
-                        score += 1
-                    else:
-                        score += 3
-                    matched_keywords.append(kw)
-            
-            if score > 0:
-                scored_blocks.append({
-                    'score': score,
-                    'block': b.strip(),
-                    'matched_keywords': matched_keywords
-                })
-        
-        # Sort by score (highest first)
-        scored_blocks.sort(key=lambda x: x['score'], reverse=True)
-        
-        # Take TOP 2 memories only (configurable)
-        MAX_MEMORIES = 2
-        
-        if scored_blocks:
-            chosen_blocks = [item['block'] for item in scored_blocks[:MAX_MEMORIES]]
-            
-            print(f"🧠 Memory retrieval:")
-            for i, item in enumerate(scored_blocks[:MAX_MEMORIES]):
-                print(f"   #{i+1}: Score {item['score']} - Matched: {', '.join(item['matched_keywords'])}")
-        else:
-            print("🧠 No keyword matches found, no memory injected")
-
-    # Format multiple memories
-    if chosen_blocks:
-        memory = "Relevant memories:\n\n" + "\n\n---\n\n".join(chosen_blocks) + "\n"
-    else:
-        memory = ""
+    memory = ""
 
     # --------------------------------------------------
     # Build unified prompt (with example dialogue fenced in system block)
@@ -662,13 +542,15 @@ def chat():
     # Filter to only valid user/assistant messages
     active_chat = [
         msg for msg in active_chat 
-        if msg.get("role") in ["user", "assistant"] and msg.get("content", "").strip()
+        if msg.get("role") in ["user", "assistant"] and (
+            isinstance(msg.get("content"), list) or msg.get("content", "").strip()
+        )
     ]
     
-    # Limit to last 30 messages (15 exchanges) to prevent massive prompts
-    if len(active_chat) > 30:
-        active_chat = active_chat[-30:]
-        print(f"⚠️ Trimmed conversation history to last 30 messages")
+    # Limit to last 20 messages (10 exchanges) to prevent massive prompts
+    if len(active_chat) > 20:
+        active_chat = active_chat[-20:]
+        print(f"⚠️ Trimmed conversation history to last 20 messages")
     
     print(f"📊 Using {len(active_chat)} messages from conversation history")
     
@@ -719,28 +601,19 @@ def chat():
     
     print(f"🔍 DEBUG: After trimming, {len(messages)} messages remain")
     
-    # 🔥 REINFORCE PROJECT INSTRUCTIONS - Add them AGAIN near the end
-    # This ensures they're always visible to the model even if system message is huge
-    if project_instructions:
-        insert_position = max(1, len(messages) - 2)  # Right before last user message
-        messages.insert(insert_position, {
-            "role": "system",
-            "content": (
-                "╔═══════════════════════════════════════════════════════╗\n"
-                "CRITICAL REMINDER - PROJECT CONTEXT\n"
-                "╚═══════════════════════════════════════════════════════╝\n\n"
-                f"{project_instructions.strip()}\n\n"
-                "You MUST acknowledge and follow these project instructions in your response.\n"
-                "═════════════════════════════════════════════════════════"
-            )
-        })
-        print(f"🔥 Re-injected project instructions at position {insert_position} for maximum visibility")
+    # (project instructions are already in the system message above - no need to repeat)
     
  
 # ✅ FIX: Re-attach example_dialogue INSIDE system block with clear fencing
     ex_block = ""
     if char_data.get("example_dialogue"):
         ex = char_data["example_dialogue"].strip()
+        # 🔥 Strip any stray ChatML tokens from example dialogue - these cause the model
+        # to see a premature end-of-turn inside the system block and emit a stop token
+        # as its very first generation token, producing zero output.
+        ex = re.sub(r'<\|im_start\|>\w*', '', ex)
+        ex = re.sub(r'<\|im_end\|>', '', ex)
+        ex = ex.strip()
         
         # 🔍 Check if character uses emojis or xxx in their examples
         has_emojis = any(emoji in ex for emoji in ['❤️', '😍', '😘', '💕', '😊', '😉', '🔥', '💯', '✨', '🎯'])
@@ -809,13 +682,37 @@ def chat():
         print(f"✅ Inserted continuation reminder at position {insert_position}")
     else:
         print("🆕 New conversation detected - allowing greeting")
-    
+
+    # 🎭 STYLE REMINDER: inject late so it's fresh in context right before generation
+    if char_data.get("example_dialogue"):
+        char_name_for_style = char_data.get("name", "the character")
+        style_reminder = {
+            "role": "system",
+            "content": (
+                f"STYLE REMINDER: You are {char_name_for_style}. "
+                "Your response MUST match the tone, energy, length, and personality shown in the example dialogue above. "
+                "Write with the same warmth, humour, and depth as those examples. "
+                "Do NOT give a short or flat reply — match the richness of the examples."
+            )
+        }
+        # Insert right before the final user message (after continuation msg if present)
+        insert_position = len(messages) - 1
+        messages.insert(insert_position, style_reminder)
+        print(f"✅ Inserted style reminder at position {insert_position}")
+
     # Build final ChatML prompt from ALL messages
     prompt_parts = []
     for msg in messages:
         role = msg.get("role", "user")
-        content = msg.get("content", "").strip()
-        prompt_parts.append(f"<|im_start|>{role}\n{content}\n<|im_end|>")
+        raw_content = msg.get("content", "")
+        # Handle multimodal content — extract text only for ChatML prompt building
+        if isinstance(raw_content, list):
+            content = " ".join(
+                part.get("text", "") for part in raw_content if part.get("type") == "text"
+            ).strip()
+        else:
+            content = raw_content.strip()
+        prompt_parts.append(f"<|im_start|>{role}\n{content}\n<|im_end|>")       
     
     # Add the assistant start tag (with pre-fill for continuations)
     if len(assistant_messages) > 0:
@@ -827,7 +724,10 @@ def chat():
         prompt_parts.append("<|im_start|>assistant\n")
         print("🆕 New conversation - model free to greet")
     
-    prompt = "\n".join(prompt_parts)
+    # Join parts — the assistant tag must not be preceded by a bare newline
+    # because the model's first token is often \n, which would then match
+    # the stop sequence "\n<|im_start|>" and kill the response after 2 tokens.
+    prompt = "\n".join(prompt_parts[:-1]) + "\n" + prompt_parts[-1]
     
     # 🔍 DEBUG: Check the end of the prompt
     print("\n" + "="*60)
@@ -838,13 +738,16 @@ def chat():
     print("\n🛑 Stop tokens:", ["<|im_end|>", "\n<|im_start|>"])
     print("="*60 + "\n")
         
-    # --- Final safety clamp (ChatML-aware) ---
-    MAX_TOKENS_APPROX = 10000  # leave 2k headroom for generation
+    # --- Final safety clamp ---
+    # Note: prompt.split() gives word count, not token count.
+    # Words average ~1.3 tokens each, so use 7500 words ≈ ~9750 tokens.
+    # This leaves ~6600 tokens headroom for generation in a 16384 context.
+    MAX_WORDS_APPROX = 7500
     words = prompt.split()
     
-    if len(words) > MAX_TOKENS_APPROX:
+    if len(words) > MAX_WORDS_APPROX:
         # Truncate but preserve ChatML structure
-        truncated = " ".join(words[-MAX_TOKENS_APPROX:])
+        truncated = " ".join(words[-MAX_WORDS_APPROX:])
         
         # Find the last complete <|im_start|> to avoid breaking mid-tag
         last_start = truncated.rfind("<|im_start|>")
@@ -852,38 +755,135 @@ def chat():
             truncated = truncated[last_start:]
         
         prompt = truncated
-        print(f"✂️ Prompt truncated to ~{MAX_TOKENS_APPROX} tokens ({len(words)} original)", flush=True)
+        print(f"✂️ Prompt truncated to ~{MAX_WORDS_APPROX} words (~9750 tokens, was {len(words)} words)", flush=True)
     
     prompt = prompt.strip().replace("\x00", "")
+
+    # ── Scan for embedded ChatML tokens that would cause zero-output ──────
+    # Split on the assistant tag — everything before it is the context block.
+    # Any <|im_end|> found inside that context (not as a proper turn-closer)
+    # will cause the model to fire a stop token as its very first output.
+    pre_assistant = prompt.split("<|im_start|>assistant")[0] if "<|im_start|>assistant" in prompt else prompt
+    embedded_ends = pre_assistant.count("<|im_end|>")
+    expected_ends = prompt[:prompt.find("<|im_start|>assistant")].count("<|im_start|>") if "<|im_start|>assistant" in prompt else 0
+    print(f"\n🔍 CHATML SANITY CHECK:")
+    print(f"   <|im_end|> tags found in context: {embedded_ends}")
+    print(f"   <|im_start|> tags found in context: {expected_ends}")
+    if embedded_ends != expected_ends:
+        print(f"   ⚠️  MISMATCH — {embedded_ends - expected_ends} extra <|im_end|> tag(s) embedded in content!")
+        print(f"   🔧 Auto-stripping extra embedded tags from prompt content...")
+        # Rebuild: strip <|im_end|> only from INSIDE message content (not the structural ones)
+        import re as _re
+        def clean_msg_content(m):
+            role = m.group(1)
+            content = m.group(2)
+            content = _re.sub(r"<\|im_end\|>", "", content)
+            content = _re.sub(r"<\|im_start\|>\w*", "", content)
+            return f"<|im_start|>{role}\n{content}\n<|im_end|>"
+        prompt = _re.sub(r"<\|im_start\|>(\w+)\n(.*?)\n<\|im_end\|>", clean_msg_content, prompt, flags=_re.DOTALL)
+        print(f"   ✅ Prompt cleaned.")
+    else:
+        print(f"   ✅ Tags balanced — prompt structure looks clean")
     
     print("\n===== FINAL PROMPT SENT TO MODEL =====")
     print(prompt[:1500])  # print first 1500 chars for sanity check
     print("======================================\n")
     # --- Load current sampling config ---
     sampling = load_sampling_settings()
+   
+# ============================================================
+    # VISION / MULTIMODAL DETECTION
+    # Check if any user message in history has image content
+    # ============================================================
+    has_images = False
+    for msg in active_chat:
+        if isinstance(msg.get("content"), list):
+            has_images = True
+            break
 
-    payload = {
-        "model": CURRENT_MODEL,
-        "prompt": prompt,
-        "temperature": sampling["temperature"],
-        "max_tokens": sampling["max_tokens"],
-        "top_p": sampling["top_p"],
-        "repeat_penalty": sampling["repeat_penalty"],
-        "stream": True,
-        "stop": ["<|im_end|>", "\n<|im_start|>"],
-    }
-    
-    print("\n🧩 FULL PAYLOAD SENDING TO MODEL:", flush=True)
-    print(json.dumps(payload, indent=2), flush=True)
+    sampling = load_sampling_settings()
 
-    try:
-        return Response(
-            stream_with_context(stream_model_response(payload)),
-            content_type="text/event-stream; charset=utf-8",
-        )
-    except Exception as e:
-        print(f"❌ Chat error: {e}", flush=True)
-        return f"⚠️ Error contacting model: {e}", 500
+    if has_images:
+        # --------------------------------------------------------
+        # VISION PATH: Use /v1/chat/completions with messages array
+        # Pixtral / LLaVA / multimodal models
+        # --------------------------------------------------------
+        print("🖼️ VISION MODE: Using /v1/chat/completions with multimodal messages", flush=True)
+
+        # Only keep image data in the MOST RECENT user message
+        # Older messages get text-only to avoid massive payloads
+        cleaned_chat = []
+        last_image_msg_idx = None
+        for i, msg in enumerate(active_chat):
+            if isinstance(msg.get("content"), list):
+                last_image_msg_idx = i
+
+        for i, msg in enumerate(active_chat):
+            if isinstance(msg.get("content"), list) and i != last_image_msg_idx:
+                # Strip images from older messages, keep text only
+                text_only = " ".join(
+                    p.get("text", "") for p in msg["content"] if p.get("type") == "text"
+                )
+                cleaned_chat.append({"role": msg["role"], "content": text_only})
+            else:
+                cleaned_chat.append(msg)
+
+        vision_messages = [
+            {"role": "system", "content": system_text + "\n" + memory},
+            *cleaned_chat
+        ]
+
+        vision_payload = {
+            "model": CURRENT_MODEL or "local",
+            "messages": vision_messages,
+            "temperature": sampling["temperature"],
+            "max_tokens": sampling["max_tokens"],
+            "top_p": sampling["top_p"],
+            "repeat_penalty": sampling["repeat_penalty"],
+            "stream": True,
+            "stop": ["<|im_end|>", "<|im_start|>"],
+        }
+
+        print("\n🧩 VISION PAYLOAD SENDING TO MODEL:", flush=True)
+        print(f"  Messages count: {len(vision_messages)}", flush=True)
+
+        try:
+            return Response(
+                stream_with_context(stream_vision_response(vision_payload)),
+                content_type="text/event-stream; charset=utf-8",
+            )
+        except Exception as e:
+            print(f"❌ Vision chat error: {e}", flush=True)
+            return f"⚠️ Error contacting vision model: {e}", 500
+
+    else:
+        # --------------------------------------------------------
+        # TEXT-ONLY PATH: existing /completion endpoint
+        # --------------------------------------------------------
+        payload = {
+            "model": CURRENT_MODEL,
+            "prompt": prompt,
+            "temperature": sampling["temperature"],
+            "max_tokens": sampling["max_tokens"],
+            "top_p": sampling["top_p"],
+            "min_p": sampling.get("min_p", 0.05),
+            "top_k": sampling.get("top_k", 40),
+            "repeat_penalty": sampling["repeat_penalty"],
+            "stream": True,
+            "stop": ["<|im_end|>", "<|im_start|>"],
+        }
+
+        print("\n🧩 FULL PAYLOAD SENDING TO MODEL:", flush=True)
+        print(json.dumps(payload, indent=2), flush=True)
+
+        try:
+            return Response(
+                stream_with_context(stream_model_response(payload)),
+                content_type="text/event-stream; charset=utf-8",
+            )
+        except Exception as e:
+            print(f"❌ Chat error: {e}", flush=True)
+            return f"⚠️ Error contacting model: {e}", 500
         
 # --------------------------------------------------
 # Chat History Persistence (NEW SIDEBAR SYSTEM)
@@ -1369,106 +1369,6 @@ def save_chat_manual():
 # Character Memories
 # --------------------------------------------------
 
-def load_memories_for_character(character_name):
-    """Load and parse the memory file for a specific character."""
-    if not character_name:
-        print("⚠️ No character name provided.")
-        return []
-
-    base_dir = os.path.dirname(__file__)
-    memory_dir = os.path.join(base_dir, "Memories")
-
-    filename = f"{character_name.lower()}_memory.txt"
-    file_path = os.path.join(memory_dir, filename)
-
-    if not os.path.exists(file_path):
-        print(f"⚠️ No memory file found for {character_name} at {file_path}")
-        return []
-
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            content = f.read()
-    except Exception as e:
-        print(f"❌ Error reading memory file: {e}")
-        return []
-
-    blocks = content.split("# Memory:")
-    memories = []
-    for block in blocks:
-        if not block.strip():
-            continue
-        lines = block.strip().splitlines()
-        title = lines[0].strip() if lines else "Untitled"
-        body_lines = []
-        keywords = []
-
-        for line in lines[1:]:
-            if line.lower().startswith("keywords:"):
-                keywords = [kw.strip().lower() for kw in re.split(r"[,:;]+", line.split(":", 1)[1]) if kw.strip()]
-            else:
-                body_lines.append(line.strip())
-
-        memories.append({
-            "title": title,
-            "body": " ".join(body_lines).strip(),
-            "keywords": keywords
-        })
-
-    print(f"✅ Loaded {len(memories)} memory blocks for {character_name}.")
-    return memories
-
-
-# --------------------------------------------------
-# Fetch Character Memories
-# --------------------------------------------------
-def fetch_character_memories(prompt, character_name, max_matches=2):
-    """Return relevant memory paragraphs for the given character and input."""
-    if not character_name:
-        print("⚠️ No character name provided to fetch_character_memories.")
-        return ""
-
-    prompt_lower = prompt.lower()
-    memories = load_memories_for_character(character_name)
-    matches = []
-
-    for mem in memories:
-        if any(k in prompt_lower for k in mem["keywords"]):
-            matches.append(f"[{mem['title']}]\n{mem['body']}")
-
-    if matches:
-        print(f"🧠 Matched {len(matches)} memory block(s) for {character_name}: {[m['title'] for m in memories if any(k in prompt_lower for k in m['keywords'])]}")
-        return "\n\n".join(matches[:max_matches])
-    else:
-        print(f"ℹ️ No memory match found for {character_name}.")
-        return ""
-
-# --------------------------------------------------
-# Sampling Settings Management (UNIFIED)
-# --------------------------------------------------
-SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "settings.json")
-
-def load_sampling_settings():
-    """Load current sampling settings from settings.json or create defaults."""
-    defaults = {
-        "temperature": 0.8,
-        "max_tokens": 4096,      # ✅ Match your actual settings.json
-        "top_p": 0.95,
-        "repeat_penalty": 1.1    # ✅ Match your actual settings.json
-    }
-    
-    if not os.path.exists(SETTINGS_FILE):
-        # Create file with defaults if missing
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(defaults, f, indent=2)
-        return defaults
-    
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"⚠️ Failed to load settings.json: {e}")
-        return defaults
-
 @app.route("/get_sampling_settings", methods=["GET"])
 def get_sampling_settings():
     return jsonify(load_sampling_settings())
@@ -1573,9 +1473,6 @@ def continue_chat():
         print(f"⚠️ Continue endpoint error: {e}")
         return jsonify({"error": str(e)}), 500
 
-      
-
-    
 # --------------------------------------------------
 # Delete Last N Messages from Chat History (baseline version)
 # --------------------------------------------------
@@ -1681,6 +1578,8 @@ def get_character(name):
     except Exception as e:
         print(f"❌ Error loading character '{name}': {e}")
         return jsonify({"error": str(e)}), 500
+        
+
 # --------------------------------------------------
 # Run Server
 # --------------------------------------------------

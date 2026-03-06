@@ -380,33 +380,50 @@ def count_tokens():
 def duplicate_character(name):
     """Duplicate an existing character with a new name."""
     try:
+        import shutil
         char_dir = os.path.join(os.path.dirname(__file__), "characters")
+        image_dir = os.path.join(os.path.dirname(__file__), "static", "images")
         source_path = os.path.join(char_dir, f"{name}.json")
-        
+
         if not os.path.exists(source_path):
             return jsonify({"error": "Character not found"}), 404
-        
+
         # Load original character
         with open(source_path, "r", encoding="utf-8") as f:
             char_data = json.load(f)
-        
+
         # Create new name with " - Copy" suffix
         new_name = f"{name} - Copy"
         counter = 1
-        
+
         # If "Name - Copy" exists, try "Name - Copy 2", "Name - Copy 3", etc.
         while os.path.exists(os.path.join(char_dir, f"{new_name}.json")):
             counter += 1
             new_name = f"{name} - Copy {counter}"
-        
+
         # Update character data with new name
         char_data["name"] = new_name
-        
-        # Save duplicated character
+
+        # --- COPY THE IMAGE ---
+        old_image = char_data.get("image", f"{name}.png")
+        old_image_path = os.path.join(image_dir, old_image)
+        new_image_filename = f"{new_name}.png"
+        new_image_path = os.path.join(image_dir, new_image_filename)
+
+        if os.path.exists(old_image_path):
+            shutil.copy2(old_image_path, new_image_path)
+            print(f"🖼️ Copied image: {old_image} → {new_image_filename}")
+            char_data["image"] = new_image_filename
+        else:
+            # No image found, use default
+            char_data["image"] = "default.png"
+            print(f"⚠️ Original image not found, using default for {new_name}")
+
+        # Save duplicated character JSON
         new_path = os.path.join(char_dir, f"{new_name}.json")
         with open(new_path, "w", encoding="utf-8") as f:
             json.dump(char_data, f, indent=2, ensure_ascii=False)
-        
+
         # Update character index
         index_path = os.path.join(char_dir, "index.json")
         if os.path.exists(index_path):
@@ -416,17 +433,70 @@ def duplicate_character(name):
                 characters.append(new_name)
         else:
             characters = [new_name]
-        
+
         with open(index_path, "w", encoding="utf-8") as f:
             json.dump(sorted(characters), f, indent=2, ensure_ascii=False)
-        
+
         print(f"📋 Duplicated character: {name} → {new_name}")
         return jsonify({"success": True, "new_name": new_name})
-        
+
     except Exception as e:
         print(f"❌ Duplicate character failed: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-        
+    
+# --------------------------------------------------
+# Replace Character Image
+# --------------------------------------------------
+@extra.route('/replace_character_image/<name>', methods=['POST'])
+def replace_character_image(name):
+    """Replace a character's image with a newly uploaded one."""
+    try:
+        from PIL import Image as PILImage
+
+        char_dir = os.path.join(os.path.dirname(__file__), "characters")
+        image_dir = os.path.join(os.path.dirname(__file__), "static", "images")
+        char_path = os.path.join(char_dir, f"{name}.json")
+
+        if not os.path.exists(char_path):
+            return jsonify({"error": f"Character '{name}' not found"}), 404
+
+        if 'file' not in request.files:
+            return jsonify({"error": "No file uploaded"}), 400
+
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({"error": "No file selected"}), 400
+
+        # Open and validate image
+        img = PILImage.open(file.stream)
+        if img.mode not in ('RGB', 'RGBA'):
+            img = img.convert('RGBA')
+
+        # Save with the character's name as filename
+        image_filename = f"{name}.png"
+        image_path = os.path.join(image_dir, image_filename)
+        img.save(image_path, "PNG")
+
+        # Update the character JSON to point to the new image
+        with open(char_path, "r", encoding="utf-8") as f:
+            char_data = json.load(f)
+
+        char_data["image"] = image_filename
+
+        with open(char_path, "w", encoding="utf-8") as f:
+            json.dump(char_data, f, indent=2, ensure_ascii=False)
+
+        print(f"🖼️ Replaced image for character: {name} → {image_filename}")
+        return jsonify({"status": "ok", "image": image_filename})
+
+    except Exception as e:
+        print(f"❌ Replace image failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 # --------------------------------------------------
 # Rename Character
 # --------------------------------------------------
@@ -434,6 +504,7 @@ def duplicate_character(name):
 def rename_character():
     """Rename a character and update all associated files."""
     try:
+        import shutil
         data = request.json
         old_name = data.get('old_name', '').strip()
         new_name = data.get('new_name', '').strip()
@@ -445,6 +516,7 @@ def rename_character():
             return jsonify({"error": "Names are identical"}), 400
         
         char_dir = os.path.join(os.path.dirname(__file__), "characters")
+        image_dir = os.path.join(os.path.dirname(__file__), "static", "images")
         old_path = os.path.join(char_dir, f"{old_name}.json")
         new_path = os.path.join(char_dir, f"{new_name}.json")
         
@@ -462,14 +534,30 @@ def rename_character():
         
         char_data["name"] = new_name
         
-        # 2. Save with new filename
+        # 2. Handle image rename
+        old_image = char_data.get("image", f"{old_name}.png")
+        old_image_path = os.path.join(image_dir, old_image)
+        new_image_filename = f"{new_name}.png"
+        new_image_path = os.path.join(image_dir, new_image_filename)
+        
+        if os.path.exists(old_image_path):
+            # Rename/move the image file
+            shutil.move(old_image_path, new_image_path)
+            print(f"🖼️ Renamed image: {old_image} → {new_image_filename}")
+            char_data["image"] = new_image_filename
+        else:
+            # Image doesn't exist, just update the reference
+            char_data["image"] = new_image_filename
+            print(f"⚠️ Image not found, updated reference to {new_image_filename}")
+        
+        # 3. Save character JSON with new filename
         with open(new_path, "w", encoding="utf-8") as f:
             json.dump(char_data, f, indent=2, ensure_ascii=False)
         
-        # 3. Delete old file
+        # 4. Delete old character JSON
         os.remove(old_path)
         
-        # 4. Update character index
+        # 5. Update character index
         index_path = os.path.join(char_dir, "index.json")
         if os.path.exists(index_path):
             with open(index_path, "r", encoding="utf-8") as f:
@@ -484,10 +572,11 @@ def rename_character():
             with open(index_path, "w", encoding="utf-8") as f:
                 json.dump(sorted(characters), f, indent=2, ensure_ascii=False)
         
-        # 5. Rename ALL chat files for this character
+        # 6. Rename ALL chat files for this character
         chats_dir = os.path.join(os.path.dirname(__file__), "chats")
         
         if os.path.exists(chats_dir):
+            renamed_count = 0
             for filename in os.listdir(chats_dir):
                 if filename.startswith(f"{old_name} - ") and filename.endswith(".txt"):
                     # Extract the part after "Character - "
@@ -497,8 +586,27 @@ def rename_character():
                     new_chat_filename = f"{new_name} - {suffix}"
                     new_chat_path = os.path.join(chats_dir, new_chat_filename)
                     
+                    # Rename the file
                     os.rename(old_chat_path, new_chat_path)
-                    print(f"📝 Renamed chat: {filename} → {new_chat_filename}")
+                    
+                    # 7. UPDATE THE CONTENTS OF THE CHAT FILE
+                    # Replace all instances of "OldName:" with "NewName:"
+                    try:
+                        with open(new_chat_path, "r", encoding="utf-8") as f:
+                            chat_content = f.read()
+                        
+                        # Replace speaker labels
+                        updated_content = chat_content.replace(f"{old_name}:", f"{new_name}:")
+                        
+                        with open(new_chat_path, "w", encoding="utf-8") as f:
+                            f.write(updated_content)
+                        
+                        print(f"📝 Renamed chat & updated content: {filename} → {new_chat_filename}")
+                        renamed_count += 1
+                    except Exception as e:
+                        print(f"⚠️ Failed to update chat content for {new_chat_filename}: {e}")
+            
+            print(f"✅ Renamed and updated {renamed_count} chat file(s)")
         
         print(f"✅ Character renamed: {old_name} → {new_name}")
         return jsonify({"success": True, "new_name": new_name})
@@ -509,7 +617,7 @@ def rename_character():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
         
-        # --------------------------------------------------
+# --------------------------------------------------
 # Create New User Persona
 # --------------------------------------------------
 @extra.route('/create_user', methods=['POST'])
@@ -619,3 +727,4 @@ def delete_user(name):
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+        

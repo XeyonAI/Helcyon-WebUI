@@ -134,11 +134,11 @@ def create_project():
 # --------------------------------------------------
 # Get project details
 # --------------------------------------------------
-@project_bp.route("/projects/get/<name>")
-def get_project(name):
+@project_bp.route("/projects/get/<n>")
+def get_project(n):
     try:
         ensure_projects_dir()
-        project_path = os.path.join(PROJECTS_DIR, name)
+        project_path = os.path.join(PROJECTS_DIR, n)
         
         if not os.path.exists(project_path):
             return jsonify({"error": "Project not found"}), 404
@@ -149,7 +149,7 @@ def get_project(name):
             with open(config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
         else:
-            config = {"name": name, "instructions": ""}
+            config = {"name": n, "instructions": ""}
         
         return jsonify(config)
         
@@ -160,13 +160,13 @@ def get_project(name):
 # --------------------------------------------------
 # Update project
 # --------------------------------------------------
-@project_bp.route("/projects/update/<name>", methods=["POST"])
-def update_project(name):
+@project_bp.route("/projects/update/<n>", methods=["POST"])
+def update_project(n):
     try:
         data = request.json
         
         ensure_projects_dir()
-        project_path = os.path.join(PROJECTS_DIR, name)
+        project_path = os.path.join(PROJECTS_DIR, n)
         
         if not os.path.exists(project_path):
             return jsonify({"error": "Project not found"}), 404
@@ -178,7 +178,7 @@ def update_project(name):
             with open(config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
         else:
-            config = {"name": name}
+            config = {"name": n}
         
         # Update fields
         if "instructions" in data:
@@ -190,7 +190,7 @@ def update_project(name):
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2, ensure_ascii=False)
         
-        print(f"✅ Updated project: {name}")
+        print(f"✅ Updated project: {n}")
         return jsonify({"success": True})
         
     except Exception as e:
@@ -209,13 +209,11 @@ def switch_project():
         ensure_projects_dir()
         
         if name:
-            # Switching to a project
             project_path = os.path.join(PROJECTS_DIR, name)
             
             if not os.path.exists(project_path):
                 return jsonify({"error": "Project not found"}), 404
         
-        # Set active project (None is valid for "no project")
         set_active_project(name)
         
         return jsonify({"success": True, "active": name})
@@ -227,25 +225,22 @@ def switch_project():
 # --------------------------------------------------
 # Delete project
 # --------------------------------------------------
-@project_bp.route("/projects/delete/<name>", methods=["DELETE"])
-def delete_project(name):
+@project_bp.route("/projects/delete/<n>", methods=["DELETE"])
+def delete_project(n):
     try:
         ensure_projects_dir()
-        project_path = os.path.join(PROJECTS_DIR, name)
+        project_path = os.path.join(PROJECTS_DIR, n)
         
         if not os.path.exists(project_path):
             return jsonify({"error": "Project not found"}), 404
         
-        # Check if it's the active project
-        if get_active_project() == name:
-            # Clear active project
+        if get_active_project() == n:
             set_active_project(None)
         
-        # Delete the project directory
         import shutil
         shutil.rmtree(project_path)
         
-        print(f"🗑️ Deleted project: {name}")
+        print(f"🗑️ Deleted project: {n}")
         return jsonify({"success": True})
         
     except Exception as e:
@@ -267,19 +262,16 @@ def upload_document(project_name):
         if file.filename == '':
             return jsonify({"error": "No file selected"}), 400
         
-        # Validate file type
         allowed_extensions = {'.txt', '.md', '.pdf', '.docx', '.odt'}
         file_ext = os.path.splitext(file.filename)[1].lower()
         
         if file_ext not in allowed_extensions:
             return jsonify({"error": f"File type not supported. Allowed: {', '.join(allowed_extensions)}"}), 400
         
-        # Create documents directory
         project_path = os.path.join(PROJECTS_DIR, project_name)
         docs_dir = os.path.join(project_path, "documents")
         os.makedirs(docs_dir, exist_ok=True)
         
-        # Save file
         filepath = os.path.join(docs_dir, file.filename)
         file.save(filepath)
         
@@ -339,3 +331,104 @@ def delete_document(project_name, filename):
     except Exception as e:
         print(f"❌ Delete failed: {e}")
         return jsonify({"error": str(e)}), 500
+
+# --------------------------------------------------
+# Toggle sticky docs
+# --------------------------------------------------
+@project_bp.route("/projects/toggle-sticky-docs/<project_name>", methods=["POST"])
+def toggle_sticky_docs(project_name):
+    """Toggle sticky document mode. Clears pinned doc when turning off.
+    Auto-pins if only one document exists when turning on."""
+    config_path = os.path.join(PROJECTS_DIR, project_name, "config.json")
+    
+    if not os.path.exists(config_path):
+        return jsonify({"error": "Project not found"}), 404
+    
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    
+    current = config.get("sticky_docs", False)
+    config["sticky_docs"] = not current
+    
+    # Clear pinned doc when turning sticky OFF
+    if not config["sticky_docs"]:
+        config["sticky_doc_file"] = None
+        print(f"📌 Sticky docs disabled for: {project_name} - pinned doc cleared")
+    else:
+        # Turning ON - if only one doc exists, auto-pin it immediately
+        docs_dir = os.path.join(PROJECTS_DIR, project_name, "documents")
+        if os.path.exists(docs_dir):
+            all_docs = [f for f in os.listdir(docs_dir) if os.path.isfile(os.path.join(docs_dir, f))]
+            if len(all_docs) == 1:
+                config["sticky_doc_file"] = all_docs[0]
+                print(f"📌 Sticky docs enabled for: {project_name} - auto-pinned: {all_docs[0]}")
+            else:
+                print(f"📌 Sticky docs enabled for: {project_name} - waiting for doc trigger ({len(all_docs)} docs)")
+        else:
+            print(f"📌 Sticky docs enabled for: {project_name} - no documents folder yet")
+    
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+    
+    return jsonify({
+        "sticky_docs": config["sticky_docs"],
+        "sticky_doc_file": config.get("sticky_doc_file")
+    })
+
+
+# --------------------------------------------------
+# Get sticky docs state
+# --------------------------------------------------
+@project_bp.route("/projects/get-sticky-docs/<project_name>")
+def get_sticky_docs(project_name):
+    """Get sticky doc state and currently pinned filename.
+    Auto-pins single doc if sticky is ON but nothing pinned yet."""
+    config_path = os.path.join(PROJECTS_DIR, project_name, "config.json")
+    
+    if not os.path.exists(config_path):
+        return jsonify({"sticky_docs": False, "sticky_doc_file": None})
+    
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    # If sticky is ON but nothing pinned, check if there's only one doc - auto-pin it
+    if config.get("sticky_docs") and not config.get("sticky_doc_file"):
+        docs_dir = os.path.join(PROJECTS_DIR, project_name, "documents")
+        if os.path.exists(docs_dir):
+            all_docs = [f for f in os.listdir(docs_dir) if os.path.isfile(os.path.join(docs_dir, f))]
+            if len(all_docs) == 1:
+                config["sticky_doc_file"] = all_docs[0]
+                with open(config_path, "w", encoding="utf-8") as f:
+                    json.dump(config, f, indent=2)
+                print(f"📌 Auto-pinned single doc on state read: {all_docs[0]}")
+    
+    return jsonify({
+        "sticky_docs": config.get("sticky_docs", False),
+        "sticky_doc_file": config.get("sticky_doc_file")
+    })
+
+
+# --------------------------------------------------
+# Save pinned sticky doc (called by backend after successful trigger load)
+# --------------------------------------------------
+@project_bp.route("/projects/set-sticky-doc/<project_name>", methods=["POST"])
+def set_sticky_doc(project_name):
+    """Save which document got pinned by sticky mode."""
+    config_path = os.path.join(PROJECTS_DIR, project_name, "config.json")
+    
+    if not os.path.exists(config_path):
+        return jsonify({"error": "Project not found"}), 404
+    
+    data = request.json
+    filename = data.get("filename")
+    
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    
+    config["sticky_doc_file"] = filename
+    
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+    
+    print(f"📌 Pinned doc set to: {filename} for project: {project_name}")
+    return jsonify({"success": True, "sticky_doc_file": filename})

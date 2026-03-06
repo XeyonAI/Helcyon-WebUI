@@ -1,0 +1,36 @@
+HELCYON-WEBUI PRO - PROPRIETARY LICENSE
+
+Copyright (c) 2026 XeyonAI. All rights reserved.
+
+GRANT OF LICENSE:
+By purchasing Helcyon-WebUI Pro, you are granted a non-exclusive, non-transferable 
+license to use this software for personal purposes.
+
+YOU MAY:
+✓ Install and use the software on unlimited devices you personally own
+✓ Receive updates for the current major version (v1.x)
+✓ Create backups for personal use
+
+YOU MAY NOT:
+✗ Redistribute, resell, share, or give away this software
+✗ Modify, reverse engineer, or extract source code
+✗ Remove or alter copyright notices
+✗ Use for commercial purposes without separate written agreement
+✗ Upload to public repositories or file-sharing services
+
+SUPPORT & UPDATES:
+Support is provided via email on a best-effort basis. Updates for v1.x are included.
+Major version upgrades (v2.0+) may require separate purchase with loyalty discount.
+
+TERMINATION:
+Violation of these terms results in immediate license termination without refund.
+
+DISCLAIMER:
+This software is provided "as is" without warranty of any kind. XeyonAI is not 
+liable for any damages arising from use of this software.
+
+For questions: [your email or Gumroad contact]
+
+---
+Helcyon-WebUI Pro v1.0
+© 2026 XeyonAI. All rights reserved.
