@@ -54,13 +54,14 @@ Everything in Free, plus:
 ```bash
    git clone https://github.com/XeyonAI/Helcyon-WebUI.git
    cd Helcyon-WebUI
-```
 
 2. **Install dependencies:**
 
 ```bash
    pip install -r requirements.txt
 ```
+Or
+run Setup.bat
 
 3. **Start your llama.cpp server:**
    
