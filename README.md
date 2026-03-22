@@ -35,7 +35,7 @@ Everything in Free, plus:
 - **💾 Memory System** — AI recalls and references past conversations across chats. Your characters actually remember what you've talked about.
 - **📁 Projects** — Upload documents (PDF, DOCX, MD, TXT, ODT) that inject into conversations via keyword triggers. Perfect for research, world-building, or working with reference material.
 
-👉 **[Get HWUI Pro on Gumroad](https://xeyonai.gumroad.com/l/mzcllf)**
+👉 **[Get HWUI Pro on Gumroad](xeyonai.gumroad.com/l/bsmupk)**
 
 ---
 
