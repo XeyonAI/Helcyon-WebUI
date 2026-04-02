@@ -1,4 +1,4 @@
-# Helcyon-WebUI (HWUI) v0.9.5 beta
+# Helcyon-WebUI (HWUI) Free v0.9.5 beta
 
 **Professional AI chat interface for local LLMs**
 
