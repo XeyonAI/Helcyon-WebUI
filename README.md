@@ -28,7 +28,7 @@ Optimized for [Helcyon](https://huggingface.co/XeyonAI/helcyon-mercury-12b-v3.2)
 - **Time/Date Awareness** — Model knows the current time and date
 - **Custom System Prompts** — Full control via `system_prompt.txt`
 
-### Pro Version (£20)
+### Pro Version (£25)
 
 Everything in Free, plus:
 
