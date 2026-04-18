@@ -102,7 +102,7 @@ run Setup.bat
 
 ## 🎯 Recommended Models
 
-HWUI was built for [**Helcyon-Mercury 12B**](https://huggingface.co/XeyonAI/helcyon-mercury-12b-v3.2) — a conversational model with presence, emotional intelligence, and zero corporate filter.
+HWUI was built for [**Helcyon-Mercury 12B**](https://huggingface.co/XeyonAI/helcyon-mercury-12b-v3.2) and all other Helcyon models since — a conversational local AI with presence, emotional intelligence, and zero corporate filter.
 
 But it works great with any ChatML-compatible model:
 - Mistral Nemo
@@ -238,7 +238,7 @@ HWUI Pro is available under a separate proprietary license. See [Gumroad](https:
 - Answer general coding questions
 - Offer custom modifications
 
-**Want guaranteed support and advanced features?** → [HWUI Pro (£20)](https://xeyonai.gumroad.com/l/mzcllf) includes Memory, Projects, and priority updates.
+**Want guaranteed support and advanced features?** → [HWUI Pro (£25)](https://xeyonai.gumroad.com/l/mzcllf) includes Memory, Projects, and priority updates.
 
 **Want to modify it yourself?** → Fork the repo! GPL v3 means you're free to build your own version. I won't be involved, but go wild.
 
