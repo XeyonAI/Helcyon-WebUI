@@ -1,9 +1,0 @@
-{
-  "temperature": 1,
-  "max_tokens": 4096,
-  "top_p": 0.95,
-  "min_p": 0.05,
-  "top_k": 40,
-  "repeat_penalty": 1.1,
-  "tts_engine": "f5"
-}
