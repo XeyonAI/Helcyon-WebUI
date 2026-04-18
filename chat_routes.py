@@ -3,7 +3,7 @@ import os, json, shutil
 from flask import Blueprint, jsonify, request
 from datetime import datetime
 
-print("✅ chat_routes blueprint loaded")
+print("âœ… chat_routes blueprint loaded")
 
 chat_bp = Blueprint("chat_bp", __name__)
 CHATS_DIR = os.path.join(os.getcwd(), "chats")  # Legacy global chats
@@ -50,7 +50,7 @@ def ensure_chats_dir():
 def list_chats():
     chats_dir = get_chats_dir()
     
-    print(f"🪶 /chats/list route triggered")
+    print(f"ðŸª¶ /chats/list route triggered")
     print(f"   Active project: {get_active_project()}")
     print(f"   Looking in: {chats_dir}")
     
@@ -80,6 +80,20 @@ def list_chats():
     return jsonify(chats)
     
     
+@chat_bp.route("/chats/load", methods=["POST"])
+def check_chat_exists():
+    """Check whether a chat file exists on the server. Used by frontend to verify before restoring."""
+    data = request.get_json()
+    filename = data.get("filename", "")
+    if not filename:
+        return jsonify({"error": "No filename provided"}), 400
+    chats_dir = get_chats_dir()
+    filepath = os.path.join(chats_dir, filename)
+    if not os.path.exists(filepath):
+        return jsonify({"error": "Chat not found"}), 404
+    return jsonify({"status": "ok", "filename": filename})
+
+
 @chat_bp.route("/chats/open/<filename>")
 def open_chat(filename):
     chats_dir = get_chats_dir()
@@ -92,7 +106,7 @@ def open_chat(filename):
         raw_text = f.read()
     
     print(f"\n{'='*60}")
-    print(f"📂 Loading: {filename}")
+    print(f"ðŸ“‚ Loading: {filename}")
     print(f"   From: {chats_dir}")
     print(f"{'='*60}\n")
     
@@ -102,27 +116,38 @@ def open_chat(filename):
         char_index_path = os.path.join(os.getcwd(), "characters", "index.json")
         with open(char_index_path, "r", encoding="utf-8") as f:
             available_characters = json.load(f)
-            print(f"📋 Known characters: {available_characters}")
+            print(f"ðŸ“‹ Known characters: {available_characters}")
     except Exception as e:
-        print(f"⚠️ Could not load character list: {e}")
+        print(f"âš ï¸ Could not load character list: {e}")
     
-    # ✅ Load list of valid user personas dynamically
+    # âœ… Load list of valid user personas dynamically
     valid_users = []
     try:
         user_index_path = os.path.join(os.getcwd(), "users", "index.json")
         with open(user_index_path, "r", encoding="utf-8") as f:
             valid_users = json.load(f)
-            print(f"👤 Valid users: {valid_users}")
+            print(f"ðŸ‘¤ Valid users: {valid_users}")
     except Exception as e:
-        print(f"⚠️ Could not load user list: {e}")
+        print(f"âš ï¸ Could not load user list: {e}")
     
+    import re as _re
+    _ts_pattern = _re.compile(r'^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)\] ')
+
     lines = raw_text.split('\n')
     messages = []
     current_role = None
     current_content = []
     current_speaker = None
+    current_timestamp = None
     
     for line in lines:
+        # Strip timestamp prefix if present
+        ts_match = _ts_pattern.match(line)
+        line_timestamp = None
+        if ts_match:
+            line_timestamp = ts_match.group(1)
+            line = line[ts_match.end():]
+
         stripped = line.strip()
         
         # Check for speaker pattern
@@ -132,16 +157,22 @@ def open_chat(filename):
             # ✅ Check against dynamic lists instead of hard-coded names
             is_known_character = potential_speaker in available_characters
             is_valid_user = potential_speaker in valid_users
-            
-            if (is_known_character or is_valid_user) and len(potential_speaker) < 30:
+            # ✅ Also treat generic "User" label as valid (legacy chats saved before persona system)
+            is_generic_user = potential_speaker.lower() == "user"
+
+            if (is_known_character or is_valid_user or is_generic_user) and len(potential_speaker) < 30:
                 # Save previous message
                 if current_role and current_content:
                     msg_text = "\n".join(current_content).strip()
-                    messages.append({"role": current_role, "content": msg_text})
+                    entry = {"role": current_role, "content": msg_text, "speaker": current_speaker}
+                    if current_timestamp:
+                        entry["timestamp"] = current_timestamp
+                    messages.append(entry)
                 
                 # Start new message
                 content_after_colon = stripped.split(":", 1)[1].strip()
                 current_speaker = potential_speaker
+                current_timestamp = line_timestamp
                 
                 if is_known_character:
                     current_role = "assistant"
@@ -163,9 +194,12 @@ def open_chat(filename):
     # Flush last message
     if current_role and current_content:
         msg_text = "\n".join(current_content).strip()
-        messages.append({"role": current_role, "content": msg_text})
+        entry = {"role": current_role, "content": msg_text, "speaker": current_speaker}
+        if current_timestamp:
+            entry["timestamp"] = current_timestamp
+        messages.append(entry)
     
-    print(f"📊 Loaded {len(messages)} messages")
+    print(f"ðŸ“Š Loaded {len(messages)} messages")
     return jsonify({"filename": filename, "messages": messages})
 
 # --------------------------------------------------
@@ -186,7 +220,7 @@ def rename_chat():
     if not os.path.exists(old_path):
         return jsonify({"error": "Original chat not found"}), 404
     
-    # ✅ The new_name should ALREADY include the character prefix (from frontend)
+    # âœ… The new_name should ALREADY include the character prefix (from frontend)
     # Frontend sends: "Gem - Copy - My New Title"
     # We just need to sanitize and add .txt
     
@@ -201,7 +235,7 @@ def rename_chat():
         return jsonify({"error": "A chat with that name already exists"}), 409
     
     os.rename(old_path, new_path)
-    print(f"✏️ Renamed: {old_filename} → {new_filename}")
+    print(f"âœï¸ Renamed: {old_filename} â†’ {new_filename}")
     
     return jsonify({"success": True, "new_filename": new_filename})
 
@@ -215,7 +249,7 @@ def new_chat():
     data = request.get_json() or {}
     char_name = data.get("character", "Unknown").strip()
     
-    print(f"🆕 NEW CHAT REQUEST")
+    print(f"ðŸ†• NEW CHAT REQUEST")
     print(f"   Character name: '{char_name}'")
     print(f"   Saving to: {chats_dir}")
     
@@ -236,7 +270,7 @@ def new_chat():
     with open(filepath, "w", encoding="utf-8") as f:
         f.write("")
     
-    print(f"📝 Created new chat: {filename}")
+    print(f"ðŸ“ Created new chat: {filename}")
     return jsonify({"filename": filename})
 # --------------------------------------------------
 # Delete Chat
@@ -251,7 +285,7 @@ def delete_chat(filename):
     
     try:
         os.remove(filepath)
-        print(f"🗑️ Deleted: {filename}")
+        print(f"ðŸ—‘ï¸ Deleted: {filename}")
         return jsonify({"success": True, "deleted": filename})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -267,13 +301,13 @@ def save_chat_messages():
         filename = data.get("filename")
         messages = data.get("messages")
         
-        print(f"💾 FLASK: Received save request for {filename}")
-        print(f"💾 FLASK: Number of messages: {len(messages)}")
+        print(f"ðŸ’¾ FLASK: Received save request for {filename}")
+        print(f"ðŸ’¾ FLASK: Number of messages: {len(messages)}")
         
         if not filename:
             return jsonify({"error": "No filename provided"}), 400
         
-        if not messages:
+        if messages is None:
             return jsonify({"error": "No messages provided"}), 400
         
         chats_dir = get_chats_dir()
@@ -284,27 +318,29 @@ def save_chat_messages():
         if " - " in filename:
             char_name = filename.split(" - ", 1)[0]
         
-        print(f"💾 FLASK: Writing to {filepath} (mode='w' = OVERWRITE)")
+        print(f"ðŸ’¾ FLASK: Writing to {filepath} (mode='w' = OVERWRITE)")
         
         # Rewrite entire file
         with open(filepath, "w", encoding="utf-8") as f:
             for i, msg in enumerate(messages):
                 role = msg.get("role")
                 content = msg.get("content", "")
-                
+                timestamp = msg.get("timestamp", "")
+
                 # Use speaker from message, fallback to defaults
                 speaker = msg.get("speaker")
                 if not speaker:
                     speaker = "User" if role == "user" else char_name
-                
-                f.write(f"{speaker}: {content}\n\n")
-                print(f"💾 FLASK: Wrote message {i+1}: {speaker} ({len(content)} chars)")
+
+                prefix = f"[{timestamp}] " if timestamp else ""
+                f.write(f"{prefix}{speaker}: {content}\n\n")
+                print(f"ðŸ’¾ FLASK: Wrote message {i+1}: {speaker} ({len(content)} chars)")
         
-        print(f"💾 FLASK: Saved {len(messages)} messages to {filename}")
+        print(f"ðŸ’¾ FLASK: Saved {len(messages)} messages to {filename}")
         return jsonify({"success": True})
         
     except Exception as e:
-        print(f"❌ FLASK: Failed to save chat: {e}")
+        print(f"âŒ FLASK: Failed to save chat: {e}")
         return jsonify({"error": str(e)}), 500
         
         
@@ -327,16 +363,17 @@ def append_chat_turn():
         chats_dir = get_chats_dir()
         filepath = os.path.join(chats_dir, filename)
         
-        # Append messages
+        # Append messages with timestamp
+        now_ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         with open(filepath, "a", encoding="utf-8") as f:
-            f.write(f"User: {user_msg}\n\n")
-            f.write(f"{character}: {model_msg}\n\n")
+            f.write(f"[{now_ts}] User: {user_msg}\n\n")
+            f.write(f"[{now_ts}] {character}: {model_msg}\n\n")
         
-        print(f"💾 Appended turn to {filename}")
+        print(f"ðŸ’¾ Appended turn to {filename}")
         return jsonify({"status": "ok"})
         
     except Exception as e:
-        print(f"❌ Failed to append chat: {e}")
+        print(f"âŒ Failed to append chat: {e}")
         return jsonify({"error": str(e)}), 500
 
 # --------------------------------------------------
@@ -366,14 +403,16 @@ def update_chat():
             for msg in messages:
                 role = msg.get("role")
                 content = msg.get("content", "")
-                speaker = "User" if role == "user" else char_name
-                f.write(f"{speaker}: {content}\n\n")
+                timestamp = msg.get("timestamp", "")
+                speaker = msg.get("speaker") or ("User" if role == "user" else char_name)
+                prefix = f"[{timestamp}] " if timestamp else ""
+                f.write(f"{prefix}{speaker}: {content}\n\n")
         
-        print(f"📝 Updated: {filename}")
+        print(f"ðŸ“ Updated: {filename}")
         return jsonify({"success": True})
         
     except Exception as e:
-        print(f"❌ Update failed: {e}")
+        print(f"âŒ Update failed: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -416,12 +455,12 @@ def copy_chat():
         new_path = os.path.join(chats_dir, new_filename)
         
         shutil.copy2(source_path, new_path)
-        print(f"📋 Copied: {source_filename} → {new_filename}")
+        print(f"ðŸ“‹ Copied: {source_filename} â†’ {new_filename}")
         
         return jsonify({"success": True, "new_filename": new_filename})
         
     except Exception as e:
-        print(f"❌ Copy failed: {e}")
+        print(f"âŒ Copy failed: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500

@@ -4,13 +4,132 @@
   <meta charset="UTF-8" />
   <title>Helcyon-WebUI</title>
   <link rel="stylesheet" href="/style.css?v=5">
+  <link rel="stylesheet" href="/theme-files/midnight.css" id="active-theme-link">
+  <script>
+    // Swap to actual active theme if different from default
+    fetch('/themes/list').then(r=>r.json()).then(d=>{
+      const name = d.active || 'midnight';
+      const link = document.getElementById('active-theme-link');
+      if (link && name !== 'midnight') link.href = '/theme-files/' + name + '.css';
+    }).catch(()=>{}); // silent fail — default midnight.css already loaded above
+  </script>
   <!-- JS Utils -->
   <script src="/utils/utils.js" defer></script>
+  <script>
+    // Apply saved background immediately to avoid flash
+    (function() {
+      var bg = localStorage.getItem('hwui_bg_image');
+      if (bg) {
+        var style = document.createElement('style');
+        style.id = 'hwui-bg-style';
+        style.textContent = 'html, body { background-image: url("' + bg + '") !important; background-size: cover !important; background-position: center !important; background-attachment: fixed !important; }';
+        document.head.appendChild(style);
+      }
+    })();
+  </script>
 </head>
 <body class="chat-page">
+
+  <!-- First-Run Setup Banner -->
+  <div id="first-run-banner" style="display:none; position:fixed; top:0; left:0; right:0; z-index:9999;
+    background: linear-gradient(90deg, #1a3a1a, #1f5a3a);
+    border-bottom: 1px solid #2d8050;
+    padding: 10px 20px;
+    align-items:center; justify-content:space-between; gap:12px;">
+    <div style="display:flex; align-items:center; gap:10px;">
+      <span style="font-size:18px;">👋</span>
+      <span style="color:#cceedd; font-size:13px;">
+        <strong style="color:#ffffff;">Welcome to HWUI-Pro!</strong>
+        &nbsp;Before you start, set your llama.cpp paths in Config so the AI can load.
+      </span>
+    </div>
+    <div style="display:flex; gap:8px; flex-shrink:0;">
+      <a href="/config" style="background:#2d8050; color:white; border:none; padding:6px 14px;
+        border-radius:5px; font-size:12px; cursor:pointer; text-decoration:none; font-weight:600;">
+        ⚙️ Open Config
+      </a>
+      <button onclick="dismissFirstRunBanner()" style="background:transparent; color:#aaa; border:1px solid #444;
+        padding:6px 10px; border-radius:5px; font-size:12px; cursor:pointer;">
+        Dismiss
+      </button>
+    </div>
+  </div>
+
   <!-- Top Bar -->
-  <div id="top-bar">
+  <div id="top-bar" style="position:fixed; top:0; left:0; right:0; z-index:1000;">
     <div><strong>Helcyon-WebUI</strong></div>
+    <div style="
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      pointer-events: none;
+    ">
+      <span style="font-size:14px; color:#ffffff; font-weight:600; letter-spacing:0.5px;">Model:</span>
+      <div id="model-display" onclick="toggleModelPicker()" title="Click to switch model" style="
+        background: rgba(0,0,0,0.55);
+        border: 1px solid #2d394b;
+        border-radius: 6px;
+        padding: 6px 20px;
+        font-size: 14px;
+        color: #ffffff;
+        letter-spacing: 0.5px;
+        white-space: nowrap;
+        max-width: 600px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        cursor: pointer;
+        pointer-events: all;
+        transition: border-color 0.2s;
+      " onmouseover="this.style.borderColor='#4a6a8a'" onmouseout="this.style.borderColor='#2d394b'">Loading...</div>
+      <button onclick="loadModelDisplay()" title="Refresh model" style="
+        pointer-events: all;
+        background: transparent;
+        border: 1px solid #2d394b;
+        border-radius: 50%;
+        width: 28px;
+        height: 28px;
+        color: #aaa;
+        font-size: 14px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        transition: color 0.2s;
+      " onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#aaa'">↻</button>
+    </div>
+
+    <!-- Model Picker Dropdown -->
+    <div id="model-picker" style="
+      display: none;
+      position: fixed;
+      top: 48px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1a1f2a;
+      border: 1px solid #2d394b;
+      border-radius: 8px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+      z-index: 2000;
+      min-width: 360px;
+      max-width: 520px;
+      overflow: hidden;
+    ">
+      <div style="padding: 10px 14px 8px; border-bottom: 1px solid #2d394b; display:flex; justify-content:space-between; align-items:center;">
+        <span style="color:#aaa; font-size:12px; font-weight:600; letter-spacing:0.5px;">SELECT MODEL</span>
+        <span onclick="closeModelPicker()" style="color:#666; cursor:pointer; font-size:16px; line-height:1;" onmouseover="this.style.color='#fff'" onmouseout="this.style.color='#666'">✕</span>
+      </div>
+      <div id="model-picker-list" style="max-height: 320px; overflow-y: auto; padding: 6px 0;"></div>
+      <div id="model-picker-status" style="display:none; padding:10px 14px; border-top:1px solid #2d394b; color:#8ab4d4; font-size:12px; text-align:center;"></div>
+      <div style="padding: 8px 14px; border-top: 1px solid #2d394b; display:flex; gap:8px; justify-content:flex-end;">
+        <button onclick="unloadModel()" style="background:#3a1a1a; border:1px solid #6a2a2a; color:#e88; border-radius:4px; padding:4px 12px; font-size:12px; cursor:pointer;">⏹ Unload</button>
+        <button onclick="closeModelPicker()" style="background:#1f2a3a; border:1px solid #2d394b; color:#aaa; border-radius:4px; padding:4px 12px; font-size:12px; cursor:pointer;">Close</button>
+      </div>
+    </div>
     <a id="settings-link" href="/config">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
@@ -36,10 +155,11 @@
         <ul id="chat-list"></ul>
       
       <div id="sidebar-footer">
-        <button class="pro-feature-locked" onclick="showUpgradeModal('projects')">📁 Projects <span class="pro-badge">PRO</span></button>
+        <button id="projects-btn" onclick="openProjectModal()">📁 Projects</button>
         <button id="opening-line-btn" onclick="openOpeningLineModal()">💬 Opening Line</button>
         <button id="author-note-btn" onclick="openAuthorNote()">📝 Author's Note</button>
-        <button class="pro-feature-locked" onclick="showUpgradeModal('memory')">🧠 Memory <span class="pro-badge">PRO</span></button>
+        <button id="memory-btn" onclick="openMemoryModal()">🧠 Memory</button>
+        <button id="situation-btn" onclick="openSituationModal()">📍 Situation</button>
       </div>
       
     </div>
@@ -47,18 +167,42 @@
     <div id="main">
       <div id="container">
         
+        <!-- Active Project Indicator -->
+        <div id="active-project-indicator" style="display: none;">
+          <small>📁 <span id="active-project-name"></span></small>
+        </div>
+        
 <!-- Character Bar -->
         <div id="character-bar">
-          <img id="character-img" src="/static/images/cal.png" alt="Character">
+          <div id="char-img-wrap">
+            <button id="char-img-prev" class="char-slide-btn" onclick="charSlide(-1)" title="Previous image">&#8249;</button>
+            <img id="character-img" src="" alt="Character">
+            <button id="char-img-next" class="char-slide-btn" onclick="charSlide(1)" title="Next image">&#8250;</button>
+            <div id="char-slide-dots"></div>
+          </div>
           <div>
-            <strong id="character-name">Cal</strong><br>
+            <strong id="character-name"></strong><br>
             <small id="system-prompt">System prompt will appear here</small>
           </div>
           <div id="character-selects">
-            <select id="character-select"></select>
-            <select id="tts-voice-select" title="TTS Voice" onchange="setTTSVoice(this.value)">
-              <option value="af_heart">Loading voices...</option>
-            </select>
+            <div style="display:flex; flex-direction:column; align-items:flex-end; gap:2px;">
+              <small style="color:#888; font-size:11px; letter-spacing:0.4px;">CHARACTER</small>
+              <select id="character-select" style="display:none;"></select>
+              <div id="char-custom-select" class="custom-select-wrap">
+                <div id="char-custom-selected" class="custom-select-selected">Loading...</div>
+                <div id="char-custom-options" class="custom-select-options"></div>
+              </div>
+            </div>
+            <div style="display:flex; flex-direction:column; align-items:flex-end; gap:2px;">
+              <small style="color:#888; font-size:11px; letter-spacing:0.4px;">VOICE</small>
+              <select id="tts-voice-select" title="TTS Voice" onchange="setTTSVoice(this.value)" style="display:none;">
+                <option value="af_heart">Loading voices...</option>
+              </select>
+              <div id="voice-custom-select" class="custom-select-wrap">
+                <div id="voice-custom-selected" class="custom-select-selected">Loading voices...</div>
+                <div id="voice-custom-options" class="custom-select-options"></div>
+              </div>
+            </div>
           </div>
         </div>
         <!-- Chat -->
@@ -75,7 +219,9 @@
 
           <div id="button-row">
             <button class="clear-btn" onclick="clearChat()">Clear Chat</button>
+            <button class="end-session-btn" onclick="showUpgradeModal('memory')" title="Upgrade to HWUI Pro">⭐ Go Pro</button>
             <button class="delete-btn" onclick="deleteLastMessages()">Delete Last</button>
+            <button class="save-chat-btn" id="save-chat-btn" onclick="manualSaveChat()" title="Save chat now" style="background:#1a3a2a;border:1px solid #2a6a4a;color:#6dbf8a;padding:6px 12px;border-radius:4px;cursor:pointer;font-size:13px;">💾 Save</button>
             <button class="regen-btn" onclick="regenerate()">Regenerate</button>
             <button class="stop-btn" id="stop-btn" onclick="stopGeneration()" style="display: none;">🚫 Stop</button>
             <button class="continue-btn" onclick="continueLast()">Continue</button>
@@ -140,6 +286,58 @@ Examples:
     </div>
   </div>
 
+  <!-- Brave API Key Modal -->
+  <div id="brave-key-modal" class="modal" style="display:none;">
+    <div class="modal-content" style="max-width:480px;">
+      <div class="modal-header">
+        <h3>🔍 Web Search API Key</h3>
+        <span class="close" onclick="closeBraveKeyModal()">&times;</span>
+      </div>
+      <div style="padding:16px 0 8px 0;">
+        <p style="color:#aaa; font-size:13px; margin:0 0 12px 0;">
+          Add a free <strong style="color:#ccc;">Brave Search API key</strong> for reliable web search results (current events, news, cinema listings etc).<br><br>
+          Without a key, basic DDG search is used — good for factual lookups but limited for real-time queries.<br><br>
+          Get a free key (2000 searches/month) at <a href="https://api.search.brave.com" target="_blank" style="color:#7ab4f5;">api.search.brave.com</a>
+        </p>
+        <input
+          type="password"
+          id="brave-key-input"
+          placeholder="BSA..."
+          style="width:100%; padding:8px 10px; background:#1a1a2e; border:1px solid #444;
+                 border-radius:6px; color:#eee; font-size:13px; box-sizing:border-box;"
+        />
+        <div style="margin-top:8px; font-size:11px; color:#666;" id="brave-key-status"></div>
+      </div>
+      <div style="display:flex; gap:8px; justify-content:flex-end; padding-top:8px;">
+        <button onclick="clearBraveKey()" style="padding:6px 14px; background:#333; border:none; border-radius:6px; color:#aaa; cursor:pointer;">Clear</button>
+        <button onclick="saveBraveKeyModal()" class="save-note-btn">💾 Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Situation Modal -->
+  <div id="situation-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>📍 Current Situation</h3>
+        <span class="close" onclick="closeSituationModal()">&times;</span>
+      </div>
+      <div class="modal-body">
+        <textarea
+          id="situation-textarea"
+          placeholder="e.g. Bob is staying at his parents' house for a few days."
+          rows="6"
+        ></textarea>
+        <small style="color: #aaa; display: block; margin-top: 8px;">
+          Shared context injected into characters that have "Use Current Situation" enabled. Only affects the next chat — go to Config to change which characters use it.
+        </small>
+      </div>
+      <div class="modal-footer">
+        <button onclick="saveSituationModal()" class="save-note-btn">💾 Save & Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Opening Line Modal -->
   <div id="opening-line-modal" class="modal">
     <div class="modal-content">
@@ -169,26 +367,172 @@ Examples:
     </div>
   </div>
 
-<!-- Upgrade Modal -->
-  <div id="upgrade-modal" class="modal">
+  <!-- Project Management Modal -->
+  <div id="project-modal" class="modal">
     <div class="modal-content">
       <div class="modal-header">
-        <h3>Upgrade to Helcyon Pro</h3>
-        <span class="close" onclick="closeUpgradeModal()">&times;</span>
+        <h3>Project Management</h3>
+        <span class="close" onclick="closeProjectModal()">&times;</span>
       </div>
+      
       <div class="modal-body">
-        <div id="upgrade-content"></div>
-        <p style="text-align: center; margin-top: 20px; color: #888; font-size: 14px;">
-          One-time payment. No subscription. Yours forever.
-        </p>
-        <button class="upgrade-btn" onclick="window.open('https://xeyonai.gumroad.com/l/mzcllf', '_blank')">
-          Get Pro Version - £20
-        </button>
+        <!-- Current Project Display -->
+        <div class="current-project-display">
+          <strong>Active Project:</strong> 
+          <span id="current-project-display">None</span>
+        </div>
+        
+        <hr style="margin: 20px 0; border-color: #333;">
+        
+        <!-- Create New Project -->
+        <div class="project-section">
+          <h4>Create New Project</h4>
+          <input type="text" id="new-project-name" placeholder="Project name (e.g., Health Journey)">
+          <textarea id="new-project-instructions" placeholder="Project instructions (optional)
+
+Example: You're helping Bob track his gym progress. Keep detailed logs with dates, times, weight, diet, and observations." rows="6"></textarea>
+          <button onclick="createProject()" class="save-btn">Create Project</button>
+        </div>
+        
+        <hr style="margin: 20px 0; border-color: #333;">
+        
+        <!-- Switch/Manage Projects -->
+        <div class="project-section">
+          <h4>Your Projects</h4>
+          <div id="projects-list"></div>
+        </div>
+      </div>
+      
+      <div class="modal-footer">
+        <button onclick="closeProjectModal()" class="cancel-btn">Close</button>
       </div>
     </div>
   </div>
 
-    <!-- Sidebar Logic -->
+ 
+<!-- Edit Project Modal -->
+  <div id="edit-project-modal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Edit Project</h3>
+        <span class="close" onclick="closeEditProjectModal()">&times;</span>
+      </div>
+      
+      <div class="modal-body">
+        <label>Project Name</label>
+        <input type="text" id="edit-project-name" readonly style="background: #0a0a0a; color: #666;">
+        
+        <label>Instructions</label>
+        <textarea id="edit-project-instructions" rows="10" placeholder="Project instructions..."></textarea>
+        
+        <hr style="margin: 16px 0; border-color: #333;">
+
+        <!-- RP Mode Toggle -->
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding: 10px 14px; background: rgba(255,255,255,0.05); border-radius: 6px; border: 1px solid #333;">
+          <span style="font-size: 18px;">🎭</span>
+          <div style="flex: 1;">
+            <div style="color: #ddd; font-size: 14px; font-weight: 600;">Roleplay Mode</div>
+            <div style="color: #888; font-size: 12px;">Inject an opening scene at the start of every new chat</div>
+          </div>
+          <button id="rp-mode-btn" onclick="toggleRpMode()" style="padding: 6px 14px; border-radius: 4px; border: 1px solid #555; background: #3a3b3f; color: #aaa; cursor: pointer; font-size: 13px; transition: all 0.2s;">OFF</button>
+        </div>
+        <div id="rp-opener-section" style="display: none; margin-bottom: 4px;">
+          <label>Opening Scene</label>
+          <textarea id="edit-project-rp-opener" rows="4" placeholder="*Nebula walks into the room and smiles at you* Hey Chris, how's it going? *She sits down on the couch and pours herself a drink*"></textarea>
+          <small style="color: #888; display: block; margin-top: 4px; margin-bottom: 12px;">Shown in chat as the character's first message — sets the scene and formatting style.</small>
+        </div>
+
+        <hr style="margin: 20px 0; border-color: #333;">
+        
+        <h4 style="margin-bottom: 10px;">Project Documents</h4>
+        <small style="color: #888; display: block; margin-bottom: 15px;">
+          Upload documents that the model can reference during conversations.
+        </small>
+
+        <!-- Sticky Docs Toggle -->
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding: 10px 14px; background: rgba(255,255,255,0.05); border-radius: 6px; border: 1px solid #333;">
+          <span style="font-size: 18px;">📌</span>
+          <div style="flex: 1;">
+            <div style="color: #ddd; font-size: 14px; font-weight: 600;">Sticky Document Mode</div>
+            <div style="color: #888; font-size: 12px;">Keep all documents loaded for every message in this project</div>
+          </div>
+          <button id="sticky-docs-btn" onclick="toggleStickyDocs()" style="padding: 6px 14px; border-radius: 4px; border: 1px solid #555; background: #3a3b3f; color: #aaa; cursor: pointer; font-size: 13px; transition: all 0.2s;">
+            OFF
+          </button>
+        </div>
+        
+        <input type="file" id="document-upload" accept=".txt,.md,.pdf,.docx,.odt" style="display: none;">
+        <button onclick="document.getElementById('document-upload').click()" class="upload-doc-btn">
+          📁 Upload Document
+        </button>
+        
+        <div id="documents-list" style="margin-top: 15px;">
+          <!-- Documents will be listed here -->
+        </div>
+      </div>
+      
+      <div class="modal-footer">
+        <button onclick="saveProjectEdit()" class="save-btn">Save Changes</button>
+        <button onclick="closeEditProjectModal()" class="cancel-btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+<!-- Memory Modal -->
+<!-- Avatar Lightbox -->
+<div id="avatar-lightbox">
+  <img id="avatar-lightbox-img" src="" alt="Avatar">
+</div>
+
+<!-- Upgrade to Pro Modal -->
+<div id="upgrade-modal" class="modal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3>Upgrade to HWUI Pro</h3>
+      <span class="close" onclick="closeUpgradeModal()">&times;</span>
+    </div>
+    <div class="modal-body">
+      <div id="upgrade-content"></div>
+      <p style="text-align: center; margin-top: 20px; color: #888; font-size: 14px;">
+        One-time payment. No subscription. Yours forever.
+      </p>
+      <button class="upgrade-btn" onclick="window.open('https://xeyonai.gumroad.com/l/bsmupk', '_blank')">
+        Get Pro Version - £20
+      </button>
+    </div>
+  </div>
+</div>
+
+<div id="memory-modal" class="modal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 id="memory-modal-title">Character Memory</h3>
+      <span class="close" onclick="closeMemoryModal()">&times;</span>
+    </div>
+
+    <div style="display:flex; gap:6px; padding: 8px 16px 0;">
+      <button id="memory-tab-character" onclick="setMemoryTab('character')" class="save-btn" style="flex:1;">👤 Character</button>
+      <button id="memory-tab-global" onclick="setMemoryTab('global')" class="cancel-btn" style="flex:1;">🌐 Global</button>
+    </div>
+    
+    <div class="modal-body">
+      <div id="memory-list"></div>
+      <div id="memory-add-panel" style="display:none;">
+        <input id="memory-add-title" type="text" placeholder="Title" class="memory-add-input" />
+        <input id="memory-add-keywords" type="text" placeholder="Keywords (comma separated)" class="memory-add-input" />
+        <textarea id="memory-add-body" rows="4" placeholder="Memory content..." class="memory-add-input"></textarea>
+        <button onclick="submitAddMemory()" class="save-btn">💾 Save Entry</button>
+        <button onclick="toggleMemoryAddPanel()" class="cancel-btn">Cancel</button>
+      </div>
+    </div>
+    
+    <div class="modal-footer">
+      <button onclick="loadCharacterMemory()" class="save-btn">🔄 Refresh</button>
+      <button onclick="toggleMemoryAddPanel()" class="save-btn">➕ Add Entry</button>
+      <button onclick="closeMemoryModal()" class="cancel-btn">Close</button>
+    </div>
+  </div>
+</div>
+  <!-- Sidebar Logic -->
 
 <script>
 // Force cache clear
@@ -208,7 +552,8 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
   let currentCharacter = {};
   let systemPrompt = '';
   let activeUserName = 'User';
-  let currentCharName = "Cal";  
+  let userImageCache = {}; // name → image filename
+  let currentCharName = '';  
   let lastPrompt = localStorage.getItem('lastPrompt') || '';
   let isCreatingNewChat = false;
 
@@ -274,29 +619,249 @@ function renderImagePreviews() {
 // Ensure marked.js fallback is always available
 if (typeof marked === "undefined") {
   console.warn("⚠️ Marked.js not found — using custom parser.");
-  window.marked = { 
+  window.marked = {
     parse: function(txt) {
-      // Split into paragraphs
-      return txt
-        .split('\n\n')
-        .map(para => para.trim())
-        .filter(para => para.length > 0)
-        .map(para => `<p>${para}</p>`)
-        .join('');
+      if (!txt) return '';
+
+      function parseInline(text) {
+        return text
+          .replace(/\*\*\*([\s\S]*?)\*\*\*/g, '<strong><em>$1</em></strong>')
+          .replace(/\*\*([\s\S]*?)\*\*/g, '<strong>$1</strong>')
+          .replace(/\*([^\n*]+?)\*/g, '<em>$1</em>')
+          .replace(/`([^`]+)`/g, '<code>$1</code>');
+      }
+
+      // Pre-process: isolate --- / *** / ___ lines so they always become their own block
+      txt = txt.replace(/^[ \t]*([-*_]{3,})[ \t]*$/gm, '\n\n$1\n\n');
+
+      // Split into blocks on blank lines
+      let blocks = txt.split(/\n\n+/);
+
+      // Merge orphaned punctuation-only blocks onto the previous block
+      // e.g. model outputs "**bold text**\n\n." — the "." becomes its own block
+      const merged = [];
+      blocks.forEach(block => {
+        const trimmed = block.trim();
+        if (/^[.,!?;:]+$/.test(trimmed) && merged.length > 0) {
+          merged[merged.length - 1] = merged[merged.length - 1].trimEnd() + trimmed;
+        } else {
+          merged.push(block);
+        }
+      });
+      blocks = merged;
+
+      let html = '';
+
+      blocks.forEach(block => {
+        const lines = block.split('\n').filter(l => l.trim() !== '');
+        if (!lines.length) return;
+
+        const first = lines[0];
+
+        // Blockquote block (> lines)
+        if (lines.every(l => /^>\s?/.test(l))) {
+          const inner = lines.map(l => l.replace(/^>\s?/, '')).join(' ');
+          html += `<blockquote>${parseInline(inner)}</blockquote>`;
+          return;
+        }
+
+        // Horizontal rule (---, ***, ___)
+        if (/^(\s*[-*_]){3,}\s*$/.test(first) && lines.length === 1) {
+          html += '<hr>';
+          return;
+        }
+
+        // Heading
+        const h3 = first.match(/^### (.+)/);
+        const h2 = first.match(/^## (.+)/);
+        const h1 = first.match(/^# (.+)/);
+        if (h3) { html += `<h3>${parseInline(h3[1])}</h3>`; return; }
+        if (h2) { html += `<h2>${parseInline(h2[1])}</h2>`; return; }
+        if (h1) { html += `<h1>${parseInline(h1[1])}</h1>`; return; }
+
+        // Unordered list block
+        if (lines.every(l => /^[-*+] /.test(l))) {
+          html += '<ul>' + lines.map(l => `<li>${parseInline(l.replace(/^[-*+] /, ''))}</li>`).join('') + '</ul>';
+          return;
+        }
+
+        // Ordered list block (1. 2. 3. etc)
+        if (lines.every(l => /^\d+\.\s/.test(l))) {
+          html += '<ol>' + lines.map(l => `<li>${parseInline(l.replace(/^\d+\.\s/, ''))}</li>`).join('') + '</ol>';
+          return;
+        }
+
+        // Regular paragraph — join lines, no space before punctuation-only lines
+        const para = lines.reduce((acc, line, i) => {
+          if (i === 0) return line;
+          return /^[.,!?;:]/.test(line) ? acc + line : acc + ' ' + line;
+        }, '');
+        html += `<p>${parseInline(para)}</p>`;
+      });
+
+      return html;
     },
-    setOptions: function(opts) {
-      // Dummy function - our simple parser doesn't need options
-      return;
-    }
+    setOptions: function(opts) { return; }
   };
 }
   
   
   // ==================================================
+  // ==================================================
+  // MODEL DISPLAY
+  // ==================================================
+  async function loadModelDisplay() {
+    const el = document.getElementById('model-display');
+    if (!el) return;
+    // Spin the refresh button if present
+    const btn = el.parentElement?.querySelector('button');
+    if (btn) btn.style.transform = 'rotate(360deg)', btn.style.transition = 'transform 0.4s ease';
+    try {
+      const res = await fetch('/get_model');
+      const data = await res.json();
+      const name = data.model || 'No model loaded';
+      el.textContent = name;
+      el.style.color = name === 'No model loaded' ? '#a05050' : '#ffffff';
+    } catch(e) {
+      el.textContent = '⚠️ Model unknown';
+      el.style.color = '#a05050';
+    }
+    if (btn) setTimeout(() => { btn.style.transform = ''; btn.style.transition = ''; }, 500);
+  }
+
+  async function toggleModelPicker() {
+    const picker = document.getElementById('model-picker');
+    if (picker.style.display !== 'none') { closeModelPicker(); return; }
+    picker.style.display = 'block';
+    // Load model list
+    const list = document.getElementById('model-picker-list');
+    list.innerHTML = '<div style="padding:12px 14px; color:#666; font-size:12px;">Loading models...</div>';
+    try {
+      const res = await fetch('/list_models');
+      const data = await res.json();
+      if (data.error) {
+        list.innerHTML = `<div style="padding:12px 14px; color:#e88; font-size:12px;">⚠️ ${data.error}</div>`;
+        return;
+      }
+      if (!data.models.length) {
+        list.innerHTML = '<div style="padding:12px 14px; color:#666; font-size:12px;">No .gguf files found in models folder.</div>';
+        return;
+      }
+      // Get current model to highlight it
+      const currentEl = document.getElementById('model-display');
+      const currentName = currentEl ? currentEl.textContent.trim() : '';
+      list.innerHTML = data.models.map(m => {
+        const stem = m.replace(/\.gguf$/i, '');
+        const isActive = stem === currentName;
+        return `<div onclick="loadModel('${m}')" style="
+          padding: 8px 14px;
+          font-size: 13px;
+          cursor: pointer;
+          color: ${isActive ? '#6dbf8a' : '#ccc'};
+          background: ${isActive ? 'rgba(40,80,50,0.3)' : 'transparent'};
+          border-left: 3px solid ${isActive ? '#3a8a5a' : 'transparent'};
+          transition: background 0.15s;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        " onmouseover="this.style.background='rgba(255,255,255,0.06)'" onmouseout="this.style.background='${isActive ? 'rgba(40,80,50,0.3)' : 'transparent'}'">
+          ${isActive ? '▶ ' : ''}${stem}
+        </div>`;
+      }).join('');
+    } catch(e) {
+      list.innerHTML = `<div style="padding:12px 14px; color:#e88; font-size:12px;">⚠️ Failed to load models: ${e}</div>`;
+    }
+    // Close on outside click
+    setTimeout(() => document.addEventListener('click', outsideModelPickerClick), 50);
+  }
+
+  function outsideModelPickerClick(e) {
+    const picker = document.getElementById('model-picker');
+    const display = document.getElementById('model-display');
+    if (picker && !picker.contains(e.target) && e.target !== display) {
+      closeModelPicker();
+    }
+  }
+
+  function closeModelPicker() {
+    const picker = document.getElementById('model-picker');
+    if (picker) picker.style.display = 'none';
+    document.removeEventListener('click', outsideModelPickerClick);
+  }
+
+  async function loadModel(filename) {
+    const status = document.getElementById('model-picker-status');
+    const list = document.getElementById('model-picker-list');
+    const display = document.getElementById('model-display');
+    status.style.display = 'block';
+    status.textContent = `⏳ Loading ${filename.replace(/\.gguf$/i,'')}...`;
+    list.style.opacity = '0.4';
+    list.style.pointerEvents = 'none';
+    display.textContent = 'Loading...';
+    display.style.color = '#8ab4d4';
+    try {
+      const res = await fetch('/load_model', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: filename })
+      });
+      const data = await res.json();
+      if (data.status === 'ok') {
+        display.textContent = data.model;
+        display.style.color = '#ffffff';
+        status.textContent = `✅ Loaded: ${data.model}`;
+        list.style.opacity = '1';
+        list.style.pointerEvents = 'all';
+        setTimeout(() => closeModelPicker(), 1200);
+      } else {
+        status.style.color = '#e88';
+        status.textContent = `❌ ${data.error}`;
+        display.textContent = 'Load failed';
+        display.style.color = '#a05050';
+        list.style.opacity = '1';
+        list.style.pointerEvents = 'all';
+      }
+    } catch(e) {
+      status.style.color = '#e88';
+      status.textContent = `❌ Request failed: ${e}`;
+      list.style.opacity = '1';
+      list.style.pointerEvents = 'all';
+    }
+  }
+
+  async function unloadModel() {
+    const status = document.getElementById('model-picker-status');
+    const display = document.getElementById('model-display');
+    status.style.display = 'block';
+    status.style.color = '#8ab4d4';
+    status.textContent = '⏳ Unloading...';
+    try {
+      await fetch('/unload_model', { method: 'POST' });
+      display.textContent = 'No model loaded';
+      display.style.color = '#a05050';
+      status.textContent = '✅ Unloaded';
+      setTimeout(() => closeModelPicker(), 1000);
+    } catch(e) {
+      status.textContent = `❌ Failed: ${e}`;
+    }
+  }
+
+  // ==================================================
   // LOAD ACTIVE USER
   // ==================================================
   async function loadActiveUser() {
     try {
+      // Pre-load all user images into cache
+      try {
+        const allRes = await fetch('/get_all_users');
+        if (allRes.ok) {
+          userImageCache = await allRes.json();
+          console.log('✅ User image cache loaded:', userImageCache);
+        }
+      } catch(e) {
+        console.warn('⚠️ Could not load user image cache:', e);
+      }
+
       const res = await fetch('/get_active_user');
       if (res.ok) {
         const data = await res.json();
@@ -337,19 +902,27 @@ if (typeof marked === "undefined") {
       const response = await fetch('/characters/index.json');
       if (!response.ok) throw new Error('Failed to fetch character list');
       const characters = await response.json();
+
+      // Sort: favourites first (alpha), then rest (alpha)
+      const favs = getFavouriteCharacters();
+      const sorted = [
+        ...characters.filter(n => favs.includes(n)).sort((a,b) => a.localeCompare(b)),
+        ...characters.filter(n => !favs.includes(n)).sort((a,b) => a.localeCompare(b))
+      ];
+
       select.innerHTML = '';
-      characters.forEach(name => {
+      sorted.forEach(name => {
         const opt = document.createElement('option');
         opt.value = name;
         opt.textContent = name;
         select.appendChild(opt);
       });
-      
+
       // Cache character list for filename parsing
-      localStorage.setItem('characterListCache', JSON.stringify(characters));
-      
+      localStorage.setItem('characterListCache', JSON.stringify(sorted));
+
       const lastChar = localStorage.getItem('lastCharacter');
-      const initialChar = lastChar && characters.includes(lastChar) ? lastChar : characters[0];
+      const initialChar = lastChar && sorted.includes(lastChar) ? lastChar : sorted[0];
       if (initialChar) {
         select.value = initialChar;
         await loadCharacter(initialChar);
@@ -358,7 +931,184 @@ if (typeof marked === "undefined") {
       console.error('Failed to load character list:', err);
     }
   }
-  
+
+  // ==================================================
+  // FAVOURITES HELPERS
+  // ==================================================
+  function getFavouriteCharacters() {
+    try { return JSON.parse(localStorage.getItem('characterFavourites') || '[]'); }
+    catch { return []; }
+  }
+  function setFavouriteCharacters(favs) {
+    localStorage.setItem('characterFavourites', JSON.stringify(favs));
+  }
+  function toggleFavouriteCharacter(name) {
+    const favs = getFavouriteCharacters();
+    const idx = favs.indexOf(name);
+    if (idx === -1) favs.push(name); else favs.splice(idx, 1);
+    setFavouriteCharacters(favs);
+  }
+
+  // ==================================================
+  // CUSTOM CHARACTER SELECT
+  // ==================================================
+  function buildCustomSelect() {
+    const select = document.getElementById('character-select');
+    const selected = document.getElementById('char-custom-selected');
+    const optList = document.getElementById('char-custom-options');
+    const favs = getFavouriteCharacters();
+
+    optList.innerHTML = '';
+    const allOpts = Array.from(select.options);
+    const favOpts = allOpts.filter(o => favs.includes(o.value));
+    const nonFavOpts = allOpts.filter(o => !favs.includes(o.value));
+
+    function renderItem(opt) {
+      const isFav = favs.includes(opt.value);
+      const item = document.createElement('div');
+      item.className = 'custom-select-item' + (opt.value === select.value ? ' active' : '');
+      item.dataset.value = opt.value;
+      item.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:6px;';
+
+      const label = document.createElement('span');
+      label.textContent = opt.textContent;
+      label.style.cssText = 'flex:1; overflow:hidden; text-overflow:ellipsis;';
+
+      const star = document.createElement('span');
+      star.textContent = '★';
+      star.title = isFav ? 'Remove from favourites' : 'Add to favourites';
+      star.style.cssText = `cursor:pointer; font-size:14px; flex-shrink:0; color:${isFav ? '#f5c518' : '#444'}; transition:color 0.15s;`;
+      star.addEventListener('mouseenter', () => { if (!favs.includes(opt.value)) star.style.color = '#888'; });
+      star.addEventListener('mouseleave', () => { if (!favs.includes(opt.value)) star.style.color = '#444'; });
+      star.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        toggleFavouriteCharacter(opt.value);
+        await loadCharacterList();
+        buildCustomSelect();
+      });
+
+      item.appendChild(label);
+      item.appendChild(star);
+      item.addEventListener('click', () => {
+        select.value = opt.value;
+        select.dispatchEvent(new Event('change'));
+        const curFavs = getFavouriteCharacters();
+        selected.textContent = (curFavs.includes(opt.value) ? '★ ' : '') + opt.textContent;
+        optList.querySelectorAll('.custom-select-item').forEach(i => i.classList.remove('active'));
+        item.classList.add('active');
+        closeCustomSelect();
+      });
+      optList.appendChild(item);
+    }
+
+    favOpts.forEach(renderItem);
+    if (favOpts.length > 0 && nonFavOpts.length > 0) {
+      const divider = document.createElement('div');
+      divider.style.cssText = 'border-top:1px solid #2a2a2a; margin:3px 0;';
+      optList.appendChild(divider);
+    }
+    nonFavOpts.forEach(renderItem);
+
+    // Update displayed value
+    const cur = select.options[select.selectedIndex];
+    if (cur) {
+      selected.textContent = (favs.includes(cur.value) ? '★ ' : '') + cur.textContent;
+    } else {
+      selected.textContent = '—';
+    }
+  }
+
+  function openCustomSelect() {
+    document.getElementById('char-custom-select').classList.add('open');
+  }
+
+  function closeCustomSelect() {
+    document.getElementById('char-custom-select').classList.remove('open');
+  }
+
+  document.getElementById('char-custom-selected').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const wrap = document.getElementById('char-custom-select');
+    wrap.classList.contains('open') ? closeCustomSelect() : openCustomSelect();
+  });
+
+  document.addEventListener('click', () => closeCustomSelect());
+
+  // Sync custom select whenever real select changes value programmatically
+  const _realSelect = document.getElementById('character-select');
+  const _charSelectObserver = new MutationObserver(() => buildCustomSelect());
+  _charSelectObserver.observe(_realSelect, { childList: true });
+
+  // Also patch select.value changes via a polling sync (for programmatic value sets)
+  let _lastCharVal = '';
+  setInterval(() => {
+    const sel = document.getElementById('character-select');
+    if (sel.value !== _lastCharVal) {
+      _lastCharVal = sel.value;
+      const selected = document.getElementById('char-custom-selected');
+      if (selected) {
+        const cur = sel.options[sel.selectedIndex];
+        if (cur) {
+          const favs = getFavouriteCharacters();
+          selected.textContent = (favs.includes(cur.value) ? '★ ' : '') + cur.textContent;
+          document.querySelectorAll('.custom-select-item').forEach(i => {
+            i.classList.toggle('active', i.dataset.value === sel.value);
+          });
+        }
+      }
+    }
+  }, 150);
+
+  // ── Custom Voice Select ──────────────────────────────
+  function buildVoiceCustomSelect() {
+    const select = document.getElementById('tts-voice-select');
+    const selected = document.getElementById('voice-custom-selected');
+    const optList = document.getElementById('voice-custom-options');
+    optList.innerHTML = '';
+    Array.from(select.options).forEach(opt => {
+      const item = document.createElement('div');
+      item.className = 'custom-select-item' + (opt.value === select.value ? ' active' : '');
+      item.textContent = opt.textContent;
+      item.dataset.value = opt.value;
+      item.addEventListener('click', () => {
+        select.value = opt.value;
+        select.dispatchEvent(new Event('change'));
+        selected.textContent = opt.textContent;
+        optList.querySelectorAll('.custom-select-item').forEach(i => i.classList.remove('active'));
+        item.classList.add('active');
+        document.getElementById('voice-custom-select').classList.remove('open');
+      });
+      optList.appendChild(item);
+    });
+    const cur = select.options[select.selectedIndex];
+    selected.textContent = cur ? cur.textContent : '—';
+  }
+
+  document.getElementById('voice-custom-selected').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const wrap = document.getElementById('voice-custom-select');
+    wrap.classList.contains('open') ? wrap.classList.remove('open') : wrap.classList.add('open');
+  });
+
+  // Sync voice custom select when options change (voices loaded async)
+  const _voiceSelectObserver = new MutationObserver(() => buildVoiceCustomSelect());
+  _voiceSelectObserver.observe(document.getElementById('tts-voice-select'), { childList: true });
+
+  // Polling sync for programmatic value sets on voice select
+  let _lastVoiceVal = '';
+  setInterval(() => {
+    const sel = document.getElementById('tts-voice-select');
+    if (sel.value !== _lastVoiceVal) {
+      _lastVoiceVal = sel.value;
+      const selected = document.getElementById('voice-custom-selected');
+      if (selected) {
+        const cur = sel.options[sel.selectedIndex];
+        if (cur) selected.textContent = cur.textContent;
+      }
+      buildVoiceCustomSelect();
+    }
+  }, 150);
+
   // ==================================================
   // LOAD CHARACTER DATA
   // ==================================================
@@ -369,27 +1119,51 @@ async function loadCharacter(name, skipChatHistory = false) {
       const data = await res.json();
       window.currentCharacter = data;
       currentCharacter = data;
-      document.getElementById('character-img').src = '/static/images/' + data.image;
+      // Build image list: prefer data.images array, fallback to single data.image
+      const imgList = (data.images && data.images.length > 0) ? data.images : (data.image ? [data.image] : []);
+      initCharSlideshow(imgList, name);
       document.getElementById('character-name').textContent = data.name;
       document.getElementById('system-prompt').textContent =
         data.tagline || (data.main_prompt ? data.main_prompt.split('\n')[0] : '');
       systemPrompt = data.system_prompt || '';
       localStorage.setItem('lastCharacter', name);
 
-      // Load this character's saved TTS voice
-      const savedVoice = localStorage.getItem(`tts-voice-${name}`);
-      if (savedVoice) {
-        ttsVoice = savedVoice;
-        // Wait for voice dropdown to be populated before setting value
-        const applyVoice = () => {
-          const voiceSelect = document.getElementById('tts-voice-select');
-          if (voiceSelect && voiceSelect.options.length > 0) {
-            voiceSelect.value = savedVoice;
-          } else {
-            setTimeout(applyVoice, 100);
+      // Load this character's saved TTS voice — server first (shared with mobile), localStorage fallback
+      try {
+        const vr = await fetch(`/character_voice/${encodeURIComponent(name)}`);
+        if (vr.ok) {
+          const vd = await vr.json();
+          const voice = vd.voice || localStorage.getItem(`tts-voice-${name}`);
+          if (voice) {
+            ttsVoice = voice;
+            localStorage.setItem(`tts-voice-${name}`, voice);
+            localStorage.setItem('tts-voice', voice);
+            const applyVoice = () => {
+              const voiceSelect = document.getElementById('tts-voice-select');
+              if (voiceSelect && voiceSelect.options.length > 0) {
+                voiceSelect.value = voice;
+              } else {
+                setTimeout(applyVoice, 100);
+              }
+            };
+            applyVoice();
           }
-        };
-        applyVoice();
+        }
+      } catch(e) {
+        // Fallback to localStorage only
+        const savedVoice = localStorage.getItem(`tts-voice-${name}`);
+        if (savedVoice) {
+          ttsVoice = savedVoice;
+          const applyVoice = () => {
+            const voiceSelect = document.getElementById('tts-voice-select');
+            if (voiceSelect && voiceSelect.options.length > 0) {
+              voiceSelect.value = savedVoice;
+            } else {
+              setTimeout(applyVoice, 100);
+            }
+          };
+          applyVoice();
+        }
       }
       
       // Only load chat history if not opening from sidebar
@@ -742,17 +1516,44 @@ function persistChatState() {
   // ==================================================
   // SORT CHAT LIST
   // ==================================================
+  function parseDateFromFilename(filename) {
+    // Extracts date from filenames like "Char - Chat Name - Mar 22.txt"
+    // Returns a comparable timestamp, or falls back to mtime
+    const monthMap = {
+      Jan:0, Feb:1, Mar:2, Apr:3, May:4, Jun:5,
+      Jul:6, Aug:7, Sep:8, Oct:9, Nov:10, Dec:11
+    };
+    const match = filename.match(/- ([A-Z][a-z]{2}) (\d{1,2})(?:\s*\(\d+\))?\.txt$/);
+    if (match) {
+      const month = monthMap[match[1]];
+      const day = parseInt(match[2]);
+      const year = new Date().getFullYear(); // assume current year
+      if (month !== undefined && !isNaN(day)) {
+        return new Date(year, month, day).getTime();
+      }
+    }
+    return null;
+  }
+
   function sortChatList(chats) {
     const sortMode = localStorage.getItem('chatSortMode') || 'newest';
-    
+
     if (sortMode === 'newest') {
-      // Sort by most recently modified (newest first)
-      chats.sort((a, b) => b.modified - a.modified);
+      chats.sort((a, b) => {
+        const da = parseDateFromFilename(a.filename) ?? (a.modified * 1000);
+        const db = parseDateFromFilename(b.filename) ?? (b.modified * 1000);
+        if (db !== da) return db - da;
+        // Same date: fall back to mtime for within-day ordering
+        return b.modified - a.modified;
+      });
     } else if (sortMode === 'oldest') {
-      // Sort by creation date (oldest first)
-      chats.sort((a, b) => a.created - b.created);
+      chats.sort((a, b) => {
+        const da = parseDateFromFilename(a.filename) ?? (a.created * 1000);
+        const db = parseDateFromFilename(b.filename) ?? (b.created * 1000);
+        if (da !== db) return da - db;
+        return a.created - b.created;
+      });
     } else if (sortMode === 'alphabetical') {
-      // Sort alphabetically by title
       chats.sort((a, b) => a.title.localeCompare(b.title));
     }
   }
@@ -1010,7 +1811,8 @@ function persistChatState() {
       var characterData = await res.json();
       currentCharacter = characterData;
       
-      document.getElementById('character-img').src = '/static/images/' + characterData.image;
+      const imgList2 = (characterData.images && characterData.images.length > 0) ? characterData.images : (characterData.image ? [characterData.image] : []);
+      initCharSlideshow(imgList2, option.value);
       document.getElementById('character-name').textContent = characterData.name;
       document.getElementById('system-prompt').textContent = characterData.tagline || (characterData.main_prompt ? characterData.main_prompt.split('\n')[0] : '');
 
@@ -1084,15 +1886,26 @@ async function openChat(filename) {
     localStorage.setItem('currentChatFilename', filename);
     localStorage.setItem('lastCharacter', characterName);
     
-    renderChatMessages(data.messages);
-    
     // ✅ FIX: Load conversation history into memory for context
+    // ✅ FIX 2: Normalise legacy "User" speaker label to actual active user name
+    var _activeUserFix = localStorage.getItem('activeUserName') || activeUserName || 'User';
     window.loadedChat = data.messages.map(function(msg) {
-      return {
+      var spk = msg.speaker || null;
+      if (spk && spk.toLowerCase() === 'user' && msg.role === 'user') {
+        spk = _activeUserFix;
+      }
+      var mapped = {
         role: msg.role,
-        content: msg.content
+        content: msg.content,
+        speaker: spk
       };
+      if (msg.is_opening_line) mapped.is_opening_line = true;
+      if (msg.timestamp) mapped.timestamp = msg.timestamp;
+      return mapped;
     });
+
+    // Render from normalised loadedChat so avatar lookup gets the real name, not "User"
+    renderChatMessages(window.loadedChat);
     
     console.log('💾 Loaded ' + window.loadedChat.length + ' messages into context');
     
@@ -1114,6 +1927,7 @@ async function openChat(filename) {
     // ✅ FIXED: Only display opening line if chat is actually empty
     if (data.messages.length === 0) {
       displayOpeningLineInChat();
+      displayRpOpenerInChat();
     }
     
   } catch (err) {
@@ -1148,7 +1962,7 @@ async function openChat(filename) {
     
     var successCount = 0;
     var charName = currentCharacter.name || 'Assistant';
-    var userName = localStorage.getItem('activeUserName') || activeUserName;
+    var activeUserNameFallback = localStorage.getItem('activeUserName') || activeUserName;
     
     messages.forEach(function(msg, index) {
       if (!msg) {
@@ -1156,11 +1970,15 @@ async function openChat(filename) {
         return;
       }
       
-      var role, content;
+      // Skip hidden messages (e.g. memory confirm triggers)
+      if (msg.hidden) return;
+      
+      var role, content, msgSpeaker;
       
       if (typeof msg === "object" && msg.role) {
         role = msg.role;
         content = msg.content;
+        msgSpeaker = msg.speaker || null;
       } 
       else if (typeof msg === "string") {
         if (msg.startsWith(charName + ":")) {
@@ -1191,10 +2009,14 @@ async function openChat(filename) {
           wrapper.classList.add("user-wrapper");
           div.classList.add("user-msg");
           
+          // Use the speaker stored in the message, fall back to current active user
+          var userName = msgSpeaker || activeUserNameFallback;
+          
           // Create avatar
           var userAvatar = document.createElement("img");
           userAvatar.className = "avatar";
-          var userImageFile = localStorage.getItem('activeUserImage') || "default.png";
+          // Look up image for the actual speaker, fall back to active user's image
+          var userImageFile = (userName && userImageCache[userName]) || localStorage.getItem('activeUserImage') || "default.png";
           userAvatar.src = "/static/images/" + userImageFile;
           userAvatar.alt = userName;
           userAvatar.onerror = function() { 
@@ -1211,7 +2033,6 @@ async function openChat(filename) {
           if (typeof marked !== "undefined") {
             let html = marked.parse(content);
             html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
-            html = html.replace(/\*([^\n*]+?)\*/g, '<em>$1</em>');  // ← ADD THIS LINE
             userSpan.innerHTML = html;
           } else {
             var formatted = content.replace(/\*(.*?)\*/gs, "<em>$1</em>");
@@ -1242,6 +2063,7 @@ async function openChat(filename) {
           div.appendChild(userCopyBtn);
           div.appendChild(userEditBtn);
           div.appendChild(userDeleteBtn);
+          div.appendChild(makeTimestampEl(msg.timestamp));
           
           wrapper.appendChild(userAvatar);
           wrapper.appendChild(div);
@@ -1271,7 +2093,6 @@ async function openChat(filename) {
           if (typeof marked !== "undefined") {
             let html = marked.parse(content);
             html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
-            html = html.replace(/\*([^\n*]+?)\*/g, '<em>$1</em>');
             modelSpan.innerHTML = html;
           } else {
             // Fallback: wrap paragraphs manually
@@ -1309,13 +2130,11 @@ async function openChat(filename) {
           div.appendChild(modelCopyBtn);
           div.appendChild(modelEditBtn);
           div.appendChild(modelDeleteBtn);
+          div.appendChild(makeTimestampEl(msg.timestamp));
                     
           wrapper.appendChild(modelAvatar);
           wrapper.appendChild(div);
           
-        } else {
-          console.warn('Unknown role: ' + role);
-          return;
         }
         
         chat.appendChild(wrapper);
@@ -1446,7 +2265,7 @@ async function openChat(filename) {
     // Create USER avatar
     const userAvatar = document.createElement("img");
     userAvatar.className = "avatar";
-    const userImageFile = localStorage.getItem('activeUserImage') || "default.png";
+    const userImageFile = (userImageCache[userName]) || localStorage.getItem('activeUserImage') || "default.png";
     userAvatar.src = "/static/images/" + userImageFile;
     userAvatar.alt = userName;
     userAvatar.onerror = function() { 
@@ -1473,6 +2292,7 @@ async function openChat(filename) {
     userDiv.appendChild(userStrong);
     userDiv.appendChild(userSpan);
     userDiv.appendChild(userCopyBtn);
+    userDiv.appendChild(makeTimestampEl(new Date().toISOString()));
 
     // Assemble wrapper: avatar + message bubble
     userWrapper.appendChild(userAvatar);
@@ -1498,7 +2318,7 @@ async function openChat(filename) {
           image_url: { url: `data:${img.mimeType};base64,${img.base64}` }
         });
       });
-      window.loadedChat.push({ role: "user", content: contentParts });
+      window.loadedChat.push({ role: "user", content: contentParts, speaker: activeUserName, timestamp: new Date().toISOString() });
       
       // Show thumbnails in the user message bubble
       window.attachedImages.forEach(img => {
@@ -1512,7 +2332,7 @@ async function openChat(filename) {
       window.attachedImages = [];
       renderImagePreviews();
     } else {
-      window.loadedChat.push({ role: "user", content: input });
+      window.loadedChat.push({ role: "user", content: input, speaker: activeUserName, timestamp: new Date().toISOString() });
     }
 
     let contextMessages = window.loadedChat;
@@ -1576,14 +2396,18 @@ async function openChat(filename) {
 
       // Strip images from all but the most recent multimodal message
       // This prevents massive payloads and base64 spam when using text-only models
+      const visibleChat = window.loadedChat.filter(msg => !msg.hidden);
+      // chatToSend includes hidden messages (e.g. memory confirm) so the model has context,
+      // but strips the hidden flag so the backend treats them as normal turns
+      const chatForSend = window.loadedChat.map(msg => msg.hidden ? {...msg, hidden: undefined} : msg);
       let lastImageIdx = -1;
-      for (let i = window.loadedChat.length - 1; i >= 0; i--) {
-        if (Array.isArray(window.loadedChat[i].content)) {
+      for (let i = visibleChat.length - 1; i >= 0; i--) {
+        if (Array.isArray(visibleChat[i].content)) {
           lastImageIdx = i;
           break;
         }
       }
-      const chatToSend = window.loadedChat.map((msg, i) => {
+      const chatToSend = chatForSend.map((msg, i) => {
         if (Array.isArray(msg.content)) {
           if (i === lastImageIdx) {
             return msg; // Keep the most recent image message intact
@@ -1604,9 +2428,9 @@ async function openChat(filename) {
           user_name: activeUserName,
           current_chat_filename: currentChatFilename,
           conversation_history: chatToSend,
-          author_note: localStorage.getItem(`author-note-${currentChatFilename}`) || '',
+          author_note: (window._memoryConfirmNote ? (window._memoryConfirmNote = false, '[SYSTEM OVERRIDE: The user just confirmed a memory save. Write ONE short sentence confirming it is saved. Do NOT write any MEMORY ADD tags. Do NOT summarize. Do NOT ask questions.]') : localStorage.getItem(`author-note-${currentChatFilename}`) || ''),
           temperature: 0.8,
-          max_tokens: 4096,
+          max_tokens: (window._memoryConfirmMaxTokens ? (window._memoryConfirmMaxTokens = 0, 80) : 4096),
           stop: [],      
         })
       });
@@ -1663,6 +2487,7 @@ async function openChat(filename) {
         msgDiv.appendChild(nameStrong);
         msgDiv.appendChild(spanText);
         msgDiv.appendChild(copyBtn);
+        msgDiv.appendChild(makeTimestampEl(new Date().toISOString()));
         
         modelWrapper.appendChild(modelAvatar);
         modelWrapper.appendChild(msgDiv);
@@ -1679,13 +2504,16 @@ async function openChat(filename) {
         );
         
         if (!isDuplicate) {
-          window.loadedChat.push({ role: "assistant", content: message });
+          window.loadedChat.push({ role: "assistant", content: message, speaker: currentCharacter?.name || charName, timestamp: new Date().toISOString() });
           console.log('✅ Added non-streaming response to loadedChat');
         } else {
           console.warn('⚠️ Skipped duplicate non-streaming response');
         }
         
         await autoSaveCurrentChat();
+
+        // Re-render so edit/delete buttons appear on live messages
+        renderChatMessages(window.loadedChat);
         return;
       }
 
@@ -1724,6 +2552,7 @@ async function openChat(filename) {
       msgDiv.appendChild(nameStrong);
       msgDiv.appendChild(spanText);
       msgDiv.appendChild(copyBtn);
+      msgDiv.appendChild(makeTimestampEl(new Date().toISOString()));
       
       modelWrapper.appendChild(modelAvatar);
       modelWrapper.appendChild(msgDiv);
@@ -1734,7 +2563,6 @@ async function openChat(filename) {
 
       const streamEl = spanText;
       
-      streamEl.style.whiteSpace = 'pre-wrap';
       streamEl.style.wordWrap = 'break-word';
       streamEl.style.overflowWrap = 'break-word';
 
@@ -1778,15 +2606,24 @@ async function openChat(filename) {
           .replace(new RegExp(`^${charName}:\\s*`, 'gim'), "")
           .replace(/^User:\s*/gim, "")
           .replace(/^Assistant:\s*/gim, "")
+          // Strip Author's Note echo if model leaks it back
+          .replace(/\[Author['']s Note:[^\]]*\]/gi, "")
+          // Strip STYLE REMINDER leakage (model echoing the author note instruction)
+          .replace(/^STYLE REMINDER:.*$/gim, "")
+          // Strip MEMORY ADD/MEMORY_ADD tag marker from display, but preserve the body text after pipes
+          // e.g. "[MEMORY ADD: Title | keywords | body text]" -> "body text"
+          // e.g. "MEMORY ADD: Title | keywords | body" -> "body"
+          .replace(/\[MEMORY[_ ]ADD:[^|\]]*\|[^|\]]*\|([^\]]*)\]/gi, "$1")
+          .replace(/\[MEMORY[_ ]ADD:[^\]]*\]/gi, "")
+          .replace(/^MEMORY[_ ]ADD:[^|]*\|[^|]*\|(.+)$/gim, "$1")
+          .replace(/^MEMORY[_ ]ADD:[^|]*\|(.+)$/gim, "$1")
+          .replace(/^MEMORY[_ ]ADD:[^\n]*$/gim, "")
           .replace(/^[ \t]+/gm, "")
           .trim();
 
         // Parse the CLEANED message with proper markdown handling
         let html = marked.parse(cleanedMessage);
         html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
-
-        // Convert ALL single asterisks to <em> tags (roleplay actions)
-        html = html.replace(/\*([^\n*]+?)\*/g, '<em>$1</em>');
 
         streamEl.innerHTML = html;
         
@@ -1822,6 +2659,8 @@ async function openChat(filename) {
 
       // 🔥 NO RE-RENDER NEEDED - TEXT IS ALREADY CLEANED!
       const finalText = cleanedMessage;
+      // Keep raw pre-strip text for memory tag detection (tags are stripped from display but needed for parsing)
+      const rawFullMessage = fullMessage || cleanedMessage;
 
       if (!window.loadedChat) window.loadedChat = [];
       
@@ -1830,7 +2669,7 @@ async function openChat(filename) {
       );
       
       if (!isDuplicate) {
-        window.loadedChat.push({ role: "assistant", content: finalText });
+        window.loadedChat.push({ role: "assistant", content: finalText, speaker: currentCharacter?.name || charName, timestamp: new Date().toISOString() });
         console.log('✅ Added assistant response to loadedChat. Total messages:', window.loadedChat.length);
       } else {
         console.warn('⚠️ Skipped duplicate assistant response - already in loadedChat');
@@ -1839,6 +2678,67 @@ async function openChat(filename) {
       }
 
       await autoSaveCurrentChat();
+
+      // Re-render so edit/delete buttons appear on live messages
+      // Guard: skip re-render for memory confirmation responses — the live bubble is already
+      // correctly in the DOM, and a full re-render risks clearing it if currentCharacter
+      // is briefly stale (which causes renderChatMessages to bail and leave the DOM empty)
+      if (!window._suppressMemoryDetection && currentCharacter && currentCharacter.name) {
+        renderChatMessages(window.loadedChat);
+      }
+
+      // ── Memory command detection ──────────────────────────────────────
+      // Runs AFTER renderChatMessages so the bubble is in the live DOM
+      // Uses rawFullMessage (pre-strip) so MEMORY ADD tags are still detectable
+      // even though they've been stripped from the displayed cleanedMessage
+      if (window._suppressMemoryDetection) {
+        window._suppressMemoryDetection = false;
+      } else {
+      const memAddMatch = rawFullMessage.match(
+        /\[?MEMORY[_ ]ADD:\s*([^\|\n\]]+)\|([^\|\n\]]+)\|([^\]]+?)(?:\]|$)/i
+      ) || rawFullMessage.match(
+        /\[?MEMORY[_ ]ADD:\s*([^\|\n\]]+)\|([^\|\n\]]+)\n([^\]]+?)(?:\]|$)/i
+      ) || rawFullMessage.match(
+        /\[?MEMORY[_ ]ADD:\s*([^\|\n\]]+)\|([^\]]+?)(?:\]|$)/i
+      ) || rawFullMessage.match(
+        /\[?MEMORY[_ ]ADD:\s*([^\n\|]+?)(?:\s*[Kk]eywords?[:\s]+)([^\n]+)/i
+      );
+      console.log('🧠 MEMORY CHECK: memAddMatch:', memAddMatch ? 'MATCHED' : 'no match');
+      if (memAddMatch) {
+        let title, keywords, body;
+        if (memAddMatch[3]) {
+          [, title, keywords, body] = memAddMatch;
+        } else if (memAddMatch[2]) {
+          [, title] = memAddMatch;
+          const combined = memAddMatch[2].trim();
+          const splitMatch = combined.match(/^(.+?)\s{1,2}([A-Z].+)$/s);
+          if (splitMatch) {
+            keywords = splitMatch[1].trim();
+            body = splitMatch[2].trim();
+          } else {
+            keywords = combined;
+            const paragraphs = rawFullMessage.split(/\n\n+/).map(p => p.trim()).filter(p =>
+              p.length > 40 && !/MEMORY[_ ](ADD|EDIT)/i.test(p) && !/^(sure[,.]?|ok[,.]?|got it[,.]?|absolutely[,.]?|yeah[,.]?)\s*$/i.test(p)
+            );
+            body = paragraphs.sort((a, b) => b.length - a.length)[0] || '';
+          }
+        } else {
+          [, title, keywords] = memAddMatch;
+          const paragraphs = rawFullMessage.split(/\n\n+/).map(p => p.trim()).filter(p =>
+            p.length > 40 && !/MEMORY[_ ](ADD|EDIT)/i.test(p) && !/^(sure[,.]?|ok[,.]?|got it[,.]?|absolutely[,.]?|yeah[,.]?)\s*$/i.test(p)
+          );
+          body = paragraphs.sort((a, b) => b.length - a.length)[0] || '';
+        }
+        const character = currentCharacter?.name || currentCharName || '';
+        if (character && body) {
+          // Target the last rendered model message bubble
+          const allBubbles = document.querySelectorAll('.message-wrapper.model-wrapper .message');
+          const lastBubble = allBubbles[allBubbles.length - 1];
+          if (lastBubble) showMemoryConfirmInBubble(lastBubble, character, title.trim(), keywords.trim(), body.trim());
+        }
+      }
+      } // end suppress check
+      // ─────────────────────────────────────────────────────────────────
 
       console.log('🔍 DEBUG END OF GENERATION:');
       console.log('window.loadedChat length:', window.loadedChat.length);
@@ -1860,6 +2760,25 @@ async function openChat(filename) {
   // AUTO-SAVE CHAT MESSAGES TO FILE
   // ==================================================
   window.isSaving = false; // 🔒 GLOBAL LOCK to prevent concurrent saves
+
+  async function manualSaveChat() {
+    if (!currentChatFilename || !window.loadedChat || window.loadedChat.length === 0) {
+      alert('Nothing to save yet.');
+      return;
+    }
+    const btn = document.getElementById('save-chat-btn');
+    const orig = btn.textContent;
+    btn.textContent = '⏳ Saving...';
+    btn.disabled = true;
+    try {
+      await autoSaveCurrentChat();
+      btn.textContent = '✅ Saved!';
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1500);
+    } catch(e) {
+      btn.textContent = '❌ Failed';
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2000);
+    }
+  }
 
   async function autoSaveCurrentChat() {
     console.log('🔴🔴🔴 autoSaveCurrentChat CALLED 🔴🔴🔴');
@@ -1934,15 +2853,20 @@ async function openChat(filename) {
       console.log('📦 Messages to save:', JSON.stringify(dedupedChat, null, 2));
       
       var charName = extractCharacterFromFilename(currentChatFilename) || 'Assistant';
-      var userName = localStorage.getItem('activeUserName') || activeUserName;
+      var activeUserNameFallback = localStorage.getItem('activeUserName') || activeUserName;
       
-      const messages = dedupedChat.map(msg => ({
+      const messages = dedupedChat.filter(msg => !msg.hidden).map(msg => ({
         role: msg.role,
         // Strip images when saving to file — store text only
         content: Array.isArray(msg.content)
           ? msg.content.filter(p => p.type === 'text').map(p => p.text).join(' ') || '[image]'
           : msg.content,
-        speaker: msg.role === 'user' ? userName : charName
+        // Use stored speaker if available, fall back to current active user/char
+        speaker: msg.speaker || (msg.role === 'user' ? activeUserNameFallback : charName),
+        // Preserve opening line flag so backend can exclude it from new chat detection
+        ...(msg.is_opening_line ? { is_opening_line: true } : {}),
+        // Preserve timestamp so it survives save/load cycles
+        ...(msg.timestamp ? { timestamp: msg.timestamp } : {})
       }));
       
       const res = await fetch('/chats/save', {
@@ -1975,23 +2899,163 @@ async function openChat(filename) {
   // CONTINUE LAST RESPONSE
   // ==================================================
   async function continueLast() {
+    if (window.isSending) return;
+
     const chat = document.getElementById('chat');
-    const msgs = chat.querySelectorAll('.model-msg');
-    if (!msgs.length) {
+
+    // Resolve character name reliably
+    const dropdown = document.getElementById('character-select');
+    currentCharName = dropdown ? dropdown.value : (currentCharacter?.name || currentCharName);
+
+    // Find the last assistant entry in loadedChat
+    let lastAssistantIdx = -1;
+    for (let i = window.loadedChat.length - 1; i >= 0; i--) {
+      if (window.loadedChat[i].role === 'assistant' && !window.loadedChat[i].hidden) {
+        lastAssistantIdx = i;
+        break;
+      }
+    }
+
+    if (lastAssistantIdx === -1) {
       alert('No previous model message to continue.');
       return;
     }
 
-    const lastResponse =
-      msgs[msgs.length - 1].querySelector('.model-text')?.textContent.trim() ||
-      msgs[msgs.length - 1].textContent.replace(/^.*?:\s*/, '').trim();
+    const continuePrefix = window.loadedChat[lastAssistantIdx].content || '';
+    window.loadedChat.splice(lastAssistantIdx, 1);
+
+    // Keep existing bubble — stream directly into it
+    const wrappers = chat.querySelectorAll('.model-wrapper');
+    const existingWrapper = wrappers.length ? wrappers[wrappers.length - 1] : null;
+    const existingStreamEl = existingWrapper ? existingWrapper.querySelector('.model-text') : null;
+
+    // Build history without the popped assistant message
+    const visibleChat = window.loadedChat.filter(msg => !msg.hidden);
+    const chatToSend = visibleChat.map(msg => {
+      if (Array.isArray(msg.content)) {
+        const textOnly = msg.content.filter(p => p.type === 'text').map(p => p.text).join(' ');
+        return { role: msg.role, content: textOnly || '[image]' };
+      }
+      return msg;
+    });
+
+    window.isSending = true;
+    const stopBtn = document.getElementById('stop-btn');
+    if (stopBtn) stopBtn.style.display = 'inline-block';
 
     try {
-      const continuationPrompt = 'Continue naturally from where you left off, keeping the same tone and flow:\n\n' + lastResponse;
-      await fetchAndDisplayResponse(continuationPrompt, chat);
+      const response = await fetch('/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          character: currentCharName,
+          user_name: activeUserName,
+          current_chat_filename: currentChatFilename,
+          conversation_history: chatToSend,
+          continue_prefix: continuePrefix,
+          author_note: localStorage.getItem(`author-note-${currentChatFilename}`) || '',
+          temperature: 0.8,
+          max_tokens: 4096,
+          stop: [],
+        })
+      });
+
+      if (!response.ok) {
+        chat.innerHTML += '<div class="message error-msg">\u26a0\ufe0f Server error during continue.</div>';
+        window.isSending = false;
+        if (stopBtn) stopBtn.style.display = 'none';
+        return;
+      }
+
+      const charName = currentCharName;
+      let streamEl;
+
+      if (existingStreamEl) {
+        streamEl = existingStreamEl;
+      } else {
+        const modelWrapper = document.createElement('div');
+        modelWrapper.className = 'message-wrapper model-wrapper';
+        const modelAvatar = document.createElement('img');
+        modelAvatar.className = 'avatar';
+        const imageFile = currentCharacter?.image || charName + '.png';
+        modelAvatar.src = '/static/images/' + imageFile;
+        modelAvatar.alt = charName;
+        modelAvatar.onerror = function() { this.src = '/static/images/default.png'; };
+        const msgDiv = document.createElement('div');
+        msgDiv.className = 'message model-msg';
+        const nameStrong = document.createElement('strong');
+        nameStrong.textContent = charName + ': ';
+        streamEl = document.createElement('span');
+        streamEl.className = 'model-text';
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'copy-btn';
+        copyBtn.textContent = '\ud83d\udccb';
+        copyBtn.onclick = function() { copyMessage(this); };
+        msgDiv.appendChild(nameStrong);
+        msgDiv.appendChild(streamEl);
+        msgDiv.appendChild(copyBtn);
+        modelWrapper.appendChild(modelAvatar);
+        modelWrapper.appendChild(msgDiv);
+        chat.appendChild(modelWrapper);
+      }
+      chat.scrollTop = chat.scrollHeight;
+
+      // Stream raw chunks — same format as main parser
+      let rawFull = continuePrefix;
+      const userName = activeUserName || 'User';
+      streamEl.innerHTML = typeof marked !== 'undefined' ? marked.parse(rawFull) : rawFull;
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        rawFull += chunk;
+
+        const cleaned = rawFull
+          .replace(/<\|im_start\|>assistant/gi, '')
+          .replace(/<\|im_start\|>user/gi, '')
+          .replace(/<\|im_start\|>system/gi, '')
+          .replace(/<\|im_end\|>/gi, '')
+          .replace(/<\/\|im_end\|>/gi, '')
+          .replace(new RegExp(`^${userName}:\\s*`, 'gim'), '')
+          .replace(new RegExp(`^${charName}:\\s*`, 'gim'), '')
+          .replace(/^User:\s*/gim, '')
+          .replace(/^Assistant:\s*/gim, '')
+          .replace(/^[ \t]+/gm, '')
+          .trim();
+
+        streamEl.innerHTML = typeof marked !== 'undefined' ? marked.parse(cleaned) : cleaned;
+        chat.scrollTop = chat.scrollHeight;
+      }
+      decoder.decode();
+
+      let finalText = rawFull
+        .replace(/<\|im_start\|>assistant/gi, '')
+        .replace(/<\|im_start\|>user/gi, '')
+        .replace(/<\|im_start\|>system/gi, '')
+        .replace(/<\|im_end\|>/gi, '')
+        .replace(/<\/\|im_end\|>/gi, '')
+        .replace(new RegExp(`^${userName}:\\s*`, 'gim'), '')
+        .replace(new RegExp(`^${charName}:\\s*`, 'gim'), '')
+        .replace(/^User:\s*/gim, '')
+        .replace(/^Assistant:\s*/gim, '')
+        .replace(/^[ \t]+/gm, '')
+        .trim();
+
+      streamEl.innerHTML = typeof marked !== 'undefined' ? marked.parse(finalText) : finalText;
+      window.loadedChat.push({ role: 'assistant', content: finalText, speaker: currentCharacter?.name || charName, timestamp: new Date().toISOString() });
+      console.log('\u2705 Continue: complete');
+      await autoSaveCurrentChat();
+
     } catch (err) {
-      console.error('⚠️ Continue error:', err);
-      chat.innerHTML += '<div class="message error-msg">⚠️ Error continuing chat.</div>';
+      console.error('\u26a0\ufe0f Continue error:', err);
+      chat.innerHTML += '<div class="message error-msg">\u26a0\ufe0f Error continuing chat.</div>';
+    } finally {
+      window.isSending = false;
+      if (stopBtn) stopBtn.style.display = 'none';
     }
   }
 
@@ -2265,6 +3329,7 @@ async function stopGeneration() {
       if (window.loadedChat && window.loadedChat.length === 0) {
         document.getElementById('chat').innerHTML = '';
         displayOpeningLineInChat();
+        displayRpOpenerInChat();
       }
       
     } catch (err) {
@@ -2318,12 +3383,60 @@ async function stopGeneration() {
       
       // ✅ RE-DISPLAY OPENING LINE AFTER CLEAR
       displayOpeningLineInChat();
+      displayRpOpenerInChat();
       
     } catch (err) {
       console.error('❌ Failed to clear chat:', err);
       alert('Failed to clear chat: ' + err.message);
     }
   }
+
+  // ==================================================
+  // UPGRADE MODAL (Pro features)
+  // ==================================================
+  function showUpgradeModal(feature) {
+    const modal = document.getElementById('upgrade-modal');
+    const content = document.getElementById('upgrade-content');
+    const features = {
+      memory: {
+        icon: "🧠",
+        title: "Character Memory",
+        description: "Characters remember past conversations, important facts, and context across all chats.",
+        benefits: [
+          "Persistent cross-session memory",
+          "End Session — generate a memory summary any time",
+          "Memory editor — view, edit and delete stored memories",
+          "Builds deeper, more coherent conversations over time"
+        ]
+      }
+    };
+    const f = features[feature] || features.memory;
+    content.innerHTML = `
+      <div style="text-align: center; margin-bottom: 20px;">
+        <div style="font-size: 64px; margin-bottom: 16px;">${f.icon}</div>
+        <h2 style="margin: 0 0 12px 0; color: #fff;">${f.title}</h2>
+        <p style="color: #aaa; font-size: 15px; line-height: 1.6;">${f.description}</p>
+      </div>
+      <ul style="list-style: none; padding: 0; margin: 20px 0;">
+        ${f.benefits.map(b => `
+          <li style="padding: 8px 0; color: #ccc; font-size: 14px;">
+            <span style="color: #667eea; margin-right: 8px;">✓</span>${b}
+          </li>
+        `).join('')}
+      </ul>
+    `;
+    modal.style.display = 'block';
+  }
+
+  function closeUpgradeModal() {
+    document.getElementById('upgrade-modal').style.display = 'none';
+  }
+
+  window.addEventListener('click', (e) => {
+    const modal = document.getElementById('upgrade-modal');
+    if (e.target === modal) closeUpgradeModal();
+  });
+
   // ==================================================
   // DELETE LAST MESSAGE
   // ==================================================
@@ -2493,6 +3606,20 @@ async function stopGeneration() {
   if (!confirm('Delete this message?')) {
     return;
   }
+
+  // 🔒 Wait if a save is already in progress
+  if (window.isSaving) {
+    console.log('⏳ Save in progress, waiting before delete...');
+    let waited = 0;
+    while (window.isSaving && waited < 3000) {
+      await new Promise(r => setTimeout(r, 100));
+      waited += 100;
+    }
+    if (window.isSaving) {
+      alert('Previous save still in progress. Please wait and try again.');
+      return;
+    }
+  }
   
   // Remove from loadedChat array
   window.loadedChat.splice(messageIndex, 1);
@@ -2510,10 +3637,278 @@ async function stopGeneration() {
   }
 }
 
+// ==================================================
+// LOAD CHARACTER MEMORY (MODAL VERSION)
+// ==================================================
+async function loadCharacterMemory() {
+  const list = document.getElementById("memory-list");
+  if (!list) {
+    console.error('❌ memory-list element not found');
+    return;
+  }
 
+  const tab = window._memoryTab || 'character';
+  let character;
+  if (tab === 'global') {
+    character = 'global';
+  } else {
+    const dropdown = document.getElementById('character-select');
+    character = dropdown ? dropdown.value : (currentCharacter?.name || '');
+  }
+
+  if (!character) {
+    list.innerHTML = '<p style="color: #666;">No character selected</p>';
+    return;
+  }
+
+  try {
+    const res = await fetch(`/get_character_memory?character=${encodeURIComponent(character)}`);
+    const data = await res.json();
+    
+    list.innerHTML = "";
+
+    if (!data.entries || data.entries.length === 0) {
+      list.innerHTML = '<p style="color: #666; font-size: 13px;">No memories saved yet.</p>';
+      return;
+    }
+
+    data.entries.forEach((entry, i) => {
+      const div = document.createElement("div");
+      div.className = "memory-entry";
+      div.id = `memory-entry-${i}`;
+
+      // Backend splits on "# Memory:" so first line IS the title
+      const lines = entry.split('\n').map(l => l.trim()).filter(l => l && !l.match(/^---+$/));
+      let title = '', keywords = '', bodyLines = [];
+      lines.forEach((line, idx) => {
+        if (idx === 0) title = line;
+        else if (line.toLowerCase().startsWith('keywords:')) keywords = line.replace(/^keywords:\s*/i, '').trim();
+        else bodyLines.push(line);
+      });
+      const body = bodyLines.filter(l => l).join(' ').trim();
+
+      const formatted = `
+        ${title    ? `<div class="mem-title">${title}</div>` : ''}
+        ${keywords ? `<div class="mem-keywords">🔑 ${keywords}</div>` : ''}
+        ${body     ? `<div class="mem-body">${body}</div>` : ''}
+      `.trim();
+
+      div.innerHTML = `
+        <div id="memory-view-${i}">
+          <button onclick="deleteMemory(${i})">✕</button>
+          <button onclick="startEditMemory(${i})" style="right:28px;">✏️</button>
+          ${formatted}
+        </div>
+        <div id="memory-edit-${i}" style="display:none;">
+          <textarea id="memory-edit-text-${i}" rows="6" class="memory-edit-textarea"># Memory: ${entry}</textarea>
+          <div style="margin-top:6px; display:flex; gap:8px;">
+            <button onclick="saveEditMemory(${i})" class="save-btn mem-edit-btn">💾 Save</button>
+            <button onclick="cancelEditMemory(${i})" class="cancel-btn mem-edit-btn">Cancel</button>
+          </div>
+        </div>`;
+      list.appendChild(div);
+    });
+    
+    console.log(`✅ Loaded ${data.entries.length} memories for ${character}`);
+    
+  } catch (err) {
+    console.error('❌ Failed to load memories:', err);
+    list.innerHTML = '<p style="color: #f55;">Error loading memories</p>';
+  }
+}
+
+async function deleteMemory(index) {
+  const tab = window._memoryTab || 'character';
+  let character;
+  if (tab === 'global') {
+    character = 'global';
+  } else {
+    const dropdown = document.getElementById('character-select');
+    character = dropdown ? dropdown.value : (currentCharacter?.name || '');
+  }
+  
+  if (!character) return;
+  
+  await fetch(`/delete_character_memory`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ character, index })
+  });
+  
+  loadCharacterMemory();
+}
+
+function startEditMemory(index) {
+  document.getElementById(`memory-view-${index}`).style.display = 'none';
+  document.getElementById(`memory-edit-${index}`).style.display = 'block';
+}
+
+function cancelEditMemory(index) {
+  document.getElementById(`memory-edit-${index}`).style.display = 'none';
+  document.getElementById(`memory-view-${index}`).style.display = 'block';
+}
+
+async function saveEditMemory(index) {
+  const tab = window._memoryTab || 'character';
+  let character;
+  if (tab === 'global') {
+    character = 'global';
+  } else {
+    const dropdown = document.getElementById('character-select');
+    character = dropdown ? dropdown.value : (currentCharacter?.name || '');
+  }
+  if (!character) return;
+  const content = document.getElementById(`memory-edit-text-${index}`).value.trim();
+  if (!content) return;
+  const res = await fetch('/edit_character_memory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ character, index, content })
+  });
+  if (res.ok) loadCharacterMemory();
+  else alert('Failed to save edit.');
+}
+
+// Track which tab is active: 'character' or 'global'
+window._memoryTab = 'character';
+
+function setMemoryTab(tab) {
+  window._memoryTab = tab;
+  const isChar = tab === 'character';
+  document.getElementById('memory-modal-title').textContent = isChar ? 'Character Memory' : 'Global Memory';
+  document.getElementById('memory-tab-character').className = isChar ? 'save-btn' : 'cancel-btn';
+  document.getElementById('memory-tab-global').className = isChar ? 'cancel-btn' : 'save-btn';
+  // Hide add panel when switching tabs
+  document.getElementById('memory-add-panel').style.display = 'none';
+  loadCharacterMemory();
+}
+
+function openMemoryModal() {
+  const dropdown = document.getElementById('character-select');
+  if (!dropdown || !dropdown.value) {
+    alert('Please select a character first.');
+    return;
+  }
+  window._memoryTab = 'character';
+  document.getElementById('memory-modal-title').textContent = 'Character Memory';
+  document.getElementById('memory-tab-character').className = 'save-btn';
+  document.getElementById('memory-tab-global').className = 'cancel-btn';
+  document.getElementById('memory-modal').style.display = 'block';
+  loadCharacterMemory();
+}
+
+function closeMemoryModal() {
+  document.getElementById('memory-modal').style.display = 'none';
+}
+
+function toggleMemoryAddPanel() {
+  const panel = document.getElementById('memory-add-panel');
+  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+}
+
+async function submitAddMemory() {
+  const tab = window._memoryTab || 'character';
+  let character;
+  if (tab === 'global') {
+    character = 'global';
+  } else {
+    const dropdown = document.getElementById('character-select');
+    character = dropdown ? dropdown.value : (currentCharacter?.name || '');
+  }
+  if (!character) { alert('No character selected'); return; }
+  const title = document.getElementById('memory-add-title').value.trim() || 'Untitled';
+  const keywords = document.getElementById('memory-add-keywords').value.trim();
+  const body = document.getElementById('memory-add-body').value.trim();
+  if (!body) { alert('Memory content is required.'); return; }
+  const res = await fetch('/add_character_memory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ character, title, keywords, body })
+  });
+  if (res.ok) {
+    document.getElementById('memory-add-title').value = '';
+    document.getElementById('memory-add-keywords').value = '';
+    document.getElementById('memory-add-body').value = '';
+    document.getElementById('memory-add-panel').style.display = 'none';
+    loadCharacterMemory();
+  }
+}
+
+function showMemoryConfirmInBubble(msgDiv, character, title, keywords, body) {
+  const existing = msgDiv.querySelector('.memory-confirm-bar');
+  if (existing) existing.remove();
+
+  const bar = document.createElement('div');
+  bar.className = 'memory-confirm-bar';
+  bar.innerHTML = `
+    <span class="memory-confirm-label">🧠 Save "<strong>${title}</strong>" to memory?</span>
+    <button class="memory-confirm-yes save-btn">✓ Save</button>
+    <button class="memory-confirm-no cancel-btn">✕ Discard</button>
+  `;
+  msgDiv.appendChild(bar);
+
+  bar.querySelector('.memory-confirm-yes').onclick = () => {
+    fetch('/add_character_memory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ character, title, keywords, body })
+    }).then(r => {
+      if (r.ok) {
+        bar.remove();
+        // Push hidden user confirmation and trigger a follow-up model response
+        // _suppressMemoryDetection prevents the follow-up from being treated as a new memory tag
+        // _memoryConfirmNote injects a one-sentence author note so the model just confirms briefly
+        const confirmMsg = 'Thats perfect, confirmed.';
+        if (!window.loadedChat) window.loadedChat = [];
+        window.loadedChat.push({ role: 'user', content: confirmMsg, speaker: activeUserName || 'User', hidden: true });
+        window._suppressMemoryDetection = true;
+        window._memoryConfirmNote = true;
+        window._memoryConfirmMaxTokens = 80;
+        const chat = document.getElementById('chat');
+        fetchAndDisplayResponse(confirmMsg, chat);
+      } else {
+        bar.innerHTML = '<span class="memory-confirm-label" style="color:#f88;">⚠️ Save failed.</span>';
+        setTimeout(() => bar.remove(), 2500);
+      }
+    });
+  };
+
+  bar.querySelector('.memory-confirm-no').onclick = () => {
+    bar.innerHTML = '<span class="memory-confirm-label" style="color:#888;">Memory discarded.</span>';
+    setTimeout(() => bar.remove(), 1500);
+  };
+}
+    
+  // ==================================================
+  // INITIALISE PAGE (UNIFIED)
+  // ==================================================
   window.addEventListener("DOMContentLoaded", async function() {
     
     console.log('🟢 DOMContentLoaded fired');
+
+    // First-run banner: show if llama exe path hasn't been customised yet
+    (async function checkFirstRun() {
+      if (localStorage.getItem('hwui_setup_dismissed')) return;
+      try {
+        const r = await fetch('/get_llama_config');
+        const cfg = await r.json();
+        const exe = (cfg.exe || '').toLowerCase().replace(/\\\\/g, '\\');
+        const isDefault = exe === '' || exe.startsWith('c:\\');
+        if (isDefault) {
+          const banner = document.getElementById('first-run-banner');
+          banner.style.display = 'flex';
+          // Push top-bar below banner
+          const bannerH = banner.offsetHeight || 44;
+          document.getElementById('top-bar').style.top = bannerH + 'px';
+        }
+      } catch(e) { console.log('First-run check failed', e); }
+    })();
+
+    window.dismissFirstRunBanner = function() {
+      document.getElementById('first-run-banner').style.display = 'none';
+      document.getElementById('top-bar').style.top = '0';
+      localStorage.setItem('hwui_setup_dismissed', '1');
+    };
     
     // Restore saved sort preference
     const savedSortMode = localStorage.getItem('chatSortMode') || 'newest';
@@ -2536,6 +3931,9 @@ async function stopGeneration() {
       console.error('❌ new-chat-btn not found!');
     }
     
+    // Initialize document upload handler
+    initDocumentUpload();
+    
     // Configure Marked.js for cleaner output
     if (typeof marked !== "undefined") {
       marked.setOptions({
@@ -2548,6 +3946,9 @@ async function stopGeneration() {
     // Load user and character data
     await loadActiveUser();
     await loadCharacterList();
+    await loadProjects();
+    loadModelDisplay(); // fire and forget — non-critical
+    
     // Set up character dropdown change handler
     // Set up character dropdown change handler
     document.getElementById('character-select').addEventListener('change', async function() {
@@ -2574,6 +3975,7 @@ async function stopGeneration() {
       
       // ✅ NOW display opening line with correct character loaded
       displayOpeningLineInChat();
+      displayRpOpenerInChat();
       
       console.log('✅ Ready for new chat with', selectedChar);
     });
@@ -2592,42 +3994,39 @@ async function stopGeneration() {
     // ✅ Auto-restore last chat from localStorage
     const savedChatFilename = localStorage.getItem('currentChatFilename');
     const savedCharacter = localStorage.getItem('lastCharacter');
-    if (savedChatFilename && savedCharacter) {
-      setTimeout(async function() {
-        try {
-          const dropdown = document.getElementById('character-select');
-          const characterExists = Array.from(dropdown.options).some(opt => opt.value === savedCharacter);
-          
-          if (!characterExists) {
-            console.warn('⚠️ Character not found in dropdown:', savedCharacter);
-            localStorage.removeItem('currentChatFilename');
-            localStorage.removeItem('lastCharacter');
-            window.loadedChat = [];
-            return;
-          }
-          
-          const chatItems = document.querySelectorAll('.chat-item');
-          const chatExists = Array.from(chatItems).some(item => item.dataset.filename === savedChatFilename);
-          
-          if (!chatExists) {
-            console.warn('⚠️ Chat file not found:', savedChatFilename);
-            localStorage.removeItem('currentChatFilename');
-            localStorage.removeItem('lastCharacter');
-            window.loadedChat = [];
-            return;
-          }
-          
-          console.log('🔄 Restoring last chat:', savedChatFilename);
-          await openChat(savedChatFilename);
-          
-        } catch (err) {
-          console.error('❌ Error restoring chat:', err);
+    if (savedChatFilename) {
+      try {
+        // Verify the chat file actually exists on the server
+        const checkRes = await fetch('/chats/load', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: savedChatFilename })
+        });
+
+        if (!checkRes.ok) {
+          console.warn('⚠️ Saved chat no longer exists on server:', savedChatFilename);
           localStorage.removeItem('currentChatFilename');
           localStorage.removeItem('lastCharacter');
           window.loadedChat = [];
+          restoreLastChat();
+        } else {
+          // If we have a saved character, make sure dropdown matches
+          if (savedCharacter) {
+            const dropdown = document.getElementById('character-select');
+            const characterExists = Array.from(dropdown.options).some(opt => opt.value === savedCharacter);
+            if (characterExists) {
+              dropdown.value = savedCharacter;
+            }
+          }
+          console.log('🔄 Restoring last chat:', savedChatFilename);
+          await openChat(savedChatFilename);
         }
-      }, 300);
-      
+      } catch (err) {
+        console.error('❌ Error restoring chat:', err);
+        localStorage.removeItem('currentChatFilename');
+        localStorage.removeItem('lastCharacter');
+        window.loadedChat = [];
+      }
     } else {
       restoreLastChat();
     }
@@ -2720,79 +4119,408 @@ async function stopGeneration() {
     }
   }
   
+// ==================================================
+// RP OPENER DISPLAY
+// ==================================================
+async function displayRpOpenerInChat() {
+  // Only fire if there's an active project
+  if (!activeProjectName) return;
+
+  // Only fire on an empty chat
+  if (window.loadedChat && window.loadedChat.length > 0) return;
+
+  try {
+    const res = await fetch(`/projects/get/${activeProjectName}`);
+    const config = await res.json();
+
+    if (!config.rp_mode || !config.rp_opener || !config.rp_opener.trim()) return;
+
+    if (!window.loadedChat) window.loadedChat = [];
+
+    // Re-check — displayOpeningLineInChat may have added something already
+    if (window.loadedChat.length > 0) return;
+
+    const openerMessage = {
+      role: 'assistant',
+      content: config.rp_opener.trim(),
+      is_opening_line: true  // same flag — tells backend not to treat as a real reply
+    };
+
+    window.loadedChat.push(openerMessage);
+    renderChatMessages(window.loadedChat);
+    autoSaveCurrentChat();
+
+    console.log('🎭 RP opener displayed for project:', activeProjectName);
+
+  } catch (err) {
+    console.error('Failed to display RP opener:', err);
+  }
+}
 
 // ==================================================
-// UPGRADE MODAL (Pro features)
+// PROJECT MANAGEMENT
 // ==================================================
-function showUpgradeModal(feature) {
-  const modal = document.getElementById('upgrade-modal');
-  const content = document.getElementById('upgrade-content');
-  const features = {
-    projects: {
-      icon: "📁",
-      title: "Projects",
-      description: "Organize chats by topic, inject documents (PDF, DOCX, Markdown) for context, and keep everything structured.",
-      benefits: [
-        "Create unlimited projects",
-        "Load documents into chat context",
-        "Separate chat histories per project",
-        "Perfect for research, worldbuilding, and organized workflows"
-      ]
-    },
-    memory: {
-      icon: "🧠",
-      title: "Character Memory",
-      description: "Characters remember past conversations, important facts, and context across all chats.",
-      benefits: [
-        "Persistent character memory",
-        "Smart keyword-based recall",
-        "Automatic summarization",
-        "Builds deeper, more coherent conversations over time"
-      ]
+let currentEditingProject = null;
+let activeProjectName = null;
+
+async function loadProjects() {
+  try {
+    const res = await fetch('/projects/list');
+    const data = await res.json();
+    
+    const listDiv = document.getElementById('projects-list');
+    const currentDisplay = document.getElementById('current-project-display');
+    
+    // Update active project display
+    activeProjectName = data.active;
+    
+    if (currentDisplay) {
+      currentDisplay.textContent = data.active || 'None';
+      currentDisplay.style.color = data.active ? '#6a9fb5' : '#666';
     }
-  };
-  const f = features[feature];
-  content.innerHTML = `
-    <div style="text-align: center; margin-bottom: 20px;">
-      <div style="font-size: 64px; margin-bottom: 16px;">${f.icon}</div>
-      <h2 style="margin: 0 0 12px 0; color: #fff;">${f.title}</h2>
-      <p style="color: #aaa; font-size: 15px; line-height: 1.6;">${f.description}</p>
-    </div>
-    <ul style="list-style: none; padding: 0; margin: 20px 0;">
-      ${f.benefits.map(b => `
-        <li style="padding: 8px 0; color: #ccc; font-size: 14px;">
-          <span style="color: #667eea; margin-right: 8px;">✓</span>${b}
-        </li>
-      `).join('')}
-    </ul>
-  `;
-  modal.style.display = 'block';
+    
+    // Update indicator above character bar
+    const indicator = document.getElementById('active-project-indicator');
+    const nameSpan = document.getElementById('active-project-name');
+    
+    if (data.active) {
+      indicator.style.display = 'block';
+      nameSpan.textContent = data.active;
+    } else {
+      indicator.style.display = 'none';
+    }
+    
+    // Update projects list in modal
+    if (listDiv) {
+      listDiv.innerHTML = '';
+      
+      if (data.projects.length === 0) {
+        listDiv.innerHTML = '<p style="color: #666; font-size: 13px; margin: 10px 0;">No projects yet. Create one above!</p>';
+      } else {
+        data.projects.forEach(project => {
+          const item = document.createElement('div');
+          item.className = 'project-item';
+          
+          const nameDiv = document.createElement('div');
+          nameDiv.className = 'project-name-section';
+          
+          const name = document.createElement('span');
+          name.textContent = project.display_name;
+          name.className = 'project-name';
+          
+          // Show active badge
+          if (project.name === data.active) {
+            const badge = document.createElement('span');
+            badge.textContent = '✓ Active';
+            badge.className = 'active-badge';
+            nameDiv.appendChild(name);
+            nameDiv.appendChild(badge);
+          } else {
+            nameDiv.appendChild(name);
+          }
+          
+          const buttons = document.createElement('div');
+          buttons.className = 'project-buttons';
+          
+          // Switch button (if not active)
+          if (project.name !== data.active) {
+            const switchBtn = document.createElement('button');
+            switchBtn.textContent = '↻';
+            switchBtn.title = 'Switch to this project';
+            switchBtn.className = 'project-switch-btn';
+            switchBtn.onclick = () => switchProject(project.name);
+            buttons.appendChild(switchBtn);
+          }
+          
+          const editBtn = document.createElement('button');
+          editBtn.textContent = '✏️';
+          editBtn.title = 'Edit instructions';
+          editBtn.onclick = () => openEditProject(project.name);
+          
+          const deleteBtn = document.createElement('button');
+          deleteBtn.textContent = '❌';
+          deleteBtn.title = 'Delete project';
+          deleteBtn.onclick = () => deleteProject(project.name);
+          
+          buttons.appendChild(editBtn);
+          buttons.appendChild(deleteBtn);
+          
+          item.appendChild(nameDiv);
+          item.appendChild(buttons);
+          listDiv.appendChild(item);
+        });
+        
+        
+        // Add "Back to Global Chats" option
+        if (data.active) {
+          const backItem = document.createElement('div');
+          backItem.className = 'back-to-global-item';
+          backItem.onclick = () => switchProject(null);
+          
+          const switchBtn = document.createElement('div');
+          switchBtn.className = 'back-button';
+          switchBtn.textContent = '↻';
+          
+          const backText = document.createElement('div');
+          backText.className = 'back-text';
+          backText.textContent = 'Back to Global Chats';
+          
+          backItem.appendChild(switchBtn);
+          backItem.appendChild(backText);
+          listDiv.appendChild(backItem);
+        }
+      }
+    }
+    
+  } catch (err) {
+    console.error('Failed to load projects:', err);
+  }
 }
 
-function closeUpgradeModal() {
-  document.getElementById('upgrade-modal').style.display = 'none';
+async function createProject() {
+  const name = document.getElementById('new-project-name').value.trim();
+  const instructions = document.getElementById('new-project-instructions').value.trim();
+  
+  if (!name) {
+    alert('Please enter a project name');
+    return;
+  }
+  
+  try {
+    const res = await fetch('/projects/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, instructions })
+    });
+    
+    const data = await res.json();
+    
+    if (data.error) {
+      alert('Error: ' + data.error);
+      return;
+    }
+    
+    console.log('✅ Project created:', name);
+    
+    // Clear inputs
+    document.getElementById('new-project-name').value = '';
+    document.getElementById('new-project-instructions').value = '';
+    
+    // Reload everything
+    await loadProjects();
+    
+    // Clear chat and reload list
+    currentChatFilename = null;
+    document.getElementById('chat').innerHTML = '';
+    window.loadedChat = [];
+    await loadChats();
+    
+    alert(`Project "${name}" created and activated!`);
+    
+  } catch (err) {
+    console.error('Failed to create project:', err);
+    alert('Failed to create project');
+  }
 }
 
-window.addEventListener('click', (e) => {
-  const modal = document.getElementById('upgrade-modal');
-  if (e.target === modal) closeUpgradeModal();
-});
+async function switchProject(projectName) {
+  try {
+    const res = await fetch('/projects/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: projectName })
+    });
+    
+    const data = await res.json();
+    
+    if (data.error) {
+      alert('Error: ' + data.error);
+      return;
+    }
+    
+    if (projectName) {
+      console.log('📁 Switched to project:', projectName);
+    } else {
+      console.log('📁 Switched to global chats (no project)');
+    }
+    
+    // Clear current chat
+    currentChatFilename = null;
+    document.getElementById('chat').innerHTML = '';
+    window.loadedChat = [];
+    localStorage.removeItem('currentChatFilename');
+    
+    // Reload everything
+    await loadProjects();
+    await loadChats();
+    
+    // Close modal
+    closeProjectModal();
+    
+  } catch (err) {
+    console.error('Failed to switch project:', err);
+    alert('Failed to switch project');
+  }
+}
+
+// ==================================================
+// CHECK PRO LICENSE
+// ==================================================
+
+async function checkProLicense() {
+    try {
+        const response = await fetch('/check_license');
+        const data = await response.json();
+        return data.valid;
+    } catch (error) {
+        console.error('License check error:', error);
+        return false;
+    }
+}
+
+
+
+function closeProjectModal() {
+  const modal = document.getElementById('project-modal');
+  modal.style.display = 'none';
+}
+
+function openEditProject(projectName) {
+  currentEditingProject = projectName;
+  
+  fetch(`/projects/get/${projectName}`)
+    .then(res => res.json())
+    .then(data => {
+      document.getElementById('edit-project-name').value = projectName;
+      document.getElementById('edit-project-instructions').value = data.instructions || '';
+      
+      // Load RP mode state
+      const rpMode = data.rp_mode || false;
+      const rpBtn = document.getElementById('rp-mode-btn');
+      rpBtn.textContent = rpMode ? 'ON' : 'OFF';
+      rpBtn.style.background = rpMode ? '#22aa55' : '#3a3b3f';
+      rpBtn.style.color = rpMode ? '#fff' : '#aaa';
+      rpBtn.style.borderColor = rpMode ? '#22aa55' : '#555';
+      document.getElementById('rp-opener-section').style.display = rpMode ? 'block' : 'none';
+      document.getElementById('edit-project-rp-opener').value = data.rp_opener || '';
+      
+      // Load documents list
+      loadProjectDocuments(projectName);
+      
+      // Load sticky docs state
+      loadStickyDocsState(projectName);
+      
+      const modal = document.getElementById('edit-project-modal');
+      modal.style.display = 'block';
+    })
+    .catch(err => {
+      console.error('Failed to load project:', err);
+      alert('Failed to load project');
+    });
+}
+
+function closeEditProjectModal() {
+  const modal = document.getElementById('edit-project-modal');
+  modal.style.display = 'none';
+  currentEditingProject = null;
+}
+
+function toggleRpMode() {
+  const btn = document.getElementById('rp-mode-btn');
+  const section = document.getElementById('rp-opener-section');
+  const isOn = btn.textContent.trim() === 'ON';
+  btn.textContent = isOn ? 'OFF' : 'ON';
+  btn.style.background = isOn ? '#3a3b3f' : '#22aa55';
+  btn.style.color = isOn ? '#aaa' : '#fff';
+  btn.style.borderColor = isOn ? '#555' : '#22aa55';
+  section.style.display = isOn ? 'none' : 'block';
+}
+
+async function saveProjectEdit() {
+  if (!currentEditingProject) return;
+  
+  const instructions = document.getElementById('edit-project-instructions').value.trim();
+  const rpMode = document.getElementById('rp-mode-btn').textContent.trim() === 'ON';
+  const rpOpener = document.getElementById('edit-project-rp-opener').value.trim();
+  
+  try {
+    const res = await fetch(`/projects/update/${currentEditingProject}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instructions, rp_mode: rpMode, rp_opener: rpOpener })
+    });
+    
+    const data = await res.json();
+    
+    if (data.error) {
+      alert('Error: ' + data.error);
+      return;
+    }
+    
+    console.log('✅ Project updated:', currentEditingProject);
+    
+    closeEditProjectModal();
+    loadProjects();
+    
+  } catch (err) {
+    console.error('Failed to update project:', err);
+    alert('Failed to update project');
+  }
+}
+
+async function deleteProject(projectName) {
+  if (!confirm(`Delete project "${projectName}"?\n\nThis will permanently delete all chats in this project.`)) {
+    return;
+  }
+  
+  try {
+    const res = await fetch(`/projects/delete/${projectName}`, {
+      method: 'DELETE'
+    });
+    
+    const data = await res.json();
+    
+    if (data.error) {
+      alert('Error: ' + data.error);
+      return;
+    }
+    
+    console.log('🗑️ Project deleted:', projectName);
+    
+    await loadProjects();
+    await loadChats();
+    
+  } catch (err) {
+    console.error('Failed to delete project:', err);
+    alert('Failed to delete project');
+  }
+}
 
 // ==================================================
 // CHAT COLOUR CODING
 // ==================================================
 
 const CHAT_COLORS = [
-  { name: 'Dark Red',    value: '#4a1a1a' },
-  { name: 'Bright Red',  value: '#6e1f1f' },
-  { name: 'Orange',      value: '#5a3010' },
-  { name: 'Yellow',      value: '#4a420a' },
-  { name: 'Green',       value: '#0f4a20' },
-  { name: 'Teal',        value: '#0a3d3f' },
-  { name: 'Blue',        value: '#0f2d5a' },
-  { name: 'Indigo',      value: '#1e1458' },
-  { name: 'Purple',      value: '#35125a' },
-  { name: 'Pink',        value: '#52103f' },
+  { name: 'Dark Red',      value: '#4a1a1a' },
+  { name: 'Bright Red',    value: '#6e1f1f' },
+  { name: 'Orange',        value: '#5a3010' },
+  { name: 'Amber',         value: '#5a4005' },
+  { name: 'Yellow',        value: '#4a420a' },
+  { name: 'Lime',          value: '#253a08' },
+  { name: 'Green',         value: '#0f4a20' },
+  { name: 'Forest',        value: '#0a3018' },
+  { name: 'Teal',          value: '#0a3d3f' },
+  { name: 'Cyan',          value: '#053a45' },
+  { name: 'Blue',          value: '#0f2d5a' },
+  { name: 'Sky',           value: '#0a2a4a' },
+  { name: 'Indigo',        value: '#1e1458' },
+  { name: 'Purple',        value: '#35125a' },
+  { name: 'Violet',        value: '#2a0a4a' },
+  { name: 'Magenta',       value: '#4a0a3a' },
+  { name: 'Pink',          value: '#52103f' },
+  { name: 'Rose',          value: '#4a1028' },
+  { name: 'Brown',         value: '#3a2010' },
+  { name: 'Slate',         value: '#1a2535' },
 ];
 
 function getChatColors() {
@@ -2894,10 +4622,132 @@ document.addEventListener('click', (e) => {
   if (menu && !menu.contains(e.target)) hideColorMenu();
 });
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') hideColorMenu();
+  if (e.key === 'Escape') {
+    hideColorMenu();
+    closeAvatarLightbox();
+  }
 });
 
-// ── Toast notification ────────────────────────────────────────
+// ── Avatar Lightbox ───────────────────────────────────────────
+function openAvatarLightbox(src) {
+  const lb = document.getElementById('avatar-lightbox');
+  const img = document.getElementById('avatar-lightbox-img');
+  img.src = src;
+  lb.classList.add('open');
+}
+function closeAvatarLightbox() {
+  document.getElementById('avatar-lightbox').classList.remove('open');
+}
+document.getElementById('avatar-lightbox').addEventListener('click', closeAvatarLightbox);
+
+// Delegate avatar clicks across the whole chat
+document.addEventListener('click', (e) => {
+  if (e.target.classList.contains('avatar')) {
+    openAvatarLightbox(e.target.src);
+  }
+});
+// Also wire the top character image
+document.getElementById('character-img').addEventListener('click', function() {
+  openAvatarLightbox(this.src);  // src is already the current slide
+});
+
+// ── Character Image Slideshow ──────────────────────────────────
+let charSlideImages = [];
+let charSlideIndex = 0;
+let charSlideName = '';
+
+function initCharSlideshow(images, charName) {
+  if (!images || images.length === 0) return;
+  charSlideImages = images;
+  charSlideName = charName || '';
+  // Restore saved index for this character
+  const saved = charSlideName ? parseInt(localStorage.getItem('slideIdx_' + charSlideName) || '0') : 0;
+  charSlideIndex = (saved >= 0 && saved < images.length) ? saved : 0;
+  renderCharSlide();
+}
+
+function charSlide(dir) {
+  if (charSlideImages.length <= 1) return;
+  charSlideIndex = (charSlideIndex + dir + charSlideImages.length) % charSlideImages.length;
+  if (charSlideName) localStorage.setItem('slideIdx_' + charSlideName, charSlideIndex);
+  renderCharSlide();
+}
+
+function renderCharSlide() {
+  const img = document.getElementById('character-img');
+  const prev = document.getElementById('char-img-prev');
+  const next = document.getElementById('char-img-next');
+  const dots = document.getElementById('char-slide-dots');
+
+  if (!img || !prev || !next || !dots) return;
+  if (!charSlideImages || charSlideImages.length === 0) return;
+
+  // Clamp index just in case
+  if (charSlideIndex >= charSlideImages.length) charSlideIndex = 0;
+
+  const src = charSlideImages[charSlideIndex];
+  if (src) img.src = '/static/images/' + src;
+
+  const count = charSlideImages.length;
+  const show = count > 1;
+  prev.style.display = show ? 'flex' : 'none';
+  next.style.display = show ? 'flex' : 'none';
+
+  // Render dots
+  dots.innerHTML = '';
+  if (show) {
+    charSlideImages.forEach((_, i) => {
+      const d = document.createElement('span');
+      d.className = 'char-slide-dot' + (i === charSlideIndex ? ' active' : '');
+      d.onclick = () => { charSlideIndex = i; if (charSlideName) localStorage.setItem('slideIdx_' + charSlideName, i); renderCharSlide(); };
+      dots.appendChild(d);
+    });
+  }
+}
+
+
+// ── Message Timestamps ────────────────────────────────────────
+function formatTimestamp(date) {
+  const now = new Date();
+  const d = date || now;
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const time = hh + ':' + mm;
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const msgDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diff = (today - msgDay) / 86400000;
+  if (diff < 1) return 'Today, ' + time;
+  if (diff < 2) return 'Yesterday, ' + time;
+  const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return days[d.getDay()] + ' ' + d.getDate() + ' ' + months[d.getMonth()] + ', ' + time;
+}
+
+function makeTimestampEl(isoString) {
+  if (!isoString) return document.createTextNode(''); // no timestamp stored = show nothing
+  const ts = document.createElement('div');
+  ts.className = 'msg-timestamp';
+  ts.textContent = formatTimestamp(new Date(isoString));
+  return ts;
+}
+
+(function injectTimestampCSS() {
+  const s = document.createElement('style');
+  s.textContent = `
+    .msg-timestamp {
+      display: block;
+      font-size: 10px;
+      color: #555;
+      margin-top: 4px;
+      letter-spacing: 0.3px;
+      user-select: none;
+    }
+    .user-msg .msg-timestamp { text-align: left; }
+    .model-msg .msg-timestamp { text-align: left; }
+  `;
+  document.head.appendChild(s);
+})();
+
 function showToast(message, duration = 3500) {
   let toast = document.getElementById('hwui-toast');
   if (!toast) {

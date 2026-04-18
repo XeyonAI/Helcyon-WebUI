@@ -1,4 +1,53 @@
 /* ------------------ Global text ------------------ */
+
+/* ==================== DEFAULT THEME FALLBACK ====================
+   These values are overridden by themes/midnight.css (or whichever
+   theme is active). This block exists purely as a safety net so the
+   page never goes transparent if the theme file fails to load.
+================================================================ */
+:root {
+  --topbar-bg: #0b1117;
+  --container-bg: #0f131a;
+  --chat-bg: #000000;
+  --sidebar-bg: #10151d;
+  --chat-item-bg: #112029;
+  --sidebar-button-hover: #213041;
+  --chat-item-bg: #112029;
+  --new-chat-btn-bg: #005903;
+  --new-chat-btn-text: #ffffff;
+  --memory-tab-active-bg: #131e27;
+  --memory-entry-bg: #080b0f;
+  --memory-entry-text: #cccccc;
+  --user-msg-bg: #0b1114;
+  --user-msg-text: #f0f0f0;
+  --model-msg-bg: #131d27;
+  --model-msg-text: #e0e0e0;
+  --msg-border: #27394b;
+  --msg-border-width: 1px;
+  --input-bg: #0c1013;
+  --char-dropdown-bg: #080f14;
+  --char-dropdown-border: #223650;
+  --modal-bg: #0e151b;
+  --modal-bg-hover: #171c27;
+  --modal-border: #000000;
+  --modal-text: #fefefe;
+  --button-border-light: #124969;
+  --button-border-dark: #771010;
+  --sidebar-footer-btn-bg: #1f3340;
+  --sidebar-footer-btn-border: #000000;
+  --project-header-bg: #040506;
+  --project-item-bg: #131c27;
+  --project-item-hover: #21323f;
+  --icon-button-bg: #131922;
+  --icon-button-hover: #161c2a;
+  --sidebar-border: #333;
+  --project-item-border: #333;
+  --input-border: #293d4b;
+  --field-bg: #0a0d10;
+  --field-border: #1d3349;
+  --field-border-focus: #2a3f50;
+}
+
 body {
   font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
   background: url("/static/images/bg.jpg") no-repeat center center fixed;
@@ -12,57 +61,6 @@ body {
 .chat-page #main {
   margin-top: 0;  /* Removed gap to match config page */
   margin-left: 10px;  /* Space from left sidebar */
-}
-
-/* ==================== MIDNIGHT THEME - GLOBAL COLORS ==================== */
-:root {
-  /* === MAIN PAGE - STRUCTURE === */
-  --topbar-bg: #12171C;
-  --container-bg: #12171C;
-  --chat-bg: #0d0d0d;
-  --sidebar-bg: #0d0d0d;
-  
-  /* === SIDEBAR === */
-  --sidebar-button-hover: #2F3540;
-  --new-chat-btn-bg: #254372;
-  --new-chat-btn-text: white;
-    /* ADD THIS */
-  
-  /* === MESSAGES === */
-  --user-msg-bg: #1d2a35;
-  --user-msg-text: #f0f0f0;
-  --model-msg-bg: #151B21;
-  --model-msg-text: #e0e0e0;
-  --msg-border: #2d394b;
-  --msg-border-width: 1px;
-  
-  /* === INPUT BOX === */
-  --input-bg: #1D262E;
-  
-  /* === DROPDOWNS & SELECTS === */
-  --char-dropdown-bg: #080F14;
-  
-  /* === MODALS (Memory, Projects, Opening Line, etc.) === */
-  --modal-bg: #161A1F;
-  --modal-bg-hover: #2F3540;
-  --modal-border: #333;
-  --modal-text: #fff;
-
-  /* === MODALS BUTTONS === */
-  --button-border-light: #555;
-  --button-border-dark: #444;
-  --sidebar-footer-btn-bg: #222c39;
-  --sidebar-footer-btn-border: #27323e;
-  --sidebar-button-hover: #273145;
-  
-  /* === PROJECT ITEMS === */
-  --project-header-bg: #080F14;
-  --project-item-bg: #15181C;
-  --project-item-hover: #2F3540;
-  
-  /* === ICON BUTTONS (Edit, Delete, Duplicate) === */
-  --icon-button-bg: #0f1218;
-  --icon-button-hover: #38455f;
 }
 
 /* ------------------ Top Bar ------------------ */
@@ -176,8 +174,9 @@ body {
   width: 275px; /* <<<<----------------------------------------------Sampling sidebar width - CHANGE THIS!! */
   height: calc(100vh - 30px);
   background: var(--container-bg);
-  border-right: 1px solid #333;
+  border-right: 1px solid var(--sidebar-border);
   padding: 1rem 0.9rem;
+  padding-bottom: 2rem;
   box-sizing: border-box;
   overflow-y: auto;
   z-index: 90;
@@ -200,9 +199,9 @@ body {
 
 
 #sampling-sidebar input {
-  background-color: #111 !important;
+  background-color: var(--field-bg, #111) !important;
   color: #eee;
-  border: 1px solid #333;
+  border: 1px solid var(--field-border, #333);
   border-radius: 4px;
   padding: 6px 10px;
 }
@@ -246,8 +245,8 @@ body:not(.chat-page) #center-column {
 #memory-panel {
   flex: 0 0 250px;
   max-height: 800px;
-  background: #111;
-  border: 1px solid #333;
+  background: var(--field-bg, #111);
+  border: 1px solid var(--field-border, #333);
   border-radius: 10px;
   padding: 10px 15px 20px 15px; /* top, right, bottom, left */
   overflow-y: auto;
@@ -259,15 +258,32 @@ body:not(.chat-page) #center-column {
   padding-bottom: 6px;
 }
 .memory-entry {
-  background: #1b1b1b;
-  border: 1px solid #2b2b2b;
+  background: var(--memory-entry-bg, #1b1b1b);
+  border: 1px solid var(--modal-border, #2b2b2b);
   border-radius: 6px;
-  margin: 8px 0;
-  padding: 8px;
-  white-space: pre-line;
-  color: #ccc;
-  font-size: 10px;
+  margin: 4px 0;
+  padding: 8px 10px;
+  padding-right: 52px;
+  color: var(--memory-entry-text, #cccccc);
+  font-size: 13px;
   position: relative;
+  line-height: 1.5;
+}
+.mem-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--memory-entry-text, #eeeeee);
+  margin-bottom: 1px;
+}
+.mem-keywords {
+  font-size: 11px;
+  color: #7a9abf;
+  margin-bottom: 6px;
+}
+.mem-body {
+  font-size: 13px;
+  color: var(--memory-entry-text, #cccccc);
+  line-height: 1.5;
 }
 .memory-entry button {
   position: absolute;
@@ -283,15 +299,32 @@ body:not(.chat-page) #center-column {
   height: 20px;
 }
 .memory-entry button:hover { color: #f55; }
+.memory-entry .mem-edit-btn {
+  position: static;
+  color: inherit;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.memory-entry .mem-edit-btn:hover { color: inherit; }
+
+.memory-entry textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--field-bg, #111);
+  border: 1px solid var(--field-border, #3a3a3a);
+  color: #ccc;
+  font-size: 11px;
+  padding: 6px;
+  border-radius: 4px;
+  resize: none;
+  font-family: monospace;
+}
 
 /* OVERRIDE MEMORY PANEL FONT SIZE */
 #memory-panel,
 #memory-panel * {
   font-size: 11px !important;
-}
-
-.memory-entry {
-  font-size: 12px !important;
 }
 
 /* ------------------ Character Bar ------------------ */
@@ -303,18 +336,75 @@ body:not(.chat-page) #center-column {
 }
 
 #character-img {
-  width: 100px;
-  height: 130px;
+  width: 130px;
+  height: 170px;
   border-radius: 8px;
   object-fit: cover;
 }
+
+/* ── Character Image Slideshow ── */
+#char-img-wrap {
+  position: relative;
+  width: 100px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.char-slide-btn {
+  display: none; /* hidden by default, shown via JS when >1 image */
+  position: absolute;
+  top: 50%;
+  transform: translateY(-60%);
+  background: rgba(0,0,0,0.55);
+  border: 1px solid rgba(255,255,255,0.15);
+  color: #fff;
+  font-size: 20px;
+  line-height: 1;
+  width: 22px;
+  height: 36px;
+  border-radius: 4px;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  padding: 0;
+  transition: background 0.15s;
+}
+.char-slide-btn:hover { background: rgba(0,0,0,0.82); }
+
+#char-img-prev { left: -11px; }
+#char-img-next { right: -11px; }
+
+#char-slide-dots {
+  display: flex;
+  gap: 5px;
+  justify-content: center;
+  min-height: 10px;
+}
+
+.char-slide-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.25);
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.char-slide-dot.active {
+  background: rgba(255,255,255,0.85);
+}
+
+
 
 #character-bar div {
   flex: 1;
 }
 
 #character-name {
-  font-size: 18px;
+  font-size: 26px;
   font-weight: bold;
   color: #fff;
 }
@@ -337,12 +427,19 @@ body:not(.chat-page) #center-column {
 #character-select {
   display: block;
   width: 200px;
+  background: var(--char-dropdown-bg);
+  color: #eee;
+  border: 1px solid var(--char-dropdown-border, #444);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
 }
 
 #tts-voice-select {
   display: block;
   width: 160px !important;
-  background: #1a2938;
+  background: #030406;
   color: #eee;
   border: 1px solid #444;
   border-radius: 6px;
@@ -354,46 +451,6 @@ body:not(.chat-page) #center-column {
 
 #tts-voice-select:hover {
   border-color: #666;
-}
-
-/* ==================== MIDNIGHT THEME - GLOBAL COLORS ==================== */
-:root {
-  /* === MAIN PAGE - STRUCTURE === */
-  --topbar-bg: #12171C;
-  --container-bg: #12171C;
-  --chat-bg: #0d0d0d;
-  
-  /* === SIDEBAR === */
-  --new-chat-btn-bg: #243042;
-  --new-chat-btn-text: white;
-  
-  /* === MESSAGES === */
-  --user-msg-bg: #1d2a35;
-  --user-msg-text: #f0f0f0;
-  --model-msg-bg: #151B21;
-  --model-msg-text: #e0e0e0;
-  --msg-border: #2a2a2a;
-  
-  /* === INPUT BOX === */
-  --input-bg: #1D262E;
-  
-  /* === DROPDOWNS & SELECTS === */
-  --char-dropdown-bg: #080F14;
-  
-  /* === MODALS (Memory, Projects, Opening Line, etc.) === */
-  --modal-bg: #161A1F;
-  --modal-bg-hover: #2F3540;
-  --modal-border: #333;
-  --modal-text: #fff;
-  
-  /* === PROJECT ITEMS === */
-  --project-header-bg: #080F14;
-  --project-item-bg: #15181C;
-  --project-item-hover: #2F3540;
-  
-  /* === ICON BUTTONS (Edit, Delete, Duplicate) === */
-  --icon-button-bg: #0f1218;
-  --icon-button-hover: #38455f;
 }
 
 select:hover,
@@ -415,22 +472,22 @@ select option,
 #userSelect option {
   background: var(--char-dropdown-bg) !important;
   color: #fff !important;
-  padding: 8px !important;
-  font-size: 15px !important;
+  padding: 3px 6px !important;
+  font-size: 12px !important;
   font-weight: 500 !important;
 }
 
 select option:checked,
 #character-select option:checked,
 #userSelect option:checked {
-  background: #333 !important;
+  background: #0e1016 !important;
   color: #fff !important;
 }
 
 select option:hover,
 #character-select option:hover,
 #userSelect option:hover {
-  background: #2a4d6e !important;
+  background: #263542 !important;
 }
 
 
@@ -467,7 +524,7 @@ select option:hover,
   border: 1px solid #333;
   border-radius: 0 0 12px 12px;
   resize: none;
-  background-color: #111;
+  background-color: var(--field-bg, #111);
   color: #ccc;
   width: 100%;
   font-family: inherit;
@@ -485,7 +542,7 @@ select option:hover,
   line-height: 1.6;
   color: #eee;
   background-color: var(--input-bg);
-  border: 1px solid var(--modal-border);
+  border: 1px solid var(--input-border);
   border-radius: 6px;
   padding: 10px 14px;
   resize: vertical;           /* keep resizing optional */
@@ -494,9 +551,9 @@ select option:hover,
 
 /* ------------------ Text Input Fields Styling ------------------ */
 input, textarea, select {
-  background-color: #111;
+  background-color: var(--field-bg, #111);
   color: #eee;
-  border: 1px solid #333;
+  border: 1px solid var(--field-border, #333);
   border-radius: 4px;
   padding: 6px 10px;
   font-size: 15px;        /* â† added font size */
@@ -510,7 +567,7 @@ input, textarea, select {
 
 input:focus, textarea:focus, select:focus {
   outline: none;
-  border-color: #555;
+  border-color: var(--field-border-focus, #555);
 }
 
 button {
@@ -566,14 +623,30 @@ button:hover {
   background-color: #702828;
 }
 
+/* End Session — deep purple/indigo */
+.end-session-btn {
+  background-color: #2a1f5a;
+  border-color: #4a3a8a;
+}
+
+.end-session-btn:hover {
+  background-color: #3a2a7a;
+}
+
+.end-session-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* Save Chat â€” Green */
 .save-btn {
-  background-color: #1f5a2f;
-  border-color: #248042;
+  background-color: var(--memory-tab-active-bg, #1f5a2f);
+  border-color: var(--memory-tab-active-bg, #248042);
 }
 
 .save-btn:hover {
-  background-color: #28703c;
+  background-color: var(--memory-tab-active-bg, #28703c);
+  filter: brightness(1.15);
 }
 /* Import Chat â€” Grey, identical sizing to other buttons */
 .import-btn {
@@ -723,6 +796,22 @@ button {
 }
 
 /* ------------------ Config Page Main Text ------------------ */
+.message hr {
+  border: none;
+  border-top: 1px solid #444;
+  margin: 10px 0;
+}
+
+.message blockquote {
+  border-left: 3px solid #555;
+  margin: 8px 0 8px 4px;
+  padding: 6px 12px;
+  color: #aaa;
+  font-style: italic;
+  background: rgba(255,255,255,0.03);
+  border-radius: 0 4px 4px 0;
+}
+
 #container hr {
   border: none;
   border-top: 1px solid #333;
@@ -762,12 +851,10 @@ small {
 }
 
 .model-text {
-  white-space: pre-wrap;
   line-height: 1.6;
 }
 /* preserve line breaks in model replies */
 #chat .message {
-  white-space: pre-line;
 }
 #app {
   display: flex;
@@ -853,7 +940,7 @@ small {
 }
 
 .chat-item {
-  background: #112029;
+  background: var(--chat-item-bg, #112029);
   padding: 6px 8px;
   margin-bottom: 4px;
   border-radius: 6px;
@@ -862,12 +949,76 @@ small {
 }
 
 .chat-item:hover {
-  background: #2D3E4F;
+  background: var(--sidebar-button-hover, #2D3E4F);
 }
 
 .chat-item.active {
-  background: #2D3E4F;
+  background: var(--sidebar-button-hover, #2D3E4F);
   font-weight: bold;
+}
+
+/* Coloured chat items - tint overrides default bg */
+.chat-item.tinted {
+  background: var(--chat-tint-color) !important;
+}
+.chat-item.tinted:hover {
+  filter: brightness(1.2);
+}
+.chat-item.tinted.active {
+  filter: brightness(1.3);
+}
+
+/* Right-click colour picker context menu */
+#chat-color-menu {
+  position: fixed;
+  z-index: 9999;
+  background: #1a2a36;
+  border: 1px solid #3a5a6a;
+  border-radius: 8px;
+  padding: 10px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 160px;
+}
+#chat-color-menu.visible {
+  display: flex;
+}
+#chat-color-menu .color-menu-label {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+#chat-color-menu .color-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+#chat-color-menu .color-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: transform 0.1s, border-color 0.1s;
+}
+#chat-color-menu .color-swatch:hover {
+  transform: scale(1.2);
+  border-color: rgba(255,255,255,0.5);
+}
+#chat-color-menu .color-clear {
+  font-size: 12px;
+  color: #aaa;
+  cursor: pointer;
+  padding: 3px 0;
+  text-align: center;
+  border-top: 1px solid #2a3a46;
+  margin-top: 2px;
+}
+#chat-color-menu .color-clear:hover {
+  color: #fff;
 }
 
 .chat-item-content {
@@ -924,25 +1075,10 @@ small {
   color: #fff;
 }
 
-.rename-input {
-  background: #2a2a2a;
-  border: 1px solid #555;
-  color: #eee;
-  padding: 4px 8px;
-  font-size: 15px;
-  width: 80%;
-  border-radius: 4px;
-  outline: none;
-}
-
-.rename-input:focus {
-  border-color: #6a9fb5;
-}
-
 /* ---RENAME CHAT--- */
 .rename-input {
-  background: #2a2a2a;
-  border: 1px solid #555;
+  background: var(--field-bg, #111);
+  border: 1px solid var(--field-border, #555);
   color: #eee;
   padding: 4px 8px;
   font-size: 15px;
@@ -952,7 +1088,7 @@ small {
 }
 
 .rename-input:focus {
-  border-color: #6a9fb5;
+  border-color: var(--field-border-focus, #555);
 }
 
 
@@ -1203,9 +1339,9 @@ body {
 .edit-msg-textarea {
   width: 100%;
   min-height: 80px;
-  background: #111;
+  background: var(--field-bg, #111);
   color: #eee;
-  border: 1px solid #555;
+  border: 1px solid var(--field-border, #555);
   border-radius: 6px;
   padding: 8px;
   font-size: 14px;
@@ -1217,7 +1353,7 @@ body {
 
 .edit-msg-textarea:focus {
   outline: none;
-  border-color: #6a9fb5;
+  border-color: var(--field-border-focus);
 }
 
 .edit-msg-btn-row {
@@ -1294,8 +1430,8 @@ body {
   bottom: 0;
   left: 0;
   width: 240px;  /* Match sidebar width */
-  background: var(--project-item-bg);
-  border-top: 1px solid #333;
+  background: var(--sidebar-bg);
+  border-top: 1px solid var(--sidebar-border);
   padding: 12px;
   display: flex;
   flex-direction: column;
@@ -1333,10 +1469,10 @@ body {
 }
 
 .modal-content {
-  background-color: #161A1F;
+  background-color: var(--modal-bg, #161A1F);
   margin: 10% auto;
   padding: 0;
-  border: 1px solid #444;
+  border: 1px solid var(--modal-border, #444);
   border-radius: 12px;
   width: 90%;
   max-width: 600px;
@@ -1376,8 +1512,8 @@ body {
 #author-note {
   width: 100%;
   min-height: 200px;
-  background: #111;
-  border: 1px solid #333;
+  background: var(--field-bg, #111);
+  border: 1px solid var(--field-border, #333);
   border-radius: 6px;
   padding: 12px;
   color: #eee;
@@ -1389,7 +1525,7 @@ body {
 
 #author-note:focus {
   outline: none;
-  border-color: #667eea;
+  border-color: var(--field-border-focus);
 }
 
 .modal-footer {
@@ -1398,6 +1534,10 @@ body {
   text-align: right;
 }
 
+#memory-modal .modal-footer button {
+  padding: 6px 12px !important;
+  font-size: 13px !important;
+}
 
 .save-note-btn {
   background: #3a3b3f;
@@ -1475,7 +1615,7 @@ body {
 
 /* ==================== OPENING LINE MODAL ==================== */
 #opening-line-modal .modal-content {
-  margin: 5% auto;  /* â† Changed from 10% to 5% */
+  margin: 8% auto;  /* nudged down — was sitting too high */
   padding: 0;
   border: 1px solid #444;
   border-radius: 12px;
@@ -1556,9 +1696,9 @@ body {
   flex: 1;
   min-height: 80px;  /* â† Changed from 100px to 80px (more compact) */
   padding: 10px;  /* â† Changed from 12px to 10px */
-  border: 1px solid #333;
+  border: 1px solid var(--field-border, #333);
   border-radius: 6px;
-  background: #111;
+  background: var(--field-bg, #111);
   color: #eee;
   font-family: inherit;
   font-size: 15px;
@@ -1568,7 +1708,7 @@ body {
 
 .opening-line-item textarea:focus {
   outline: none;
-  border-color: #667eea;
+  border-color: var(--field-border-focus);
 }
 
 .opening-line-item button {
@@ -1660,7 +1800,335 @@ body {
 }
 
 /* Memory Modal - Centered positioning */
+#author-note-modal .modal-content {
+  margin: 6% auto;
+}
 
+#memory-modal .modal-content {
+  margin: 5% auto;
+}
+
+#memory-modal .modal-body {
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+
+/* ==================== PROJECT MANAGEMENT ==================== */
+/* Sidebar footer - make room for 3 buttons */
+
+/* Force Inter font for all project elements */
+#project-modal *,
+#edit-project-modal *,
+#active-project-indicator *,
+#projects-btn,
+#opening-line-btn,
+#author-note-btn,
+#situation-btn {
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; !important;
+}
+
+#edit-project-name {
+  background: #0f0f0f !important;
+  color: #888 !important;
+  font-size: 15px !important;
+  font-weight: 600 !important;
+  border: 1px solid #333 !important;  
+}
+
+#sidebar-footer {
+  position: relative;
+  bottom: auto;
+  left: auto;
+  width: 80%;
+  background: var(--sidebar-bg);
+  border-top: 1px solid var(--sidebar-border);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 5px 12px;
+  z-index: 100;
+  flex-shrink: 0;
+  margin-left: -20px;
+  margin-right: -10px;
+  width: calc(100% + 10px);
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--sidebar-border);
+}
+
+#projects-btn,
+#opening-line-btn,
+#author-note-btn,
+#memory-btn,
+#situation-btn {
+  background: var(--sidebar-footer-btn-bg);
+  color: #ddd;
+  border: 1px solid var(--sidebar-footer-btn-border);
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+  width: 100%;
+  text-align: center;
+  margin: 0;
+}
+
+#projects-btn:hover,
+#opening-line-btn:hover,
+#author-note-btn:hover,
+#memory-btn:hover,
+#situation-btn:hover {
+  background: var(--sidebar-button-hover);
+  border-color: var(--button-border-light);
+}
+
+#active-project-indicator {
+  padding: 12px 15px;
+  margin-bottom: 15px;
+  background: var(--project-header-bg);
+  border-radius: 8px;
+}
+
+#active-project-indicator small {
+  font-size: 18px !important;  /* Force it */
+  color: #ccc;  /* Light grey for ALL text including emoji */
+  display: block;
+  letter-spacing: 0.3px;
+}
+
+#active-project-name {
+  color: #ccc;
+  font-weight: 600;
+}
+
+#project-modal .modal-content,
+#edit-project-modal .modal-content {
+  max-width: 600px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  margin: 5% auto;  /* â† ADD THIS - centers it vertically with 5% from top */
+}
+
+
+#project-modal .modal-body,
+#edit-project-modal .modal-body {
+  overflow-y: auto;
+  flex: 1;
+}
+.current-project-display {
+  background: transparent;
+  padding: 0;
+  border: none;
+  margin-bottom: 20px;
+}
+.current-project-display strong {
+  color: #aaa;
+  font-size: 15px;
+  font-weight: 600;
+}
+#current-project-display {
+  color: #4a7c9e;
+  font-size: 17px;
+  font-weight: 700;
+  margin-left: 8px;
+}
+.project-section {
+  margin: 15px 0;
+}
+.project-section h4 {
+  font-size: 15px;
+  color: #fff;
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+/* All project input fields - same darker grey */
+#new-project-name,
+#new-project-instructions,
+#edit-project-name,
+#edit-project-instructions {
+  width: 100%;
+  margin-bottom: 10px;
+  background: #0f0f0f !important;
+  color: #ddd !important;
+  border: 1px solid #333 !important;
+}
+
+#edit-project-name {
+  font-size: 15px !important;
+  font-weight: 600 !important;
+  color: #888 !important;
+}
+
+/* Projects list */
+#projects-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.project-item {
+  background: var(--project-item-bg);
+  border: 1px solid var(--project-item-border);
+  border-radius: 6px;
+  padding: 5px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 15px;
+  transition: background 0.2s;
+}
+.project-item:hover {
+  background: var(--project-item-hover);
+}
+.project-name-section {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+}
+.project-name {
+  font-size: 18px;
+  color: #ddd;
+  font-weight: 500;
+}
+.active-badge {
+  background: rgba(40, 167, 69, 0.2);
+  color: #28a745;
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.project-buttons {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.project-buttons button {
+  background: var(--project-item-bg);
+  border: 1px solid #444;
+  color: #fff;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.2s;
+}
+.project-switch-btn {
+  color: #fff !important;
+  font-size: 18px !important;
+}
+.project-buttons button:hover {
+  background: var(--icon-button-hover);
+  border-color: #555;
+  color: #fff;
+}
+/* Adjust chat list to not overlap footer */
+#chat-list {
+  padding-bottom: 160px !important;
+}
+/* Edit project modal styling */
+#edit-project-modal .modal-body label {
+  color: #ccc;
+  font-size: 15px;
+  font-weight: 600;
+  display: block;
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+/* Back to global chats button */
+.back-to-global-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border-radius: 6px;
+}
+
+.back-to-global-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.back-button {
+  font-size: 32px;
+  color: #fff;
+  margin-bottom: 8px;
+}
+
+.back-text {
+  font-size: 13px;
+  color: #888;
+  text-align: center;
+}
+
+
+#system-prompt {
+  font-style: italic;
+  font-size: 15px;
+  color: #ccc;
+}
+
+/* Document upload button */
+.upload-doc-btn {
+  background: #3a3b3f;
+  border: 1px solid #555;
+  color: #eee;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.2s;
+}
+
+.upload-doc-btn:hover {
+  background: #4a4b50;
+}
+
+/* Document list items */
+.document-item {
+  background: var(--project-item-bg);
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.document-name {
+  flex: 1;
+  font-size: 13px;
+  color: #ddd;
+}
+
+.document-size {
+  font-size: 11px;
+  color: #888;
+}
+
+.document-delete-btn {
+  background: transparent;
+  border: 1px solid #555;
+  color: #aaa;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 15px;
+  transition: all 0.2s;
+}
+
+.document-delete-btn:hover {
+  background: #d9534f;
+  border-color: #d9534f;
+  color: #fff;
+}
 
 
 /* Make config page buttons smaller */
@@ -1742,12 +2210,7 @@ button#stop-btn {
   50% { opacity: 0.3; }
 }
 
-.model-msg strong {
-    display: inline;
-    line-height: 1;
-    margin: 0;
-    padding: 0;
-}
+/* Character name label (direct child strong) handled below with > strong selector */
 
 .model-text:empty {
     display: inline;
@@ -1776,75 +2239,252 @@ button#stop-btn {
 }
 
 /* Put names on their own line with space below */
-.model-msg strong {
+/* Only target direct-child strong (character name label), NOT bold inside message body */
+.model-msg > strong {
   display: block;
   margin-bottom: 8px !important;  /* Space below character name */
   margin-right: 8px;
   padding-right: 4px;
 }
 
-.user-msg strong {
-  display: block;  /* User name stays on same line as message */
-  margin-bottom: 8px !important;  /* Still maintains spacing below the whole message */
+.user-msg > strong {
+  display: block;
+  margin-bottom: 8px !important;
   margin-right: 8px;
   padding-right: 4px;
 }
 
-
-
-
-Now the structure is:
-```
-<div class="message-wrapper">
-  <img class="avatar" />
-  <div class="message user-msg">
-    [text content]
-  </div>
-</div>
-/* ==================== PRO FEATURE BUTTONS ==================== */
-.pro-feature-locked {
-  opacity: 0.6;
-  cursor: pointer;
-  position: relative;
+/* Bold text inside message body must remain inline */
+.model-text strong,
+.user-text strong {
+  display: inline !important;
+  margin: 0;
+  padding: 0;
+}
+/* Memory edit textarea */
+.memory-edit-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  font-family: monospace;
 }
 
-.pro-feature-locked:hover {
-  opacity: 0.85;
-}
-
-.pro-badge {
-  font-size: 9px;
-  font-weight: 700;
-  background: linear-gradient(135deg, #667eea, #764ba2);
-  color: #fff;
-  padding: 2px 5px;
-  border-radius: 3px;
-  margin-left: 5px;
-  vertical-align: middle;
-  letter-spacing: 0.5px;
-}
-
-/* ==================== UPGRADE MODAL ==================== */
-#upgrade-modal .modal-content {
-  max-width: 480px;
-}
-
-.upgrade-btn {
+/* Memory add panel inputs */
+.memory-add-input {
   display: block;
   width: 100%;
-  margin-top: 24px;
-  padding: 14px 20px;
-  background: linear-gradient(135deg, #667eea, #764ba2);
-  color: #fff;
-  border: none;
-  border-radius: 8px;
-  font-size: 16px;
-  font-weight: 700;
-  cursor: pointer;
-  letter-spacing: 0.3px;
-  transition: opacity 0.2s;
+  box-sizing: border-box;
+  margin-bottom: 6px;
 }
 
-.upgrade-btn:hover {
-  opacity: 0.9;
+/* Memory confirm bar — inline inside message bubble */
+.memory-confirm-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #333;
+  flex-wrap: wrap;
+}
+
+.memory-confirm-label {
+  font-size: 12px;
+  color: #aaa;
+  flex: 1;
+}
+
+/* ==================== AVATAR LIGHTBOX ==================== */
+#avatar-lightbox {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: rgba(0, 0, 0, 0.85);
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+  animation: lightbox-fade 0.15s ease;
+}
+
+#avatar-lightbox.open {
+  display: flex;
+}
+
+#avatar-lightbox img {
+  max-width: 80vw;
+  max-height: 80vh;
+  border-radius: 10px;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.7);
+  object-fit: contain;
+  pointer-events: none;
+}
+
+@keyframes lightbox-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.avatar {
+  cursor: zoom-in;
+}
+
+/* ==================== LLAMA CONFIG PRESETS ==================== */
+#llama-preset-select,
+#llama-preset-name {
+  font-size: 12px !important;
+  padding: 0 6px !important;
+  height: 28px !important;
+  width: auto !important;
+  max-width: none !important;
+  box-sizing: border-box !important;
+}
+
+/* ── Custom Character Select ── */
+.custom-select-wrap {
+  position: relative;
+  width: 200px;
+  user-select: none;
+}
+
+.custom-select-selected {
+  background: #0d0d0d;
+  color: #eee;
+  border: 1px solid #444;
+  border-radius: 6px;
+  padding: 5px 28px 5px 10px;
+  font-size: 14px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: border-color 0.15s;
+}
+.custom-select-selected::after {
+  content: '▾';
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #888;
+  font-size: 13px;
+  pointer-events: none;
+}
+.custom-select-wrap.open .custom-select-selected {
+  border-color: #666;
+  border-radius: 6px 6px 0 0;
+}
+
+.custom-select-options {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: 100%;
+  min-width: 100%;
+  max-height: 400px;
+  overflow-y: auto;
+  background: #0d0d0d;
+  border: 1px solid #444;
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  z-index: 500;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+}
+.custom-select-wrap.open .custom-select-options {
+  display: block;
+}
+
+.custom-select-item {
+  padding: 4px 12px;
+  font-size: 14px;
+  color: #eee;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s;
+}
+.custom-select-item:hover {
+  background: #1f2a35;
+}
+.custom-select-item.active {
+  background: #0f1b24;
+  color: #283a63;
+} */
+.custom-select-wrap {
+  position: relative;
+  width: 200px;
+  user-select: none;
+}
+
+.custom-select-selected {
+  background: #0d0d0d;
+  color: #eee;
+  border: 1px solid #444;
+  border-radius: 6px;
+  padding: 5px 28px 5px 10px;
+  font-size: 14px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: border-color 0.15s;
+  position: relative;
+}
+.custom-select-selected::after {
+  content: '▾';
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #888;
+  font-size: 13px;
+  pointer-events: none;
+}
+.custom-select-wrap.open .custom-select-selected {
+  border-color: #666;
+  border-radius: 6px 6px 0 0;
+}
+
+.custom-select-options {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: 100%;
+  min-width: 100%;
+  max-height: 400px;
+  overflow-y: auto;
+  background: #0d0d0d;
+  border: 1px solid #444;
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  z-index: 500;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+}
+.custom-select-wrap.open .custom-select-options {
+  display: block;
+}
+
+.custom-select-item {
+  padding: 4px 12px;
+  font-size: 14px;
+  color: #eee;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s;
+}
+.custom-select-item:hover {
+  background: #1f2a35;
+}
+.custom-select-item.active {
+  background: #1f2a35;
+  color: #ffffff;
+}
+
+#voice-custom-select {
+  width: 160px;
+}
+
+/* Prevent long URLs in source links from overflowing message bubbles */
+.message a {
+  word-break: break-all;
+  overflow-wrap: anywhere;
 }

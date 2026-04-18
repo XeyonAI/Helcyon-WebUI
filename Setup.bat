@@ -1,6 +1,6 @@
 @echo off
 echo ============================================
-echo   HWUI Free Setup
+echo   HWUI-Pro Setup
 echo ============================================
 echo.
 :: Check Python
@@ -27,6 +27,6 @@ if not exist settings.json (
     )
 )
 echo ============================================
-echo   Setup complete! Run START_HWUI.bat to launch.
+echo   Setup complete! Run Start_AI.bat to launch.
 echo ============================================
 pause

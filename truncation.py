@@ -1,8 +1,11 @@
 import re
 
-CONTEXT_WINDOW = 16384   # llama.cpp context size
-GENERATION_RESERVE = 4096  # tokens reserved for the model's response
-# Max tokens available for prompt = CONTEXT_WINDOW - GENERATION_RESERVE = 12288
+CONTEXT_WINDOW     = 12288  # llama.cpp context size
+GENERATION_RESERVE = 2048   # tokens reserved for the model's response
+SYSTEM_BUFFER      = 200    # small safety margin for ChatML overhead tokens
+
+# Max tokens available for prompt = CONTEXT_WINDOW - GENERATION_RESERVE = 10240
+# Of that, the system message takes what it takes — the rest goes to conversation history.
 
 def rough_token_count(text) -> int:
     # Handle multimodal content (list of parts)
@@ -15,44 +18,45 @@ def rough_token_count(text) -> int:
         return 0
     return len(re.findall(r'\w+|[^\s\w]', text))
 
+
 def trim_chat_history(messages, token_budget: int = None):
     if not messages:
         return []
-    
-    # Separate system message (always keep it)
+
+    # Separate system message (always kept in full)
     system_msg = messages[0] if messages[0].get("role") == "system" else None
     body = messages[1:] if system_msg else messages
-    
-    # Calculate system message tokens
+
+    # Measure actual system message size
     system_tokens = rough_token_count(system_msg.get("content", "")) if system_msg else 0
-    print(f"📊 System message uses ~{system_tokens} tokens")
-    
-    # Dynamically calculate how many tokens are left for conversation history
-    max_prompt_tokens = CONTEXT_WINDOW - GENERATION_RESERVE  # 12288
-    history_budget = max_prompt_tokens - system_tokens - 200  # 200 token safety buffer
-    
-    if history_budget < 500:
-        print(f"🔴 WARNING: System message is too large ({system_tokens} tokens) — almost no room for chat history!")
-        history_budget = 500  # keep at least a few messages
-    
-    print(f"📊 History budget: ~{history_budget} tokens ({max_prompt_tokens} max prompt - {system_tokens} system - 200 buffer)")
-    
-    # Trim conversation history to fit budget
+    print(f"📊 System message: ~{system_tokens} tokens")
+
+    # Dynamically calculate how much room is left for conversation history
+    prompt_budget = CONTEXT_WINDOW - GENERATION_RESERVE - SYSTEM_BUFFER
+    conversation_budget = max(prompt_budget - system_tokens, 1024)  # never go below 1024
+
+    # Allow caller to override if needed
+    if token_budget is not None:
+        conversation_budget = token_budget
+
+    print(f"📊 Conversation budget: ~{conversation_budget} tokens "
+          f"(context {CONTEXT_WINDOW} - gen {GENERATION_RESERVE} - buffer {SYSTEM_BUFFER} - system {system_tokens})")
+
+    # Trim conversation history to fit budget (keep most recent messages)
     total = 0
     trimmed = []
-    
+
     for msg in reversed(body):
-        n = rough_token_count(msg.get("content", "")) + 20
-        if total + n > history_budget:
+        n = rough_token_count(msg.get("content", "")) + 20  # +20 for ChatML tags
+        if total + n > conversation_budget:
             break
         trimmed.insert(0, msg)
         total += n
-    
+
     print(f"📊 Kept {len(trimmed)} conversation messages (~{total} tokens)")
-    print(f"📊 Total context: ~{system_tokens + total} tokens (leaves ~{CONTEXT_WINDOW - system_tokens - total} for generation)")
-    
-    # Always include system message at the start
+    print(f"📊 Estimated total context: ~{system_tokens + total} / {CONTEXT_WINDOW} tokens")
+
     if system_msg:
         trimmed.insert(0, system_msg)
-    
+
     return trimmed

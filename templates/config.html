@@ -4,6 +4,15 @@
   <meta charset="UTF-8" />
   <title>Helcyon Config</title>
   <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/theme-files/midnight.css" id="active-theme-link" />
+  <script>
+    // Swap to actual active theme if different from default
+    fetch('/themes/list').then(r=>r.json()).then(d=>{
+      const name = d.active || 'midnight';
+      const link = document.getElementById('active-theme-link');
+      if (link && name !== 'midnight') link.href = '/theme-files/' + name + '.css';
+    }).catch(()=>{}); // silent fail — default midnight.css already loaded above
+  </script>
 </head>
 <body id="config-page">
   <div id="top-bar">
@@ -49,6 +58,7 @@
       <select id="tts-engine-select" style="width:100%; margin-bottom:8px;">
         <option value="f5">F5-TTS</option>
         <option value="xtts">XTTS v2</option>
+        <option value="chatterbox">Chatterbox</option>
         <option value="kokoro">Kokoro</option>
         <option value="none">None (Disabled)</option>
       </select>
@@ -57,15 +67,122 @@
 
       <button id="saveTTSEngineBtn" style="background-color: #1f3a5a; border-color: #245080; color: white; width:100%;">💾 Save TTS Engine</button>
 
+      <hr style="margin: 20px 0; border-color: #333;">
+
+      <h3>Llama.cpp</h3>
+
+      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Server Executable Path</label>
+      <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">
+        <input id="llama-exe" type="text" placeholder="C:\path\to\llama-server.exe" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
+        <button onclick="browseFile('llama-exe')" title="Browse for file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">📁</button>
+      </div>
+
+      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Models Folder</label>
+      <div style="display:flex; align-items:center; gap:6px; margin-bottom:12px;">
+        <input id="llama-models-dir" type="text" placeholder="C:\path\to\models" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
+        <button onclick="browseFolder('llama-models-dir')" title="Browse for folder" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">📁</button>
+      </div>
+
+      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:6px; font-weight:600;">Launch Arguments</label>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px 10px; margin-bottom:10px;">
+        <div>
+          <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">GPU Layers</label>
+          <input id="llama-gpu-layers" type="number" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
+        </div>
+        <div>
+          <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Context Size</label>
+          <input id="llama-ctx-size" type="number" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
+        </div>
+        <div>
+          <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Chat Template</label>
+          <input id="llama-chat-template" type="text" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
+        </div>
+      </div>
+      <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:#aaa; margin-bottom:10px; cursor:pointer;">
+        <input type="checkbox" id="llama-show-console" style="width:14px; height:14px; cursor:pointer;">
+        Show llama.cpp console window
+      </label>
+      <div id="llama-config-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:16px;"></div>
+      <button onclick="saveLlamaConfig()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:6px;">💾 Save Llama Config</button>
+      <button onclick="resetToDefault()" title="Wipe settings.json and restore from settings.default.json" style="background:#3a1a1a; border:1px solid #6a2a2a; color:#e88; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">↺ Reset All Settings to Default</button>
+
+      <!-- Llama Config Presets -->
+      <div style="border-top:1px solid #2a2a2a; padding-top:8px;">
+        <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:#666; margin-bottom:6px;">Config Presets</div>
+        <div style="display:flex; gap:4px; margin-bottom:6px;">
+          <select id="llama-preset-select" style="flex:1; background:#1a1a2a; border:1px solid #444; color:#ccc; border-radius:3px; font-size:12px; padding:3px 4px;">
+            <option value="">— select preset —</option>
+          </select>
+          <button onclick="loadLlamaPreset()" style="background:#1f3a5a; border:1px solid #245080; color:white; border-radius:3px; padding:3px 7px; font-size:12px; cursor:pointer; align-self:stretch;">Load</button>
+          <button onclick="deleteLlamaPreset()" style="background:#5a1f1f; border:1px solid #8a2424; color:white; border-radius:3px; padding:3px 7px; font-size:12px; cursor:pointer; align-self:stretch;">🗑️</button>
+        </div>
+        <input id="llama-preset-name" type="text" placeholder="Preset name..." style="background:#111; border:1px solid #333; color:#ccc; border-radius:3px; font-size:12px; padding:3px 6px; width:100%; box-sizing:border-box; margin-bottom:4px;">
+        <button onclick="saveLlamaPreset()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; border-radius:3px; padding:4px 7px; font-size:12px; cursor:pointer; width:100%; margin-bottom:4px;">💾 Save Preset</button>
+        <div id="llama-preset-status" style="font-size:11px; color:#aaa; min-height:14px;"></div>
+      </div>
+
+
+      <hr style="margin: 20px 0; border-color: #333;">
+
+      <h3>🔍 Web Search</h3>
+      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">
+        Brave Search API Key
+        <span style="color:#666; font-weight:normal;">
+          — <a href="https://api.search.brave.com" target="_blank" style="color:#7ab4f5;">get free key</a> (2000/month)
+        </span>
+      </label>
+      <input id="brave-api-key" type="password" placeholder="BSA..." style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:6px;">
+      <div id="brave-key-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
+      <button onclick="saveBraveKey()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:4px;">💾 Save Search Key</button>
+      <button onclick="clearBraveKey()" style="background:#3a1a1a; border:1px solid #6a2a2a; color:#e88; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">✕ Clear Key (use DDG fallback)</button>
+
+      <hr style="margin: 20px 0; border-color: #333;">
+
+      <h3>Appearance</h3>
+
+      <input type="file" id="bg-image-input" accept="image/*" style="display:none;" onchange="handleBgImageChange(this)">
+      <button onclick="document.getElementById('bg-image-input').click()" style="background-color: #3a2a5a; border-color: #6a4a9a; color: white; width:100%; margin-bottom:8px;">🖼️ Change Background</button>
+      <button onclick="clearBackground()" style="background-color: #3a3b3f; border-color: #555; color: #aaa; width:100%; font-size:12px; margin-bottom:14px;">✕ Clear Background</button>
+
+      <button onclick="openThemeModal()" style="background:#1e3a4a; border:1px solid #2a5068; color:#a0c8d8; width:100%; font-size:12px; padding:6px 0; border-radius:4px; cursor:pointer; margin-bottom:14px;">🎨 Theme Editor</button>
+
     </div>
 
     <!-- Main Center Column -->
     <div id="container">
       <h3>Global System Prompt</h3>
+
+      <!-- Template selector row -->
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+        <select id="system-prompt-file-select" style="flex:1;">
+          <option value="">-- Select Template --</option>
+        </select>
+        <button onclick="saveGlobalSystemPrompt()" title="Save changes to the currently selected template" style="background-color:#2a4a2a; border-color:#3a6a3a; color:white; white-space:nowrap;">💾 Update</button>
+        <button onclick="activateSystemPrompt()" title="Set as active (used by the model)" style="background-color:#1f5a3a; border-color:#248050; color:white; white-space:nowrap;">✅ Activate</button>
+        <button onclick="deleteSystemPrompt()" title="Delete this template" style="background-color:#5a1f1f; border-color:#8a2424; color:white; white-space:nowrap;">🗑️</button>
+      </div>
+
+      <!-- Active indicator -->
+      <div id="active-prompt-indicator" style="font-size:12px; color:#6a9; margin-bottom:10px;"></div>
+
+      <!-- Save as row -->
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
+        <input type="text" id="system-prompt-filename" placeholder="Type new filename to Save As..." style="flex:1; font-size:13px;"/>
+        <button onclick="saveSystemPromptAs()" style="background-color:#1f3a5a; border-color:#245080; color:white; white-space:nowrap;">💾 Save As</button>
+      </div>
+
       <label>System Prompt:</label>
       <textarea id="global-system-prompt"
-                placeholder="Global system prompt text here..."></textarea>
-      <button id="saveGlobalSystemPromptBtn" style="background-color: #1f5a3a; border-color: #248050; color: white;">💾 Save System Prompt</button>
+                placeholder="Type a system prompt, then Save As a new template..."></textarea>
+      <hr />
+
+      <!-- 📍 CURRENT SITUATION (semi-global) -->
+      <h3>📍 Current Situation</h3>
+      <p style="font-size:12px; color:#888; margin-top:-8px; margin-bottom:10px;">
+        A shared context injected into any character that has "Use Current Situation" enabled. Update this whenever your real-world situation changes.
+      </p>
+      <textarea id="global-current-situation" placeholder="e.g. Bob is staying at his parents' house for a few days." style="min-height:80px;"></textarea>
+      <button onclick="saveCurrentSituation()" style="background-color:#1f5a3a; border-color:#248050; color:white; margin-top:6px;">💾 Save Situation</button>
       <hr />
 
 	  <div id="character-select-bar">
@@ -87,6 +204,34 @@
 
       <label>Scenario:</label>
       <textarea id="scenario"></textarea>
+
+      <div style="margin: 8px 0 12px 0; display:flex; align-items:center; gap:8px;">
+        <input type="checkbox" id="use-current-situation" style="width:16px; height:16px; cursor:pointer;" />
+        <label for="use-current-situation" style="margin:0; cursor:pointer; font-size:13px; color:#ccc;">
+          📍 Include Current Situation <span style="color:#888; font-size:11px;">(inject global situation into this character's context)</span>
+        </label>
+      </div>
+
+      <div style="margin: 8px 0 4px 0; display:flex; align-items:center; gap:8px;">
+        <input type="checkbox" id="use-personal-memory" style="width:16px; height:16px; cursor:pointer;" />
+        <label for="use-personal-memory" style="margin:0; cursor:pointer; font-size:13px; color:#ccc;">
+          👤 Use personal memory <span style="color:#888; font-size:11px;">(character's own memory file)</span>
+        </label>
+      </div>
+
+      <div style="margin: 4px 0 12px 0; display:flex; align-items:center; gap:8px;">
+        <input type="checkbox" id="use-global-memory" style="width:16px; height:16px; cursor:pointer;" />
+        <label for="use-global-memory" style="margin:0; cursor:pointer; font-size:13px; color:#ccc;">
+          🌐 Use global memory <span style="color:#888; font-size:11px;">(shared memory file for all opted-in characters)</span>
+        </label>
+      </div>
+
+      <div style="margin: 4px 0 12px 0; display:flex; align-items:center; gap:8px;">
+        <input type="checkbox" id="use-web-search" style="width:16px; height:16px; cursor:pointer;" />
+        <label for="use-web-search" style="margin:0; cursor:pointer; font-size:13px; color:#ccc;">
+          🔍 Enable web search <span style="color:#888; font-size:11px;">(character can search the web when needed)</span>
+        </label>
+      </div>
 
       <label>Post History Instructions:</label>
       <textarea id="post-history"></textarea>
@@ -157,6 +302,14 @@
 
       <input type="file" id="char-img-replace-input" accept="image/*" style="display:none;" onchange="replaceCharacterImage(this)">
       <button onclick="document.getElementById('char-img-replace-input').click()" style="background-color: #2a4a6a; border-color: #3a6a9a; color: white; margin-top: 6px; margin-bottom: 10px;">🖼️ Upload New Image</button>
+
+      <!-- Extra Images / Slideshow -->
+      <div id="extra-images-section" style="margin: 10px 0 14px; padding: 10px 12px; background: rgba(255,255,255,0.04); border: 1px solid #2a3a4a; border-radius: 6px;">
+        <div style="font-size: 13px; color: #aaa; margin-bottom: 8px; font-weight: 600;">🎞️ Slideshow Images <span style="font-weight:400; color:#666;">(optional — add extras for the character bar slideshow)</span></div>
+        <div id="extra-images-strip" style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px;"></div>
+        <input type="file" id="extra-img-input" accept="image/*" style="display:none;" onchange="addExtraImage(this)">
+        <button onclick="document.getElementById('extra-img-input').click()" style="background:#1a3a5a; border:1px solid #2a5a8a; color:#8ab4d4; padding:5px 12px; border-radius:4px; font-size:12px; cursor:pointer;">➕ Add Image</button>
+      </div>
 
       <button onclick="saveCharacter()" style="background-color: #1f5a3a; border-color: #248050; color: white; margin-right: 10px;">💾 Save Character</button>
       <button id="duplicate-char-btn" style="background-color: #3a4a5a; border-color: #4a5a6a; color: white; margin-left: 10px;">📋 Duplicate</button>
@@ -283,30 +436,135 @@
   let currentCharacter = {};
 
   // --- GLOBAL SYSTEM PROMPT MANAGEMENT ---
-  async function loadGlobalSystemPrompt() {
+  // --- SYSTEM PROMPT TEMPLATE MANAGER ---
+
+  async function loadSystemPromptList() {
     try {
-      const res = await fetch('/system_prompt.txt');
-      if (!res.ok) throw new Error('Failed to fetch system_prompt.txt');
-      const text = await res.text();
-      document.getElementById('global-system-prompt').value = text.trim();
+      const res = await fetch('/system_prompts/list');
+      const data = await res.json();
+      const select = document.getElementById('system-prompt-file-select');
+      select.innerHTML = '<option value="">-- Select Template --</option>';
+      for (const f of data.files) {
+        const opt = document.createElement('option');
+        opt.value = f;
+        opt.textContent = f;
+        if (f === data.active) opt.textContent += ' ✅';
+        select.appendChild(opt);
+      }
+      // Auto-select and load active
+      if (data.active) {
+        select.value = data.active;
+        document.getElementById('system-prompt-filename').value = data.active;
+        updateActiveIndicator(data.active);
+        await loadSelectedSystemPrompt(data.active);
+      }
     } catch (err) {
-      console.error('Error loading global system prompt:', err);
+      console.error('Error loading system prompt list:', err);
     }
   }
 
-  async function saveGlobalSystemPrompt() {
-    const text = document.getElementById('global-system-prompt').value.trim();
+  function updateActiveIndicator(filename) {
+    const el = document.getElementById('active-prompt-indicator');
+    if (el) el.textContent = filename ? '🟢 Active: ' + filename : '';
+  }
+
+  async function loadSelectedSystemPrompt(filename) {
+    if (!filename) return;
     try {
-      const res = await fetch('/system_prompt.txt', {
+      const res = await fetch('/system_prompts/load/' + encodeURIComponent(filename));
+      if (!res.ok) return;
+      const text = await res.text();
+      document.getElementById('global-system-prompt').value = text.trim();
+      document.getElementById('system-prompt-filename').value = filename;
+    } catch (err) {
+      console.error('Error loading system prompt file:', err);
+    }
+  }
+
+  async function saveSystemPromptAs() {
+    let filename = document.getElementById('system-prompt-filename').value.trim();
+    if (!filename) { alert('Enter a filename first (e.g. my_prompt.txt)'); return; }
+    if (!filename.endsWith('.txt')) filename += '.txt';
+    const text = document.getElementById('global-system-prompt').value;
+    try {
+      const res = await fetch('/system_prompts/save/' + encodeURIComponent(filename), {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
         body: text
       });
-      if (res.ok) alert('✅ System prompt saved!');
-      else alert('⚠️ Error saving system prompt.');
+      const data = await res.json();
+      if (data.status === 'saved') {
+        await loadSystemPromptList();
+        document.getElementById('system-prompt-file-select').value = filename;
+        alert('✅ Saved as: ' + filename);
+      } else {
+        alert('❌ Save failed');
+      }
     } catch (err) {
-      console.error('Error saving global system prompt:', err);
+      alert('❌ Save error: ' + err);
     }
+  }
+
+  async function activateSystemPrompt() {
+    const select = document.getElementById('system-prompt-file-select');
+    const filename = select.value;
+    if (!filename) { alert('Select a template first'); return; }
+    try {
+      const res = await fetch('/system_prompts/activate/' + encodeURIComponent(filename), { method: 'POST' });
+      const data = await res.json();
+      if (data.status === 'ok') {
+        updateActiveIndicator(filename);
+        await loadSystemPromptList();
+        alert('✅ Active prompt set to: ' + filename);
+      } else {
+        alert('❌ Failed: ' + (data.error || 'Unknown'));
+      }
+    } catch (err) {
+      alert('❌ Error: ' + err);
+    }
+  }
+
+  async function deleteSystemPrompt() {
+    const select = document.getElementById('system-prompt-file-select');
+    const filename = select.value;
+    if (!filename) { alert('Select a template to delete'); return; }
+    if (!confirm('Delete "' + filename + '"? This cannot be undone.')) return;
+    try {
+      const res = await fetch('/system_prompts/delete/' + encodeURIComponent(filename), { method: 'POST' });
+      const data = await res.json();
+      if (data.status === 'deleted') {
+        await loadSystemPromptList();
+      } else {
+        alert('❌ Delete failed: ' + (data.error || 'Unknown'));
+      }
+    } catch (err) {
+      alert('❌ Error: ' + err);
+    }
+  }
+
+  // Overwrite the currently selected file
+  async function saveGlobalSystemPrompt() {
+    const select = document.getElementById('system-prompt-file-select');
+    const filename = select.value || document.getElementById('system-prompt-filename').value.trim();
+    if (!filename) { alert('No template selected. Use Save As to create a new one.'); return; }
+    const text = document.getElementById('global-system-prompt').value;
+    try {
+      const res = await fetch('/system_prompts/save/' + encodeURIComponent(filename), {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        body: text
+      });
+      const data = await res.json();
+      if (data.status === 'saved') alert('✅ Saved: ' + filename);
+      else alert('❌ Save failed');
+    } catch (err) {
+      alert('❌ Error: ' + err);
+    }
+  }
+
+  // Legacy alias
+  async function loadGlobalSystemPrompt() {
+    await loadSystemPromptList();
   }
 
   // --- CHARACTER MANAGEMENT ---
@@ -341,6 +599,11 @@
     }
   }
 
+  async function loadCharacterMemory() {
+    // Memory display is handled in the main chat UI (index.html)
+    // This stub prevents ReferenceError when called from character list/switch events
+  }
+
   async function loadCharacter(name) {
     const select = document.getElementById("character-select");
     select.value = name;
@@ -358,11 +621,16 @@
       document.getElementById("description").value = data.description || "";
       document.getElementById("tagline").value = data.tagline || "";
       document.getElementById("scenario").value = data.scenario || "";
+      document.getElementById("use-current-situation").checked = data.use_current_situation || false;
+      document.getElementById("use-personal-memory").checked = data.use_personal_memory !== undefined ? data.use_personal_memory : true;
+      document.getElementById("use-global-memory").checked = data.use_global_memory || false;
+      document.getElementById("use-web-search").checked = data.use_web_search || false;
       document.getElementById("post-history").value = data.post_history || "";
       document.getElementById("character-note").value = data.character_note || "";
       document.getElementById("example-dialog").value = data.example_dialogue || "";
       document.getElementById("image").value = data.image || "";
       updateImagePreview();
+      renderExtraImages(data.images || [], data.image || "");
     } catch (err) {
       console.error("Error loading character:", err);
     }
@@ -382,40 +650,115 @@
   async function replaceCharacterImage(input) {
     const file = input.files[0];
     if (!file) return;
-
-    const charName = document.getElementById('character-select').value;
-    if (!charName) {
-      alert('No character selected!');
-      input.value = '';
-      return;
-    }
-
+    const charName = document.getElementById("character-select").value;
+    if (!charName) { alert("Select a character first."); return; }
     const formData = new FormData();
-    formData.append('file', file);
-
+    formData.append("file", file);
     try {
       const res = await fetch(`/replace_character_image/${encodeURIComponent(charName)}`, {
-        method: 'POST',
+        method: "POST",
         body: formData
       });
       const data = await res.json();
-
-      if (data.status === 'ok') {
-        // Update the filename field
-        document.getElementById('image').value = data.image;
-        // Refresh the preview with cache-busting
-        const preview = document.getElementById('preview-img');
-        preview.src = `/static/images/${data.image}?v=${Date.now()}`;
-        preview.style.display = 'block';
-        console.log('✅ Character image replaced:', data.image);
+      if (data.status === "ok" && data.image) {
+        document.getElementById("image").value = data.image;
+        const img = document.getElementById("preview-img");
+        img.src = `/static/images/${data.image}?v=${Date.now()}`;
+        img.style.display = "block";
       } else {
-        alert('Failed to update image: ' + (data.error || 'Unknown error'));
+        alert("Upload failed: " + (data.error || "Unknown error"));
       }
-    } catch (err) {
-      console.error('❌ Image replace error:', err);
-      alert('Error uploading image');
+    } catch(e) {
+      alert("Upload failed: " + e);
     }
     input.value = '';
+  }
+
+  // ── Extra Images (Slideshow) ──────────────────────────
+  function renderExtraImages(images, primary) {
+    const strip = document.getElementById('extra-images-strip');
+    if (!strip) return;
+    strip.innerHTML = '';
+
+    // Always ensure primary is in the list
+    let list = images && images.length > 0 ? [...images] : [];
+    if (primary && !list.includes(primary)) list.unshift(primary);
+    if (list.length === 0) return;
+
+    list.forEach(filename => {
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'position:relative; display:inline-flex;';
+
+      const img = document.createElement('img');
+      img.src = `/static/images/${filename}?v=${Date.now()}`;
+      img.title = filename;
+      img.style.cssText = 'width:54px; height:70px; object-fit:cover; border-radius:5px; border:2px solid ' + (filename === primary ? '#4a9a6a' : '#2a3a4a') + ';';
+
+      if (filename === primary) {
+        const badge = document.createElement('span');
+        badge.textContent = '★';
+        badge.title = 'Primary image';
+        badge.style.cssText = 'position:absolute; top:2px; left:3px; font-size:10px; color:#6dbf8a; line-height:1; pointer-events:none;';
+        wrap.appendChild(badge);
+      }
+
+      const del = document.createElement('button');
+      del.textContent = '✕';
+      del.title = filename === primary ? 'Primary image (use Upload New Image to replace)' : 'Remove from slideshow';
+      del.style.cssText = 'position:absolute; top:-6px; right:-6px; background:#3a1a1a; border:1px solid #6a2a2a; color:#e88; border-radius:50%; width:16px; height:16px; font-size:9px; line-height:1; cursor:pointer; padding:0; display:flex; align-items:center; justify-content:center;';
+      if (filename === primary) {
+        del.style.opacity = '0.3';
+        del.style.cursor = 'not-allowed';
+      } else {
+        del.onclick = () => removeExtraImage(filename);
+      }
+
+      wrap.appendChild(img);
+      wrap.appendChild(del);
+      strip.appendChild(wrap);
+    });
+  }
+
+  async function addExtraImage(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const charName = document.getElementById("character-select").value;
+    if (!charName) { alert("Select a character first."); return; }
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const res = await fetch(`/add_character_image/${encodeURIComponent(charName)}`, {
+        method: "POST", body: formData
+      });
+      const data = await res.json();
+      if (data.status === "ok") {
+        if (!currentCharacter) currentCharacter = {};
+        currentCharacter.images = data.images;
+        renderExtraImages(data.images, document.getElementById("image").value);
+      } else {
+        alert("Failed: " + (data.error || "Unknown error"));
+      }
+    } catch(e) { alert("Upload failed: " + e); }
+    input.value = '';
+  }
+
+  async function removeExtraImage(filename) {
+    const charName = document.getElementById("character-select").value;
+    if (!charName) return;
+    if (!confirm(`Remove "${filename}" from slideshow?`)) return;
+    try {
+      const res = await fetch(`/remove_character_image/${encodeURIComponent(charName)}/${encodeURIComponent(filename)}`, {
+        method: "DELETE"
+      });
+      const data = await res.json();
+      if (data.status === "ok") {
+        if (!currentCharacter) currentCharacter = {};
+        currentCharacter.images = data.images;
+        renderExtraImages(data.images, document.getElementById("image").value);
+      } else {
+        alert("Failed: " + (data.error || "Unknown error"));
+      }
+    } catch(e) { alert("Remove failed: " + e); }
   }
 
   async function saveCharacter() {
@@ -427,10 +770,15 @@
       description: document.getElementById("description").value,
       tagline: document.getElementById("tagline").value,
       scenario: document.getElementById("scenario").value,
+      use_current_situation: document.getElementById("use-current-situation").checked,
+      use_personal_memory: document.getElementById("use-personal-memory").checked,
+      use_global_memory: document.getElementById("use-global-memory").checked,
+        use_web_search: document.getElementById("use-web-search").checked,
       post_history: document.getElementById("post-history").value,
       character_note: document.getElementById("character-note").value,
       example_dialogue: document.getElementById("example-dialog").value,
       image: document.getElementById("image").value,
+      images: (currentCharacter && currentCharacter.images) ? currentCharacter.images : undefined,
     };
     try {
       const res = await fetch(`/characters/${name}.json`, {
@@ -624,6 +972,10 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     document.getElementById('description').value = '';
     document.getElementById('tagline').value = '';
     document.getElementById('scenario').value = '';
+    document.getElementById('use-current-situation').checked = false;
+    document.getElementById('use-personal-memory').checked = true;
+    document.getElementById('use-global-memory').checked = false;
+      document.getElementById('use-web-search').checked = false;
     document.getElementById('post-history').value = '';
     document.getElementById('character-note').value = '';
     document.getElementById('example-dialog').value = '';
@@ -725,7 +1077,8 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     if (fileInput && fileInput.files.length > 0) {
       const formData = new FormData();
       formData.append("file", fileInput.files[0]);
-      formData.append("character_name", name); // Use user name for filename
+      formData.append("character_name", name);
+      formData.append("is_user", "true"); // ⚠️ Prevents collision with character images
       
       try {
         const uploadRes = await fetch("/upload_image", { method: "POST", body: formData });
@@ -755,7 +1108,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       }
     } catch (err) {
       console.error("Failed to save user:", err);
-      alert("Error saving user details.");
+      alert("Error saving user details: " + err.message);
     }
   }
 
@@ -839,13 +1192,21 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     loadUserList();
     loadSettings();
     loadGlobalSystemPrompt();
+    loadCurrentSituation();
     loadTTSEngine();
+    loadLlamaConfig();
 
     const refreshBtn = document.getElementById("refresh-memory");
     if (refreshBtn) refreshBtn.addEventListener("click", loadCharacterMemory);
 
-    const sysBtn = document.getElementById("saveGlobalSystemPromptBtn");
-    if (sysBtn) sysBtn.addEventListener("click", saveGlobalSystemPrompt);
+
+    const spFileSelect = document.getElementById('system-prompt-file-select');
+    if (spFileSelect) {
+      spFileSelect.addEventListener('change', () => {
+        const filename = spFileSelect.value;
+        if (filename) loadSelectedSystemPrompt(filename);
+      });
+    }
 
     const select = document.getElementById("character-select");
     if (select) {
@@ -1256,6 +1617,7 @@ function updateTTSEngineStatus(engine) {
   const labels = {
     f5: '🟢 F5-TTS — fast, good quality',
     xtts: '🟢 XTTS v2 — voice cloning',
+    chatterbox: '🟢 Chatterbox — voice cloning, expressive',
     kokoro: '🟢 Kokoro — lightweight, natural',
     none: '🔴 TTS disabled'
   };
@@ -1282,6 +1644,1178 @@ async function saveTTSEngine() {
   }
 }
 
+// --- BACKGROUND IMAGE ---
+function handleBgImageChange(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const dataUrl = e.target.result;
+    localStorage.setItem('hwui_bg_image', dataUrl);
+    applyBackground(dataUrl);
+  };
+  reader.readAsDataURL(file);
+  input.value = ''; // reset so same file can be picked again
+}
+
+function applyBackground(dataUrl) {
+  if (dataUrl) {
+    document.body.style.backgroundImage = `url(${dataUrl})`;
+    document.body.style.backgroundSize = 'cover';
+    document.body.style.backgroundPosition = 'center';
+    document.body.style.backgroundAttachment = 'fixed';
+  } else {
+    document.body.style.backgroundImage = '';
+  }
+}
+
+function clearBackground() {
+  localStorage.removeItem('hwui_bg_image');
+  applyBackground(null);
+}
+
+// Apply on load
+(function() {
+  const saved = localStorage.getItem('hwui_bg_image');
+  if (saved) applyBackground(saved);
+})();
+
+// --- THEME EDITOR ---
+
+const THEME_VARS = [
+  { group: 'Top Bar', vars: [
+    { key: '--topbar-bg', label: 'Top Bar BG' },
+  ]},
+  { group: 'Background & Container', vars: [
+    { key: '--container-bg',      label: 'Main Area BG' },
+    { key: '--chat-bg',           label: 'Chat Panel BG' },
+    { key: '--project-header-bg', label: 'Project Bar (top of chat)' },
+  ]},
+  { group: 'Sidebar', vars: [
+    { key: '--sidebar-bg',                label: 'Sidebar BG' },
+    { key: '--sidebar-border',            label: 'Sidebar Border' },
+    { key: '--chat-item-bg',              label: 'Chat Item BG' },
+    { key: '--sidebar-button-hover',      label: 'Chat Item Hover' },
+    { key: '--new-chat-btn-bg',           label: 'New Chat Btn BG' },
+    { key: '--new-chat-btn-text',         label: 'New Chat Btn Text' },
+    { key: '--char-dropdown-bg',          label: 'Character Dropdown BG' },
+    { key: '--char-dropdown-border',      label: 'Character Dropdown Border' },
+    { key: '--sidebar-footer-btn-bg',     label: 'Footer Btn BG' },
+    { key: '--sidebar-footer-btn-border', label: 'Footer Btn Border' },
+  ]},
+  { group: 'Messages', vars: [
+    { key: '--user-msg-bg',    label: 'Your Msg BG' },
+    { key: '--user-msg-text',  label: 'Your Msg Text' },
+    { key: '--model-msg-bg',   label: 'AI Reply BG' },
+    { key: '--model-msg-text', label: 'AI Reply Text' },
+    { key: '--msg-border',     label: 'Message Border' },
+  ], preview: 'messages' },
+  { group: 'Input Box', vars: [
+    { key: '--input-bg',     label: 'Input BG' },
+    { key: '--input-border', label: 'Input Border' },
+  ]},
+  { group: 'Modals (popups)', vars: [
+    { key: '--modal-bg',               label: 'Modal Background' },
+    { key: '--modal-bg-hover',         label: 'Modal Row Hover' },
+    { key: '--modal-border',           label: 'Modal Border' },
+    { key: '--modal-text',             label: 'Modal Title Text' },
+    { key: '--memory-tab-active-bg',   label: 'Memory Active Tab' },
+    { key: '--memory-entry-bg',        label: 'Memory Card BG' },
+    { key: '--memory-entry-text',      label: 'Memory Card Text' },
+  ], preview: 'modal' },
+  { group: 'Modal Buttons', vars: [
+    { key: '--button-border-light', label: 'Save Btn Border' },
+    { key: '--button-border-dark',  label: 'Cancel Btn Border' },
+  ]},
+  { group: 'Project List (inside modal)', vars: [
+    { key: '--project-item-bg',     label: 'Project Row BG' },
+    { key: '--project-item-hover',  label: 'Project Row Hover' },
+    { key: '--project-item-border', label: 'Project Row Border' },
+  ], preview: 'project' },
+  { group: 'Icon Buttons (Edit / Delete)', vars: [
+    { key: '--icon-button-bg',    label: 'Icon Btn BG' },
+    { key: '--icon-button-hover', label: 'Icon Btn Hover' },
+  ]},
+];
+
+let originalTheme = {};
+let themePresets = {};
+
+async function loadTheme() {
+  try {
+    const res = await fetch('/get_theme');
+    const data = await res.json();
+    originalTheme = { ...data };
+    renderThemeEditor(data);
+  } catch(e) {
+    console.error('Failed to load theme:', e);
+  }
+  // Also load presets
+  try {
+    const res = await fetch('/theme_presets');
+    themePresets = await res.json();
+    refreshPresetDropdown();
+  } catch(e) {
+    console.error('Failed to load presets:', e);
+  }
+}
+
+function refreshPresetDropdown() {
+  const sel = document.getElementById('theme-preset-select');
+  if (!sel) return;
+  const current = sel.value || localStorage.getItem('hwui_last_preset') || '';
+  sel.innerHTML = '<option value="">— Presets —</option>';
+  Object.keys(themePresets).sort().forEach(name => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+  if (current && themePresets[current]) sel.value = current;
+}
+
+async function loadPreset() {
+  const name = document.getElementById('theme-preset-select').value;
+  if (!name || !themePresets[name]) { alert('Pick a preset first.'); return; }
+  const colours = themePresets[name];
+  renderThemeEditor({ ...originalTheme, ...colours });
+  // Live preview
+  Object.entries(colours).forEach(([k, v]) => {
+    document.documentElement.style.setProperty(k, v);
+  });
+  // Persist selection and write to style.css
+  localStorage.setItem('hwui_last_preset', name);
+  try {
+    const res = await fetch('/save_theme', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(colours)
+    });
+    const data = await res.json();
+    if (data.status !== 'ok') {
+      alert('Preset loaded but failed to save to CSS: ' + (data.error || 'Unknown error'));
+    }
+  } catch(e) {
+    alert('Preset loaded but failed to save to CSS: ' + e);
+  }
+}
+
+async function updatePreset() {
+  const name = document.getElementById('theme-preset-select').value;
+  if (!name) { alert('Pick a preset first.'); return; }
+  const inputs = document.querySelectorAll('.cp-swatch-btn');
+  const colours = {};
+  inputs.forEach(inp => { colours[inp.dataset.var] = inp.dataset.hex; });
+  try {
+    const res = await fetch('/theme_presets/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, colours })
+    });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      themePresets[name] = colours;
+      // Also write to style.css
+      await fetch('/save_theme', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(colours)
+      });
+      const btn = document.querySelector('button[onclick="updatePreset()"]');
+      if (btn) { btn.textContent = '✓ Saved'; setTimeout(() => btn.textContent = 'Update', 1500); }
+    } else {
+      alert('Failed: ' + (data.error || 'Unknown error'));
+    }
+  } catch(e) { alert('Failed: ' + e); }
+}
+
+async function saveAsPreset() {
+  const name = prompt('Preset name:');
+  if (!name || !name.trim()) return;
+  const inputs = document.querySelectorAll('.cp-swatch-btn');
+  const colours = {};
+  inputs.forEach(inp => { colours[inp.dataset.var] = inp.dataset.hex; });
+  try {
+    const res = await fetch('/theme_presets/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim(), colours })
+    });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      themePresets[name.trim()] = colours;
+      refreshPresetDropdown();
+      document.getElementById('theme-preset-select').value = name.trim();
+      localStorage.setItem('hwui_last_preset', name.trim());
+    } else {
+      alert('Failed: ' + (data.error || 'Unknown error'));
+    }
+  } catch(e) { alert('Failed: ' + e); }
+}
+
+async function deletePreset() {
+  const name = document.getElementById('theme-preset-select').value;
+  if (!name) { alert('Pick a preset first.'); return; }
+  if (!confirm(`Delete preset "${name}"?`)) return;
+  try {
+    await fetch('/theme_presets/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    delete themePresets[name];
+    refreshPresetDropdown();
+  } catch(e) { alert('Failed: ' + e); }
+}
+
+function renderThemeEditor(data) {
+  renderThemeModal(data);
+}
+
+function toHex(value) {
+  // Already a hex
+  if (/^#[0-9a-fA-F]{3,8}$/.test(value)) return value.slice(0,7);
+  // Named color fallback
+  const ctx = document.createElement('canvas').getContext('2d');
+  ctx.fillStyle = value;
+  return ctx.fillStyle;
+}
+
+function _applyThemeVar(varName, value) {
+  document.documentElement.style.setProperty(varName, value);
+}
+
+async function saveTheme() {
+  const inputs = document.querySelectorAll('.cp-swatch-btn');
+  const updates = {};
+  inputs.forEach(inp => {
+    updates[inp.dataset.var] = inp.dataset.hex;
+  });
+  try {
+    const res = await fetch('/save_theme', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates)
+    });
+    const result = await res.json();
+    if (result.status === 'ok') {
+      alert('✅ Theme saved! Refresh the chat page to see changes.');
+    } else {
+      alert('❌ Save failed: ' + (result.error || 'Unknown error'));
+    }
+  } catch(e) {
+    alert('❌ Save failed: ' + e);
+  }
+}
+
+function resetTheme() {
+  if (!confirm('Reset all colours to the last saved values?')) return;
+  renderThemeEditor(originalTheme);
+  // Revert live preview
+  for (const group of THEME_VARS) {
+    for (const v of group.vars) {
+      if (originalTheme[v.key]) {
+        document.documentElement.style.setProperty(v.key, originalTheme[v.key]);
+      }
+    }
+  }
+}
+
+// Load theme on page init
+loadTheme();
+
+async function loadLlamaConfig() {
+  try {
+    const res = await fetch('/get_llama_config');
+    const data = await res.json();
+    if (data.error) return;
+    document.getElementById('llama-exe').value = data.exe || '';
+    document.getElementById('llama-models-dir').value = data.models_dir || '';
+    document.getElementById('llama-show-console').checked = data.show_console || false;
+    const a = data.args || {};
+    document.getElementById('llama-gpu-layers').value = a.n_gpu_layers ?? 44;
+    document.getElementById('llama-ctx-size').value = a.ctx_size ?? 16384;
+    document.getElementById('llama-chat-template').value = a.chat_template ?? 'chatml';
+    populateLlamaPresetDropdown();
+  } catch(e) {
+    console.error('Failed to load llama config:', e);
+  }
+}
+
+async function saveLlamaConfig() {
+  const status = document.getElementById('llama-config-status');
+  const payload = {
+    exe: document.getElementById('llama-exe').value.trim(),
+    models_dir: document.getElementById('llama-models-dir').value.trim(),
+    show_console: document.getElementById('llama-show-console').checked,
+    args: {
+      port: 5000,
+      n_gpu_layers: parseInt(document.getElementById('llama-gpu-layers').value) || 44,
+      ctx_size: parseInt(document.getElementById('llama-ctx-size').value) || 16384,
+      cache_type_k: 'q8_0',
+      cache_type_v: 'q8_0',
+      timeout: 0,
+      chat_template: document.getElementById('llama-chat-template').value.trim() || 'chatml',
+      parallel: 1,
+    }
+  };
+  try {
+    const res = await fetch('/save_llama_config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    status.style.color = data.status === 'ok' ? '#6dbf8a' : '#e88';
+    status.textContent = data.status === 'ok' ? '✅ Saved' : '❌ ' + data.error;
+    setTimeout(() => status.textContent = '', 3000);
+  } catch(e) {
+    status.style.color = '#e88';
+    status.textContent = '❌ Failed: ' + e;
+  }
+}
+
+// ==================================================
+// BROWSE FILE / FOLDER DIALOGS
+// ==================================================
+async function browseFile(targetId) {
+  try {
+    const res = await fetch('/browse_file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+    const data = await res.json();
+    if (data.path) document.getElementById(targetId).value = data.path;
+  } catch(e) { alert('Browse failed: ' + e); }
+}
+
+async function browseFolder(targetId) {
+  try {
+    const res = await fetch('/browse_folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+    const data = await res.json();
+    if (data.path) document.getElementById(targetId).value = data.path;
+  } catch(e) { alert('Browse failed: ' + e); }
+}
+
+// ==================================================
+// RESET ALL SETTINGS TO DEFAULT
+// ==================================================
+async function resetToDefault() {
+  if (!confirm('⚠️ This will reset ALL settings back to defaults. Your current settings.json will be overwritten. Continue?')) return;
+  try {
+    const res = await fetch('/reset_settings_to_default', { method: 'POST' });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      alert('✅ Settings reset to default. Reloading config...');
+      location.reload();
+    } else {
+      alert('❌ Reset failed: ' + (data.error || 'Unknown error'));
+    }
+  } catch(e) { alert('❌ Reset failed: ' + e); }
+}
+
+// ==================================================
+// LLAMA CONFIG PRESETS
+// ==================================================
+function getLlamaPresets() {
+  try { return JSON.parse(localStorage.getItem('hwui_llama_presets') || '{}'); }
+  catch(e) { return {}; }
+}
+
+function saveLlamaPresetsToStorage(presets) {
+  localStorage.setItem('hwui_llama_presets', JSON.stringify(presets));
+}
+
+function populateLlamaPresetDropdown() {
+  const sel = document.getElementById('llama-preset-select');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">— select preset —</option>';
+  const presets = getLlamaPresets();
+  Object.keys(presets).sort().forEach(name => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+  if (current && presets[current]) sel.value = current;
+}
+
+function saveLlamaPreset() {
+  const name = document.getElementById('llama-preset-name').value.trim();
+  const status = document.getElementById('llama-preset-status');
+  if (!name) { status.style.color = '#e88'; status.textContent = '❌ Enter a preset name first'; setTimeout(() => status.textContent = '', 2000); return; }
+  const preset = {
+    exe: document.getElementById('llama-exe').value.trim(),
+    models_dir: document.getElementById('llama-models-dir').value.trim(),
+    show_console: document.getElementById('llama-show-console').checked,
+    gpu_layers: document.getElementById('llama-gpu-layers').value,
+    ctx_size: document.getElementById('llama-ctx-size').value,
+    chat_template: document.getElementById('llama-chat-template').value.trim()
+  };
+  const presets = getLlamaPresets();
+  presets[name] = preset;
+  saveLlamaPresetsToStorage(presets);
+  populateLlamaPresetDropdown();
+  document.getElementById('llama-preset-select').value = name;
+  document.getElementById('llama-preset-name').value = '';
+  status.style.color = '#6dbf8a';
+  status.textContent = `✅ Preset "${name}" saved`;
+  setTimeout(() => status.textContent = '', 2500);
+}
+
+function loadLlamaPreset() {
+  const name = document.getElementById('llama-preset-select').value;
+  const status = document.getElementById('llama-preset-status');
+  if (!name) { status.style.color = '#e88'; status.textContent = '❌ Select a preset first'; setTimeout(() => status.textContent = '', 2000); return; }
+  const presets = getLlamaPresets();
+  const p = presets[name];
+  if (!p) return;
+  document.getElementById('llama-exe').value = p.exe || '';
+  document.getElementById('llama-models-dir').value = p.models_dir || '';
+  document.getElementById('llama-show-console').checked = p.show_console || false;
+  document.getElementById('llama-gpu-layers').value = p.gpu_layers || 44;
+  document.getElementById('llama-ctx-size').value = p.ctx_size || 16384;
+  document.getElementById('llama-chat-template').value = p.chat_template || 'chatml';
+  status.style.color = '#6dbf8a';
+  status.textContent = `✅ Loaded "${name}" — hit Save Llama Config to apply`;
+  setTimeout(() => status.textContent = '', 3000);
+}
+
+function deleteLlamaPreset() {
+  const name = document.getElementById('llama-preset-select').value;
+  const status = document.getElementById('llama-preset-status');
+  if (!name) { status.style.color = '#e88'; status.textContent = '❌ Select a preset first'; setTimeout(() => status.textContent = '', 2000); return; }
+  if (!confirm(`Delete preset "${name}"?`)) return;
+  const presets = getLlamaPresets();
+  delete presets[name];
+  saveLlamaPresetsToStorage(presets);
+  populateLlamaPresetDropdown();
+  status.style.color = '#aaa';
+  status.textContent = `🗑 Preset "${name}" deleted`;
+  setTimeout(() => status.textContent = '', 2000);
+}
+// --------------------------------------------------
+// Current Situation (semi-global)
+// --------------------------------------------------
+async function loadCurrentSituation() {
+  try {
+    const res = await fetch('/get_current_situation');
+    const data = await res.json();
+    document.getElementById('global-current-situation').value = data.current_situation || '';
+  } catch (e) {
+    console.warn('Could not load current situation:', e);
+  }
+}
+
+async function saveCurrentSituation() {
+  const text = document.getElementById('global-current-situation').value.trim();
+  try {
+    const res = await fetch('/save_current_situation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_situation: text })
+    });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      const btn = document.querySelector('button[onclick="saveCurrentSituation()"]');
+      if (btn) {
+        const orig = btn.textContent;
+        btn.textContent = '✅ Saved!';
+        setTimeout(() => btn.textContent = orig, 1500);
+      }
+    }
+  } catch (e) {
+    console.error('Failed to save current situation:', e);
+  }
+}
+
+
+</script>
+
+<!-- ===== CUSTOM COLOUR PICKER ===== -->
+<div id="cp-popup" style="
+  display:none; position:fixed; z-index:99999;
+  background:#1e2128; border:1px solid #444; border-radius:8px;
+  box-shadow:0 8px 32px rgba(0,0,0,0.7); padding:10px; width:220px;
+  user-select:none;">
+
+  <!-- SV canvas -->
+  <canvas id="cp-sv" width="200" height="150" style="display:block; border-radius:4px; cursor:crosshair; margin-bottom:8px;"></canvas>
+
+  <!-- Hue strip -->
+  <canvas id="cp-hue" width="200" height="14" style="display:block; border-radius:3px; cursor:crosshair; margin-bottom:8px;"></canvas>
+
+  <!-- Alpha strip -->
+  <canvas id="cp-alpha" width="200" height="14" style="display:block; border-radius:3px; cursor:crosshair; margin-bottom:8px;"></canvas>
+
+  <!-- Hex input + preview swatch -->
+  <div style="display:flex; gap:6px; align-items:center;">
+    <div id="cp-swatch" style="width:28px; height:28px; border-radius:4px; border:1px solid #555; flex-shrink:0;"></div>
+    <input id="cp-hex" type="text" maxlength="9" style="
+      flex:1; background:#111; border:1px solid #444; color:#eee;
+      border-radius:4px; padding:4px 7px; font-size:12px; font-family:monospace;"/>
+    <button id="cp-close" style="
+      background:#333; border:1px solid #555; color:#aaa;
+      border-radius:4px; padding:3px 8px; font-size:11px; cursor:pointer;">✕</button>
+  </div>
+</div>
+
+<script>
+(function() {
+  // ---- state ----
+  let cpH = 0, cpS = 1, cpV = 1, cpA = 1;
+  let cpTarget = null;   // the hidden <input type=color> or data-var element
+  let cpVarName = '';
+  let dragging = null;
+
+  const popup   = document.getElementById('cp-popup');
+  const svCanvas= document.getElementById('cp-sv');
+  const hueCanvas=document.getElementById('cp-hue');
+  const alphaCanvas=document.getElementById('cp-alpha');
+  const hexInput= document.getElementById('cp-hex');
+  const swatch  = document.getElementById('cp-swatch');
+  const closeBtn= document.getElementById('cp-close');
+
+  // ---- draw helpers ----
+  function drawSV() {
+    const ctx = svCanvas.getContext('2d');
+    const w = svCanvas.width, h = svCanvas.height;
+    // hue base
+    const hueColor = hsvToRgb(cpH, 1, 1);
+    const gr1 = ctx.createLinearGradient(0,0,w,0);
+    gr1.addColorStop(0,'#fff');
+    gr1.addColorStop(1,`rgb(${hueColor.r},${hueColor.g},${hueColor.b})`);
+    ctx.fillStyle = gr1; ctx.fillRect(0,0,w,h);
+    const gr2 = ctx.createLinearGradient(0,0,0,h);
+    gr2.addColorStop(0,'rgba(0,0,0,0)');
+    gr2.addColorStop(1,'#000');
+    ctx.fillStyle = gr2; ctx.fillRect(0,0,w,h);
+    // crosshair
+    const cx = cpS * w, cy = (1-cpV) * h;
+    ctx.beginPath(); ctx.arc(cx,cy,6,0,Math.PI*2);
+    ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.stroke();
+  }
+
+  function drawHue() {
+    const ctx = hueCanvas.getContext('2d');
+    const w = hueCanvas.width, h = hueCanvas.height;
+    const gr = ctx.createLinearGradient(0,0,w,0);
+    for(let i=0;i<=360;i+=30) gr.addColorStop(i/360,`hsl(${i},100%,50%)`);
+    ctx.fillStyle=gr; ctx.fillRect(0,0,w,h);
+    // marker
+    const x = (cpH/360)*w;
+    ctx.fillStyle='#fff'; ctx.fillRect(x-2,0,4,h);
+  }
+
+  function drawAlpha() {
+    const ctx = alphaCanvas.getContext('2d');
+    const w = alphaCanvas.width, h = alphaCanvas.height;
+    // checkerboard
+    for(let i=0;i<w;i+=8) for(let j=0;j<h;j+=8) {
+      ctx.fillStyle = ((i+j)/8%2<1) ? '#aaa' : '#eee';
+      ctx.fillRect(i,j,8,8);
+    }
+    const {r,g,b} = hsvToRgb(cpH,cpS,cpV);
+    const gr = ctx.createLinearGradient(0,0,w,0);
+    gr.addColorStop(0,`rgba(${r},${g},${b},0)`);
+    gr.addColorStop(1,`rgba(${r},${g},${b},1)`);
+    ctx.fillStyle=gr; ctx.fillRect(0,0,w,h);
+    // marker
+    const x = cpA * w;
+    ctx.fillStyle='#fff'; ctx.fillRect(x-2,0,4,h);
+  }
+
+  function redraw() { drawSV(); drawHue(); drawAlpha(); updateSwatch(); }
+
+  function updateSwatch() {
+    const {r,g,b} = hsvToRgb(cpH,cpS,cpV);
+    const hex = rgbaToHex(r,g,b,cpA);
+    swatch.style.background = `rgba(${r},${g},${b},${cpA})`;
+    hexInput.value = hex;
+    if (cpVarName) {
+      document.documentElement.style.setProperty(cpVarName, hex);
+      // Update the trigger swatch div so save/preset capture the new value
+      const triggerEl = document.querySelector(`.cp-swatch-btn[data-var="${cpVarName}"]`);
+      if (triggerEl) {
+        triggerEl.style.background = hex;
+        triggerEl.dataset.hex = hex;
+      }
+    }
+  }
+
+  function rgbaToHex(r,g,b,a) {
+    const h = v => v.toString(16).padStart(2,'0');
+    if (a >= 1) return `#${h(r)}${h(g)}${h(b)}`;
+    return `#${h(r)}${h(g)}${h(b)}${h(Math.round(a*255))}`;
+  }
+
+  function hsvToRgb(h,s,v) {
+    let r,g,b;
+    const i=Math.floor(h/60)%6, f=h/60-Math.floor(h/60);
+    const p=v*(1-s),q=v*(1-f*s),t=v*(1-(1-f)*s);
+    [r,g,b]=[[v,t,p],[q,v,p],[p,v,t],[p,q,v],[t,p,v],[v,p,q]][i];
+    return {r:Math.round(r*255),g:Math.round(g*255),b:Math.round(b*255)};
+  }
+
+  function hexToHsv(hex) {
+    hex = hex.replace('#','');
+    if(hex.length===3) hex=hex.split('').map(c=>c+c).join('');
+    const r=parseInt(hex.slice(0,2),16)/255;
+    const g=parseInt(hex.slice(2,4),16)/255;
+    const b=parseInt(hex.slice(4,6),16)/255;
+    const a=hex.length===8?parseInt(hex.slice(6,8),16)/255:1;
+    const max=Math.max(r,g,b),min=Math.min(r,g,b),d=max-min;
+    let h=0,s=max===0?0:d/max,v=max;
+    if(d!==0){
+      if(max===r) h=((g-b)/d+6)%6;
+      else if(max===g) h=(b-r)/d+2;
+      else h=(r-g)/d+4;
+      h*=60;
+    }
+    return {h,s,v,a};
+  }
+
+  // ---- open / close ----
+  window.openColorPicker = function(varName, currentHex, anchorEl) {
+    cpVarName = varName;
+    const parsed = hexToHsv(currentHex || '#000000');
+    cpH=parsed.h; cpS=parsed.s; cpV=parsed.v; cpA=parsed.a;
+
+    popup.style.display = 'block';
+
+    // Position to the right of the anchor, but clamp to viewport
+    const rect = anchorEl.getBoundingClientRect();
+    const pw = 240, ph = 260;
+    let left = rect.right + 8;
+    let top  = rect.top;
+    if (left + pw > window.innerWidth)  left = rect.left - pw - 8;
+    if (top  + ph > window.innerHeight) top  = window.innerHeight - ph - 8;
+    if (top < 4) top = 4;
+    popup.style.left = left + 'px';
+    popup.style.top  = top  + 'px';
+
+    redraw();
+  };
+
+  closeBtn.addEventListener('click', () => { popup.style.display='none'; });
+  document.addEventListener('mousedown', e => {
+    if (!popup.contains(e.target) && !e.target.classList.contains('cp-swatch-btn')) {
+      popup.style.display='none';
+    }
+  });
+
+  // ---- canvas interactions ----
+  function svPos(e) {
+    const r = svCanvas.getBoundingClientRect();
+    cpS = Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
+    cpV = Math.max(0,Math.min(1,1-(e.clientY-r.top)/r.height));
+    redraw();
+  }
+  function huePos(e) {
+    const r = hueCanvas.getBoundingClientRect();
+    cpH = Math.max(0,Math.min(360,((e.clientX-r.left)/r.width)*360));
+    redraw();
+  }
+  function alphaPos(e) {
+    const r = alphaCanvas.getBoundingClientRect();
+    cpA = Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
+    redraw();
+  }
+
+  svCanvas.addEventListener('mousedown',  e=>{dragging='sv';  svPos(e);});
+  hueCanvas.addEventListener('mousedown', e=>{dragging='hue'; huePos(e);});
+  alphaCanvas.addEventListener('mousedown',e=>{dragging='alpha';alphaPos(e);});
+
+  document.addEventListener('mousemove', e=>{
+    if(dragging==='sv')    svPos(e);
+    else if(dragging==='hue')   huePos(e);
+    else if(dragging==='alpha') alphaPos(e);
+  });
+  document.addEventListener('mouseup', ()=>{ dragging=null; });
+
+  // ---- hex input ----
+  hexInput.addEventListener('input', () => {
+    const v = hexInput.value.trim();
+    if(/^#[0-9a-fA-F]{6,8}$/.test(v)) {
+      const p=hexToHsv(v); cpH=p.h;cpS=p.s;cpV=p.v;cpA=p.a;
+      redraw();
+    }
+  });
+  hexInput.addEventListener('blur', () => {
+    if (cpVarName) {
+      // fire the same save signal that previewThemeVar uses
+    }
+  });
+})();
+</script>
+
+<!-- ============================================================
+     THEME EDITOR MODAL
+============================================================ -->
+<div id="theme-modal-overlay" style="
+  display:none; position:fixed; inset:0; z-index:10000;
+  background:rgba(0,0,0,0.75); backdrop-filter:blur(3px);
+  overflow-y:auto; padding:30px 20px;">
+
+  <div style="
+    max-width:780px; margin:0 auto;
+    background:var(--modal-bg); border:1px solid var(--modal-border); border-radius:12px;
+    box-shadow:0 20px 60px rgba(0,0,0,0.8); overflow:hidden;">
+
+    <!-- Header: single row -->
+    <div style="padding:12px 20px; border-bottom:1px solid var(--modal-border); background:var(--modal-bg); display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+      <span style="font-size:16px; font-weight:700; color:#fff; white-space:nowrap;">🎨 Theme Editor</span>
+      <div style="width:1px; height:20px; background:#333; flex-shrink:0;"></div>
+      <select id="theme-file-select"
+        style="background:var(--field-bg); border:1px solid var(--field-border); color:#fff; border-radius:4px; font-size:13px; padding:3px 8px; font-weight:600; min-width:80px; max-width:160px;">
+      </select>
+      <button onclick="switchThemeFile(document.getElementById('theme-file-select').value)" style="background:#1f3a5a; border:1px solid #245080; color:white; border-radius:4px; padding:3px 9px; font-size:12px; cursor:pointer;">Load</button>
+      <button onclick="newThemeFile()" style="background:#2a2a4a; border:1px solid #4a4a8a; color:#aaf; border-radius:4px; padding:3px 9px; font-size:12px; cursor:pointer; white-space:nowrap;">＋ New</button>
+      <button onclick="deleteThemeFile()" style="background:#3a1a1a; border:1px solid #6a2a2a; color:#f88; border-radius:4px; padding:3px 7px; font-size:12px; cursor:pointer;">🗑️</button>
+      <div style="flex:1;"></div>
+      <button onclick="saveTheme()" style="background:#1f5a3a; border:1px solid #248050; color:white; border-radius:4px; padding:3px 16px; font-size:13px; font-weight:600; cursor:pointer;">💾 Save</button>
+      <button onclick="resetTheme()" style="background:#2a2b2f; border:1px solid #444; color:#aaa; border-radius:4px; padding:3px 10px; font-size:12px; cursor:pointer;">↺ Reset</button>
+      <button onclick="closeThemeModal()" style="background:#2a2b2f; border:1px solid #444; color:#aaa; border-radius:4px; padding:3px 10px; font-size:12px; cursor:pointer;">✕ Close</button>
+    </div>
+
+    <!-- Body: sections stacked -->
+    <div id="theme-modal-body" style="padding:24px; display:flex; flex-direction:column; gap:32px;">
+      <!-- populated by renderThemeModal() -->
+    </div>
+  </div>
+</div>
+
+<script>
+// ---- Theme Modal open/close ----
+// ---- Theme file management ----
+let _activeThemeName = 'midnight';
+
+async function loadThemeFileList() {
+  try {
+    const res = await fetch('/themes/list');
+    const data = await res.json();
+    _activeThemeName = data.active || 'midnight';
+    const sel = document.getElementById('theme-file-select');
+    if (!sel) return;
+    sel.innerHTML = '';
+    (data.themes || []).forEach(name => {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      if (name === _activeThemeName) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  } catch(e) { console.error('loadThemeFileList failed:', e); }
+}
+
+async function switchThemeFile(name) {
+  if (!name) return;
+  try {
+    await fetch('/themes/switch', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ name })
+    });
+    _activeThemeName = name;
+    // Swap the loaded stylesheet
+    const existing = document.getElementById('active-theme-link');
+    if (existing) existing.href = '/theme-files/' + name + '.css';
+    // Reload theme vars and re-render
+    const res = await fetch('/get_theme');
+    const data = await res.json();
+    originalTheme = { ...data };
+    renderThemeModal(data);
+  } catch(e) { alert('Failed to switch theme: ' + e); }
+}
+
+async function newThemeFile() {
+  const name = prompt('New theme name (e.g. "dark-blue"):');
+  if (!name || !name.trim()) return;
+  try {
+    const res = await fetch('/themes/create', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ name: name.trim() })
+    });
+    const data = await res.json();
+    if (data.error) { alert('Error: ' + data.error); return; }
+    await loadThemeFileList();
+    await switchThemeFile(name.trim());
+  } catch(e) { alert('Failed to create theme: ' + e); }
+}
+
+async function deleteThemeFile() {
+  const name = _activeThemeName;
+  if (!confirm(`Delete theme "${name}"? This cannot be undone.`)) return;
+  try {
+    const res = await fetch('/themes/delete', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ name })
+    });
+    const data = await res.json();
+    if (data.error) { alert('Error: ' + data.error); return; }
+    await loadThemeFileList();
+    // Switch to whatever is now active
+    const listRes = await fetch('/themes/list');
+    const listData = await listRes.json();
+    await switchThemeFile(listData.active);
+  } catch(e) { alert('Failed to delete theme: ' + e); }
+}
+
+function openThemeModal() {
+  loadThemeFileList();
+  renderThemeModal(originalTheme);
+  document.getElementById('theme-modal-overlay').style.display = 'block';
+}
+function closeThemeModal() {
+  document.getElementById('theme-modal-overlay').style.display = 'none';
+}
+// Close on overlay click
+document.getElementById('theme-modal-overlay').addEventListener('mousedown', function(e) {
+  if (e.target === this) closeThemeModal();
+});
+
+// ---- Section definitions: each has a label, vars, and a preview renderer ----
+const THEME_SECTIONS = [
+
+  {
+    title: 'Top Bar',
+    vars: [
+      { key: '--topbar-bg', label: 'Background' },
+    ],
+    preview: (el) => {
+      el.innerHTML = `
+        <div style="border-radius:6px; overflow:hidden; border:1px solid #222;">
+          <div style="background:var(--topbar-bg); padding:10px 16px; display:flex; justify-content:space-between; align-items:center;">
+            <span style="font-weight:700; font-size:14px; color:#fff;">Helcyon-WebUI</span>
+            <span style="color:#aaa; font-size:12px;">Model: helcyon-4o ⟳ ⚙</span>
+          </div>
+        </div>`;
+    }
+  },
+
+  {
+    title: 'Background & Chat Container',
+    vars: [
+      { key: '--container-bg',      label: 'Main Area BG' },
+      { key: '--chat-bg',           label: 'Chat Panel BG' },
+      { key: '--project-header-bg', label: 'Project Bar' },
+    ],
+    preview: (el) => {
+      el.innerHTML = `
+        <div style="border-radius:6px; overflow:hidden; border:1px solid #222; background:var(--container-bg); padding:10px;">
+          <div style="background:var(--project-header-bg); border-radius:6px 6px 0 0; padding:8px 14px; font-size:13px; color:#ccc; display:flex; align-items:center; gap:8px;">
+            <span>📁</span><span style="font-weight:600;">General</span>
+          </div>
+          <div style="background:var(--chat-bg); border-radius:0 0 6px 6px; padding:12px; min-height:48px;">
+            <span style="font-size:11px; color:#555;">← Chat messages appear here</span>
+          </div>
+        </div>`;
+    }
+  },
+
+  {
+    title: 'Sidebar',
+    vars: [
+      { key: '--sidebar-bg',                label: 'Sidebar BG' },
+      { key: '--chat-item-bg',              label: 'Chat Item BG' },
+      { key: '--sidebar-button-hover',      label: 'Chat Item Hover' },
+      { key: '--new-chat-btn-bg',           label: '+ New Button BG' },
+      { key: '--new-chat-btn-text',         label: '+ New Button Text' },
+      { key: '--char-dropdown-bg',          label: 'Character Dropdown BG' },
+      { key: '--char-dropdown-border',      label: 'Character Dropdown Border' },
+      { key: '--sidebar-footer-btn-bg',     label: 'Footer Btn BG' },
+      { key: '--sidebar-footer-btn-border', label: 'Footer Btn Border' },
+    ],
+    preview: (el) => {
+      el.innerHTML = `
+        <div style="border-radius:6px; overflow:hidden; border:1px solid var(--sidebar-border); background:var(--sidebar-bg); padding:10px; display:flex; flex-direction:column; gap:6px;">
+          <div style="display:flex; gap:6px; align-items:center; margin-bottom:2px;">
+            <span style="font-size:13px; font-weight:700; color:#fff; flex:1;">Chats</span>
+            <div style="background:var(--new-chat-btn-bg); color:var(--new-chat-btn-text); padding:3px 10px; border-radius:4px; font-size:11px; font-weight:600;">＋ New</div>
+          </div>
+          <div style="background:var(--sidebar-button-hover); border-radius:4px; padding:7px 10px; font-size:12px; color:#fff; font-weight:600;">Nebula - New Chat ← active</div>
+          <div style="background:var(--chat-item-bg); border-radius:4px; padding:7px 10px; font-size:12px; color:#aaa;">Nebula - New Chat ← default</div>
+          <div style="border-top:1px solid #333; margin-top:4px; padding-top:8px; display:flex; flex-direction:column; gap:4px;">
+            <div style="background:var(--sidebar-footer-btn-bg); border:1px solid var(--sidebar-footer-btn-border); border-radius:4px; padding:5px 10px; font-size:11px; color:#ccc; text-align:center;">📁 Projects</div>
+            <div style="background:var(--sidebar-footer-btn-bg); border:1px solid var(--sidebar-footer-btn-border); border-radius:4px; padding:5px 10px; font-size:11px; color:#ccc; text-align:center;">🧠 Memory</div>
+          </div>
+          <div style="background:var(--char-dropdown-bg); border:1px solid var(--char-dropdown-border,#333); border-radius:4px; padding:5px 8px; font-size:11px; color:#ccc; margin-top:2px;">Nebula ▾ &nbsp;&nbsp;← Character dropdown</div>
+        </div>`;
+    }
+  },
+
+  {
+    title: 'Messages',
+    vars: [
+      { key: '--user-msg-bg',    label: 'Your Message BG' },
+      { key: '--user-msg-text',  label: 'Your Message Text' },
+      { key: '--model-msg-bg',   label: 'AI Reply BG' },
+      { key: '--model-msg-text', label: 'AI Reply Text' },
+      { key: '--msg-border',     label: 'Message Border' },
+    ],
+    preview: (el) => {
+      el.innerHTML = `
+        <div style="display:flex; flex-direction:column; gap:8px; background:#0a0d10; border-radius:6px; padding:12px; border:1px solid #222;">
+          <div style="display:flex; gap:8px; align-items:flex-start;">
+            <div style="width:36px; height:44px; border-radius:5px; background:#223; flex-shrink:0; border:1px solid rgba(100,200,255,0.2); display:flex; align-items:center; justify-content:center; font-size:9px; color:rgba(100,200,255,0.5); text-align:center; line-height:1.2;">user<br>img</div>
+            <div style="background:var(--user-msg-bg); color:var(--user-msg-text); border:1px solid var(--msg-border); border-radius:6px; padding:10px 14px; font-size:13px; flex:1;">
+              <strong>User:</strong><br>Hey, what's the capital of France?
+            </div>
+          </div>
+          <div style="display:flex; gap:8px; align-items:flex-start;">
+            <div style="width:36px; height:44px; border-radius:5px; background:#322; flex-shrink:0; border:1px solid rgba(255,100,200,0.2); display:flex; align-items:center; justify-content:center; font-size:9px; color:rgba(255,100,200,0.5); text-align:center; line-height:1.2;">char<br>img</div>
+            <div style="background:var(--model-msg-bg); color:var(--model-msg-text); border:1px solid var(--msg-border); border-radius:6px; padding:10px 14px; font-size:13px; flex:1;">
+              <strong>Assistant:</strong><br>Paris is the capital of France.
+            </div>
+          </div>
+        </div>`;
+    }
+  },
+
+  {
+    title: 'Input Box',
+    vars: [
+      { key: '--input-bg',           label: 'Input Box BG' },
+      { key: '--input-border',       label: 'Input Box Border' },
+      { key: '--field-bg',           label: 'Form Field BG' },
+      { key: '--field-border',       label: 'Form Field Border' },
+      { key: '--field-border-focus', label: 'Form Field Focus Border' },
+    ],
+    preview: (el) => {
+      el.innerHTML = `
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <div style="background:var(--input-bg); border:1px solid var(--input-border); border-radius:8px; padding:10px 14px; font-size:13px; color:#666; min-height:42px;">
+            Type a message... &nbsp;<span style="opacity:0.4">← Chat input box</span>
+          </div>
+          <div style="background:var(--container-bg); border-radius:6px; padding:10px; display:flex; flex-direction:column; gap:6px;">
+            <div style="font-size:10px; color:#555; text-transform:uppercase; letter-spacing:0.6px; margin-bottom:2px;">Config page form fields</div>
+            <input type="text" disabled placeholder="e.g. Character name..." style="background:var(--field-bg); border:1px solid var(--field-border); border-radius:4px; padding:6px 10px; font-size:13px; color:#666; width:100%; box-sizing:border-box;">
+            <textarea disabled placeholder="Short bio or purpose..." style="background:var(--field-bg); border:1px solid var(--field-border); border-radius:4px; padding:6px 10px; font-size:13px; color:#666; width:100%; box-sizing:border-box; resize:none; height:52px;"></textarea>
+            <div style="font-size:10px; color:#555; margin-top:2px;">Focus border: <span style="color:var(--field-border-focus);">■</span> var(--field-border-focus)</div>
+          </div>
+        </div>`;
+    }
+  },
+
+  {
+    title: 'Modals & Popups',
+    vars: [
+      { key: '--modal-bg',             label: 'Modal Background' },
+      { key: '--modal-bg-hover',       label: 'Modal Row Hover' },
+      { key: '--modal-border',         label: 'Modal Border' },
+      { key: '--modal-text',           label: 'Modal Title Text' },
+      { key: '--memory-tab-active-bg', label: 'Active Tab (Character/Global)' },
+      { key: '--memory-entry-bg',      label: 'Memory Card BG' },
+      { key: '--memory-entry-text',    label: 'Memory Card Text' },
+    ],
+    preview: (el) => {
+      el.innerHTML = `
+        <div style="background:var(--modal-bg); border:1px solid var(--modal-border); border-radius:8px; overflow:hidden; max-width:420px;">
+          <div style="padding:14px 18px; border-bottom:1px solid var(--modal-border); display:flex; justify-content:space-between;">
+            <span style="font-size:15px; font-weight:700; color:var(--modal-text);">Character Memory</span>
+            <span style="color:#666;">✕</span>
+          </div>
+          <div style="padding:10px 14px; display:flex; gap:8px; border-bottom:1px solid var(--modal-border);">
+            <div style="flex:1; padding:6px; border-radius:4px; text-align:center; font-size:12px; background:var(--memory-tab-active-bg); color:#fff; font-weight:600;">👤 Character</div>
+            <div style="flex:1; padding:6px; border-radius:4px; text-align:center; font-size:12px; background:var(--modal-bg-hover); color:#aaa; border:1px solid var(--modal-border);">🌐 Global</div>
+          </div>
+          <div style="padding:10px 14px; display:flex; flex-direction:column; gap:6px;">
+            <div style="background:var(--memory-entry-bg); border:1px solid var(--modal-border); border-radius:5px; padding:8px 12px;">
+              <div style="font-weight:600; font-size:13px; color:var(--memory-entry-text);">Portal 2</div>
+              <div style="font-size:10px; color:#7a9abf; margin:2px 0 4px;">Portal 2, game, walkthrough</div>
+              <div style="font-size:12px; color:var(--memory-entry-text); opacity:0.85;">We discussed Portal 2, walking through the old Aperture...</div>
+            </div>
+            <div style="background:var(--modal-bg-hover); border:1px solid var(--modal-border); border-radius:5px; padding:8px 12px;">
+              <div style="font-weight:600; font-size:13px; color:var(--memory-entry-text);">GPT-4o Retirement ← hover state</div>
+            </div>
+          </div>
+        </div>`;
+    }
+  },
+
+  {
+    title: 'Project List',
+    vars: [
+      { key: '--project-header-bg',  label: 'Header BG' },
+      { key: '--project-item-bg',    label: 'Project Row BG' },
+      { key: '--project-item-hover', label: 'Project Row Hover' },
+      { key: '--icon-button-bg',     label: 'Icon Btn BG' },
+      { key: '--icon-button-hover',  label: 'Icon Btn Hover' },
+    ],
+    preview: (el) => {
+      el.innerHTML = `
+        <div style="background:var(--modal-bg); border:1px solid var(--modal-border); border-radius:8px; overflow:hidden; max-width:420px;">
+          <div style="padding:14px 18px; border-bottom:1px solid var(--modal-border);">
+            <span style="font-size:15px; font-weight:700; color:var(--modal-text);">Project Management</span>
+          </div>
+          <div style="padding:10px 14px; display:flex; flex-direction:column; gap:6px;">
+            <div style="background:var(--project-header-bg); border-radius:4px; padding:5px 10px; font-size:10px; color:#888; text-transform:uppercase; letter-spacing:0.6px;">Your Projects</div>
+            <div style="background:var(--project-item-bg); border:1px solid var(--project-item-border); border-radius:5px; padding:8px 12px; display:flex; justify-content:space-between; align-items:center;">
+              <span style="font-size:13px; color:#ddd;">Admin and Shard Creation</span>
+              <div style="display:flex; gap:4px;">
+                <div style="width:22px; height:22px; background:var(--icon-button-bg); border-radius:3px;"></div>
+                <div style="width:22px; height:22px; background:var(--icon-button-bg); border-radius:3px;"></div>
+              </div>
+            </div>
+            <div style="background:var(--project-item-hover); border:1px solid var(--project-item-border); border-radius:5px; padding:8px 12px; display:flex; justify-content:space-between; align-items:center;">
+              <span style="font-size:13px; color:#ddd;">Conspiracies ← hover state</span>
+              <div style="display:flex; gap:4px;">
+                <div style="width:22px; height:22px; background:var(--icon-button-hover); border-radius:3px;"></div>
+                <div style="width:22px; height:22px; background:var(--icon-button-hover); border-radius:3px;"></div>
+              </div>
+            </div>
+          </div>
+        </div>`;
+    }
+  },
+
+  {
+    title: 'Modal Buttons',
+    vars: [
+      { key: '--button-border-light', label: 'Save Btn Border' },
+      { key: '--button-border-dark',  label: 'Cancel Btn Border' },
+    ],
+    preview: (el) => {
+      el.innerHTML = `
+        <div style="display:flex; gap:10px; padding:10px 0;">
+          <div style="padding:8px 20px; border-radius:6px; background:#161a1f; border:1px solid var(--button-border-light); color:#eee; font-size:13px; font-weight:600;">Save</div>
+          <div style="padding:8px 20px; border-radius:6px; background:#161a1f; border:1px solid var(--button-border-dark); color:#aaa; font-size:13px; font-weight:600;">Cancel</div>
+        </div>`;
+    }
+  },
+
+];
+
+function renderThemeModal(data) {
+  const body = document.getElementById('theme-modal-body');
+  if (!body) return;
+  body.innerHTML = '';
+
+  for (const section of THEME_SECTIONS) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex; gap:28px; align-items:flex-start;';
+
+    // Left: pickers
+    const left = document.createElement('div');
+    left.style.cssText = 'flex:0 0 260px; min-width:0;';
+
+    const title = document.createElement('div');
+    title.style.cssText = 'font-size:11px; text-transform:uppercase; letter-spacing:1px; color:#666; margin-bottom:10px; padding-bottom:5px; border-bottom:1px solid #2a2a2a;';
+    title.textContent = section.title;
+    left.appendChild(title);
+
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:flex; flex-direction:column; gap:7px;';
+
+    const seen = new Set();
+    for (const v of section.vars) {
+      if (seen.has(v.key)) continue;
+      seen.add(v.key);
+      const raw = data[v.key] || '#000000';
+      const hex = toHex(raw);
+
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex; align-items:center; gap:9px;';
+
+      const swatch = document.createElement('div');
+      swatch.className = 'cp-swatch-btn';
+      swatch.dataset.var = v.key;
+      swatch.dataset.hex = hex;
+      swatch.style.cssText = `width:26px; height:26px; border-radius:4px; border:1px solid #555; background:${hex}; cursor:pointer; flex-shrink:0;`;
+      swatch.onclick = function() { openColorPicker(v.key, this.dataset.hex, this); };
+
+      const label = document.createElement('label');
+      label.style.cssText = 'font-size:12px; color:#ccc; margin:0;';
+      label.textContent = v.label;
+
+      row.appendChild(swatch);
+      row.appendChild(label);
+      grid.appendChild(row);
+    }
+    left.appendChild(grid);
+
+    // Right: preview panel
+    const right = document.createElement('div');
+    right.style.cssText = 'flex:1; min-width:0;';
+    const previewLabel = document.createElement('div');
+    previewLabel.style.cssText = 'font-size:10px; color:#555; text-transform:uppercase; letter-spacing:0.6px; margin-bottom:8px;';
+    previewLabel.textContent = 'Preview';
+    right.appendChild(previewLabel);
+    const previewWrap = document.createElement('div');
+    right.appendChild(previewWrap);
+    section.preview(previewWrap);
+
+    wrap.appendChild(left);
+    wrap.appendChild(right);
+    body.appendChild(wrap);
+
+    // Divider
+    const hr = document.createElement('div');
+    hr.style.cssText = 'border-top:1px solid #232323;';
+    body.appendChild(hr);
+  }
+}
+
+function previewThemeVar(varName, value) {
+  _applyThemeVar(varName, value);
+  // Re-render preview panels live
+  const body = document.getElementById('theme-modal-body');
+  if (!body || body.children.length === 0) return;
+  let sectionIdx = 0;
+  for (let i = 0; i < body.children.length; i++) {
+    const child = body.children[i];
+    if (child.style.display === 'flex') {
+      if (sectionIdx < THEME_SECTIONS.length) {
+        const previewWrap = child.children[1]?.children[1];
+        if (previewWrap) THEME_SECTIONS[sectionIdx].preview(previewWrap);
+      }
+      sectionIdx++;
+    }
+  }
+}
+
+  // ── Brave Search Key (config page) ──────────────────────────────
+  async function loadBraveKey() {
+    try {
+      const res = await fetch('/get_brave_api_key');
+      const data = await res.json();
+      const input = document.getElementById('brave-api-key');
+      if (input) {
+        input.value = data.brave_api_key || '';
+        const status = document.getElementById('brave-key-status');
+        if (data.brave_api_key) {
+          status.textContent = '✅ Brave Search active';
+          status.style.color = '#6f6';
+        } else {
+          status.textContent = 'No key — using DDG fallback';
+          status.style.color = '#888';
+        }
+      }
+    } catch(e) { console.warn('Could not load Brave key:', e); }
+  }
+
+  async function saveBraveKey() {
+    const key = document.getElementById('brave-api-key').value.trim();
+    try {
+      await fetch('/save_brave_api_key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brave_api_key: key })
+      });
+      const status = document.getElementById('brave-key-status');
+      if (key) {
+        status.textContent = '✅ Brave Search active';
+        status.style.color = '#6f6';
+      } else {
+        status.textContent = 'No key — using DDG fallback';
+        status.style.color = '#888';
+      }
+    } catch(e) { console.error('Failed to save Brave key:', e); }
+  }
+
+  async function clearBraveKey() {
+    document.getElementById('brave-api-key').value = '';
+    await saveBraveKey();
+  }
+
+  // Load brave key on page load
+  loadBraveKey();
 </script>
 </body>
 </html>

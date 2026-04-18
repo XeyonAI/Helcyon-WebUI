@@ -32,6 +32,40 @@ function saveAuthorNote() {
 }
 
 
+// ============================================================
+// CURRENT SITUATION MODAL
+// ============================================================
+async function openSituationModal() {
+  try {
+    const res = await fetch('/get_current_situation');
+    const data = await res.json();
+    document.getElementById('situation-textarea').value = data.current_situation || '';
+  } catch (e) {
+    console.warn('Could not load current situation:', e);
+  }
+  document.getElementById('situation-modal').style.display = 'flex';
+}
+
+function closeSituationModal() {
+  document.getElementById('situation-modal').style.display = 'none';
+}
+
+async function saveSituationModal() {
+  const text = document.getElementById('situation-textarea').value.trim();
+  try {
+    await fetch('/save_current_situation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_situation: text })
+    });
+    console.log('✅ Current situation saved');
+  } catch (e) {
+    console.error('Failed to save current situation:', e);
+  }
+  closeSituationModal();
+}
+
+
 // ==================================================
 // CHECK PRO LICENSE
 // ==================================================
@@ -54,7 +88,8 @@ function openMemoryModal() {
     const modal = document.getElementById('memory-modal');
     if (modal) {
         modal.style.display = 'block';
-        loadCharacterMemory();
+        window._memoryTab = 'personal';
+        switchMemoryTab('personal');
     }
 }
 
@@ -171,7 +206,8 @@ async function displayOpeningLineInChat() {
     // Create assistant message object
     const openingMessage = {
       role: 'assistant',
-      content: randomLine
+      content: randomLine,
+      is_opening_line: true  // tells backend this isn't a real reply — don't treat as continuation
     };
     
     // Add to chat history
@@ -435,6 +471,14 @@ function fixContractionsForTTS(text) {
 function bufferTextForTTS(chunk) {
   if (!ttsEnabled || !chunk) return;
 
+  // Strip HTML, URLs and source lines before anything else
+  chunk = chunk.replace(/<[^>]+>/g, ' ')                    // HTML tags (e.g. <a href=...>)
+               .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')  // markdown links → text only
+               .replace(/\n*[🔗\*]*\s*Source:[^\n]*/g, '') // Source: lines
+               .replace(/https?:\/\/\S+/g, '')            // bare https/http URLs
+               .replace(/www\.\S+/g, '')                  // bare www URLs
+               .replace(/[🔗]/g, '');                       // link emoji
+
   // Reset streaming flag at start of each new response
   if (ttsSentenceBuffer === '' && ttsQueue.length === 0 && !ttsProcessing) {
     ttsStreamingComplete = false;
@@ -443,15 +487,16 @@ function bufferTextForTTS(chunk) {
   // Fix contractions FIRST before apostrophes get stripped
   chunk = fixContractionsForTTS(chunk);
 
-  // Normalise dashes to commas, strip ellipsis entirely
-  chunk = chunk.replace(/\.{3}/g, ' . . . ').replace(/\u2026/g, ' . . . ').replace(/\.{2}/g, ' . . ');
+  // Normalise dashes, strip ellipsis to single pause, no stacking dots
+  chunk = chunk.replace(/\.{3}/g, '. ').replace(/\u2026/g, '. ').replace(/\.{2}/g, '. ');
   chunk = chunk.replace(/:/g, '. ');
-  chunk = chunk.replace(/\s*\(\s*/g, ', ').replace(/\s*\)\s*/g, ', ');
+  chunk = chunk.replace(/\s*\(\s*/g, '. ').replace(/\s*\)\s*/g, '. ');
+  chunk = chunk.replace(/^>\s*/gm, '').replace(/\s*>\s*/g, '. ');  // strip > list markers
   // Replace specific emojis with spoken words before catch-all strips them
   chunk = chunk.replace(/\u{1F4AF}/gu, 'one hundred percent');
   // Replace remaining emojis with full stop tight to preceding word — \s* eats the space
-  chunk = chunk.replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '$1.');
-  chunk = chunk.replace(/(?:[\u{1F000}-\u{1FFFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '');
+  chunk = chunk.replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '$1.');
+  chunk = chunk.replace(/(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '');
 
   ttsSentenceBuffer += chunk;
 
@@ -479,30 +524,97 @@ function bufferTextForTTS(chunk) {
 }
 
 
+// Max characters per TTS chunk — engine-aware
+// F5 sounds better with longer chunks (more pacing context)
+// Chatterbox needs short chunks to keep latency low
+let TTS_MAX_CHUNK_LENGTH = 300; // default to F5-friendly until engine is known
+
+async function initTTSEngine() {
+  try {
+    const res = await fetch('/api/tts/engine');
+    const data = await res.json();
+    const engine = data.engine || 'f5';
+    TTS_MAX_CHUNK_LENGTH = (engine === 'chatterbox') ? 150 : 300;
+    console.log(`🔊 TTS engine: ${engine} — chunk length: ${TTS_MAX_CHUNK_LENGTH}`);
+  } catch (e) {
+    console.warn('Could not fetch TTS engine, using default chunk length');
+  }
+}
+
 function splitAndQueue(text) {
+  // Strip links and source lines before any TTS processing
+  text = text.replace(/<[^>]+>/g, ' ')                          // HTML tags
+             .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')     // markdown links → text
+             .replace(/\n*[\u{1F517}\*]*\s*Source:[^\n]*/gu, '') // Source: lines
+             .replace(/https?:\/\/\S+/g, '')                 // bare URLs
+             .replace(/[\u{1F517}]/gu, '');                    // link emoji
   const cleaned = text.trim()
     .replace(/\u{1F4AF}/gu, 'one hundred percent')
-    .replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '$1.')
-    .replace(/(?:[\u{1F000}-\u{1FFFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '')
+    .replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '$1.')
+    .replace(/(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '')
     .replace(/\*\*/g, '').replace(/\*/g, '').replace(/_/g, '')
-    .replace(/^[-*•]\s+/, '').replace(/^\d+\.\s+/, '')
+    .replace(/^[-*•>]\s+/, '').replace(/^\d+\.\s+/, '').replace(/\s*>\s*/g, '. ')
     .replace(/:/g, '. ')
-    .replace(/\s*\(\s*/g, ', ').replace(/\s*\)\s*/g, ', ')
+    .replace(/\s*\(\s*/g, '. ').replace(/\s*\)\s*/g, '. ')
     .trim();
 
   if (cleaned.length === 0) return;
 
-  // Ensure every sentence ends with punctuation — full stop unless it's already ? or !
+  // Ensure every sentence ends with punctuation
   const withPunct = /[.!?]$/.test(cleaned) ? cleaned : cleaned + '.';
 
-  // Send the whole sentence as one chunk — no word-boundary splitting
-  if (withPunct.length > 2) {
-    ttsQueue.push(withPunct);
-    console.log(`📝 Queued: "${withPunct.substring(0, 50)}"`);
-    if (!ttsProcessing && ttsQueue.length >= TTS_START_THRESHOLD) {
-      console.log('🎬 Threshold reached, starting playback');
-      processQueue();
+  // If chunk is within limit, queue it directly
+  if (withPunct.length <= TTS_MAX_CHUNK_LENGTH) {
+    if (withPunct.length > 2) {
+      ttsQueue.push(withPunct);
+      console.log(`📝 Queued: "${withPunct.substring(0, 50)}"`);
+      if (!ttsProcessing && ttsQueue.length >= TTS_START_THRESHOLD) {
+        console.log('🎬 Threshold reached, starting playback');
+        processQueue();
+      }
     }
+    return;
+  }
+
+  // Chunk is too long — split at commas/dashes first, then word boundaries
+  const subChunks = [];
+  let remaining = withPunct;
+
+  while (remaining.length > TTS_MAX_CHUNK_LENGTH) {
+    // Try to split at last comma or dash before the limit
+    let splitAt = -1;
+    const searchStr = remaining.substring(0, TTS_MAX_CHUNK_LENGTH);
+    const commaIdx = searchStr.lastIndexOf(',');
+    const dashIdx  = searchStr.lastIndexOf(' — ');
+    const spaceIdx = searchStr.lastIndexOf(' ');
+
+    if (commaIdx > TTS_MAX_CHUNK_LENGTH * 0.4) {
+      splitAt = commaIdx + 1; // include the comma
+    } else if (dashIdx > TTS_MAX_CHUNK_LENGTH * 0.4) {
+      splitAt = dashIdx + 3;
+    } else if (spaceIdx > TTS_MAX_CHUNK_LENGTH * 0.4) {
+      splitAt = spaceIdx;
+    } else {
+      splitAt = TTS_MAX_CHUNK_LENGTH; // hard cut as last resort
+    }
+
+    subChunks.push(remaining.substring(0, splitAt).trim());
+    remaining = remaining.substring(splitAt).trim();
+  }
+
+  if (remaining.length > 2) subChunks.push(remaining);
+
+  // Queue each sub-chunk
+  for (const sub of subChunks) {
+    if (sub.length <= 2) continue;
+    const subWithPunct = /[.!?]$/.test(sub) ? sub : sub + '.';
+    ttsQueue.push(subWithPunct);
+    console.log(`📝 Queued (sub): "${subWithPunct.substring(0, 50)}"`);
+  }
+
+  if (!ttsProcessing && ttsQueue.length >= TTS_START_THRESHOLD) {
+    console.log('🎬 Threshold reached, starting playback');
+    processQueue();
   }
 }
 
@@ -513,8 +625,8 @@ function flushTTSBuffer() {
 
   // Flush anything left in the buffer (no newline at end, no punctuation)
   const remaining = ttsSentenceBuffer.trim()
-    .replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '$1.')
-    .replace(/(?:[\u{1F000}-\u{1FFFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '')
+    .replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '$1.')
+    .replace(/(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '')
     .replace(/\*\*/g, '').replace(/\*/g, '').replace(/_/g, '')
     .trim();
 
@@ -524,12 +636,18 @@ function flushTTSBuffer() {
     console.log(`📝 Flushed: "${withPunct.substring(0, 50)}"`);
   }
   ttsSentenceBuffer = '';
-  ttsStreamingComplete = true;
 
-  if (!ttsProcessing && ttsQueue.length > 0) {
-    console.log('🎬 Starting playback after flush');
-    processQueue();
-  }
+  // Delay setting streamingComplete so the queue processor's poll loop
+  // has time to pick up any last-queued sentences before seeing "done"
+  // Fixes last sentence cutoff when it arrives just before stream end
+  setTimeout(() => {
+    ttsStreamingComplete = true;
+    console.log('✅ TTS streaming marked complete');
+    if (!ttsProcessing && ttsQueue.length > 0) {
+      console.log('🎬 Starting playback after flush');
+      processQueue();
+    }
+  }, 150);
 }
 
 
@@ -565,10 +683,10 @@ async function processQueue() {
     return;
   }
 
-  // Pre-fetch buffer: always keep 2-3 sentences generating ahead
+  // Pre-fetch buffer: always keep 3 sentences generating ahead
   const prefetchBuffer = [];
-  
-  // Start fetching first 5 sentences immediately (aggressive buffering)
+
+  // Start fetching first 2 sentences immediately
   const initialFetches = Math.min(2, ttsQueue.length);
   for (let i = 0; i < initialFetches; i++) {
     prefetchBuffer.push(fetchAudio(ttsQueue.shift()));
@@ -579,9 +697,9 @@ async function processQueue() {
 
     // Wait for the next audio in the buffer
     const audioUrl = prefetchBuffer.length > 0 ? await prefetchBuffer.shift() : null;
-    
+
     // Immediately start fetching more to keep buffer full
-    while (prefetchBuffer.length < 2 && ttsQueue.length > 0) {
+    while (prefetchBuffer.length < 3 && ttsQueue.length > 0) {
       prefetchBuffer.push(fetchAudio(ttsQueue.shift()));
     }
 
@@ -593,7 +711,6 @@ async function processQueue() {
         isPlayingAudio = true;
 
         // Poll during playback so next sentences start fetching immediately
-        // rather than waiting until current sentence finishes
         const prefetchInterval = setInterval(() => {
           while (prefetchBuffer.length < 3 && ttsQueue.length > 0) {
             prefetchBuffer.push(fetchAudio(ttsQueue.shift()));
@@ -607,7 +724,6 @@ async function processQueue() {
           currentAudio = null;
           resolve();
         };
-        
         currentAudio.onerror = () => {
           clearInterval(prefetchInterval);
           URL.revokeObjectURL(audioUrl);
@@ -615,7 +731,6 @@ async function processQueue() {
           currentAudio = null;
           resolve();
         };
-        
         currentAudio.play().catch(() => {
           clearInterval(prefetchInterval);
           isPlayingAudio = false;
@@ -623,7 +738,7 @@ async function processQueue() {
           resolve();
         });
       });
-      
+
       // Keep buffer topped up after each sentence plays
       while (prefetchBuffer.length < 3 && ttsQueue.length > 0) {
         prefetchBuffer.push(fetchAudio(ttsQueue.shift()));
@@ -633,13 +748,12 @@ async function processQueue() {
     // Check if we're done
     if (prefetchBuffer.length === 0 && ttsQueue.length === 0) {
       if (ttsStreamingComplete) {
-        break;  // Completely done
+        break;
       } else {
         // Wait for more sentences from streaming
         await new Promise(r => setTimeout(r, 25));
         if (ttsQueue.length > 0) {
-          // More sentences arrived - fetch them
-          while (prefetchBuffer.length < 2 && ttsQueue.length > 0) {
+          while (prefetchBuffer.length < 3 && ttsQueue.length > 0) {
             prefetchBuffer.push(fetchAudio(ttsQueue.shift()));
           }
         } else if (ttsStreamingComplete) {
@@ -670,6 +784,12 @@ function setTTSVoice(voiceName) {
   if (charName) {
     localStorage.setItem(`tts-voice-${charName}`, voiceName);
     console.log('🔊 TTS voice saved for', charName, ':', voiceName);
+    // Save to server so mobile picks it up automatically
+    fetch(`/character_voice/${encodeURIComponent(charName)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ voice: voiceName })
+    }).catch(e => console.warn('Server voice save failed:', e));
   }
   // Warm up the newly selected voice so first response is fast
   warmupTTSVoice(voiceName);
@@ -728,6 +848,7 @@ window.addEventListener('DOMContentLoaded', () => {
   if (savedVoice) ttsVoice = savedVoice;
 
   loadTTSVoices();
+  initTTSEngine();
 
   // Warmup with current voice so first response is fast
   if (ttsVoice) warmupTTSVoice(ttsVoice);
@@ -949,13 +1070,13 @@ function replayLastAudio() {
     replayTimeout = null;
     const text = lastAssistant.content
       .replace(/\u{1F4AF}/gu, 'one hundred percent')
-      .replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '$1.')
-      .replace(/(?:[\u{1F000}-\u{1FFFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '')
+      .replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '$1.')
+      .replace(/(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '')
       .replace(/\*\*/g, '').replace(/\*/g, '').replace(/_/g, '')
       .replace(/\s*[\u2013\u2014]\s*/g, '. ').replace(/\s*--\s*/g, '. ')
-      .replace(/\.{3}/g, ' . . . ').replace(/\u2026/g, ' . . . ')
+      .replace(/\.{3}/g, '. ').replace(/\u2026/g, '. ')
       .replace(/:/g, '. ')
-      .replace(/\s*\(\s*/g, ', ').replace(/\s*\)\s*/g, ', ')
+      .replace(/\s*\(\s*/g, '. ').replace(/\s*\)\s*/g, '. ')
       ;
 
     const lines = text.split('\n');

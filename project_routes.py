@@ -70,7 +70,9 @@ def list_projects():
                 projects.append({
                     "name": item,
                     "display_name": config.get("name", item),
-                    "instructions": config.get("instructions", "")
+                    "instructions": config.get("instructions", ""),
+                    "rp_mode": config.get("rp_mode", False),
+                    "rp_opener": config.get("rp_opener", "")
                 })
         
         return jsonify({"projects": projects, "active": get_active_project()})
@@ -114,6 +116,8 @@ def create_project():
         config = {
             "name": name,
             "instructions": instructions,
+            "rp_mode": data.get("rp_mode", False),
+            "rp_opener": data.get("rp_opener", "").strip(),
             "created": datetime.now().isoformat()
         }
         
@@ -185,6 +189,10 @@ def update_project(n):
             config["instructions"] = data["instructions"]
         if "display_name" in data:
             config["name"] = data["display_name"]
+        if "rp_mode" in data:
+            config["rp_mode"] = data["rp_mode"]
+        if "rp_opener" in data:
+            config["rp_opener"] = data["rp_opener"].strip()
         
         # Save updated config
         with open(config_path, "w", encoding="utf-8") as f:

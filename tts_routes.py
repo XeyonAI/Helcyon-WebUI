@@ -1,5 +1,5 @@
 """
-TTS Routes - Text-to-Speech functionality supporting F5-TTS and XTTS engines
+TTS Routes - Text-to-Speech functionality supporting F5-TTS, XTTS, and Chatterbox engines
 """
 
 from flask import Blueprint, request, jsonify, send_file
@@ -13,8 +13,9 @@ import os
 tts_bp = Blueprint('tts', __name__)
 
 # Server URLs
-F5_SERVER_URL = 'http://localhost:8003'
-XTTS_SERVER_URL = 'http://localhost:8002'
+F5_SERVER_URL          = 'http://localhost:8003'
+XTTS_SERVER_URL        = 'http://localhost:8002'
+CHATTERBOX_SERVER_URL  = 'http://localhost:8004'
 DEFAULT_VOICE = 'Sol'
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.json')
 
@@ -40,7 +41,12 @@ def get_engine():
 
 def get_server_url():
     engine = get_engine()
-    return XTTS_SERVER_URL if engine == 'xtts' else F5_SERVER_URL
+    if engine == 'xtts':
+        return XTTS_SERVER_URL
+    elif engine == 'chatterbox':
+        return CHATTERBOX_SERVER_URL
+    else:
+        return F5_SERVER_URL
 
 
 # --------------------------------------------------
@@ -54,7 +60,7 @@ def get_tts_engine():
 def set_tts_engine():
     data = request.json
     engine = data.get('engine', 'f5')
-    if engine not in ('f5', 'xtts', 'none'):
+    if engine not in ('f5', 'xtts', 'chatterbox', 'none'):
         return jsonify({'error': 'Invalid engine'}), 400
     save_settings({'tts_engine': engine})
     logging.info(f"TTS engine set to: {engine}")
@@ -75,7 +81,10 @@ def generate_tts():
 
         data = request.json
         text = data.get('text', '')
-        voice = data.get('voice', DEFAULT_VOICE)
+        voice = data.get('voice') or DEFAULT_VOICE
+        # Guard against 'null' string or empty string from mobile/JS
+        if not voice or voice.lower() in ('null', 'none', 'undefined'):
+            voice = DEFAULT_VOICE
 
         if not text:
             return jsonify({'error': 'No text provided'}), 400
@@ -139,7 +148,8 @@ def get_voices():
 # --------------------------------------------------
 @tts_bp.route('/warmup', methods=['POST'])
 def warmup_tts():
-    """Fire a lightweight warmup request to heat the GPU before real requests."""
+    """Fire a lightweight warmup request to heat the GPU before real requests.
+    Uses a background thread so it returns instantly — never blocks the client."""
     try:
         engine = get_engine()
         if engine == 'none':
@@ -147,10 +157,18 @@ def warmup_tts():
         data = request.json or {}
         voice = data.get('voice', DEFAULT_VOICE)
         server_url = get_server_url()
-        requests.post(f'{server_url}/warmup', json={'voice': voice}, timeout=30)
+
+        # Fire warmup in background thread — return immediately to the client
+        import threading
+        def _warmup():
+            try:
+                requests.post(f'{server_url}/warmup', json={'voice': voice}, timeout=10)
+            except Exception:
+                pass  # Warmup is non-critical, silently ignore failures
+        threading.Thread(target=_warmup, daemon=True).start()
+
         return jsonify({'status': 'ok'})
     except Exception as e:
-        # Always return 200 — warmup is non-critical, never block the client
         logging.warning(f"Warmup skipped: {str(e)}")
         return jsonify({'status': 'skipped', 'reason': str(e)})
 
