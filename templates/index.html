@@ -616,6 +616,25 @@ function renderImagePreviews() {
   });
 }
 
+// sanitizeMarkdown: strip setext headings, HR lines, and spaced-char HR patterns.
+// Catches all patterns the fallback parser would render as <hr>.
+function sanitizeMarkdown(text) {
+  if (!text) return text;
+  // Setext headings: line of text followed by === or --- -> keep text, drop underline
+  text = text.replace(/^(.+)\n[=]{2,}[ \t]*$/gm, "$1");
+  text = text.replace(/^(.+)\n[-]{2,}[ \t]*$/gm, "$1");
+  // Solid HR lines: ---, ===, ___, *** (3+ identical chars)
+  text = text.replace(/^[-]{3,}[ \t]*$/gm, "");
+  text = text.replace(/^[=]{3,}[ \t]*$/gm, "");
+  text = text.replace(/^[_]{3,}[ \t]*$/gm, "");
+  text = text.replace(/^[*]{3,}[ \t]*$/gm, "");
+  // Spaced HR lines: - - -, * * *, _ _ _ (the fallback parser catches these too)
+  text = text.replace(/^(\s*[-*_]\s*){3,}$/gm, "");
+  // Box-drawing chars: ═══, ─── etc (model echoes these from injected search prompts)
+  text = text.replace(/^[\u2550\u2551\u2500\u2501\u2502\u2503]{3,}\s*$/gm, "");
+  return text;
+}
+
 // Ensure marked.js fallback is always available
 if (typeof marked === "undefined") {
   console.warn("⚠️ Marked.js not found — using custom parser.");
@@ -1242,7 +1261,7 @@ async function loadChatHistory() {
       
       const spanText = document.createElement('span');
       spanText.className = 'model-text';
-      let html = marked.parse(entry.model);
+      let html = marked.parse(sanitizeMarkdown(entry.model));
       html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
       spanText.innerHTML = html;
       
@@ -2031,7 +2050,7 @@ async function openChat(filename) {
           
           // Use Marked.js for consistent formatting
           if (typeof marked !== "undefined") {
-            let html = marked.parse(content);
+            let html = marked.parse(sanitizeMarkdown(content));
             html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
             userSpan.innerHTML = html;
           } else {
@@ -2091,7 +2110,7 @@ async function openChat(filename) {
 
           // Use Marked.js for consistent formatting (same as live streaming)
           if (typeof marked !== "undefined") {
-            let html = marked.parse(content);
+            let html = marked.parse(sanitizeMarkdown(content));
             html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
             modelSpan.innerHTML = html;
           } else {
@@ -2622,7 +2641,7 @@ async function openChat(filename) {
           .trim();
 
         // Parse the CLEANED message with proper markdown handling
-        let html = marked.parse(cleanedMessage);
+        let html = marked.parse(sanitizeMarkdown(cleanedMessage));
         html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
 
         streamEl.innerHTML = html;
@@ -3003,7 +3022,7 @@ async function openChat(filename) {
       // Stream raw chunks — same format as main parser
       let rawFull = continuePrefix;
       const userName = activeUserName || 'User';
-      streamEl.innerHTML = typeof marked !== 'undefined' ? marked.parse(rawFull) : rawFull;
+      streamEl.innerHTML = typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(rawFull)) : rawFull;
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder('utf-8');
@@ -3027,7 +3046,7 @@ async function openChat(filename) {
           .replace(/^[ \t]+/gm, '')
           .trim();
 
-        streamEl.innerHTML = typeof marked !== 'undefined' ? marked.parse(cleaned) : cleaned;
+        streamEl.innerHTML = typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(cleaned)) : cleaned;
         chat.scrollTop = chat.scrollHeight;
       }
       decoder.decode();
@@ -3045,7 +3064,7 @@ async function openChat(filename) {
         .replace(/^[ \t]+/gm, '')
         .trim();
 
-      streamEl.innerHTML = typeof marked !== 'undefined' ? marked.parse(finalText) : finalText;
+      streamEl.innerHTML = typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(finalText)) : finalText;
       window.loadedChat.push({ role: 'assistant', content: finalText, speaker: currentCharacter?.name || charName, timestamp: new Date().toISOString() });
       console.log('\u2705 Continue: complete');
       await autoSaveCurrentChat();
@@ -3392,6 +3411,7 @@ async function stopGeneration() {
   }
 
   // ==================================================
+  // ==================================================
   // UPGRADE MODAL (Pro features)
   // ==================================================
   function showUpgradeModal(feature) {
@@ -3438,6 +3458,7 @@ async function stopGeneration() {
   });
 
   // ==================================================
+  // DELETE LAST MESSAGE  // ==================================================
   // DELETE LAST MESSAGE
   // ==================================================
   async function deleteLastMessages(count = 1) {

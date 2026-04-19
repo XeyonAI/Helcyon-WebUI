@@ -484,8 +484,10 @@ import requests, sys
 def strip_chatml_leakage(text):
     """Remove any leaked or partial ChatML stop tokens from generated text."""
     import re
+    # Full tokens
     text = re.sub(r"<\|im_end\|>", "", text)
     text = re.sub(r"<\|im_start\|>\w*", "", text)
+    # Partial tokens at end of string
     text = re.sub(r"<\|im_end?$", "", text)
     text = re.sub(r"<\|im_en$", "", text)
     text = re.sub(r"<\|im_e$", "", text)
@@ -493,6 +495,9 @@ def strip_chatml_leakage(text):
     text = re.sub(r"<\|im$", "", text)
     text = re.sub(r"<\|i$", "", text)
     text = re.sub(r"<\|$", "", text)
+    # Partial tokens mid-string (e.g. scraped page content containing ChatML)
+    text = re.sub(r"<\|im_end[|]?", "", text)
+    text = re.sub(r"<\|im_start[|]?\w*", "", text)
     return text
 
 
@@ -1263,7 +1268,7 @@ def chat():
         # Build the system_text (WITHOUT example_dialogue yet)
         # Build the system_text (WITHOUT example_dialogue yet)
         system_text = (
-            f"{system_prompt}\n\n{project_instructions}{project_documents}{user_context}{char_context}\n\n{instruction}\n\n{tone_primer}"
+            f"{system_prompt}\n\n{char_context}{user_context}\n\n{instruction}\n\n{tone_primer}{project_instructions}{project_documents}"
         )
 
         # 📊 LOG SYSTEM MESSAGE SIZE
@@ -1777,7 +1782,7 @@ def chat():
                 # — previous turn's augmented message may be in conversation_history
                 # and would contain search trigger phrases from the results block itself
                 _user_msg = _re.sub(
-                    u'\u2550+\nWEB SEARCH RESULTS.*?\u2550+',
+                    r'\[WEB SEARCH RESULTS.*?\[END WEB SEARCH RESULTS\]',
                     '', user_input, flags=_re.DOTALL
                 ).strip()
                 # Also strip the IMPORTANT instruction block if present
@@ -1828,7 +1833,10 @@ def chat():
                             "<|im_start|>system\n"
                             "Extract the single best web search query from the user's message. "
                             "Return ONLY the search query — no explanation, no punctuation, no quotes. "
-                            "Maximum 8 words. Focus on the specific topic or name being asked about.\n"
+                            "Maximum 8 words. Focus on the TOPIC being asked about, not the meta-request. "
+                            "Examples: 'do a search on Consumer Law refund period' → 'Consumer Law refund period'; "
+                            "'look up how long a tenancy notice has to be' → 'tenancy notice period UK'; "
+                            "'search for whether eight weeks notice is legal' → 'eight weeks notice legal UK'.\n"
                             "<|im_end|>\n"
                             f"<|im_start|>user\n{_user_msg[:400]}\n<|im_end|>\n"
                             "<|im_start|>assistant\n"
@@ -1910,16 +1918,16 @@ def chat():
                     )
                     augmented_user_msg = (
                         f"{user_input.strip()}\n\n"
-                        f"════════════════════════════════════════\n"
-                        f"WEB SEARCH RESULTS FOR: {query}\n"
-                        f"════════════════════════════════════════\n"
+                        f"[WEB SEARCH RESULTS FOR: {query}]\n"
                         f"{results_block}\n"
-                        f"════════════════════════════════════════\n"
+                        f"[END WEB SEARCH RESULTS]\n"
                         f"IMPORTANT: Your response MUST be based on the search results above ONLY. "
                         f"Do NOT use your training data or prior knowledge about this topic — "
                         f"the search results are the ground truth. "
                         f"If the results say something that contradicts what you think you know, "
-                        f"trust the results. Summarise what the results say in your own words. "
+                        f"trust the results. Respond naturally in your own words. "
+                        f"Do NOT quote, repeat, echo, or reference the structure of this results block — "
+                        f"consume it silently and respond as if you just know this information. "
                         f"Do not include a source link in your response."
                     )
                 else:
@@ -1950,7 +1958,7 @@ def chat():
                         content = m.get("content", "")
                         if isinstance(content, str) and "WEB SEARCH RESULTS" in content:
                             # Strip everything from the search block onwards, keep original user text only
-                            clean = _re.split(r'\n{0,2}[═]+\nWEB SEARCH RESULTS', content)[0].strip()
+                            clean = _re.split(r'\[WEB SEARCH RESULTS', content)[0].strip()
                             search_messages[i] = {"role": "user", "content": clean}
 
                 # Replace the last user turn with the augmented version
@@ -1969,6 +1977,16 @@ def chat():
                     else:
                         content = content.strip()
                     _search_prompt_parts.append(f"<|im_start|>{role}\n{content}\n<|im_end|>")
+                # Inject a final system message right before assistant tag
+                # to ground the model firmly in the search results and prevent
+                # it from echoing system prompt fragments or search block markers
+                _search_prompt_parts.append(
+                    "<|im_start|>system\n"
+                    "Web search results have been injected above. "
+                    "Respond naturally as the character, discussing what the results say. "
+                    "Do not echo prompt structure, markers, or system text.\n"
+                    "<|im_end|>"
+                )
                 _search_prompt_parts.append("<|im_start|>assistant\n")
                 _search_prompt = "\n".join(_search_prompt_parts[:-1]) + "\n" + _search_prompt_parts[-1]
 
@@ -1977,9 +1995,36 @@ def chat():
 
                 try:
                     _response_chunks = []
+                    _line_buf = ""  # rolling line buffer — chunks are fragments, not lines
                     for chunk in stream_model_response(new_payload):
                         _response_chunks.append(chunk)
-                        yield chunk
+                        _line_buf += chunk
+                        # Process complete lines only
+                        _parts = _line_buf.split('\n')
+                        _line_buf = _parts[-1]  # hold incomplete last line
+                        _out = ""
+                        for _line in _parts[:-1]:
+                            # Strip HR patterns: ---, ===, ___, box-drawing chars, spaced variants
+                            if (_re.match(r'^[-=_*]{3,}\s*$', _line) or
+                                _re.match(r'^(\s*[-*_]\s*){3,}$', _line) or
+                                _re.match(r'^[\u2550\u2551\u2500\u2501\u2502\u2503]{3,}\s*$', _line)):
+                                continue
+                            # Strip search block markers and system leakage
+                            _line = _re.sub(r'\[WEB SEARCH RESULTS[^\]]*\]', '', _line)
+                            _line = _re.sub(r'\[END WEB SEARCH RESULTS\]', '', _line)
+                            _line = _re.sub(r'You are Helcyon[^.!?\n]*[.!?\n]?', '', _line)
+                            _line = _re.sub(r'What do I search for[?]?', '', _line)
+                            _out += _line + '\n'
+                        if _out:
+                            yield _out
+                    # Flush remaining partial line
+                    if _line_buf:
+                        if not (_re.match(r'^[-=_*]{3,}\s*$', _line_buf) or
+                                _re.match(r'^(\s*[-*_]\s*){3,}$', _line_buf) or
+                                _re.match(r'^[\u2550\u2551\u2500\u2501\u2502\u2503]{3,}\s*$', _line_buf)):
+                            _line_buf = _re.sub(r'\[WEB SEARCH RESULTS[^\]]*\]', '', _line_buf)
+                            _line_buf = _re.sub(r'\[END WEB SEARCH RESULTS\]', '', _line_buf)
+                            yield _line_buf
                     # Always append source link ourselves — never trust the model to do it
                     if has_results and _src:
                         _full_response = "".join(_response_chunks)
@@ -3548,6 +3593,7 @@ def edit_character_memory():
         f.write(new_text.strip())
 
     return "OK", 200
+
 
 
 # --------------------------------------------------
