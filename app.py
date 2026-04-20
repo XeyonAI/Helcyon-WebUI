@@ -498,12 +498,28 @@ def strip_chatml_leakage(text):
     # Partial tokens mid-string (e.g. scraped page content containing ChatML)
     text = re.sub(r"<\|im_end[|]?", "", text)
     text = re.sub(r"<\|im_start[|]?\w*", "", text)
+    text = re.sub(r"\bim_end\|?>", "", text)
+    text = re.sub(r"\bim_start\|?\w*", "", text)
     return text
 
 
 def do_web_search(query):
     """DuckDuckGo Instant Answer search + top page fetch."""
     import urllib.parse, urllib.request, re as _re
+
+    # Domains that produce useless or misleading page content — never fetch or cite
+    _JUNK_DOMAINS = {
+        'knowyourmeme.com', 'reddit.com', 'twitter.com', 'x.com',
+        'facebook.com', 'instagram.com', 'tiktok.com', 'youtube.com',
+        'quora.com', 'pinterest.com', 'tumblr.com', 'imgur.com',
+        'giphy.com', 'tenor.com', '9gag.com', 'ifunny.co',
+    }
+    def _is_junk(u):
+        try:
+            host = urllib.parse.urlparse(u).netloc.lower().lstrip('www.')
+            return any(host == d or host.endswith('.' + d) for d in _JUNK_DOMAINS)
+        except Exception:
+            return False
 
     out = {"summary": "", "results": [], "top_url": "", "top_text": ""}
     try:
@@ -513,7 +529,9 @@ def do_web_search(query):
         with urllib.request.urlopen(req, timeout=8) as r:
             ddg = json.loads(r.read().decode("utf-8"))
         out["summary"] = ddg.get("AbstractText", "").strip()
-        out["top_url"] = ddg.get("AbstractURL", "").strip()
+        _abstract_url = ddg.get("AbstractURL", "").strip()
+        if _abstract_url and not _is_junk(_abstract_url):
+            out["top_url"] = _abstract_url
         for item in ddg.get("RelatedTopics", [])[:5]:
             if isinstance(item, dict) and item.get("FirstURL"):
                 out["results"].append({
@@ -521,8 +539,12 @@ def do_web_search(query):
                     "url": item["FirstURL"],
                     "snippet": item.get("Text", "")[:200],
                 })
-        if not out["top_url"] and out["results"]:
-            out["top_url"] = out["results"][0]["url"]
+        # Fall back to first non-junk result URL if AbstractURL was empty/junk
+        if not out["top_url"]:
+            out["top_url"] = next(
+                (r["url"] for r in out["results"] if not _is_junk(r["url"])),
+                ""
+            )
     except Exception as e:
         print(f"⚠️ DDG search error: {e}")
 
@@ -536,7 +558,7 @@ def do_web_search(query):
                 raw = r.read().decode("utf-8", errors="ignore")
             text = _re.sub(r"<[^>]+>", " ", raw)
             text = _re.sub(r"\s+", " ", text).strip()
-            out["top_text"] = text[:5000]
+            out["top_text"] = text[:2000]
         except Exception as e:
             print(f"⚠️ Page fetch error: {e}")
 
@@ -547,6 +569,20 @@ def do_web_search(query):
 def do_brave_search(query, api_key):
     """Brave Search API — requires free API key from https://api.search.brave.com"""
     import urllib.parse, urllib.request
+
+    # Domains that produce useless or misleading page content — never fetch or cite
+    _JUNK_DOMAINS = {
+        'knowyourmeme.com', 'reddit.com', 'twitter.com', 'x.com',
+        'facebook.com', 'instagram.com', 'tiktok.com', 'youtube.com',
+        'quora.com', 'pinterest.com', 'tumblr.com', 'imgur.com',
+        'giphy.com', 'tenor.com', '9gag.com', 'ifunny.co',
+    }
+    def _is_junk(u):
+        try:
+            host = urllib.parse.urlparse(u).netloc.lower().lstrip('www.')
+            return any(host == d or host.endswith('.' + d) for d in _JUNK_DOMAINS)
+        except Exception:
+            return False
 
     out = {"summary": "", "results": [], "top_url": "", "top_text": ""}
     try:
@@ -573,9 +609,12 @@ def do_brave_search(query, api_key):
                 "url": item.get("url", ""),
                 "snippet": item.get("description", "")[:300],
             })
-        if out["results"]:
-            out["top_url"] = out["results"][0]["url"]
-            out["summary"] = out["results"][0]["snippet"]
+
+        # Pick first non-junk result as top_url
+        top = next((r for r in out["results"] if r.get("url") and not _is_junk(r["url"])), None)
+        if top:
+            out["top_url"] = top["url"]
+            out["summary"] = top["snippet"]
 
         # Fetch top page text
         if out["top_url"]:
@@ -589,7 +628,7 @@ def do_brave_search(query, api_key):
                     raw2 = r2.read().decode("utf-8", errors="ignore")
                 text = _re.sub(r"<[^>]+>", " ", raw2)
                 text = _re.sub(r"\s+", " ", text).strip()
-                out["top_text"] = text[:5000]
+                out["top_text"] = text[:2000]
             except Exception as e:
                 print(f"⚠️ Brave page fetch error: {e}")
 
@@ -636,7 +675,7 @@ def format_search_results(query, res):
     if res["top_url"]:
         lines.append(f"\nTop result: {res['top_url']}")
     if res["top_text"]:
-        lines.append(f"Page content:\n{res['top_text'][:4000]}")
+        lines.append(f"Page content:\n{res['top_text'][:1500]}")
     elif res["summary"]:
         lines.append(f"Summary: {res['summary']}")
 
@@ -1796,7 +1835,7 @@ def chat():
                 # Keep this list TIGHT — single common words cause false positives.
                 _should_search = bool(_re.search(
                     r'\b(?:do a search|search for|search up|search that up|'
-                    r'look it up|look that up|look up|find out about|'
+                    r'look it up|look that up|look up|find out(?:\s+(?:about|what|who|when|where|why|how|if))?|'
                     r'google that|look online|check online|'
                     r'any (?:news|updates|info) (?:on|about)|'
                     r'(?:get me |give me )?up to date (?:info|news|updates) (?:on|about))',
@@ -1825,40 +1864,27 @@ def chat():
                 _q = _re.sub(r'[,\s]*(?:please|for me|right now|would you|can you)[?.]?\s*$', '', _q, flags=_re.IGNORECASE).strip()
                 _q = _re.sub(r'\s+', ' ', _q).strip().rstrip('?,.')
 
-                # If the cleaned query is still long and conversational, use the model
-                # to extract just the search topic — prevents Brave getting walls of text
+                # If the cleaned query is still long, extract topic via regex first.
+                # Find the LAST search trigger phrase and grab what follows it —
+                # that's always the actual topic. No model needed for this.
                 if len(_q) > 80:
-                    try:
-                        _extract_prompt = (
-                            "<|im_start|>system\n"
-                            "Extract the single best web search query from the user's message. "
-                            "Return ONLY the search query — no explanation, no punctuation, no quotes. "
-                            "Maximum 8 words. Focus on the TOPIC being asked about, not the meta-request. "
-                            "Examples: 'do a search on Consumer Law refund period' → 'Consumer Law refund period'; "
-                            "'look up how long a tenancy notice has to be' → 'tenancy notice period UK'; "
-                            "'search for whether eight weeks notice is legal' → 'eight weeks notice legal UK'.\n"
-                            "<|im_end|>\n"
-                            f"<|im_start|>user\n{_user_msg[:400]}\n<|im_end|>\n"
-                            "<|im_start|>assistant\n"
-                        )
-                        _extract_payload = {
-                            "prompt": _extract_prompt,
-                            "temperature": 0.0,
-                            "n_predict": 20,
-                            "stream": False,
-                            "stop": ["<|im_end|>", "\n"],
-                        }
-                        _er = requests.post(f"{API_URL}/completion", json=_extract_payload, timeout=10)
-                        _extracted = _er.json().get("content", "").strip().strip('"').strip("'")
-                        if _extracted and len(_extracted) > 2:
-                            print(f"🔍 Model-extracted query: {repr(_extracted)} (was: {repr(_q[:60])}...)", flush=True)
-                            _q = _extracted
+                    _trigger_re = (
+                        r'\b(?:do a search|search for|search up|search that up|'
+                        r'look it up|look that up|look up|find out(?:\s+(?:about|what|who|when|where|why|how|if))?|'
+                        r'google that|look online|check online)\s*'
+                        r'(?:about|for|on|up)?\s*'
+                    )
+                    _tmatches = list(_re.finditer(_trigger_re, _user_msg, _re.IGNORECASE))
+                    if _tmatches:
+                        _after = _user_msg[_tmatches[-1].end():].strip()
+                        _topic = _re.split(r'[?!.]', _after)[0].strip().rstrip('?!., ')
+                        if _topic and len(_topic) > 2:
+                            print(f"🔍 Regex-extracted query: {repr(_topic)} (was: {repr(_q[:60])}...)", flush=True)
+                            _q = _topic
                         else:
-                            print("⚠️ Query extraction returned empty — using truncated original", flush=True)
-                            _q = _q[:200].rsplit(' ', 1)[0]
-                    except Exception as _qe:
-                        print(f"⚠️ Query extraction failed: {_qe} — using truncated original", flush=True)
-                        _q = _q[:200].rsplit(' ', 1)[0]
+                            _q = _q[:120].rsplit(' ', 1)[0]
+                    else:
+                        _q = _q[:120].rsplit(' ', 1)[0]
 
                 # Brave rejects queries over ~400 chars (HTTP 422) — cap at 200
                 if len(_q) > 200:
@@ -1910,12 +1936,30 @@ def chat():
                 # to the grounded content directly.
                 if has_results:
                     import urllib.parse as _urlparse
-                    # Best available URL: AbstractURL > first result > DDG search page
-                    _src = (
-                        res.get('top_url', '')
-                        or (res['results'][0]['url'] if res['results'] else '')
-                        or f"https://duckduckgo.com/?q={_urlparse.quote_plus(query)}"
-                    )
+                    # Domains that are never useful as a cited source
+                    _junk_domains = {
+                        'knowyourmeme.com', 'reddit.com', 'twitter.com', 'x.com',
+                        'facebook.com', 'instagram.com', 'tiktok.com', 'youtube.com',
+                        'quora.com', 'pinterest.com', 'tumblr.com', 'imgur.com',
+                        'giphy.com', 'tenor.com', '9gag.com', 'ifunny.co',
+                    }
+                    def _is_junk_url(u):
+                        try:
+                            from urllib.parse import urlparse as _up
+                            host = _up(u).netloc.lower().lstrip('www.')
+                            return any(host == d or host.endswith('.' + d) for d in _junk_domains)
+                        except Exception:
+                            return False
+
+                    # Best available URL: AbstractURL > first non-junk result > DDG search page
+                    _src = res.get('top_url', '')
+                    if not _src or _is_junk_url(_src):
+                        _src = next(
+                            (r['url'] for r in res['results'] if r.get('url') and not _is_junk_url(r['url'])),
+                            ''
+                        )
+                    if not _src:
+                        _src = f"https://duckduckgo.com/?q={_urlparse.quote_plus(query)}"
                     augmented_user_msg = (
                         f"{user_input.strip()}\n\n"
                         f"[WEB SEARCH RESULTS FOR: {query}]\n"
@@ -1992,39 +2036,59 @@ def chat():
 
                 new_payload = dict(payload)
                 new_payload["prompt"] = _search_prompt
+                # Override n_predict for search responses — full history + results block
+                # eats heavily into context, leaving too little room for the response
+                new_payload["n_predict"] = max(new_payload.get("n_predict", 512), 1024)
+                _np = new_payload.get("n_predict", "?")
+                print(f"🔍 Search prompt length: ~{len(_search_prompt)//4} tokens, n_predict: {_np}", flush=True)
 
                 try:
                     _response_chunks = []
-                    _line_buf = ""  # rolling line buffer — chunks are fragments, not lines
+                    _line_buf = ""  # rolling line buffer for HR detection
+
+                    def _is_hr(s):
+                        return bool(
+                            _re.match(r'^[-=_*]{3,}\s*$', s) or
+                            _re.match(r'^(\s*[-*_]\s*){3,}$', s) or
+                            _re.match(r'^[\u2550\u2551\u2500\u2501\u2502\u2503]{3,}\s*$', s)
+                        )
+
+                    _suppressing_fake_search = [False]
+
+                    def _clean_line(s):
+                        # Inline: strip single-line hallucinated blocks (open+close on same line)
+                        s = _re.sub(r'\[WEB SEARCH RESULTS[^\n]*?\[END[^\]]*\]>?', '', s)
+                        s = _re.sub(r'\[WEB SEARCH RESULTS[^\n]*END WEB SEARCH RESULTS\]', '', s)
+                        # Multiline suppression
+                        if '[WEB SEARCH RESULTS' in s:
+                            _suppressing_fake_search[0] = True
+                        if _suppressing_fake_search[0]:
+                            if '[END WEB SEARCH RESULTS]' in s or '[END]>' in s:
+                                _suppressing_fake_search[0] = False
+                            return ''
+                        s = _re.sub(r'You are Helcyon[^.!?\n]*[.!?\n]?', '', s)
+                        s = _re.sub(r'What do I search for[?]?', '', s)
+                        return s
+
                     for chunk in stream_model_response(new_payload):
                         _response_chunks.append(chunk)
                         _line_buf += chunk
-                        # Process complete lines only
-                        _parts = _line_buf.split('\n')
-                        _line_buf = _parts[-1]  # hold incomplete last line
-                        _out = ""
-                        for _line in _parts[:-1]:
-                            # Strip HR patterns: ---, ===, ___, box-drawing chars, spaced variants
-                            if (_re.match(r'^[-=_*]{3,}\s*$', _line) or
-                                _re.match(r'^(\s*[-*_]\s*){3,}$', _line) or
-                                _re.match(r'^[\u2550\u2551\u2500\u2501\u2502\u2503]{3,}\s*$', _line)):
+                        # Yield any complete lines (split on \n)
+                        while '\n' in _line_buf:
+                            _line, _line_buf = _line_buf.split('\n', 1)
+                            if _is_hr(_line):
                                 continue
-                            # Strip search block markers and system leakage
-                            _line = _re.sub(r'\[WEB SEARCH RESULTS[^\]]*\]', '', _line)
-                            _line = _re.sub(r'\[END WEB SEARCH RESULTS\]', '', _line)
-                            _line = _re.sub(r'You are Helcyon[^.!?\n]*[.!?\n]?', '', _line)
-                            _line = _re.sub(r'What do I search for[?]?', '', _line)
-                            _out += _line + '\n'
-                        if _out:
-                            yield _out
-                    # Flush remaining partial line
-                    if _line_buf:
-                        if not (_re.match(r'^[-=_*]{3,}\s*$', _line_buf) or
-                                _re.match(r'^(\s*[-*_]\s*){3,}$', _line_buf) or
-                                _re.match(r'^[\u2550\u2551\u2500\u2501\u2502\u2503]{3,}\s*$', _line_buf)):
-                            _line_buf = _re.sub(r'\[WEB SEARCH RESULTS[^\]]*\]', '', _line_buf)
-                            _line_buf = _re.sub(r'\[END WEB SEARCH RESULTS\]', '', _line_buf)
-                            yield _line_buf
+                            _line = _clean_line(_line)
+                            yield _line + '\n'
+                        # Yield partial line chunks as they arrive for smooth streaming
+                        # but keep enough back to detect a potential HR on the next chunk
+                        if len(_line_buf) > 80:
+                            # Safe to yield — too long to be a pure HR line
+                            yield _clean_line(_line_buf)
+                            _line_buf = ""
+                    # Flush any remaining buffer
+                    if _line_buf and not _is_hr(_line_buf):
+                        yield _clean_line(_line_buf)
                     # Always append source link ourselves — never trust the model to do it
                     if has_results and _src:
                         _full_response = "".join(_response_chunks)
@@ -2047,8 +2111,31 @@ def chat():
 
         else:
             try:
+                import re as _re3
+                def _filtered_stream():
+                    _suppress = [False]
+                    _buf = ""
+                    for chunk in stream_model_response(payload):
+                        _buf += chunk
+                        while '\n' in _buf:
+                            _line, _buf = _buf.split('\n', 1)
+                            _line = _re3.sub(r'\[WEB SEARCH RESULTS[^\n]*?\[END[^\]]*\]>?', '', _line)
+                            _line = _re3.sub(r'\[WEB SEARCH RESULTS[^\n]*END WEB SEARCH RESULTS\]', '', _line)
+                            if '[WEB SEARCH RESULTS' in _line:
+                                _suppress[0] = True
+                            if _suppress[0]:
+                                if '[END WEB SEARCH RESULTS]' in _line or '[END]>' in _line:
+                                    _suppress[0] = False
+                                continue
+                            yield _line + '\n'
+                        if len(_buf) > 80 and not _suppress[0]:
+                            if '[WEB SEARCH RESULTS' not in _buf:
+                                yield _buf
+                                _buf = ""
+                    if _buf and not _suppress[0] and '[WEB SEARCH RESULTS' not in _buf:
+                        yield _buf
                 resp = Response(
-                    stream_with_context(stream_model_response(payload)),
+                    stream_with_context(_filtered_stream()),
                     content_type="text/event-stream; charset=utf-8",
                 )
                 if newly_pinned_doc:
@@ -2384,6 +2471,18 @@ def save_character(n):
     try:
         data = request.get_json()
         path = os.path.join("characters", f"{n}.json")
+        # Preserve fields the config page doesn't know about (e.g. tts_voice)
+        # so they don't get wiped on every character save
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+                preserved_keys = ["tts_voice"]
+                for key in preserved_keys:
+                    if key in existing and key not in data:
+                        data[key] = existing[key]
+            except Exception:
+                pass  # If we can't read existing, just save what we have
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         print(f"✅ Character saved: {path}")
