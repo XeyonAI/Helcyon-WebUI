@@ -699,8 +699,9 @@ def stream_model_response(payload):
     global abort_generation
     abort_generation = False  # Reset flag at start
     
-    print("\n🧩 FULL PAYLOAD SENDING TO MODEL:", flush=True)
-    print(json.dumps(payload, indent=2), flush=True)
+    if app.debug:
+        print("\n🧩 FULL PAYLOAD SENDING TO MODEL:", flush=True)
+        print(json.dumps(payload, indent=2), flush=True)
     response = requests.post(
         f"{API_URL}/completion",
         json=payload,
@@ -1514,6 +1515,26 @@ def chat():
 # ✅ FIX: Re-attach example_dialogue INSIDE system block with clear fencing
     ex_block = ""
     has_paragraph_style = False  # used by example dialogue style rules block below
+
+    # Resolve example dialogue: character-level overrides global; global is fallback
+    _char_ex = char_data.get("example_dialogue", "").strip()
+    if not _char_ex:
+        try:
+            _active_sp = get_active_prompt_filename()
+            _base = _active_sp.rsplit('.', 1)[0] if '.' in _active_sp else _active_sp
+            _ex_path = os.path.join(get_system_prompts_dir(), _base + '.example.txt')
+            if os.path.exists(_ex_path):
+                with open(_ex_path, 'r', encoding='utf-8') as _ef:
+                    _global_ex = _ef.read().strip()
+            else:
+                _global_ex = ""
+        except Exception:
+            _global_ex = ""
+        if _global_ex:
+            print(f"🌐 No character example dialogue — using {_base}.example.txt as fallback")
+            char_data = dict(char_data)  # don't mutate original
+            char_data["example_dialogue"] = _global_ex
+
     if char_data.get("example_dialogue"):
         ex = char_data["example_dialogue"].strip()
         # 🔥 Strip any stray ChatML tokens from example dialogue - these cause the model
@@ -1805,8 +1826,9 @@ def chat():
             "stop": ["<|im_end|>", "\n<|im_start|>"],
         }
 
-        print("\n🧩 FULL PAYLOAD SENDING TO MODEL:", flush=True)
-        print(json.dumps(payload, indent=2), flush=True)
+        if app.debug:
+            print("\n🧩 FULL PAYLOAD SENDING TO MODEL:", flush=True)
+            print(json.dumps(payload, indent=2), flush=True)
 
         use_web_search = char_data.get("use_web_search", False)
 
@@ -2073,19 +2095,19 @@ def chat():
                     for chunk in stream_model_response(new_payload):
                         _response_chunks.append(chunk)
                         _line_buf += chunk
-                        # Yield any complete lines (split on \n)
+                        # Yield complete lines immediately
                         while '\n' in _line_buf:
                             _line, _line_buf = _line_buf.split('\n', 1)
                             if _is_hr(_line):
                                 continue
-                            _line = _clean_line(_line)
-                            yield _line + '\n'
-                        # Yield partial line chunks as they arrive for smooth streaming
-                        # but keep enough back to detect a potential HR on the next chunk
-                        if len(_line_buf) > 80:
-                            # Safe to yield — too long to be a pure HR line
-                            yield _clean_line(_line_buf)
-                            _line_buf = ""
+                            yield _clean_line(_line) + '\n'
+                        # For partial lines: an HR can only be 3-10 chars of identical symbols.
+                        # Once the buffer has >12 chars OR contains non-HR characters,
+                        # it's safe to yield immediately — can't possibly be an HR.
+                        if _line_buf and not _suppressing_fake_search[0]:
+                            if len(_line_buf) > 12 or _re.search(r'[a-zA-Z0-9]', _line_buf):
+                                yield _clean_line(_line_buf)
+                                _line_buf = ""
                     # Flush any remaining buffer
                     if _line_buf and not _is_hr(_line_buf):
                         yield _clean_line(_line_buf)
@@ -2102,6 +2124,8 @@ def chat():
                     stream_with_context(_web_search_stream()),
                     content_type="text/event-stream; charset=utf-8",
                 )
+                resp.headers['X-Accel-Buffering'] = 'no'
+                resp.headers['Cache-Control'] = 'no-cache'
                 if newly_pinned_doc:
                     resp.headers["X-Pinned-Doc"] = newly_pinned_doc
                 return resp
@@ -2116,6 +2140,11 @@ def chat():
                     _suppress = [False]
                     _buf = ""
                     for chunk in stream_model_response(payload):
+                        # Fast path: if not suppressing and chunk has no suspicious content, yield immediately
+                        if not _suppress[0] and '[WEB SEARCH' not in chunk and '[END' not in chunk:
+                            yield chunk
+                            continue
+                        # Slow path: buffer and check line by line
                         _buf += chunk
                         while '\n' in _buf:
                             _line, _buf = _buf.split('\n', 1)
@@ -2128,16 +2157,17 @@ def chat():
                                     _suppress[0] = False
                                 continue
                             yield _line + '\n'
-                        if len(_buf) > 80 and not _suppress[0]:
-                            if '[WEB SEARCH RESULTS' not in _buf:
-                                yield _buf
-                                _buf = ""
+                        if _buf and not _suppress[0] and '[WEB SEARCH RESULTS' not in _buf:
+                            yield _buf
+                            _buf = ""
                     if _buf and not _suppress[0] and '[WEB SEARCH RESULTS' not in _buf:
                         yield _buf
                 resp = Response(
                     stream_with_context(_filtered_stream()),
                     content_type="text/event-stream; charset=utf-8",
                 )
+                resp.headers['X-Accel-Buffering'] = 'no'
+                resp.headers['Cache-Control'] = 'no-cache'
                 if newly_pinned_doc:
                     resp.headers['X-Pinned-Doc'] = newly_pinned_doc
                 return resp
@@ -2240,7 +2270,7 @@ def set_active_prompt_filename(filename):
 def list_system_prompts():
     folder = get_system_prompts_dir()
     os.makedirs(folder, exist_ok=True)
-    files = sorted([f for f in os.listdir(folder) if f.endswith('.txt')])
+    files = sorted([f for f in os.listdir(folder) if f.endswith('.txt') and not f.endswith('.example.txt')])
     active = get_active_prompt_filename()
     return jsonify({'files': files, 'active': active})
 
@@ -2294,6 +2324,44 @@ def delete_system_prompt(filename):
         set_active_prompt_filename('default.txt')
     print(f'🗑️ Deleted system prompt: {filename}')
     return jsonify({'status': 'deleted'})
+
+@app.route('/system_prompts/load_example/<filename>', methods=['GET'])
+def load_system_prompt_example(filename):
+    """Load the paired .example.txt for a system prompt template."""
+    if '..' in filename or '/' in filename or os.sep in filename:
+        return jsonify({'error': 'Invalid filename'}), 400
+    # Strip existing extension and add .example.txt
+    base = filename.rsplit('.', 1)[0] if '.' in filename else filename
+    example_filename = base + '.example.txt'
+    folder = get_system_prompts_dir()
+    path = os.path.join(folder, example_filename)
+    if not os.path.exists(path):
+        return '', 200, {'Content-Type': 'text/plain; charset=utf-8'}  # empty = none yet
+    with open(path, 'r', encoding='utf-8') as f:
+        return f.read(), 200, {'Content-Type': 'text/plain; charset=utf-8'}
+
+@app.route('/system_prompts/save_example/<filename>', methods=['POST'])
+def save_system_prompt_example(filename):
+    """Save the paired .example.txt for a system prompt template.
+    If content is empty, deletes the file rather than writing a blank one."""
+    if '..' in filename or '/' in filename or os.sep in filename:
+        return jsonify({'error': 'Invalid filename'}), 400
+    base = filename.rsplit('.', 1)[0] if '.' in filename else filename
+    example_filename = base + '.example.txt'
+    folder = get_system_prompts_dir()
+    os.makedirs(folder, exist_ok=True)
+    data = request.get_data(as_text=True).strip()
+    path = os.path.join(folder, example_filename)
+    if not data:
+        # Empty content — delete the file if it exists, don't create a blank one
+        if os.path.exists(path):
+            os.remove(path)
+            print(f'🗑️ Deleted empty example dialog: {example_filename}')
+        return jsonify({'status': 'saved', 'filename': example_filename})
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(data)
+    print(f'✅ Saved example dialog: {example_filename}')
+    return jsonify({'status': 'saved', 'filename': example_filename})
 
 # Legacy route - kept for backwards compatibility
 @app.route('/system_prompt.txt', methods=['GET', 'POST'])
@@ -2524,6 +2592,40 @@ def set_character_voice(n):
         return jsonify({"success": True})
     except Exception as e:
         print(f"❌ Failed to save voice for {n}: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/character_system_prompt/<n>', methods=['GET'])
+def get_character_system_prompt(n):
+    """Get the saved system prompt template for a character."""
+    try:
+        path = os.path.join("characters", f"{n}.json")
+        if not os.path.exists(path):
+            return jsonify({"system_prompt": None})
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return jsonify({"system_prompt": data.get("system_prompt", None)})
+    except Exception as e:
+        return jsonify({"system_prompt": None})
+
+@app.route('/character_system_prompt/<n>', methods=['POST'])
+def set_character_system_prompt(n):
+    """Save system prompt template for a character — only updates system_prompt field, leaves rest intact."""
+    try:
+        data = request.get_json()
+        template = data.get("system_prompt", "")
+        path = os.path.join("characters", f"{n}.json")
+        if not os.path.exists(path):
+            return jsonify({"success": False, "error": "Character not found"}), 404
+        with open(path, "r", encoding="utf-8") as f:
+            char_data = json.load(f)
+        char_data["system_prompt"] = template
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(char_data, f, indent=2, ensure_ascii=False)
+        print(f"✅ System prompt saved for {n}: {template}")
+        return jsonify({"success": True})
+    except Exception as e:
+        print(f"❌ Failed to save system prompt for {n}: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -3202,6 +3304,37 @@ def save_current_situation():
         return jsonify({"status": "error", "error": str(e)}), 500
 
 
+# --------------------------------------------------
+# Global Example Dialog Routes
+# --------------------------------------------------
+@app.route("/get_global_example_dialog", methods=["GET"])
+def get_global_example_dialog():
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            s = json.load(f)
+        return jsonify({"global_example_dialog": s.get("global_example_dialog", "")})
+    except Exception as e:
+        return jsonify({"global_example_dialog": "", "error": str(e)})
+
+@app.route("/save_global_example_dialog", methods=["POST"])
+def save_global_example_dialog():
+    data = request.get_json()
+    dialog = data.get("global_example_dialog", "").strip()
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            s = json.load(f)
+        s["global_example_dialog"] = dialog
+        import tempfile, shutil
+        tmp = SETTINGS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(s, f, indent=2)
+        shutil.move(tmp, SETTINGS_FILE)
+        print(f"✅ Global example dialog saved ({len(dialog)} chars)")
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        print(f"❌ save_global_example_dialog failed: {e}")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
 
 @app.route("/get_brave_api_key", methods=["GET"])
 def get_brave_api_key_route():
@@ -3695,53 +3828,12 @@ def edit_character_memory():
 
 
 
+
 # --------------------------------------------------
-# Delete Last N Messages from Chat History (baseline version)
+# Delete Last N Messages from Chat History
 # --------------------------------------------------
 @app.route('/delete_last_messages/<path:character>', methods=['POST'])
 def delete_last_messages(character):
-    character = character.lower()
-    count = int(request.args.get("count", 2))
-    chat_path = os.path.join("chats", f"{character}.json")
-
-    try:
-        if not os.path.exists(chat_path):
-            return jsonify({"error": f"No chat found at {chat_path}"}), 404
-
-        # Load file (try JSON first, fallback to plain text lines)
-        with open(chat_path, "r", encoding="utf-8") as f:
-            try:
-                data = json.load(f)
-            except json.JSONDecodeError:
-                f.seek(0)
-                lines = f.readlines()
-                lines = lines[:-count] if len(lines) > count else []
-                with open(chat_path, "w", encoding="utf-8") as fw:
-                    fw.writelines(lines)
-                print(f"🗑️ Deleted last {count} lines for {character} ({chat_path})")
-                return jsonify({"status": "ok"}), 200
-
-        # If it’s valid JSON and a simple list of messages
-        if isinstance(data, list):
-            data = data[:-count] if len(data) > count else []
-
-        # Write back
-        with open(chat_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-
-        print(f"🗑️ Deleted last {count} item(s) for {character} ({chat_path})")
-        return jsonify({"status": "ok"}), 200
-
-    except Exception as e:
-        print(f"❌ delete_last_messages error: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-# --------------------------------------------------
-# Delete Last N Messages from Chat History (safe JSON version)
-# --------------------------------------------------
-@app.route('/delete_last_messages/<path:character>', methods=['POST'])
-def delete_last_messages_safe(character):
     character = character.lower()
     count = int(request.args.get("count", 2))
     chat_path = os.path.join("chats", f"{character}.json")
@@ -3813,7 +3905,16 @@ if __name__ == '__main__':
             print(" ", rule.rule)
         print("-" * 50)
 
-    ssl_cert = r'C:\Users\Chris\music.tail39b776.ts.net.crt'
-    ssl_key  = r'C:\Users\Chris\music.tail39b776.ts.net.key'
-    app.run(debug=True, use_reloader=False, host='0.0.0.0', port=8081,
-            ssl_context=(ssl_cert, ssl_key))
+    _base = os.path.dirname(os.path.abspath(__file__))
+    ssl_cert = os.path.join(_base, 'music.tail39b776.ts.net.crt')
+    ssl_key  = os.path.join(_base, 'music.tail39b776.ts.net.key')
+    if os.path.isfile(ssl_cert) and os.path.isfile(ssl_key):
+        print('🔒 SSL certs found — running HTTPS (Tailscale mode)')
+        ssl_context = (ssl_cert, ssl_key)
+    else:
+        print('🌐 No SSL certs — running HTTP (local mode)')
+        ssl_context = None
+    app.run(debug=False, use_reloader=False, host='0.0.0.0', port=8081,
+            ssl_context=ssl_context)
+
+# --------------------------------------------------

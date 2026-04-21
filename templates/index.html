@@ -616,20 +616,20 @@ function renderImagePreviews() {
   });
 }
 
-// sanitizeMarkdown: strip setext headings, HR lines, and spaced-char HR patterns.
-// Catches all patterns the fallback parser would render as <hr>.
+// sanitizeMarkdown: strip setext headings and box-drawing HR patterns.
+// Allows genuine --- separators through so marked.js renders them as <hr>.
 function sanitizeMarkdown(text) {
   if (!text) return text;
   // Setext headings: line of text followed by === or --- -> keep text, drop underline
   text = text.replace(/^(.+)\n[=]{2,}[ \t]*$/gm, "$1");
   text = text.replace(/^(.+)\n[-]{2,}[ \t]*$/gm, "$1");
-  // Solid HR lines: ---, ===, ___, *** (3+ identical chars)
-  text = text.replace(/^[-]{3,}[ \t]*$/gm, "");
-  text = text.replace(/^[=]{3,}[ \t]*$/gm, "");
-  text = text.replace(/^[_]{3,}[ \t]*$/gm, "");
-  text = text.replace(/^[*]{3,}[ \t]*$/gm, "");
+  // Strip excessive HR lines (10+ chars) — these are always decorative noise from the model
+  text = text.replace(/^[-]{10,}[ \t]*$/gm, "");
+  text = text.replace(/^[=]{4,}[ \t]*$/gm, "");
+  text = text.replace(/^[_]{4,}[ \t]*$/gm, "");
+  text = text.replace(/^[*]{4,}[ \t]*$/gm, "");
   // Spaced HR lines: - - -, * * *, _ _ _ (the fallback parser catches these too)
-  text = text.replace(/^(\s*[-*_]\s*){3,}$/gm, "");
+  text = text.replace(/^(\s*[-*_]\s*){5,}$/gm, "");
   // Box-drawing chars: ═══, ─── etc (model echoes these from injected search prompts)
   text = text.replace(/^[\u2550\u2551\u2500\u2501\u2502\u2503]{3,}\s*$/gm, "");
   return text;
@@ -2149,6 +2149,9 @@ async function openChat(filename) {
           div.appendChild(modelCopyBtn);
           div.appendChild(modelEditBtn);
           div.appendChild(modelDeleteBtn);
+          var sep = document.createElement("hr");
+          sep.className = "msg-separator";
+          div.appendChild(sep);
           div.appendChild(makeTimestampEl(msg.timestamp));
                     
           wrapper.appendChild(modelAvatar);
@@ -2594,6 +2597,10 @@ async function openChat(filename) {
       const userName = activeUserName || "User";
       const charName = currentCharName || "Assistant";
 
+      // Simple per-token render — clean and re-parse on each chunk.
+      // No artificial delay (was 25ms before — caused progressive slowdown on long responses).
+      // marked.parse cost is acceptable at typical token rates.
+
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -2608,30 +2615,26 @@ async function openChat(filename) {
             .replace(/<\|im_start\|>user/gi, '')
             .replace(/<\|im_start\|>system/gi, '')
             .replace(/<\|im_end\|>/gi, '')
+            .replace(/\bim_end\|?>/gi, '')
             .replace(new RegExp(charName + ':\s*', 'gim'), '')
             .replace(/^User:\s*/gim, '')
             .replace(/^Assistant:\s*/gim, '');
           bufferTextForTTS(ttsChunk);
         }
-        
-        // 🔥 CLEAN THE TEXT DURING STREAMING - NOT AFTER!
+
         cleanedMessage = fullMessage
           .replace(/<\|im_start\|>assistant/gi, "")
           .replace(/<\|im_start\|>user/gi, "")
           .replace(/<\|im_start\|>system/gi, "")
           .replace(/<\|im_end\|>/gi, "")
+          .replace(/\bim_end\|?>/gi, '')
           .replace(/<\/\|im_end\|>/gi, "")
           .replace(new RegExp(`^${userName}:\\s*`, 'gim'), "")
           .replace(new RegExp(`^${charName}:\\s*`, 'gim'), "")
           .replace(/^User:\s*/gim, "")
           .replace(/^Assistant:\s*/gim, "")
-          // Strip Author's Note echo if model leaks it back
           .replace(/\[Author['']s Note:[^\]]*\]/gi, "")
-          // Strip STYLE REMINDER leakage (model echoing the author note instruction)
           .replace(/^STYLE REMINDER:.*$/gim, "")
-          // Strip MEMORY ADD/MEMORY_ADD tag marker from display, but preserve the body text after pipes
-          // e.g. "[MEMORY ADD: Title | keywords | body text]" -> "body text"
-          // e.g. "MEMORY ADD: Title | keywords | body" -> "body"
           .replace(/\[MEMORY[_ ]ADD:[^|\]]*\|[^|\]]*\|([^\]]*)\]/gi, "$1")
           .replace(/\[MEMORY[_ ]ADD:[^\]]*\]/gi, "")
           .replace(/^MEMORY[_ ]ADD:[^|]*\|[^|]*\|(.+)$/gim, "$1")
@@ -2640,14 +2643,17 @@ async function openChat(filename) {
           .replace(/^[ \t]+/gm, "")
           .trim();
 
-        // Parse the CLEANED message with proper markdown handling
         let html = marked.parse(sanitizeMarkdown(cleanedMessage));
         html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
-
         streamEl.innerHTML = html;
-        
         chat.scrollTop = chat.scrollHeight;
-        await new Promise((r) => setTimeout(r, 25));
+      }
+      // Final render to ensure last chunks are displayed
+      {
+        let html = marked.parse(sanitizeMarkdown(cleanedMessage));
+        html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
+        streamEl.innerHTML = html;
+        chat.scrollTop = chat.scrollHeight;
       }
 
       // ── Empty response guard ─────────────────────────────────────────
@@ -3038,6 +3044,7 @@ async function openChat(filename) {
           .replace(/<\|im_start\|>user/gi, '')
           .replace(/<\|im_start\|>system/gi, '')
           .replace(/<\|im_end\|>/gi, '')
+          .replace(/\bim_end\|?>/gi, '')
           .replace(/<\/\|im_end\|>/gi, '')
           .replace(new RegExp(`^${userName}:\\s*`, 'gim'), '')
           .replace(new RegExp(`^${charName}:\\s*`, 'gim'), '')
@@ -3056,6 +3063,7 @@ async function openChat(filename) {
         .replace(/<\|im_start\|>user/gi, '')
         .replace(/<\|im_start\|>system/gi, '')
         .replace(/<\|im_end\|>/gi, '')
+          .replace(/\bim_end\|?>/gi, '')
         .replace(/<\/\|im_end\|>/gi, '')
         .replace(new RegExp(`^${userName}:\\s*`, 'gim'), '')
         .replace(new RegExp(`^${charName}:\\s*`, 'gim'), '')
@@ -3458,7 +3466,6 @@ async function stopGeneration() {
   });
 
   // ==================================================
-  // DELETE LAST MESSAGE  // ==================================================
   // DELETE LAST MESSAGE
   // ==================================================
   async function deleteLastMessages(count = 1) {
@@ -3958,7 +3965,7 @@ function showMemoryConfirmInBubble(msgDiv, character, title, keywords, body) {
     // Configure Marked.js for cleaner output
     if (typeof marked !== "undefined") {
       marked.setOptions({
-        breaks: true,
+        breaks: false,
         gfm: true,
         pedantic: false
       });
@@ -4765,6 +4772,12 @@ function makeTimestampEl(isoString) {
     }
     .user-msg .msg-timestamp { text-align: left; }
     .model-msg .msg-timestamp { text-align: left; }
+    .msg-separator {
+      border: none;
+      border-top: 1px solid var(--msg-border, #444);
+      opacity: 0.5;
+      margin: 8px 0 4px 0;
+    }
   `;
   document.head.appendChild(s);
 })();
