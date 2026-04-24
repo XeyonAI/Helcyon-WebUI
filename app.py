@@ -498,8 +498,17 @@ def strip_chatml_leakage(text):
     # Partial tokens mid-string (e.g. scraped page content containing ChatML)
     text = re.sub(r"<\|im_end[|]?", "", text)
     text = re.sub(r"<\|im_start[|]?\w*", "", text)
-    text = re.sub(r"\bim_end\|?>", "", text)
-    text = re.sub(r"\bim_start\|?\w*", "", text)
+    # Fix: \b doesn't match before _ — use explicit pattern instead
+    text = re.sub(r"(?<![<|])_end\|?>", "", text)
+    text = re.sub(r"(?<![<|])_start\|?\w*", "", text)
+    # Bare "end|>" fragment — left behind when "<|im_" was stripped from previous chunk
+    text = re.sub(r"\bend\|?>", "", text)
+    # ">user" / ">assistant" — left when "<|im_start|>" stripped, leaving ">user"
+    text = re.sub(r">(?:user|assistant|system)\b[\s\S]*$", "", text, flags=re.IGNORECASE)
+    # "\nuser" / "\nassistant" — model generating next turn after stop
+    text = re.sub(r"\n(?:user|assistant|system)\b[\s\S]*$", "", text, flags=re.IGNORECASE)
+    # Bare role word at start of chunk — chunk boundary split right after stop token
+    text = re.sub(r"^(?:user|assistant|system)\b[\s\S]*$", "", text, flags=re.IGNORECASE)
     return text
 
 
@@ -695,6 +704,142 @@ def format_search_results(query, res):
     return "\n".join(lines)
 
 
+def do_chat_search(query, current_filename=None):
+    """
+    Search all chat .txt files for content matching the query keywords.
+    Uses AND logic with co-occurrence scoring — all keywords should appear
+    near each other. Weak matches are rejected via a minimum score threshold.
+    Returns (results_block_string, error_string) — one will be None.
+    """
+    import re as _re
+
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    projects_dir = os.path.join(base_dir, "projects")
+    global_chats_dir = os.path.join(base_dir, "chats")
+
+    # Collect all chats directories to scan
+    dirs_to_scan = []
+    if os.path.isdir(global_chats_dir):
+        dirs_to_scan.append(global_chats_dir)
+    if os.path.isdir(projects_dir):
+        for entry in os.listdir(projects_dir):
+            if entry.startswith("_"):
+                continue
+            proj_chats = os.path.join(projects_dir, entry, "chats")
+            if os.path.isdir(proj_chats):
+                dirs_to_scan.append(proj_chats)
+
+    # Build keyword list — strip stopwords and recall meta-verbs
+    stopwords = {
+        'the', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'of', 'and', 'or',
+        'we', 'i', 'you', 'me', 'my', 'about', 'with', 'this', 'that', 'was',
+        'is', 'are', 'it', 'its', 'be', 'been', 'have', 'had', 'do', 'did',
+        'when', 'where', 'what', 'how', 'which', 'our', 'us', 'he', 'she',
+        'they', 'them', 'there', 'then', 'so', 'but', 'if', 'up', 'out',
+        'remember', 'talked', 'discussed', 'said', 'mentioned', 'tell', 'chat',
+        'spoke', 'speaking', 'another', 'other', 'previous', 'before', 'ago',
+        'last', 'time', 'conversation', 'earlier', 'know', 'recall', 'going',
+        'get', 'got', 'just', 'like', 'also', 'will', 'can', 'could', 'would',
+        'should', 'does', 'been', 'her', 'his', 'him', 'who', 'very', 'really',
+    }
+    raw_words = _re.sub(r'[^\w\s]', ' ', query.lower()).split()
+    keywords = [w for w in raw_words if w not in stopwords and len(w) > 2]
+
+    if not keywords:
+        return None, "No usable keywords extracted from query."
+
+    print(f"🗂️ Chat search — keywords: {keywords}", flush=True)
+
+    # Window size for co-occurrence: keywords must all appear within N lines of each other
+    COOCCURRENCE_WINDOW = 8
+    MAX_SNIPPET_CHARS = 600
+    CONTEXT_LINES = 4
+    # Minimum score to be considered a valid result:
+    # Must match ALL keywords (score == len(keywords)) to pass.
+    # If only 1 keyword, require it appears at least once (score >= 1).
+    MIN_SCORE = len(keywords) if len(keywords) > 1 else 1
+
+    results = []
+
+    for chats_dir in dirs_to_scan:
+        for fname in os.listdir(chats_dir):
+            if not fname.endswith(".txt"):
+                continue
+            if current_filename and fname == current_filename:
+                continue
+
+            filepath = os.path.join(chats_dir, fname)
+            try:
+                with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                    raw = f.read()
+            except Exception:
+                continue
+
+            if not raw.strip():
+                continue
+
+            # Strip timestamp prefixes for cleaner matching
+            clean = _re.sub(r'^\[\d{4}-\d{2}-\d{2}T[^\]]+\] ', '', raw, flags=_re.MULTILINE)
+            lines = clean.split('\n')
+
+            # Slide a window across lines looking for co-occurrence of ALL keywords
+            best_window_score = 0
+            best_window_center = None
+
+            for i in range(len(lines)):
+                window_start = max(0, i - COOCCURRENCE_WINDOW // 2)
+                window_end = min(len(lines), i + COOCCURRENCE_WINDOW // 2 + 1)
+                window_text = ' '.join(lines[window_start:window_end]).lower()
+
+                # Count how many distinct keywords appear in this window
+                kws_found = [kw for kw in keywords if kw in window_text]
+                score = len(kws_found)
+
+                if score > best_window_score:
+                    best_window_score = score
+                    best_window_center = i
+
+            # Reject if below minimum — means not all keywords co-occur anywhere
+            if best_window_score < MIN_SCORE:
+                continue
+
+            print(f"🗂️  ✅ {fname}: score={best_window_score}/{len(keywords)}", flush=True)
+
+            # Extract snippet around the best window
+            snippet_start = max(0, best_window_center - CONTEXT_LINES)
+            snippet_end = min(len(lines), best_window_center + CONTEXT_LINES + 1)
+            snippet = '\n'.join(lines[snippet_start:snippet_end]).strip()
+            if len(snippet) > MAX_SNIPPET_CHARS:
+                snippet = snippet[:MAX_SNIPPET_CHARS] + '...'
+
+            char_name = fname.split(' - ')[0] if ' - ' in fname else fname.replace('.txt', '')
+            chat_title = fname.replace('.txt', '')
+
+            results.append({
+                'filename': fname,
+                'char_name': char_name,
+                'chat_title': chat_title,
+                'snippet': snippet,
+                'score': best_window_score,
+            })
+
+    if not results:
+        print(f"🗂️ Chat search — no qualifying matches for keywords: {keywords} (min_score={MIN_SCORE})", flush=True)
+        return None, f"No chat history found matching all of: {', '.join(keywords)}"
+
+    results.sort(key=lambda x: x['score'], reverse=True)
+    top_results = results[:3]
+    print(f"🗂️ Chat search — {len(results)} files qualified, returning top {len(top_results)}", flush=True)
+
+    lines_out = [f"[CHAT HISTORY RESULTS FOR: {query}]"]
+    for r in top_results:
+        lines_out.append(f"\n--- From: \"{r['chat_title']}\" (with {r['char_name']}) ---")
+        lines_out.append(r['snippet'])
+    lines_out.append("\n[END CHAT HISTORY RESULTS]")
+
+    return "\n".join(lines_out), None
+
+
 def stream_model_response(payload):
     global abort_generation
     abort_generation = False  # Reset flag at start
@@ -739,6 +884,7 @@ def stream_model_response(payload):
                 all_text.append(chunk)
                 yield chunk
                 sys.stdout.flush()
+
                 
         except Exception as e:
             print(f"❌ Parse error: {e}", flush=True)
@@ -1010,6 +1156,24 @@ def chat():
     system_prompt, current_time = get_system_prompt()
     instruction = get_instruction_layer()
     tone_primer = get_tone_primer()
+
+    # Override system prompt with character's bound template if set
+    _char_sp = char_data.get("system_prompt", "").strip()
+    if _char_sp:
+        _char_sp_path = os.path.join(get_system_prompts_dir(), _char_sp)
+        if os.path.exists(_char_sp_path):
+            try:
+                with open(_char_sp_path, "r", encoding="utf-8") as _spf:
+                    _char_sp_content = _spf.read().strip()
+                # Rebuild with same time context prefix
+                import datetime as _dt
+                _time_ctx = f"Current date and time: {current_time}\n\n"
+                system_prompt = _time_ctx + _char_sp_content
+                print(f"🎭 Character system prompt override: {_char_sp}")
+            except Exception as e:
+                print(f"⚠️ Could not load character system prompt '{_char_sp}': {e}")
+        else:
+            print(f"⚠️ Character system prompt not found: {_char_sp_path}")
 
     print(f"⏰ Time context injected: {current_time}")
     
@@ -1378,7 +1542,23 @@ def chat():
     
     chosen_blocks = []
 
-    if memory_text:
+    # Skip memory injection if this is a cross-chat recall request —
+    # chat search will inject raw snippets instead, memory would just confuse the model
+    import re as _cs_early_re
+    _cs_early_check = _cs_early_re.search(
+        r'\b(?:do you remember|remember (?:when|that|what)|'
+        r'we (?:talked|spoke|discussed|chatted) (?:about|regarding)|'
+        r'in (?:a|an|the|another|a different|that other) (?:chat|conversation|session)|'
+        r'(?:other|different|another|previous|earlier|last) (?:chat|conversation|session)|'
+        r'I told (?:you|her|him|them)|'
+        r'we (?:already|previously) (?:talked|spoke|discussed))\b',
+        user_input, _cs_early_re.IGNORECASE
+    )
+    _skip_memory_for_chat_search = bool(_cs_early_check)
+    if _skip_memory_for_chat_search:
+        print("🗂️ Chat search intent detected early — skipping memory injection", flush=True)
+
+    if memory_text and not _skip_memory_for_chat_search:
         blocks = re.split(r"(?m)^# Memory:", memory_text)
         user_input_lower = user_input.lower()
         
@@ -1417,8 +1597,9 @@ def chat():
         # Sort by score (highest first)
         scored_blocks.sort(key=lambda x: x['score'], reverse=True)
         
-        # Take TOP 2 memories only (configurable)
-        MAX_MEMORIES = 2
+        # In RP mode, cap to 1 memory block to preserve context space for conversation turns
+        # (formatting instructions live in conversation, not system block — RP needs that room)
+        MAX_MEMORIES = 1 if project_rp_mode else 2
         
         if scored_blocks:
             chosen_blocks = [item['block'] for item in scored_blocks[:MAX_MEMORIES]]
@@ -1486,23 +1667,6 @@ def chat():
         
    
     # ✅ INJECT CHARACTER NOTE if present (every 4 messages)
-    char_note = char_data.get("character_note", "").strip()
-    if char_note:
-        # Count total messages (excluding system messages)
-        message_count = len([m for m in messages if m.get("role") in ["user", "assistant"]])
-        
-        # Inject every 4 messages
-        if message_count % 4 == 0 or message_count < 4:
-            insert_position = max(1, len(messages) - 3)
-            
-            messages.insert(insert_position, {
-                "role": "system",
-                "content": f"[Character Note: {char_note}]"
-            })
-            print(f"✅ Injected Character Note at position {insert_position} (message #{message_count}): {char_note[:50]}...")
-        else:
-            print(f"⏭️ Skipped Character Note injection (message #{message_count})")
-    
     # Trim if needed (secondary safety net)
     from truncation import trim_chat_history
     messages = trim_chat_history(messages)
@@ -1520,7 +1684,8 @@ def chat():
     _char_ex = char_data.get("example_dialogue", "").strip()
     if not _char_ex:
         try:
-            _active_sp = get_active_prompt_filename()
+            # Prefer the character's own bound system prompt over the globally active one
+            _active_sp = char_data.get("system_prompt") or get_active_prompt_filename()
             _base = _active_sp.rsplit('.', 1)[0] if '.' in _active_sp else _active_sp
             _ex_path = os.path.join(get_system_prompts_dir(), _base + '.example.txt')
             if os.path.exists(_ex_path):
@@ -1559,10 +1724,6 @@ def chat():
         has_emojis = any(emoji in ex for emoji in ['❤️', '😍', '😘', '💕', '😊', '😉', '🔥', '💯', '✨', '🎯'])
         has_xxx = 'xxx' in ex.lower()
 
-        # 🔍 Detect if examples use flowing multi-sentence paragraphs
-        ex_paragraphs = [p.strip() for p in ex.split('\n\n') if p.strip()]
-        has_paragraph_style = any(p.count('. ') >= 1 or p.count('! ') >= 1 or p.count('? ') >= 1 for p in ex_paragraphs)
-        
         # Build conditional style instructions
         style_rules = []
         if has_emojis:
@@ -1573,9 +1734,7 @@ def chat():
         # Add generic style rules that apply to everyone
         style_rules.insert(0, "- Copy the EXACT tone, energy, and emotional warmth")
         style_rules.append("- Match their vocabulary, sentence structure, and rhythm")
-        if has_paragraph_style:
-            style_rules.append("- Write in flowing paragraphs like the examples — multiple sentences per paragraph")
-            style_rules.append("- DO NOT put every sentence on its own line — group related sentences together into paragraphs")
+        style_rules.append("- Mirror the formatting structure of the examples precisely — headers, bullets, separators, paragraphs — whatever the example uses, use it")
         style_rules.append("- DO NOT copy the topics or situations from examples")
         style_rules.append("- Generate NEW content in this character's style")
         
@@ -1632,6 +1791,21 @@ def chat():
         print(f"✅ Inserted continuation reminder at position {insert_position}")
     else:
         print("🆕 New conversation detected - allowing greeting")
+
+    # Inject character note LAST — after continuation reminder — so it's the final
+    # system message the model reads before the user turn. This maximises adherence.
+    char_note = char_data.get("character_note", "").strip()
+    if char_note:
+        message_count = len([m for m in messages if m.get("role") in ["user", "assistant"]])
+        if message_count % 4 == 0 or message_count < 4:
+            insert_position = max(1, len(messages) - 1)
+            messages.insert(insert_position, {
+                "role": "system",
+                "content": f"[Character Note: {char_note}]"
+            })
+            print(f"✅ Injected Character Note at position {insert_position} (message #{message_count}): {char_note[:50]}...")
+        else:
+            print(f"⏭️ Skipped Character Note injection (message #{message_count})")
 
     # Build final ChatML prompt from ALL messages
     prompt_parts = []
@@ -1793,7 +1967,7 @@ def chat():
             "top_p": sampling["top_p"],
             "repeat_penalty": sampling["repeat_penalty"],
             "stream": True,
-            "stop": ["<|im_end|>", "\n<|im_start|>"],
+            "stop": ["<|im_end|>", "\n<|im_start|>", "<|im_start|>", "\nuser\n", "\nUser\n", "\nassistant\n", "\nAssistant\n"],
         }
 
         print("\n🧩 VISION PAYLOAD SENDING TO MODEL:", flush=True)
@@ -1823,7 +1997,7 @@ def chat():
             "top_k": sampling.get("top_k", 40),
             "repeat_penalty": sampling["repeat_penalty"],
             "stream": True,
-            "stop": ["<|im_end|>", "\n<|im_start|>"],
+            "stop": ["<|im_end|>", "\n<|im_start|>", "<|im_start|>", "\nuser\n", "\nUser\n", "\nassistant\n", "\nAssistant\n"],
         }
 
         if app.debug:
@@ -1831,6 +2005,151 @@ def chat():
             print(json.dumps(payload, indent=2), flush=True)
 
         use_web_search = char_data.get("use_web_search", False)
+
+        # --------------------------------------------------
+        # CHAT HISTORY SEARCH — intent-based, always-on
+        # Fires before web search or normal stream.
+        # Detects phrases that clearly reference a past conversation
+        # the model has no access to, searches chat files, injects results.
+        # --------------------------------------------------
+        import re as _csre
+        _cs_user_msg = user_input.strip()
+
+        _should_chat_search = bool(_csre.search(
+            r'\b(?:'
+            r'do you remember|do(?:es)? (?:she|he|it) remember|'
+            r'remember (?:when|that|what|the time)|'
+            r'we (?:talked|spoke|discussed|chatted) (?:about|regarding)|'
+            r'(?:I|we) (?:mentioned|told you|said|talked) (?:about|that|in another|in a different)|'
+            r'in (?:a|an|the|another|a different|that other) (?:chat|conversation|session)|'
+            r'(?:other|different|another|previous|earlier|last) (?:chat|conversation|session)|'
+            r'(?:from|in) (?:a|an|another) (?:previous|earlier|other|different) (?:chat|conversation)|'
+            r'you (?:should|might|may|would) (?:remember|recall|know)|'
+            r'I told (?:you|her|him|them)|'
+            r'we (?:already|previously) (?:talked|spoke|discussed)'
+            r')\b',
+            _cs_user_msg, _csre.IGNORECASE
+        ))
+
+        if _should_chat_search:
+            print(f"🗂️ Chat search intent detected: {repr(_cs_user_msg[:80])}", flush=True)
+
+            # Extract a clean search query from the user message
+            # Strip the recall preamble — keep the actual topic
+            _cs_query = _cs_user_msg
+            _cs_query = _csre.sub(
+                r'^(?:(?:hey|hi|ok|okay|so|well|actually)[,\s]*)*'
+                r'(?:do you remember|remember when|we talked about|we spoke about|'
+                r'we discussed|I mentioned|I told you about|in another chat|in a different chat|'
+                r'in a previous chat|in the other chat|you might remember|you should remember)'
+                r'[\s,]*(?:that|about|when|what|how|the)?[\s,]*',
+                '', _cs_query, flags=_csre.IGNORECASE
+            ).strip().rstrip('?.,!')
+
+            # Fallback: use full message if stripping left nothing useful
+            if len(_cs_query) < 4:
+                _cs_query = _cs_user_msg
+
+            print(f"🗂️ Chat search query: {repr(_cs_query)}", flush=True)
+
+            _cs_results, _cs_err = do_chat_search(_cs_query, current_filename=data.get("current_chat_filename", "") or None)
+
+            def _chat_search_intent_stream():
+                import re as _csre2
+                _ROLE_LEAK = _csre2.compile(r'\n(?:user|assistant|system)\b', _csre2.IGNORECASE)
+
+                yield "🗂️ *Searching chat history...*\n\n"
+
+                if _cs_results:
+                    _augmented_msg = (
+                        f"{user_input.strip()}\n\n"
+                        f"{_cs_results}\n"
+                        f"IMPORTANT: The above are real excerpts from past conversations found by searching chat logs. "
+                        f"Use them to answer the user's question accurately. "
+                        f"Respond naturally as if you genuinely recall this — do NOT say you searched, "
+                        f"do NOT echo the block markers or structure. "
+                        f"If the excerpts only partially answer the question, say what you found and acknowledge any gaps."
+                    )
+                else:
+                    _augmented_msg = (
+                        f"{user_input.strip()}\n\n"
+                        f"[Chat history search found no matching conversations for this topic. "
+                        f"Be honest — tell the user you don't have any record of that conversation "
+                        f"and cannot recall it. Do not invent or guess details.]"
+                    )
+
+                # Rebuild messages array with augmented user turn
+                _cs_msgs = [dict(m) for m in messages]
+                for i in range(len(_cs_msgs) - 1, -1, -1):
+                    if _cs_msgs[i].get("role") == "user":
+                        _cs_msgs[i] = {"role": "user", "content": _augmented_msg}
+                        break
+
+                # Rebuild full ChatML prompt
+                _cs_parts = []
+                for msg in _cs_msgs:
+                    role = msg.get("role", "user")
+                    content = msg.get("content", "")
+                    if isinstance(content, list):
+                        content = " ".join(p.get("text", "") for p in content if p.get("type") == "text").strip()
+                    else:
+                        content = content.strip()
+                    _cs_parts.append(f"<|im_start|>{role}\n{content}\n<|im_end|>")
+                _cs_parts.append(
+                    "<|im_start|>system\n"
+                    "Chat history excerpts have been injected above. "
+                    "Respond naturally as the character based on what was found. "
+                    "Do not echo or reference the block markers or structure.\n"
+                    "<|im_end|>"
+                )
+                _cs_parts.append("<|im_start|>assistant\n")
+                _cs_prompt = "\n".join(_cs_parts[:-1]) + "\n" + _cs_parts[-1]
+
+                _cs_payload = dict(payload)
+                _cs_payload["prompt"] = _cs_prompt
+                _cs_payload["n_predict"] = max(_cs_payload.get("n_predict", 512), 1024)
+
+                _tail = ""
+                _TAIL_LEN = 40
+                _halted = [False]
+                for chunk in stream_model_response(_cs_payload):
+                    if _halted[0]:
+                        continue
+                    # Suppress any echoed CHAT HISTORY block markers
+                    if '[CHAT HISTORY RESULTS' in chunk or '[END CHAT HISTORY' in chunk:
+                        continue
+                    combined = _tail + chunk
+                    m = _ROLE_LEAK.search(combined)
+                    if m:
+                        safe = combined[:m.start()]
+                        if safe:
+                            yield safe
+                        _halted[0] = True
+                        _tail = ""
+                        continue
+                    if len(combined) > _TAIL_LEN:
+                        yield combined[:-_TAIL_LEN]
+                        _tail = combined[-_TAIL_LEN:]
+                    else:
+                        _tail = combined
+                if not _halted[0] and _tail:
+                    _tail = _csre2.sub(r'\n(?:user|assistant|system)\b[^\n]*$', '', _tail, flags=_csre2.IGNORECASE)
+                    if _tail:
+                        yield _tail
+
+            try:
+                resp = Response(
+                    stream_with_context(_chat_search_intent_stream()),
+                    content_type="text/event-stream; charset=utf-8",
+                )
+                resp.headers['X-Accel-Buffering'] = 'no'
+                resp.headers['Cache-Control'] = 'no-cache'
+                if newly_pinned_doc:
+                    resp.headers['X-Pinned-Doc'] = newly_pinned_doc
+                return resp
+            except Exception as e:
+                print(f"❌ Chat search intent error: {e}", flush=True)
+                return f"⚠️ Error: {e}", 500
 
         if use_web_search:
             def _web_search_stream():
@@ -2137,15 +2456,46 @@ def chat():
             try:
                 import re as _re3
                 def _filtered_stream():
+                    import re as _re3_inner
                     _suppress = [False]
+                    _halted = [False]
                     _buf = ""
+                    _tail = ""
+                    _TAIL_LEN = 40
+                    _ROLE_LEAK = _re3_inner.compile(r'\n(?:user|assistant|system)\b', _re3_inner.IGNORECASE)
+
+                    # Stream live, watching for [CHAT SEARCH: ...] tag as secondary fallback
+                    _accumulated = []
+                    _cs_tag_query = None
+
                     for chunk in stream_model_response(payload):
-                        # Fast path: if not suppressing and chunk has no suspicious content, yield immediately
-                        if not _suppress[0] and '[WEB SEARCH' not in chunk and '[END' not in chunk:
-                            yield chunk
+                        if _halted[0]:
                             continue
-                        # Slow path: buffer and check line by line
-                        _buf += chunk
+                        _accumulated.append(chunk)
+                        _rolling = "".join(_accumulated)
+                        _cs_tag = _re3_inner.search(r'\[CHAT SEARCH:\s*(.+?)\]', _rolling, _re3_inner.IGNORECASE)
+                        if _cs_tag:
+                            _cs_tag_query = _cs_tag.group(1).strip()
+                            break  # stop streaming, do chat search
+
+                        if not _suppress[0] and '[WEB SEARCH' not in chunk and '[END' not in chunk and '[CHAT SEARCH' not in chunk:
+                            combined = _tail + chunk
+                            m = _ROLE_LEAK.search(combined)
+                            if m:
+                                safe = combined[:m.start()]
+                                if safe:
+                                    yield safe
+                                _halted[0] = True
+                                _tail = ""
+                                continue
+                            if len(combined) > _TAIL_LEN:
+                                yield combined[:-_TAIL_LEN]
+                                _tail = combined[-_TAIL_LEN:]
+                            else:
+                                _tail = combined
+                            continue
+                        _buf += _tail + chunk
+                        _tail = ""
                         while '\n' in _buf:
                             _line, _buf = _buf.split('\n', 1)
                             _line = _re3.sub(r'\[WEB SEARCH RESULTS[^\n]*?\[END[^\]]*\]>?', '', _line)
@@ -2160,8 +2510,80 @@ def chat():
                         if _buf and not _suppress[0] and '[WEB SEARCH RESULTS' not in _buf:
                             yield _buf
                             _buf = ""
-                    if _buf and not _suppress[0] and '[WEB SEARCH RESULTS' not in _buf:
-                        yield _buf
+
+                    # Model emitted [CHAT SEARCH: ...] — do the search and re-prompt
+                    if _cs_tag_query:
+                        print(f"🗂️ Model-triggered chat search: {_cs_tag_query}", flush=True)
+                        yield "\n\n🗂️ *Searching chat history...*\n\n"
+                        _cs_res, _cs_err = do_chat_search(_cs_tag_query, current_filename=current_chat_filename or None)
+                        if _cs_res:
+                            _aug = (
+                                f"{user_input.strip()}\n\n{_cs_res}\n"
+                                f"IMPORTANT: The above are real excerpts from past conversations. "
+                                f"Use them to answer naturally. Do NOT echo block markers or structure."
+                            )
+                        else:
+                            _aug = (
+                                f"{user_input.strip()}\n\n"
+                                f"[Chat history search found no results for '{_cs_tag_query}'. "
+                                f"Tell the user honestly nothing was found. Do not invent details.]"
+                            )
+                        _cs_msgs = [dict(m) for m in messages]
+                        for i in range(len(_cs_msgs) - 1, -1, -1):
+                            if _cs_msgs[i].get("role") == "user":
+                                _cs_msgs[i] = {"role": "user", "content": _aug}
+                                break
+                        _cs_parts = []
+                        for msg in _cs_msgs:
+                            role = msg.get("role", "user")
+                            content = msg.get("content", "")
+                            if isinstance(content, list):
+                                content = " ".join(p.get("text", "") for p in content if p.get("type") == "text").strip()
+                            else:
+                                content = content.strip()
+                            _cs_parts.append(f"<|im_start|>{role}\n{content}\n<|im_end|>")
+                        _cs_parts.append("<|im_start|>system\nChat history excerpts injected. Respond naturally.\n<|im_end|>")
+                        _cs_parts.append("<|im_start|>assistant\n")
+                        _cs_prompt = "\n".join(_cs_parts[:-1]) + "\n" + _cs_parts[-1]
+                        _cs_pl = dict(payload)
+                        _cs_pl["prompt"] = _cs_prompt
+                        _cs_pl["n_predict"] = max(_cs_pl.get("n_predict", 512), 1024)
+                        _cs_tail2 = ""
+                        _cs_halted2 = [False]
+                        for chunk in stream_model_response(_cs_pl):
+                            if _cs_halted2[0]:
+                                continue
+                            if '[CHAT HISTORY RESULTS' in chunk or '[END CHAT HISTORY' in chunk:
+                                continue
+                            combined = _cs_tail2 + chunk
+                            m = _ROLE_LEAK.search(combined)
+                            if m:
+                                safe = combined[:m.start()]
+                                if safe:
+                                    yield safe
+                                _cs_halted2[0] = True
+                                _cs_tail2 = ""
+                                continue
+                            if len(combined) > _TAIL_LEN:
+                                yield combined[:-_TAIL_LEN]
+                                _cs_tail2 = combined[-_TAIL_LEN:]
+                            else:
+                                _cs_tail2 = combined
+                        if not _cs_halted2[0] and _cs_tail2:
+                            _cs_tail2 = _re3_inner.sub(r'\n(?:user|assistant|system)\b[^\n]*$', '', _cs_tail2, flags=_re3_inner.IGNORECASE)
+                            if _cs_tail2:
+                                yield _cs_tail2
+                        return
+
+                    # Normal end-of-stream flush (no chat search tag)
+                    if not _halted[0]:
+                        _tail = _re3_inner.sub(r'\n(?:user|assistant|system)\b[^\n]*$', '', _tail, flags=_re3_inner.IGNORECASE)
+                        if _tail and not _suppress[0]:
+                            yield _tail
+                        if _buf and not _suppress[0] and '[WEB SEARCH RESULTS' not in _buf:
+                            _buf = _re3_inner.sub(r'\n(?:user|assistant|system)\b[^\n]*$', '', _buf, flags=_re3_inner.IGNORECASE)
+                            if _buf:
+                                yield _buf
                 resp = Response(
                     stream_with_context(_filtered_stream()),
                     content_type="text/event-stream; charset=utf-8",

@@ -438,7 +438,7 @@ Example: You're helping Bob track his gym progress. Keep detailed logs with date
         </div>
         <div id="rp-opener-section" style="display: none; margin-bottom: 4px;">
           <label>Opening Scene</label>
-          <textarea id="edit-project-rp-opener" rows="4" placeholder="*Nebula walks into the room and smiles at you* Hey Chris, how's it going? *She sits down on the couch and pours herself a drink*"></textarea>
+          <textarea id="edit-project-rp-opener" rows="4" placeholder="*Lucy walks into the room and smiles at you* Hey, how's it going? *She pours herself a drink and takes a seat*"></textarea>
           <small style="color: #888; display: block; margin-top: 4px; margin-bottom: 12px;">Shown in chat as the character's first message — sets the scene and formatting style.</small>
         </div>
 
@@ -620,9 +620,15 @@ function renderImagePreviews() {
 // Allows genuine --- separators through so marked.js renders them as <hr>.
 function sanitizeMarkdown(text) {
   if (!text) return text;
-  // Setext headings: line of text followed by === or --- -> keep text, drop underline
+  // Guarantee --- separators always have blank lines around them BEFORE any other processing.
+  // Without this, marked.js (with breaks:true) can interpret the line above a --- as a setext h2,
+  // turning it into a heading and silently swallowing the separator — dropping everything after it.
+  text = text.replace(/([^\n])\n(---+[ \t]*)\n/g, "$1\n\n$2\n\n");  // missing blank before AND after
+  text = text.replace(/([^\n])\n(---+[ \t]*)$/g, "$1\n\n$2");          // missing blank before (end of string)
+  // Setext headings: line of text followed by === or long ---- (4+ dashes) -> keep text, drop underline
+  // Only strip 4+ dash lines — genuine --- separators (exactly 3 dashes) are left alone to render as <hr>
   text = text.replace(/^(.+)\n[=]{2,}[ \t]*$/gm, "$1");
-  text = text.replace(/^(.+)\n[-]{2,}[ \t]*$/gm, "$1");
+  text = text.replace(/^(.+)\n[-]{4,}[ \t]*$/gm, "$1");
   // Strip excessive HR lines (10+ chars) — these are always decorative noise from the model
   text = text.replace(/^[-]{10,}[ \t]*$/gm, "");
   text = text.replace(/^[=]{4,}[ \t]*$/gm, "");
@@ -632,6 +638,19 @@ function sanitizeMarkdown(text) {
   text = text.replace(/^(\s*[-*_]\s*){5,}$/gm, "");
   // Box-drawing chars: ═══, ─── etc (model echoes these from injected search prompts)
   text = text.replace(/^[\u2550\u2551\u2500\u2501\u2502\u2503]{3,}\s*$/gm, "");
+  // Ensure blank line after every ATX heading (# ## ###) before any content.
+  // With breaks:true, a heading immediately followed by a list item or paragraph
+  // pulls that content into the heading block — it never renders as a separate element.
+  text = text.replace(/(#{1,6}[^\n]+)\n([^\n#])/g, "$1\n\n$2");
+
+  // Fix: no blank line between heading/intro and numbered list item 1
+  // Marked.js requires a blank line before a list — insert one before "1. " when preceded by text
+  text = text.replace(/([^\n])\n(1\.\s)/g, "$1\n\n$2");
+  // Fix: blank lines between numbered list items cause each item to become its own block
+  // Collapse blank lines between consecutive numbered items so they stay in one block
+  text = text.replace(/^(\d+\..+)\n\n(\d+\.\s)/gm, "$1\n$2");
+  // Same fix for bullet lists — ensure blank line before - or * list items after any text line
+  text = text.replace(/([^\n])\n([-*]\s)/g, "$1\n\n$2");
   return text;
 }
 
@@ -658,11 +677,19 @@ if (typeof marked === "undefined") {
 
       // Merge orphaned punctuation-only blocks onto the previous block
       // e.g. model outputs "**bold text**\n\n." — the "." becomes its own block
+      // Also merge consecutive numbered list item blocks so they form one <ol> not many <ol start=1>
       const merged = [];
       blocks.forEach(block => {
         const trimmed = block.trim();
         if (/^[.,!?;:]+$/.test(trimmed) && merged.length > 0) {
           merged[merged.length - 1] = merged[merged.length - 1].trimEnd() + trimmed;
+        } else if (/^\d+\.\s/.test(trimmed) && merged.length > 0) {
+          const prev = merged[merged.length - 1].trimStart();
+          if (/^\d+\.\s/.test(prev)) {
+            merged[merged.length - 1] = merged[merged.length - 1].trimEnd() + '\n' + block.trim();
+          } else {
+            merged.push(block);
+          }
         } else {
           merged.push(block);
         }
@@ -705,8 +732,11 @@ if (typeof marked === "undefined") {
         }
 
         // Ordered list block (1. 2. 3. etc)
-        if (lines.every(l => /^\d+\.\s/.test(l))) {
-          html += '<ol>' + lines.map(l => `<li>${parseInline(l.replace(/^\d+\.\s/, ''))}</li>`).join('') + '</ol>';
+        // Also handles intro line followed by list items e.g. "Heading:\n1. Foo\n2. Bar"
+        const olStart = lines.findIndex(l => /^\d+\.\s/.test(l));
+        if (olStart !== -1 && lines.slice(olStart).every(l => /^\d+\.\s/.test(l))) {
+          if (olStart > 0) html += `<p>${parseInline(lines.slice(0, olStart).join(' '))}</p>`;
+          html += '<ol>' + lines.slice(olStart).map(l => `<li>${parseInline(l.replace(/^\d+\.\s/, ''))}</li>`).join('') + '</ol>';
           return;
         }
 
@@ -2616,6 +2646,9 @@ async function openChat(filename) {
             .replace(/<\|im_start\|>system/gi, '')
             .replace(/<\|im_end\|>/gi, '')
             .replace(/\bim_end\|?>/gi, '')
+            .replace(/_end\|?>/gi, '')
+            .replace(/End\|>?/gi, '')
+            .replace(/\n(?:user|assistant|system)\b[\s\S]*$/i, '')
             .replace(new RegExp(charName + ':\s*', 'gim'), '')
             .replace(/^User:\s*/gim, '')
             .replace(/^Assistant:\s*/gim, '');
@@ -2629,6 +2662,11 @@ async function openChat(filename) {
           .replace(/<\|im_end\|>/gi, "")
           .replace(/\bim_end\|?>/gi, '')
           .replace(/<\/\|im_end\|>/gi, "")
+          // Partial ChatML token fragments that survive chunk-level stripping
+          .replace(/_end\|?>/gi, '')
+          .replace(/End\|>?/gi, '')
+          // Role-tag leakage: model generates next turn — strip from the point leakage starts
+          .replace(/\n(?:user|assistant|system)\b[\s\S]*$/i, '')
           .replace(new RegExp(`^${userName}:\\s*`, 'gim'), "")
           .replace(new RegExp(`^${charName}:\\s*`, 'gim'), "")
           .replace(/^User:\s*/gim, "")
@@ -3046,6 +3084,9 @@ async function openChat(filename) {
           .replace(/<\|im_end\|>/gi, '')
           .replace(/\bim_end\|?>/gi, '')
           .replace(/<\/\|im_end\|>/gi, '')
+          .replace(/_end\|?>/gi, '')
+          .replace(/End\|>?/gi, '')
+          .replace(/\n(?:user|assistant|system)\b[\s\S]*$/i, '')
           .replace(new RegExp(`^${userName}:\\s*`, 'gim'), '')
           .replace(new RegExp(`^${charName}:\\s*`, 'gim'), '')
           .replace(/^User:\s*/gim, '')
@@ -3063,8 +3104,11 @@ async function openChat(filename) {
         .replace(/<\|im_start\|>user/gi, '')
         .replace(/<\|im_start\|>system/gi, '')
         .replace(/<\|im_end\|>/gi, '')
-          .replace(/\bim_end\|?>/gi, '')
+        .replace(/\bim_end\|?>/gi, '')
         .replace(/<\/\|im_end\|>/gi, '')
+        .replace(/_end\|?>/gi, '')
+        .replace(/End\|>?/gi, '')
+        .replace(/\n(?:user|assistant|system)\b[\s\S]*$/i, '')
         .replace(new RegExp(`^${userName}:\\s*`, 'gim'), '')
         .replace(new RegExp(`^${charName}:\\s*`, 'gim'), '')
         .replace(/^User:\s*/gim, '')

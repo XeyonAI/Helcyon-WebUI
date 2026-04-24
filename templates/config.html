@@ -174,6 +174,13 @@
       <label>System Prompt:</label>
       <textarea id="global-system-prompt"
                 placeholder="Type a system prompt, then Save As a new template..."></textarea>
+
+      <label style="margin-top:14px; display:block;">Global Example Dialog: <span style="font-size:11px; color:#888; font-weight:normal;">Used when a character has no example dialogue of its own.</span></label>
+      <textarea id="global-example-dialog"
+                placeholder="User: Hey, how are you?&#10;Assistant: I'm doing great, thanks for asking!&#10;&#10;User: Tell me something interesting.&#10;Assistant: Sure — did you know..."
+                style="min-height:120px;"></textarea>
+      <button onclick="saveGlobalExampleDialog()" style="background-color:#1f3a5a; border-color:#245080; color:white; margin-top:6px; margin-bottom:4px;">💾 Save Global Example Dialog</button>
+      <div id="global-example-dialog-status" style="font-size:12px; color:#6a9; margin-bottom:6px; min-height:16px;"></div>
       <hr />
 
       <!-- 📍 CURRENT SITUATION (semi-global) -->
@@ -186,7 +193,7 @@
       <hr />
 
 	  <div id="character-select-bar">
-		<h3>Select Character</h3>
+		<h3>Select Character <span id="char-bind-indicator" style="display:none; font-size:13px; color:#6a9; margin-left:6px;" title="System prompt bound">🔗 Bound</span></h3>
 	    <select id="character-select"></select>
 	  </div>
 
@@ -212,18 +219,16 @@
         </label>
       </div>
 
-      <div style="margin: 8px 0 4px 0; display:flex; align-items:center; gap:8px;">
-        <input type="checkbox" id="use-personal-memory" style="width:16px; height:16px; cursor:pointer;" />
-        <label for="use-personal-memory" style="margin:0; cursor:pointer; font-size:13px; color:#ccc;">
-          👤 Use personal memory <span style="color:#888; font-size:11px;">(character's own memory file)</span>
-        </label>
-      </div>
+      <!-- Memory checkboxes hidden in free version — kept for JS compatibility -->
+      <input type="checkbox" id="use-personal-memory" style="display:none;" />
+      <input type="checkbox" id="use-global-memory" style="display:none;" />
 
-      <div style="margin: 4px 0 12px 0; display:flex; align-items:center; gap:8px;">
-        <input type="checkbox" id="use-global-memory" style="width:16px; height:16px; cursor:pointer;" />
-        <label for="use-global-memory" style="margin:0; cursor:pointer; font-size:13px; color:#ccc;">
-          🌐 Use global memory <span style="color:#888; font-size:11px;">(shared memory file for all opted-in characters)</span>
-        </label>
+      <div style="margin: 8px 0 12px 0; padding: 10px 14px; background: rgba(102,126,234,0.08); border: 1px solid rgba(102,126,234,0.25); border-radius: 8px; display:flex; align-items:center; justify-content:space-between; gap:12px;">
+        <div>
+          <div style="font-size:13px; color:#ccc;">🧠 <strong style="color:#fff;">Character Memory</strong></div>
+          <div style="font-size:11px; color:#888; margin-top:2px;">Characters that remember you — Pro feature</div>
+        </div>
+        <button onclick="window.open('https://xeyonai.gumroad.com/l/bsmupk','_blank')" style="background:linear-gradient(135deg,#667eea,#764ba2); border:none; color:#fff; font-size:12px; font-weight:600; padding:6px 14px; border-radius:6px; cursor:pointer; white-space:nowrap;">⭐ Go Pro</button>
       </div>
 
       <div style="margin: 4px 0 12px 0; display:flex; align-items:center; gap:8px;">
@@ -479,6 +484,14 @@
     } catch (err) {
       console.error('Error loading system prompt file:', err);
     }
+    // Load paired example dialog
+    try {
+      const exRes = await fetch('/system_prompts/load_example/' + encodeURIComponent(filename));
+      const exText = exRes.ok ? await exRes.text() : '';
+      document.getElementById('global-example-dialog').value = exText.trim();
+    } catch (err) {
+      console.warn('Could not load paired example dialog:', err);
+    }
   }
 
   async function saveSystemPromptAs() {
@@ -486,6 +499,7 @@
     if (!filename) { alert('Enter a filename first (e.g. my_prompt.txt)'); return; }
     if (!filename.endsWith('.txt')) filename += '.txt';
     const text = document.getElementById('global-system-prompt').value;
+    const exText = document.getElementById('global-example-dialog').value;
     try {
       const res = await fetch('/system_prompts/save/' + encodeURIComponent(filename), {
         method: 'POST',
@@ -493,6 +507,12 @@
         body: text
       });
       const data = await res.json();
+      // Also save paired example dialog
+      await fetch('/system_prompts/save_example/' + encodeURIComponent(filename), {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        body: exText
+      });
       if (data.status === 'saved') {
         await loadSystemPromptList();
         document.getElementById('system-prompt-file-select').value = filename;
@@ -505,6 +525,11 @@
     }
   }
 
+  function updateBindIndicator(isBound) {
+    const el = document.getElementById('char-bind-indicator');
+    if (el) el.style.display = isBound ? 'inline' : 'none';
+  }
+
   async function activateSystemPrompt() {
     const select = document.getElementById('system-prompt-file-select');
     const filename = select.value;
@@ -515,7 +540,19 @@
       if (data.status === 'ok') {
         updateActiveIndicator(filename);
         await loadSystemPromptList();
-        alert('✅ Active prompt set to: ' + filename);
+        // Bind this template to the current character card
+        const charName = document.getElementById('character-select').value;
+        if (charName) {
+          await fetch(`/character_system_prompt/${encodeURIComponent(charName)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ system_prompt: filename })
+          });
+          updateBindIndicator(true);
+          alert('✅ Active prompt set to: ' + filename + '\n💾 Bound to character: ' + charName);
+        } else {
+          alert('✅ Active prompt set to: ' + filename);
+        }
       } else {
         alert('❌ Failed: ' + (data.error || 'Unknown'));
       }
@@ -548,6 +585,7 @@
     const filename = select.value || document.getElementById('system-prompt-filename').value.trim();
     if (!filename) { alert('No template selected. Use Save As to create a new one.'); return; }
     const text = document.getElementById('global-system-prompt').value;
+    const exText = document.getElementById('global-example-dialog').value;
     try {
       const res = await fetch('/system_prompts/save/' + encodeURIComponent(filename), {
         method: 'POST',
@@ -555,6 +593,12 @@
         body: text
       });
       const data = await res.json();
+      // Also save paired example dialog
+      await fetch('/system_prompts/save_example/' + encodeURIComponent(filename), {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        body: exText
+      });
       if (data.status === 'saved') alert('✅ Saved: ' + filename);
       else alert('❌ Save failed');
     } catch (err) {
@@ -631,6 +675,19 @@
       document.getElementById("image").value = data.image || "";
       updateImagePreview();
       renderExtraImages(data.images || [], data.image || "");
+
+      // Auto-load character's paired system prompt + example dialog if set
+      if (data.system_prompt) {
+        const spSelect = document.getElementById('system-prompt-file-select');
+        if (spSelect) spSelect.value = data.system_prompt;
+        document.getElementById('system-prompt-filename').value = data.system_prompt;
+        updateActiveIndicator(data.system_prompt);
+        await loadSelectedSystemPrompt(data.system_prompt);
+        updateBindIndicator(true);
+        console.log(`🎭 Auto-loaded system prompt for ${name}: ${data.system_prompt}`);
+      } else {
+        updateBindIndicator(false);
+      }
     } catch (err) {
       console.error("Error loading character:", err);
     }
@@ -779,6 +836,7 @@
       example_dialogue: document.getElementById("example-dialog").value,
       image: document.getElementById("image").value,
       images: (currentCharacter && currentCharacter.images) ? currentCharacter.images : undefined,
+      system_prompt: (currentCharacter && currentCharacter.system_prompt) ? currentCharacter.system_prompt : undefined,
     };
     try {
       const res = await fetch(`/characters/${name}.json`, {
@@ -1193,6 +1251,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     loadSettings();
     loadGlobalSystemPrompt();
     loadCurrentSituation();
+    loadGlobalExampleDialog();
     loadTTSEngine();
     loadLlamaConfig();
 
@@ -1202,9 +1261,9 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
 
     const spFileSelect = document.getElementById('system-prompt-file-select');
     if (spFileSelect) {
-      spFileSelect.addEventListener('change', () => {
+      spFileSelect.addEventListener('change', async () => {
         const filename = spFileSelect.value;
-        if (filename) loadSelectedSystemPrompt(filename);
+        if (filename) await loadSelectedSystemPrompt(filename);
       });
     }
 
@@ -2123,6 +2182,50 @@ async function saveCurrentSituation() {
     }
   } catch (e) {
     console.error('Failed to save current situation:', e);
+  }
+}
+
+async function loadGlobalExampleDialog() {
+  // Example dialog is now loaded as part of loadSelectedSystemPrompt.
+  // This function is kept for init — it loads the active template's paired example.
+  try {
+    const res = await fetch('/system_prompts/list');
+    const data = await res.json();
+    if (data.active) {
+      const exRes = await fetch('/system_prompts/load_example/' + encodeURIComponent(data.active));
+      const exText = exRes.ok ? await exRes.text() : '';
+      document.getElementById('global-example-dialog').value = exText.trim();
+    }
+  } catch (e) {
+    console.warn('Could not load global example dialog on init:', e);
+  }
+}
+
+async function saveGlobalExampleDialog() {
+  const text = document.getElementById('global-example-dialog').value.trim();
+  const statusEl = document.getElementById('global-example-dialog-status');
+  const select = document.getElementById('system-prompt-file-select');
+  const filename = select ? select.value : '';
+  if (!filename) {
+    if (statusEl) { statusEl.textContent = '⚠️ Select a system prompt template first'; statusEl.style.color = '#fa8'; }
+    setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 3000);
+    return;
+  }
+  try {
+    const res = await fetch('/system_prompts/save_example/' + encodeURIComponent(filename), {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      body: text
+    });
+    const data = await res.json();
+    if (data.status === 'saved') {
+      if (statusEl) { statusEl.textContent = '✅ Saved with ' + filename; statusEl.style.color = '#6a9'; setTimeout(() => statusEl.textContent = '', 2500); }
+    } else {
+      if (statusEl) { statusEl.textContent = '❌ Save failed'; statusEl.style.color = '#e66'; }
+    }
+  } catch (e) {
+    console.error('Failed to save global example dialog:', e);
+    if (statusEl) { statusEl.textContent = '❌ Error saving'; statusEl.style.color = '#e66'; }
   }
 }
 
