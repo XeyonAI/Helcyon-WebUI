@@ -29,7 +29,7 @@ Optimized for [Helcyon](https://huggingface.co/XeyonAI) models, but works beauti
 - 📁 **Project Folders** — Organise chats by topic and inject documents (PDF, DOCX, MD, TXT, ODT) directly into conversation context
 - 🌐 **Web Search** — Real-time web search built in. Works just like Grok and ChatGPT — Helcyon searches and chats about the results. Compatible with Helcyon models (see [XeyonAI on HuggingFace](https://huggingface.co/XeyonAI))
 
-### Pro Version (£20)
+### Pro Version (£25)
 
 Everything in Free, plus:
 
