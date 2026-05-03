@@ -132,7 +132,7 @@
         <button id="projects-btn" onclick="openProjectModal()">📁 Projects</button>
         <button id="opening-line-btn" onclick="openOpeningLineModal()">💬 Opening Line</button>
         <button id="author-note-btn" onclick="openAuthorNote()">📝 Author's Note</button>
-        <button id="memory-btn" onclick="openMemoryModal()">🧠 Memory</button>
+        <button id="memory-btn" onclick="showUpgradeModal('memory')">⭐ Go Pro</button>
         <button id="situation-btn" onclick="openSituationModal()">📍 Situation</button>
       </div>
       
@@ -205,7 +205,7 @@
                 <button onclick="document.getElementById('chat-image-input').click(); closeInputMenu()" title="Attach Image">📎 Attach Image</button>
                 <div class="input-menu-divider"></div>
                 <button onclick="manualSaveChat(); closeInputMenu()" id="save-chat-btn">💾 Save Chat</button>
-                <button onclick="endSession(); closeInputMenu()" title="Generate a memory summary">🧠 End Session</button>
+                <button onclick="showUpgradeModal('memory'); closeInputMenu()" title="Upgrade to HWUI Pro">⭐ Go Pro</button>
                 <div class="input-menu-divider"></div>
                 <button onclick="deleteLastMessages(); closeInputMenu()" class="input-menu-danger">🗑 Delete Last</button>
                 <button onclick="clearChat(); closeInputMenu()" class="input-menu-danger">✕ Clear Chat</button>
@@ -484,6 +484,25 @@ Example: You're helping Bob track his gym progress. Keep detailed logs with date
 <!-- Avatar Lightbox -->
 <div id="avatar-lightbox">
   <img id="avatar-lightbox-img" src="" alt="Avatar">
+</div>
+
+<!-- Upgrade to Pro Modal -->
+<div id="upgrade-modal" class="modal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3>Upgrade to HWUI Pro</h3>
+      <span class="close" onclick="closeUpgradeModal()">&times;</span>
+    </div>
+    <div class="modal-body">
+      <div id="upgrade-content"></div>
+      <p style="text-align: center; margin-top: 20px; color: #888; font-size: 14px;">
+        One-time payment. No subscription. Yours forever.
+      </p>
+      <button class="upgrade-btn" onclick="window.open('https://xeyonai.gumroad.com/l/bsmupk', '_blank')">
+        Get Pro Version - £20
+      </button>
+    </div>
+  </div>
 </div>
 
 <div id="memory-modal" class="modal">
@@ -3763,51 +3782,53 @@ async function stopGeneration() {
   }
 
   // ==================================================
-  // END SESSION — generate + store character memory summary
   // ==================================================
-  async function endSession() {
-    if (!currentCharacter || !currentCharacter.name) {
-      alert('No character loaded.');
-      return;
-    }
-    if (!window.loadedChat || window.loadedChat.length === 0) {
-      alert('No conversation to summarise.');
-      return;
-    }
-    if (!confirm(`End session with ${currentCharacter.name}?\n\nThis will generate a memory summary so she remembers this conversation next time.`)) {
-      return;
-    }
-
-    const btn = document.querySelector('.end-session-btn');
-    const originalText = btn ? btn.textContent : '';
-    if (btn) { btn.textContent = '⏳ Summarising...'; btn.disabled = true; }
-
-    try {
-      const res = await fetch('/generate_session_summary', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          character: currentCharacter.name,
-          messages: window.loadedChat,
-          user_name: activeUserName || localStorage.getItem('activeUserName') || 'User'
-        })
-      });
-
-      const result = await res.json();
-
-      if (result.status === 'ok') {
-        showToast(`🧠 Session memory saved for ${currentCharacter.name}`);
-        console.log('✅ Session summary:', result.summary);
-      } else {
-        alert('Failed to generate summary: ' + (result.error || 'Unknown error'));
+  // UPGRADE MODAL (Pro features)
+  // ==================================================
+  function showUpgradeModal(feature) {
+    const modal = document.getElementById('upgrade-modal');
+    const content = document.getElementById('upgrade-content');
+    const features = {
+      memory: {
+        icon: "🧠",
+        title: "Character Memory",
+        description: "Characters remember past conversations, important facts, and context across all chats.",
+        benefits: [
+          "Persistent cross-session memory",
+          "End Session — generate a memory summary any time",
+          "Memory editor — view, edit and delete stored memories",
+          "Builds deeper, more coherent conversations over time"
+        ]
       }
-    } catch (err) {
-      console.error('❌ endSession error:', err);
-      alert('Failed to contact server: ' + err.message);
-    } finally {
-      if (btn) { btn.textContent = originalText; btn.disabled = false; }
-    }
+    };
+    const f = features[feature] || features.memory;
+    content.innerHTML = `
+      <div style="text-align: center; margin-bottom: 20px;">
+        <div style="font-size: 64px; margin-bottom: 16px;">${f.icon}</div>
+        <h2 style="margin: 0 0 12px 0; color: #fff;">${f.title}</h2>
+        <p style="color: #aaa; font-size: 15px; line-height: 1.6;">${f.description}</p>
+      </div>
+      <ul style="list-style: none; padding: 0; margin: 20px 0;">
+        ${f.benefits.map(b => `
+          <li style="padding: 8px 0; color: #ccc; font-size: 14px;">
+            <span style="color: #667eea; margin-right: 8px;">✓</span>${b}
+          </li>
+        `).join('')}
+      </ul>
+    `;
+    modal.style.display = 'block';
   }
+
+  function closeUpgradeModal() {
+    document.getElementById('upgrade-modal').style.display = 'none';
+  }
+
+  function openMemoryModal() { showUpgradeModal('memory'); }
+
+  window.addEventListener('click', (e) => {
+    const modal = document.getElementById('upgrade-modal');
+    if (e.target === modal) closeUpgradeModal();
+  });
 
   // ==================================================
   // DELETE LAST MESSAGE
