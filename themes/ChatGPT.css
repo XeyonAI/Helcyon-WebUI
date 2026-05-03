@@ -13,7 +13,7 @@
   --sidebar-bg: #262626;
   --chat-item-bg: #2e2e2e;
   --sidebar-button-hover: #3a3a3a;
-  --new-chat-btn-bg: #c5820b;
+  --new-chat-btn-bg: #153e00;
   --new-chat-btn-text: #ffffff;
   --char-dropdown-bg: #202020;
   --char-dropdown-border: #303030;
@@ -26,24 +26,22 @@
   --msg-border: #383838;
   --input-bg: #3e3e3e;
   --input-border: #626262;
-  --field-bg: #191919;
+  --field-bg: #262626;
   --field-border: #404040;
   --field-border-focus: #5f5f5f;
-  --token-panel-bg: #1a1a1a;
-  --token-panel-border: #424242;
-  --modal-bg: #222222;
+  --modal-bg: #303030;
   --modal-bg-hover: #575757;
-  --modal-border: #626262;
-  --modal-text: #a5a5a5;
+  --modal-border: #363636;
+  --modal-text: #b2b2b2;
   --memory-tab-active-bg: #7a7a7a;
-  --memory-entry-bg: #181818;
+  --memory-entry-bg: #292929;
   --memory-entry-text: #929292;
   --project-item-bg: #1e1e1e;
   --project-item-hover: #252525;
   --icon-button-bg: #454545;
   --icon-button-hover: #606060;
   --button-border-light: #5f5f5f;
-  --button-border-dark: #bd7e0e;
+  --button-border-dark: #bd0e0e;
 }
 
 /* ------------------------------------------------------------------

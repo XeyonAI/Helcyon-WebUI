@@ -407,6 +407,7 @@ def auto_launch_llama():
             print(f"⚠️ llama-server.exe not found at {exe} — skipping auto-launch.")
             return
         print(f"🚀 Auto-launching llama.cpp with: {last_model}")
+        _startup_template = str(args.get("chat_template", "chatml")).strip().lower()
         cmd = [
             exe, "-m", model_path,
             "--port", str(args.get("port", 8080)),
@@ -415,9 +416,11 @@ def auto_launch_llama():
             "--cache-type-k", str(args.get("cache_type_k", "q8_0")),
             "--cache-type-v", str(args.get("cache_type_v", "q8_0")),
             "--timeout", str(args.get("timeout", 0)),
-            "--chat-template", str(args.get("chat_template", "chatml")),
             "--parallel", str(args.get("parallel", 1)),
         ]
+        if _startup_template not in ('jinja', 'qwen', ''):
+            cmd += ["--chat-template", _startup_template]
+
         if mmproj_path and os.path.isfile(mmproj_path):
             cmd += ["--mmproj", mmproj_path]
             print(f"🖼️ Vision mode: mmproj loaded from {mmproj_path}")
@@ -481,9 +484,34 @@ import requests, sys
 # --------------------------------------------------
 # Strip any leaked ChatML tags from a chunk
 # --------------------------------------------------
+def get_stop_tokens():
+    """Return appropriate stop tokens based on the active model/template."""
+    try:
+        with open('settings.json', 'r') as f:
+            s = json.load(f)
+        chat_template = s.get('llama_args', {}).get('chat_template', 'chatml').strip().lower()
+    except Exception:
+        chat_template = 'chatml'
+
+    model_name = (CURRENT_MODEL or '').lower()
+    is_gemma = 'gemma' in model_name or chat_template == 'jinja'
+    is_qwen  = 'qwen' in model_name or chat_template == 'qwen'
+
+    if is_gemma:
+        print("📐 Using Gemma stop tokens (<end_of_turn>)", flush=True)
+        return ["<end_of_turn>", "<start_of_turn>"]
+    elif is_qwen:
+        print("📐 Using Qwen stop tokens (<|im_end|>)", flush=True)
+        return ["<|im_end|>", "<|im_start|>"]
+    else:
+        return ["<|im_end|>", "\n<|im_start|>", "<|im_start|>", "\nuser\n", "\nUser\n", "\nassistant\n", "\nAssistant\n"]
+
+
 def strip_chatml_leakage(text):
     """Remove any leaked or partial ChatML stop tokens from generated text."""
     import re
+    if not text:
+        return ""
     # Full tokens
     text = re.sub(r"<\|im_end\|>", "", text)
     text = re.sub(r"<\|im_start\|>\w*", "", text)
@@ -931,7 +959,7 @@ def stream_vision_response(payload):
             j = json.loads(line_str)
             # /v1/chat/completions uses choices[0].delta.content
             delta = j.get("choices", [{}])[0].get("delta", {})
-            chunk = strip_chatml_leakage(delta.get("content", ""))
+            chunk = strip_chatml_leakage(delta.get("content") or "")
             total_chunks += 1
 
             if chunk:
@@ -1156,6 +1184,18 @@ def chat():
     system_prompt, current_time = get_system_prompt()
     instruction = get_instruction_layer()
     tone_primer = get_tone_primer()
+
+    # Suppress tone primer if the character card already defines personality/tone.
+    # The primer is a fallback only — sending it alongside a character card causes
+    # its "favour long, deep responses" instruction to override the character's style.
+    _has_char_personality = bool(
+        char_data.get("main_prompt", "").strip() or
+        char_data.get("description", "").strip() or
+        char_data.get("personality", "").strip()
+    )
+    if _has_char_personality:
+        tone_primer = ""
+        print("🎭 Character has personality defined — tone primer suppressed")
 
     # Override system prompt with character's bound template if set
     _char_sp = char_data.get("system_prompt", "").strip()
@@ -1471,9 +1511,26 @@ def chat():
 
         # Build the system_text (WITHOUT example_dialogue yet)
         # Build the system_text (WITHOUT example_dialogue yet)
-        system_text = (
-            f"{system_prompt}\n\n{char_context}{user_context}\n\n{instruction}\n\n{tone_primer}{project_instructions}{project_documents}"
-        )
+        # For jinja/Gemma models: skip instruction layer and tone primer — they're Helcyon-specific
+        # scaffolding that confuses capable models into treating meta-instructions as output format
+        try:
+            with open('settings.json', 'r') as _stf:
+                _sts = json.load(_stf)
+            _st_template = _sts.get('llama_args', {}).get('chat_template', 'chatml').strip().lower()
+        except Exception:
+            _st_template = 'chatml'
+        _st_model = (CURRENT_MODEL or '').lower()
+        _is_jinja_model = _st_template in ('jinja', 'qwen') or 'gemma' in _st_model or 'qwen' in _st_model
+
+        if _is_jinja_model:
+            system_text = (
+                f"{system_prompt}\n\n{char_context}{user_context}{project_instructions}{project_documents}"
+            )
+            print("📐 Jinja model: skipping instruction layer + tone primer from system_text")
+        else:
+            system_text = (
+                f"{system_prompt}\n\n{char_context}{user_context}\n\n{instruction}\n\n{tone_primer}{project_instructions}{project_documents}"
+            )
 
         # 📊 LOG SYSTEM MESSAGE SIZE
         from truncation import rough_token_count
@@ -1681,22 +1738,37 @@ def chat():
     has_paragraph_style = False  # used by example dialogue style rules block below
 
     # Resolve example dialogue: character-level overrides global; global is fallback
+    # Priority: 1) character JSON example_dialogue  2) settings.json global_example_dialog  3) .example.txt file
+    # For jinja/Gemma models: skip global fallback if character has no example dialogue —
+    # generic global examples confuse capable models that don't need style scaffolding
     _char_ex = char_data.get("example_dialogue", "").strip()
-    if not _char_ex:
+    if not _char_ex and not _is_jinja_model:
+        # ── Priority 2: settings.json global_example_dialog ────────────────────
+        _global_ex = ""
         try:
-            # Prefer the character's own bound system prompt over the globally active one
-            _active_sp = char_data.get("system_prompt") or get_active_prompt_filename()
-            _base = _active_sp.rsplit('.', 1)[0] if '.' in _active_sp else _active_sp
-            _ex_path = os.path.join(get_system_prompts_dir(), _base + '.example.txt')
-            if os.path.exists(_ex_path):
-                with open(_ex_path, 'r', encoding='utf-8') as _ef:
-                    _global_ex = _ef.read().strip()
-            else:
-                _global_ex = ""
+            with open("settings.json", "r", encoding="utf-8") as _sf:
+                _settings_ex = json.load(_sf).get("global_example_dialog", "").strip()
+            if _settings_ex:
+                _global_ex = _settings_ex
+                print(f"🌐 No character example dialogue — using global_example_dialog from settings.json")
         except Exception:
-            _global_ex = ""
+            pass
+
+        # ── Priority 3: .example.txt file alongside system prompt ──────────────
+        if not _global_ex:
+            try:
+                _active_sp = char_data.get("system_prompt") or get_active_prompt_filename()
+                _base = _active_sp.rsplit('.', 1)[0] if '.' in _active_sp else _active_sp
+                _ex_path = os.path.join(get_system_prompts_dir(), _base + '.example.txt')
+                if os.path.exists(_ex_path):
+                    with open(_ex_path, 'r', encoding='utf-8') as _ef:
+                        _global_ex = _ef.read().strip()
+                    if _global_ex:
+                        print(f"🌐 No character example dialogue — using {_base}.example.txt as fallback")
+            except Exception:
+                pass
+
         if _global_ex:
-            print(f"🌐 No character example dialogue — using {_base}.example.txt as fallback")
             char_data = dict(char_data)  # don't mutate original
             char_data["example_dialogue"] = _global_ex
 
@@ -1709,16 +1781,13 @@ def chat():
         ex = re.sub(r'<\|im_end\|>', '', ex)
         ex = ex.strip()
 
-        # 🔥 NORMALISE SPEAKER LABELS — replace any real participant names with generic
-        # labels so the model can never confuse example turns with actual conversation.
-        # Covers the character's own name and the user's display name.
-        _char_name = char_data.get("name", "").strip()
-        _user_name = user_display_name.strip() if user_display_name else ""
-        if _char_name:
-            ex = re.sub(rf'(?im)^{re.escape(_char_name)}\s*:', 'Assistant:', ex)
-        if _user_name:
-            ex = re.sub(rf'(?im)^{re.escape(_user_name)}\s*:', 'User:', ex)
-        print(f"🧹 Example dialogue speaker labels normalised (char='{_char_name}', user='{_user_name}')")
+        # 🔥 NORMALISE SPEAKER LINE BREAKS — collapse "Name:\n" into "Name: "
+        # so example dialogue never teaches the model to put responses on a new line,
+        # which causes paragraph-break formatting in human-style characters.
+        # Matches any speaker label (character name, user name, or generic labels).
+        ex = re.sub(r'(?m)^([^\n:]{1,40}):\s*\n+', lambda m: m.group(1) + ': ', ex)
+        ex = ex.strip()
+        print(f"🧹 Example dialogue speaker line breaks normalised")
         
         # 🔍 Check if character uses emojis or xxx in their examples
         has_emojis = any(emoji in ex for emoji in ['❤️', '😍', '😘', '💕', '😊', '😉', '🔥', '💯', '✨', '🎯'])
@@ -1765,7 +1834,33 @@ def chat():
         # Add example dialogue to system message
         if messages and messages[0].get("role") == "system":
             messages[0]["content"] += ex_block
-            
+
+            # 🔒 SYSTEM PROMPT ANCHOR — injected last, closest to generation
+            # Extracts hard rules from system_prompt and repeats them here
+            # so they aren't buried under char card and example dialogue
+            import re as _re
+            _restriction_lines = []
+            for _line in system_prompt.splitlines():
+                _l = _line.strip()
+                if not _l:
+                    continue
+                _lower = _l.lower()
+                if any(kw in _lower for kw in [
+                    "never", "do not", "don't", "refuse", "will not",
+                    "cannot", "must not", "under no", "absolute", "prohibited"
+                ]):
+                    _restriction_lines.append(_l)
+            if _restriction_lines:
+                _anchor = (
+                    "\n\n═══════════════════════════════════════════════════════════\n"
+                    "⚠️ ACTIVE OPERATOR RESTRICTIONS — THESE OVERRIDE EVERYTHING:\n"
+                    "═══════════════════════════════════════════════════════════\n"
+                    + "\n".join(f"• {r}" for r in _restriction_lines)
+                    + "\n═══════════════════════════════════════════════════════════\n"
+                )
+                messages[0]["content"] += _anchor
+                print(f"🔒 Injected {len(_restriction_lines)} restriction(s) as end-of-system anchor")
+
             # 🔥 DEBUG: Check if example dialogue made it through
             print("\n" + "="*80)
             print("🎭 SYSTEM MESSAGE AFTER ADDING EXAMPLE DIALOGUE:")
@@ -1847,7 +1942,7 @@ def chat():
     print("="*60)
     print("Last 300 chars of prompt:")
     print(prompt[-300:])
-    print("\n🛑 Stop tokens:", ["<|im_end|>", "\n<|im_start|>"])
+    print("\n🛑 Stop tokens:", get_stop_tokens())
     print("="*60 + "\n")
         
     # --- Final safety clamp ---
@@ -1954,24 +2049,120 @@ def chat():
             else:
                 cleaned_chat.append(msg)
 
-        vision_messages = [
-            {"role": "system", "content": system_text + "\n" + memory},
-            *cleaned_chat
-        ]
+        import re as _vr
+        def _nuke_chatml_vision(text):
+            if not isinstance(text, str):
+                return text
+            import re as _vr2
+            text = _vr2.sub('<[|]im_start[|]>[a-z]*', '', text)
+            text = _vr2.sub('<[|]im_end[|]>', '', text)
+            text = _vr2.sub('[[]im_end[]]', '', text)
+            text = _vr2.sub('im_start[|]>', '', text)
+            text = _vr2.sub('im_end[|]>', '', text)
+            return text.strip()
+        # Detect if this is a Qwen model — needs vision token markers around images
+        try:
+            with open('settings.json', 'r') as _vsf:
+                _vst = json.load(_vsf)
+            _vis_template = _vst.get('llama_args', {}).get('chat_template', '').strip().lower()
+            _vis_last_model = _vst.get('llama_last_model', '').lower()
+        except Exception:
+            _vis_template = ''
+            _vis_last_model = ''
+        _is_qwen_vision = (_vis_template == 'qwen'
+                          or 'qwen' in (CURRENT_MODEL or '').lower()
+                          or 'qwen' in _vis_last_model)
+        print(f"🔍 Qwen vision detection: template={_vis_template}, is_qwen={_is_qwen_vision}", flush=True)
+
+        # Sanitise text content in cleaned_chat — don't touch image_url parts
+        _safe_chat = []
+        for _vm in cleaned_chat:
+            _vc = _vm.get("content")
+            if isinstance(_vc, list):
+                _safe_parts = []
+                for _vp in _vc:
+                    if _vp.get("type") == "text":
+                        _safe_parts.append({"type": "text", "text": _nuke_chatml_vision(_vp.get("text",""))})
+                    elif _vp.get("type") == "image_url":
+                        # Always wrap with vision markers — Qwen requires them, others ignore them
+                        if _is_qwen_vision:
+                            _safe_parts.append({"type": "text", "text": "<|vision_start|>"})
+                            _safe_parts.append(_vp)
+                            _safe_parts.append({"type": "text", "text": "<|vision_end|>"})
+                        else:
+                            _safe_parts.append(_vp)
+                    else:
+                        _safe_parts.append(_vp)
+                _safe_chat.append({"role": _vm["role"], "content": _safe_parts})
+            else:
+                _safe_chat.append({"role": _vm["role"], "content": _nuke_chatml_vision(_vc or "")})
+
+        # Gemma 3 requires strictly alternating user/assistant roles
+        # Step 0: strip ALL system role messages — Gemma/Qwen reject mid-conversation system messages
+        _safe_chat = [_m for _m in _safe_chat if _m.get("role") != "system"]
+
+        # Step 1: merge consecutive same-role messages
+        _merged_chat = []
+        for _m in _safe_chat:
+            if _merged_chat and _merged_chat[-1]["role"] == _m["role"]:
+                _prev = _merged_chat[-1]
+                # For list content (multimodal), keep the one that has images
+                if isinstance(_prev["content"], list):
+                    pass  # keep existing multimodal, drop duplicate
+                elif isinstance(_m["content"], list):
+                    _prev["content"] = _m["content"]  # upgrade to multimodal
+                else:
+                    _prev["content"] = (_prev["content"] + "\n" + _m["content"]).strip()
+            else:
+                _merged_chat.append(dict(_m))
+
+        # Step 2: fold system prompt into first user message (Gemma 3 has no system role)
+        _sys_content = _nuke_chatml_vision((system_text + "\n" + memory).strip())
+        if _merged_chat and _merged_chat[0]["role"] == "user":
+            _first = _merged_chat[0]
+            if isinstance(_first["content"], list):
+                _first["content"] = [{"type": "text", "text": _sys_content + "\n\n"}] + _first["content"]
+            else:
+                _first["content"] = _sys_content + "\n\n" + _first["content"]
+        else:
+            # No user message at start — prepend one with just the system content
+            _merged_chat.insert(0, {"role": "user", "content": _sys_content})
+
+        # Step 3: final pass — drop any remaining system messages and consecutive dupes
+        _final_chat = []
+        for _m in _merged_chat:
+            if _m.get("role") == "system":
+                continue  # belt-and-braces
+            if _final_chat and _final_chat[-1]["role"] == _m["role"]:
+                if isinstance(_m["content"], list):
+                    _final_chat[-1] = dict(_m)
+            else:
+                _final_chat.append(dict(_m))
+
+        print("✅ VISION ROLES AFTER CLEANUP:", [m["role"] for m in _final_chat], flush=True)
+        vision_messages = _final_chat
 
         vision_payload = {
             "model": CURRENT_MODEL or "local",
             "messages": vision_messages,
             "temperature": sampling["temperature"],
             "max_tokens": sampling["max_tokens"],
-            "top_p": sampling["top_p"],
-            "repeat_penalty": sampling["repeat_penalty"],
             "stream": True,
-            "stop": ["<|im_end|>", "\n<|im_start|>", "<|im_start|>", "\nuser\n", "\nUser\n", "\nassistant\n", "\nAssistant\n"],
         }
 
         print("\n🧩 VISION PAYLOAD SENDING TO MODEL:", flush=True)
         print(f"  Messages count: {len(vision_messages)}", flush=True)
+        # Print payload keys for debugging (not messages — too large with base64 image)
+        print(f"  Payload keys: {list(vision_payload.keys())}", flush=True)
+        print(f"  Temperature: {vision_payload['temperature']}, max_tokens: {vision_payload['max_tokens']}", flush=True)
+        for _di, _dm in enumerate(vision_messages):
+            _dc = _dm['content']
+            if isinstance(_dc, list):
+                _part_types = [p.get('type') for p in _dc]
+                _has_vs = any(p.get('type')=='text' and 'vision_start' in p.get('text','') for p in _dc)
+                print(f"  [{_di}] {_dm['role']}: parts={_part_types} vision_start={_has_vs}", flush=True)
+            else:
+                print(f"  [{_di}] {_dm['role']}: {str(_dc)[:80]}", flush=True)
 
         try:
             return Response(
@@ -1984,8 +2175,81 @@ def chat():
 
     else:
         # --------------------------------------------------------
-        # TEXT-ONLY PATH: existing /completion endpoint
+        # TEXT-ONLY PATH
+        # For ChatML models (Helcyon/Mistral): raw /completion with pre-built prompt
+        # For jinja/Gemma/other models: /v1/chat/completions with messages array
         # --------------------------------------------------------
+        try:
+            with open('settings.json', 'r') as _sf:
+                _st = json.load(_sf)
+            _chat_template = _st.get('llama_args', {}).get('chat_template', 'chatml').strip().lower()
+        except Exception:
+            _chat_template = 'chatml'
+        _model_name = (CURRENT_MODEL or '').lower()
+        _use_messages_api = _chat_template in ('jinja', 'qwen') or 'gemma' in _model_name or 'qwen' in _model_name
+
+        if _use_messages_api:
+            # ── Messages array path (Gemma 4 / jinja models) ──
+            print("🔀 TEXT via /v1/chat/completions (jinja/non-ChatML model)", flush=True)
+
+            import re as _cr
+            def _nuke_chatml(text):
+                """Hard-strip every ChatML token — Gemma must never see these."""
+                if not isinstance(text, str):
+                    return text
+                import re as _cr2
+                text = _cr2.sub('<[|]im_start[|]>[a-z]*', '', text)
+                text = _cr2.sub('<[|]im_end[|]>', '', text)
+                text = _cr2.sub('[[]im_end[]]', '', text)
+                text = _cr2.sub('im_start[|]>', '', text)
+                text = _cr2.sub('im_end[|]>', '', text)
+                return text.strip()
+            def _extract_content(m):
+                if isinstance(m.get("content"), list):
+                    return " ".join(p.get("text","") for p in m["content"] if p.get("type")=="text")
+                return m.get("content","")
+
+            _sys_content = _nuke_chatml(system_text + ("\n" + memory if memory else ""))
+            _text_messages = []  # system folded into first user message for Gemma 3 compatibility
+            for m in active_chat:
+                _text_messages.append({
+                    "role": m.get("role"),
+                    "content": _nuke_chatml(_extract_content(m))
+                })
+
+            # Fold system into first user message, enforce alternation
+            if _text_messages and _text_messages[0]["role"] == "user":
+                _text_messages[0]["content"] = _sys_content + "\n\n" + _text_messages[0]["content"]
+            elif _sys_content:
+                _text_messages.insert(0, {"role": "user", "content": _sys_content})
+            # Enforce strict alternation
+            _alt_messages = []
+            for _tm in _text_messages:
+                if _alt_messages and _alt_messages[-1]["role"] == _tm["role"]:
+                    _alt_messages[-1]["content"] = (_alt_messages[-1]["content"] + "\n" + _tm["content"]).strip()
+                else:
+                    _alt_messages.append(dict(_tm))
+            _text_messages = _alt_messages
+            print(f"🧹 ChatML nuked from {len(_text_messages)} messages", flush=True)
+
+            payload = {
+                "model": CURRENT_MODEL or "local",
+                "messages": _text_messages,
+                "temperature": sampling["temperature"],
+                "max_tokens": sampling["max_tokens"],
+                "top_p": sampling["top_p"],
+                "stream": True,
+            }
+            try:
+                return Response(
+                    stream_with_context(stream_vision_response(payload)),
+                    content_type="text/event-stream; charset=utf-8",
+                )
+            except Exception as e:
+                print(f"❌ Chat (messages API) error: {e}", flush=True)
+                return f"⚠️ Error contacting model: {e}", 500
+
+        # ── Raw prompt path (ChatML / Helcyon / Mistral) ──
         payload = {
             "model": CURRENT_MODEL,
             "prompt": prompt,
@@ -1997,7 +2261,7 @@ def chat():
             "top_k": sampling.get("top_k", 40),
             "repeat_penalty": sampling["repeat_penalty"],
             "stream": True,
-            "stop": ["<|im_end|>", "\n<|im_start|>", "<|im_start|>", "\nuser\n", "\nUser\n", "\nassistant\n", "\nAssistant\n"],
+            "stop": get_stop_tokens(),
         }
 
         if app.debug:
@@ -2015,18 +2279,22 @@ def chat():
         import re as _csre
         _cs_user_msg = user_input.strip()
 
+        # Chat history search — only fires on EXPLICIT past-session recall requests.
+        # Phrases must clearly reference a previous chat/conversation, not just use
+        # "remember" or "we talked" in ordinary conversational context.
         _should_chat_search = bool(_csre.search(
             r'\b(?:'
-            r'do you remember|do(?:es)? (?:she|he|it) remember|'
-            r'remember (?:when|that|what|the time)|'
-            r'we (?:talked|spoke|discussed|chatted) (?:about|regarding)|'
-            r'(?:I|we) (?:mentioned|told you|said|talked) (?:about|that|in another|in a different)|'
-            r'in (?:a|an|the|another|a different|that other) (?:chat|conversation|session)|'
-            r'(?:other|different|another|previous|earlier|last) (?:chat|conversation|session)|'
-            r'(?:from|in) (?:a|an|another) (?:previous|earlier|other|different) (?:chat|conversation)|'
-            r'you (?:should|might|may|would) (?:remember|recall|know)|'
-            r'I told (?:you|her|him|them)|'
-            r'we (?:already|previously) (?:talked|spoke|discussed)'
+            r'do you remember|'
+            r'do(?:es)? (?:she|he|it) remember|'
+            r'remember (?:when we|what we|the time we|the time I|what I said|what I told you)|'
+            r'we (?:talked|spoke|discussed|chatted) (?:about|regarding)\b.{0,40}\b(?:before|last time|earlier|previously|in another|in a previous)|'
+            r'(?:I|we) (?:mentioned|told you|said|talked) (?:about|that) (?:in another|in a different|in a previous|last time)|'
+            r'in (?:a|an|the|another|a different|that other) (?:chat|conversation|session)\b|'
+            r'(?:another|previous|earlier|last|different|other) (?:chat|conversation|session)\b|'
+            r'(?:from|in) (?:a|an|another) (?:previous|earlier|other|different) (?:chat|conversation)\b|'
+            r'you (?:should|might|may|would) (?:remember|recall|know) (?:from|that we|what I|when I)|'
+            r'I told you (?:about|that|in|last)\b|'
+            r'we (?:already|previously) (?:talked|spoke|discussed) (?:about|regarding)'
             r')\b',
             _cs_user_msg, _csre.IGNORECASE
         ))
@@ -3174,12 +3442,55 @@ def get_all_users():
 
 @app.route("/get_model", methods=["GET"])
 def get_model():
-    """Return the currently loaded model name."""
+    """Return the currently loaded model name, mmproj status, and VRAM usage."""
     get_current_model()  # refresh from llama.cpp
     name = CURRENT_MODEL or "No model loaded"
-    # Strip path and extension for display — just the filename stem
     display = os.path.splitext(os.path.basename(name))[0] if name else "No model loaded"
-    return jsonify({"model": display})
+
+    # Check if mmproj is configured
+    cfg = get_llama_settings()
+    mmproj_path = cfg.get('mmproj_path', '') if cfg else ''
+    vision_active = bool(mmproj_path and os.path.isfile(mmproj_path))
+
+    # VRAM usage via pynvml
+    vram_used_gb = None
+    vram_total_gb = None
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+        mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
+        vram_used_gb = round(mem.used / 1024**3, 1)
+        vram_total_gb = round(mem.total / 1024**3, 1)
+        pynvml.nvmlShutdown()
+    except Exception:
+        pass  # pynvml not available or no GPU
+
+    # Load friendly label from model_names.txt if available
+    label = display
+    try:
+        names_file = os.path.join(cfg.get('models_dir', ''), 'model_names.txt')
+        if os.path.isfile(names_file):
+            filename = os.path.basename(name)
+            with open(names_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if '=' in line and not line.startswith('#'):
+                        key, val = line.split('=', 1)
+                        if key.strip().lower() == filename.lower():
+                            label = val.strip()
+                            break
+    except Exception:
+        pass
+
+    return jsonify({
+        "model": display,
+        "label": label,
+        "vision_active": vision_active,
+        "mmproj": os.path.basename(mmproj_path) if mmproj_path else None,
+        "vram_used": vram_used_gb,
+        "vram_total": vram_total_gb
+    })
 
 # --------------------------------------------------
 # Llama.cpp Process Management
@@ -3228,15 +3539,105 @@ def kill_llama_process():
 
 @app.route("/list_models", methods=["GET"])
 def list_models():
-    """List all .gguf files in the configured models directory."""
+    """List all .gguf files in the configured models directory, grouped by subfolder."""
     cfg = get_llama_settings()
     if not cfg or not cfg['models_dir']:
-        return jsonify({"error": "models_dir not configured in settings.json", "models": []})
+        return jsonify({"error": "models_dir not configured in settings.json", "models": [], "labels": {}, "groups": []})
     models_dir = cfg['models_dir']
     if not os.path.isdir(models_dir):
-        return jsonify({"error": f"Models folder not found: {models_dir}", "models": []})
-    models = sorted([f for f in os.listdir(models_dir) if f.lower().endswith('.gguf')])
-    return jsonify({"models": models})
+        return jsonify({"error": f"Models folder not found: {models_dir}", "models": [], "labels": {}, "groups": []})
+
+    # Load all labels from any model_names.txt (root + subfolders)
+    labels = {}
+    def load_labels(folder):
+        try:
+            names_file = os.path.join(folder, 'model_names.txt')
+            if os.path.isfile(names_file):
+                with open(names_file, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if '=' in line and not line.startswith('#'):
+                            key, val = line.split('=', 1)
+                            labels[key.strip()] = val.strip()
+        except Exception:
+            pass
+
+    load_labels(models_dir)
+
+    # Build grouped structure: root models first, then one entry per subfolder
+    groups = []
+
+    # Root-level .gguf files
+    root_models = sorted([f for f in os.listdir(models_dir)
+                          if f.lower().endswith('.gguf') and os.path.isfile(os.path.join(models_dir, f))])
+    if root_models:
+        groups.append({"folder": None, "models": root_models})
+
+    # Subfolders
+    for entry in sorted(os.listdir(models_dir)):
+        sub_path = os.path.join(models_dir, entry)
+        if os.path.isdir(sub_path) and not entry.startswith('.'):
+            load_labels(sub_path)
+            sub_models = sorted([f for f in os.listdir(sub_path) if f.lower().endswith('.gguf')])
+            if sub_models:
+                # Store as subfolder/filename so backend can find it
+                groups.append({"folder": entry, "models": sub_models})
+
+    # Flat list for backwards compat (used by get_model display name matching)
+    all_models = []
+    for g in groups:
+        prefix = (g["folder"] + "/") if g["folder"] else ""
+        all_models.extend([prefix + m for m in g["models"]])
+
+    return jsonify({"models": all_models, "labels": labels, "groups": groups})
+
+@app.route("/save_model_label", methods=["POST"])
+def save_model_label():
+    """Save or update a friendly display name for a model in model_names.txt."""
+    data = request.json
+    filename = data.get("filename", "").strip()
+    label = data.get("label", "").strip()
+    if not filename:
+        return jsonify({"error": "No filename provided"}), 400
+
+    cfg = get_llama_settings()
+    if not cfg or not cfg['models_dir']:
+        return jsonify({"error": "models_dir not configured"}), 500
+    models_dir = cfg['models_dir']
+    names_file = os.path.join(models_dir, 'model_names.txt')
+
+    try:
+        # Read existing lines
+        lines = []
+        if os.path.isfile(names_file):
+            with open(names_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+
+        # Update or remove existing entry for this filename
+        new_lines = []
+        found = False
+        for line in lines:
+            stripped = line.strip()
+            if '=' in stripped and not stripped.startswith('#'):
+                key = stripped.split('=', 1)[0].strip()
+                if key.lower() == filename.lower():
+                    found = True
+                    if label:  # replace with new label
+                        new_lines.append(f"{filename} = {label}\n")
+                    # if label is empty, skip (deletes the entry)
+                    continue
+            new_lines.append(line)
+
+        if not found and label:
+            new_lines.append(f"{filename} = {label}\n")
+
+        with open(names_file, 'w', encoding='utf-8') as f:
+            f.writelines(new_lines)
+
+        print(f"✏️ Model label saved: {filename} = {label}")
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/load_model", methods=["POST"])
 def load_model():
@@ -3268,6 +3669,7 @@ def load_model():
     time.sleep(1)
 
     # Build command
+    _chat_template = str(args.get("chat_template", "chatml")).strip().lower()
     cmd = [
         exe,
         "-m", model_path,
@@ -3277,13 +3679,20 @@ def load_model():
         "--cache-type-k", str(args.get("cache_type_k", "q8_0")),
         "--cache-type-v", str(args.get("cache_type_v", "q8_0")),
         "--timeout", str(args.get("timeout", 0)),
-        "--chat-template", str(args.get("chat_template", "chatml")),
         "--parallel", str(args.get("parallel", 1)),
     ]
+    if _chat_template not in ('jinja', 'qwen', ''):
+        cmd += ["--chat-template", _chat_template]
+        print(f"📐 Chat template: {_chat_template}")
+    else:
+        print(f"📐 Chat template: {_chat_template} (native GGUF — not passing --chat-template)")
+    # Only load mmproj if explicitly configured — never auto-detect
     mmproj_path = cfg.get('mmproj_path', '')
     if mmproj_path and os.path.isfile(mmproj_path):
         cmd += ["--mmproj", mmproj_path]
         print(f"🖼️ Vision mode: mmproj loaded from {mmproj_path}")
+    else:
+        print("📝 No mmproj — text-only mode")
 
     try:
         show_console = cfg.get('show_console', False)
@@ -3342,10 +3751,15 @@ def browse_file():
     """Open a native Windows file picker and return the selected path."""
     try:
         import subprocess, tempfile
+        file_filter = request.json.get('filter', 'exe') if request.json else 'exe'
+        if file_filter == 'gguf':
+            ps_filter = 'GGUF Models (*.gguf)|*.gguf|All Files (*.*)|*.*'
+        else:
+            ps_filter = 'Executables (*.exe)|*.exe|All Files (*.*)|*.*'
         script = (
             'Add-Type -AssemblyName System.Windows.Forms;'
             '$d = New-Object System.Windows.Forms.OpenFileDialog;'
-            '$d.Filter = "Executables (*.exe)|*.exe|All Files (*.*)|*.*";'
+            f'$d.Filter = "{ps_filter}";'
             'if ($d.ShowDialog() -eq "OK") { Write-Output $d.FileName }'
         )
         result = subprocess.run(
@@ -3410,6 +3824,33 @@ def save_llama_config():
         return jsonify({"status": "ok"})
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)})
+
+
+@app.route("/auto_detect_mmproj", methods=["POST"])
+def auto_detect_mmproj():
+    """Given a model path, look for a matching mmproj file in the same folder."""
+    try:
+        data = request.json
+        model_path = data.get("model_path", "").strip()
+        if not model_path:
+            return jsonify({"mmproj_path": None})
+
+        folder = os.path.dirname(model_path)
+        if not os.path.isdir(folder):
+            return jsonify({"mmproj_path": None})
+
+        # Look for any file in the same folder that contains 'mmproj' in its name
+        for fname in os.listdir(folder):
+            if "mmproj" in fname.lower() and fname.endswith(".gguf"):
+                found = os.path.join(folder, fname)
+                print(f"🖼️ Auto-detected mmproj: {found}")
+                return jsonify({"mmproj_path": found})
+
+        print(f"⚠️ No mmproj found in {folder}")
+        return jsonify({"mmproj_path": None})
+    except Exception as e:
+        print(f"❌ auto_detect_mmproj error: {e}")
+        return jsonify({"mmproj_path": None})
 
 
 @app.route('/get_active_user', methods=['GET'])
@@ -3841,7 +4282,7 @@ def get_theme():
 
 @app.route("/save_theme", methods=["POST"])
 def save_theme():
-    """Write updated CSS custom properties to the active theme file only."""
+    """Write updated CSS custom properties into :root in the active theme file."""
     try:
         data = request.get_json()
         path = get_active_theme_path()
@@ -3852,22 +4293,24 @@ def save_theme():
         else:
             print(f"⚠️  save_theme: file not found, creating new")
             css = ":root {\n}\n"
-        for var, value in data.items():
-            if re.search(re.escape(var) + r'\s*:', css):
-                css = re.sub(
-                    r'(' + re.escape(var) + r'\s*:\s*)([^;]+)(;)',
-                    lambda m, v=value: m.group(1) + v + m.group(3),
-                    css
-                )
-            else:
-                css = css.rstrip()
-                if css.endswith('}'):
-                    css = css[:-1].rstrip() + f"\n  {var}: {value};\n}}\n"
+
+        # Build fresh :root block from incoming data
+        root_vars = "\n".join(f"  {var}: {value};" for var, value in data.items())
+        root_block = f":root {{\n{root_vars}\n}}"
+
+        # Replace existing :root block if present, otherwise prepend one
+        root_match = re.search(r":root\s*\{[^}]*\}", css, re.DOTALL)
+        if root_match:
+            css = css[:root_match.start()] + root_block + css[root_match.end():]
+        else:
+            # Insert after opening comment block if present
+            comment_match = re.match(r"\s*/\*.*?\*/", css, re.DOTALL)
+            insert_at = comment_match.end() if comment_match else 0
+            css = css[:insert_at].rstrip() + "\n\n" + root_block + "\n\n" + css[insert_at:].lstrip()
+
         with open(path, "w", encoding="utf-8") as f:
             f.write(css)
-        with open(path, "r", encoding="utf-8") as f:
-            verify = f.read()
-        print(f"✅ Theme saved to {os.path.basename(path)}: {len(data)} vars, file now {len(verify)} chars")
+        print(f"✅ Theme saved to {os.path.basename(path)}: {len(data)} vars")
         return jsonify({"status": "ok"})
     except Exception as e:
         print(f"❌ save_theme failed: {e}")

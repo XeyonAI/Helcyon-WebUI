@@ -1,10 +1,10 @@
 import re
 
-CONTEXT_WINDOW     = 12288  # llama.cpp context size
-GENERATION_RESERVE = 2048   # tokens reserved for the model's response
+CONTEXT_WINDOW     = 16384  # llama.cpp context size — updated to match --ctx-size
+GENERATION_RESERVE = 1024   # tokens reserved for the model's response
 SYSTEM_BUFFER      = 200    # small safety margin for ChatML overhead tokens
 
-# Max tokens available for prompt = CONTEXT_WINDOW - GENERATION_RESERVE = 10240
+# Max tokens available for prompt = CONTEXT_WINDOW - GENERATION_RESERVE = 15360
 # Of that, the system message takes what it takes — the rest goes to conversation history.
 
 def rough_token_count(text) -> int:

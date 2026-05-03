@@ -206,7 +206,7 @@ CFG_STRENGTH = 0.5
 # top_k: lower = faster sampling (50-100), higher = more varied (500-1000)
 # repetition_penalty: prevents phoneme repetition — 1.2 is a good default
 # cfg_weight: how closely to follow reference voice — 0.3-0.5 sounds most natural
-TEMPERATURE        = 0.7
+TEMPERATURE        = 1.0
 TOP_K              = 100
 REPETITION_PENALTY = 1.2
 CFG_WEIGHT         = 0.5

@@ -7,13 +7,13 @@
 
 :root {
   /* === MAIN PAGE - STRUCTURE === */
-  --topbar-bg: #111e27;
-  --container-bg: #121e28;
+  --topbar-bg: #13191c;
+  --container-bg: #14191d;
   --chat-bg: #090e12;
   --sidebar-bg: #0a151c;
 
   /* === SIDEBAR === */
-  --chat-item-bg: #0d2139;
+  --chat-item-bg: #1a2f48;
   --sidebar-button-hover: #244d7c;
   --new-chat-btn-bg: #005903;
   --new-chat-btn-text: #ffffff;
@@ -26,7 +26,7 @@
   --user-msg-text: #f0f0f0;
   --model-msg-bg: #111f2e;
   --model-msg-text: #e0e0e0;
-  --msg-border: #263c53;
+  --msg-border: #314459;
   --msg-border-width: 1px;
 
   /* === INPUT BOX === */
@@ -37,7 +37,7 @@
   --char-dropdown-border: #293d4b;
 
   /* === MODALS (Memory, Projects, Opening Line, etc.) === */
-  --modal-bg: #141b24;
+  --modal-bg: #161c24;
   --modal-bg-hover: #1e2b3d;
   --modal-border: #000000;
   --modal-text: #fefefe;

@@ -245,8 +245,7 @@ def clean_text(text):
     text = re.sub(u'[\u2600-\u27BF]+', '', text)
     text = re.sub(u'[\u2700-\u27BF]+', '', text)
     text = re.sub(r'[\u003A\uFE13\uFE30\uFE55\uFF1A]', '. ', text)
-    # Strip lone digits left floating after colon/punctuation removal
-    text = re.sub(r'(?<!\w)\d(?!\w)', '', text)
+    # (lone-digit strip removed — was stripping numbers incorrectly)
     text = re.sub(r'\s-\s', '. ', text)
     text = re.sub(r'(\w)-(\w)', r'\1 \2', text)
     text = re.sub(r'\bI AM\b', 'I am', text)
@@ -270,7 +269,10 @@ def clean_text(text):
     text = re.sub(r'\bID\b', 'I D', text)  # ID → "I D"
     text = re.sub(r'\bGemini\b', 'Jemineye', text, flags=re.IGNORECASE)
     text = re.sub(r'(\w)\+', r'\1 plus', text)  # word+ → "word plus" e.g. "lewd+" → "lewd plus"
-    text = re.sub(r'\blive\b', 'livv', text, flags=re.IGNORECASE)
+    text = re.sub(r'\blive\b', 'lyve', text, flags=re.IGNORECASE)
+    text = re.sub(r'\blives\b', 'lyves', text, flags=re.IGNORECASE)
+    text = re.sub(r'\blively\b', 'lyvely', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bliven\b', 'lyven', text, flags=re.IGNORECASE)
     text = re.sub(r'\bread\b', 'reed', text, flags=re.IGNORECASE)
     text = re.sub(r'\bvs\.?\b', 'versus', text, flags=re.IGNORECASE)
     text = re.sub(r'\bx+\b', '', text, flags=re.IGNORECASE)  # strip kiss x's (xx, xxx etc)

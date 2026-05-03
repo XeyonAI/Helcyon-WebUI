@@ -372,10 +372,16 @@ function toggleTTS() {
 
   if (ttsEnabled) {
     btn.classList.add('active');
+    btn.style.background = 'rgba(76,175,80,0.4)';
+    btn.style.borderColor = 'rgba(76,175,80,0.8)';
+    btn.style.color = '#aaffaa';
     console.log('🔊 TTS enabled');
     checkTTSStatus();
   } else {
     btn.classList.remove('active');
+    btn.style.background = 'rgba(255,255,255,0.08)';
+    btn.style.borderColor = '#555';
+    btn.style.color = '#ccc';
     stopAllAudio();
     console.log('🔇 TTS disabled');
   }
@@ -392,7 +398,7 @@ async function checkTTSStatus() {
     if (data.status === 'offline') {
       showTTSNotification('Kokoro TTS server not running. Start start_kokoro.bat', true);
       ttsEnabled = false;
-      document.getElementById('tts-toggle-btn')?.classList.remove('active');
+      const _tb=document.getElementById('tts-toggle-btn'); if(_tb){_tb.classList.remove('active');_tb.style.background='rgba(255,255,255,0.08)';_tb.style.borderColor='#555';_tb.style.color='#ccc';}
     } else if (data.status === 'online') {
       console.log('✅ Kokoro TTS ready');
     }
@@ -471,13 +477,17 @@ function fixContractionsForTTS(text) {
 function bufferTextForTTS(chunk) {
   if (!ttsEnabled || !chunk) return;
 
-  // Strip HTML, URLs and source lines before anything else
-  chunk = chunk.replace(/<[^>]+>/g, ' ')                    // HTML tags (e.g. <a href=...>)
-               .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')  // markdown links → text only
-               .replace(/\n*[🔗\*]*\s*Source:[^\n]*/g, '') // Source: lines
-               .replace(/https?:\/\/\S+/g, '')            // bare https/http URLs
-               .replace(/www\.\S+/g, '')                  // bare www URLs
-               .replace(/[🔗]/g, '');                       // link emoji
+  // Strip source links and HTML before anything else
+  // Must run BEFORE HTML tag stripping so the full <a>...</a> block is caught
+  chunk = chunk.replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi, '')  // entire <a> tags incl. content
+               .replace(/\n*[\u{1F517}\uD83D\uDD17]*\s*Source:[^\n]*/gu, '') // Source: lines (all emoji variants)
+               .replace(/<[^>]+>/g, ' ')                    // remaining HTML tags
+               .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')    // markdown links [text](url) → text only
+               .replace(/\[([^\]]+)\]\([^)]*$/g, '$1')     // unclosed markdown link (chunk split mid-URL)
+               .replace(/\]\([^)]*\)/g, '')                 // orphaned ](url) fragment
+               .replace(/https?:\/\/[^\s\])"'>]+/g, '')    // bare URLs (broader terminator set)
+               .replace(/www\.[^\s\])"'>]+/g, '')           // bare www URLs
+               .replace(/[\u{1F517}\uD83D\uDD17]/gu, ''); // link emoji (all variants)
 
   // Reset streaming flag at start of each new response
   if (ttsSentenceBuffer === '' && ttsQueue.length === 0 && !ttsProcessing) {
@@ -841,7 +851,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const saved = localStorage.getItem('tts-enabled');
   if (saved === 'true') {
     ttsEnabled = true;
-    document.getElementById('tts-toggle-btn')?.classList.add('active');
+    const _ta=document.getElementById('tts-toggle-btn'); if(_ta){_ta.classList.add('active');_ta.style.background='rgba(76,175,80,0.4)';_ta.style.borderColor='rgba(76,175,80,0.8)';_ta.style.color='#aaffaa';}
   }
 
   const savedVoice = localStorage.getItem('tts-voice');
@@ -884,6 +894,9 @@ async function startVoiceInput() {
 
     const micBtn = document.getElementById('mic-btn');
     micBtn.classList.add('listening');
+    micBtn.style.background = '#5a0f0f';
+    micBtn.style.borderColor = '#ff4444';
+    micBtn.style.color = '#ff8888';
     console.log('🎤 Recording started...');
 
   } catch (err) {
@@ -898,6 +911,9 @@ async function stopVoiceInput() {
   isRecording = false;
   const micBtn = document.getElementById('mic-btn');
   micBtn.classList.remove('listening');
+  micBtn.style.background = 'rgba(255,255,255,0.08)';
+  micBtn.style.borderColor = '#555';
+  micBtn.style.color = '#ccc';
 
   return new Promise((resolve) => {
     mediaRecorder.onstop = async () => {
@@ -909,6 +925,9 @@ async function stopVoiceInput() {
 
       try {
         micBtn.classList.add('processing');
+        micBtn.style.background = '#1a3a1a';
+        micBtn.style.borderColor = '#44aa44';
+        micBtn.style.color = '#88ff88';
 
         const response = await fetch('/api/whisper/transcribe', {
           method: 'POST',
@@ -930,6 +949,9 @@ async function stopVoiceInput() {
         console.error('❌ Whisper request failed:', err);
       } finally {
         micBtn.classList.remove('processing');
+        micBtn.style.background = 'rgba(255,255,255,0.08)';
+        micBtn.style.borderColor = '#555';
+        micBtn.style.color = '#ccc';
         // Stop all mic tracks to release the mic
         mediaRecorder.stream.getTracks().forEach(t => t.stop());
       }
@@ -1046,7 +1068,7 @@ function replayLastAudio() {
 
   if (!ttsEnabled) {
     ttsEnabled = true;
-    document.getElementById('tts-toggle-btn')?.classList.add('active');
+    const _ta=document.getElementById('tts-toggle-btn'); if(_ta){_ta.classList.add('active');_ta.style.background='rgba(76,175,80,0.4)';_ta.style.borderColor='rgba(76,175,80,0.8)';_ta.style.color='#aaffaa';}
     localStorage.setItem('tts-enabled', true);
   }
 

@@ -249,8 +249,8 @@
 
       <!-- 🔥 TOKEN COUNTER PANEL - INSERTED HERE -->
       <div id="token-counter-panel" style="
-        background: #1D262E;
-        border: 1px solid #333;
+        background: var(--token-panel-bg, #1D262E);
+        border: 1px solid var(--token-panel-border, #333);
         border-radius: 8px;
         padding: 15px;
         margin-top: 20px;
@@ -1945,10 +1945,17 @@ function _applyThemeVar(varName, value) {
 }
 
 async function saveTheme() {
-  const inputs = document.querySelectorAll('.cp-swatch-btn');
+  // Read from live CSS vars — authoritative source, never stale
   const updates = {};
-  inputs.forEach(inp => {
-    updates[inp.dataset.var] = inp.dataset.hex;
+  for (const section of THEME_SECTIONS) {
+    for (const v of section.vars) {
+      const val = getComputedStyle(document.documentElement).getPropertyValue(v.key).trim();
+      if (val) updates[v.key] = val;
+    }
+  }
+  // Fallback: also pick up any swatch values not in THEME_SECTIONS
+  document.querySelectorAll('.cp-swatch-btn').forEach(inp => {
+    if (!updates[inp.dataset.var]) updates[inp.dataset.var] = inp.dataset.hex;
   });
   try {
     const res = await fetch('/save_theme', {
@@ -2508,6 +2515,10 @@ async function loadThemeFileList() {
   } catch(e) { console.error('loadThemeFileList failed:', e); }
 }
 
+// Themes that use a flat solid background (no wallpaper).
+// Add any future flat-bg theme names here.
+const FLAT_BG_THEMES = ['openai-layout'];
+
 async function switchThemeFile(name) {
   if (!name) return;
   try {
@@ -2519,6 +2530,12 @@ async function switchThemeFile(name) {
     // Swap the loaded stylesheet
     const existing = document.getElementById('active-theme-link');
     if (existing) existing.href = '/theme-files/' + name + '.css';
+    // Flag whether this theme uses a flat background (no wallpaper)
+    if (FLAT_BG_THEMES.includes(name)) {
+      localStorage.setItem('hwui_flat_bg_theme', '1');
+    } else {
+      localStorage.removeItem('hwui_flat_bg_theme');
+    }
     // Reload theme vars and re-render
     const res = await fetch('/get_theme');
     const data = await res.json();
@@ -2562,7 +2579,15 @@ async function deleteThemeFile() {
 
 function openThemeModal() {
   loadThemeFileList();
-  renderThemeModal(originalTheme);
+  // Build current state from live CSS vars so editor always shows what's on screen
+  const liveTheme = {};
+  for (const section of THEME_SECTIONS) {
+    for (const v of section.vars) {
+      const val = getComputedStyle(document.documentElement).getPropertyValue(v.key).trim();
+      liveTheme[v.key] = val || originalTheme[v.key] || '#000000';
+    }
+  }
+  renderThemeModal(liveTheme);
   document.getElementById('theme-modal-overlay').style.display = 'block';
 }
 function closeThemeModal() {
@@ -2679,6 +2704,8 @@ const THEME_SECTIONS = [
       { key: '--field-bg',           label: 'Form Field BG' },
       { key: '--field-border',       label: 'Form Field Border' },
       { key: '--field-border-focus', label: 'Form Field Focus Border' },
+      { key: '--token-panel-bg',     label: 'Token Panel BG' },
+      { key: '--token-panel-border', label: 'Token Panel Border' },
     ],
     preview: (el) => {
       el.innerHTML = `

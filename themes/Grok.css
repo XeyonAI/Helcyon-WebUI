@@ -6,44 +6,42 @@
    ============================================================ */
 
 :root {
-  --topbar-bg: #282828;
-  --container-bg: #2e2e2e;
-  --chat-bg: #1a1a1a;
-  --project-header-bg: #242424;
-  --sidebar-bg: #262626;
-  --chat-item-bg: #2e2e2e;
+  --topbar-bg: #000000;
+  --container-bg: #000000;
+  --chat-bg: #000000;
+  --project-header-bg: #000000;
+  --sidebar-bg: #000000;
+  --chat-item-bg: #171717;
   --sidebar-button-hover: #3a3a3a;
-  --new-chat-btn-bg: #c5820b;
-  --new-chat-btn-text: #ffffff;
-  --char-dropdown-bg: #202020;
+  --new-chat-btn-bg: #000000;
+  --new-chat-btn-text: #000000;
+  --char-dropdown-bg: #000000;
   --char-dropdown-border: #303030;
-  --sidebar-footer-btn-bg: #2c2c2c;
-  --sidebar-footer-btn-border: #323232;
-  --user-msg-bg: #313131;
+  --sidebar-footer-btn-bg: #000000;
+  --sidebar-footer-btn-border: #6d6d6d;
+  --user-msg-bg: #131719;
   --user-msg-text: #ffffff;
-  --model-msg-bg: #212121;
+  --model-msg-bg: #000000;
   --model-msg-text: #ffffff;
-  --msg-border: #383838;
-  --input-bg: #3e3e3e;
-  --input-border: #626262;
-  --field-bg: #191919;
-  --field-border: #404040;
-  --field-border-focus: #5f5f5f;
-  --token-panel-bg: #1a1a1a;
-  --token-panel-border: #424242;
-  --modal-bg: #222222;
-  --modal-bg-hover: #575757;
-  --modal-border: #626262;
-  --modal-text: #a5a5a5;
-  --memory-tab-active-bg: #7a7a7a;
-  --memory-entry-bg: #181818;
-  --memory-entry-text: #929292;
-  --project-item-bg: #1e1e1e;
-  --project-item-hover: #252525;
-  --icon-button-bg: #454545;
-  --icon-button-hover: #606060;
-  --button-border-light: #5f5f5f;
-  --button-border-dark: #bd7e0e;
+  --msg-border: #000000;
+  --input-bg: #000000;
+  --input-border: #000000;
+  --field-bg: #000000;
+  --field-border: #000000;
+  --field-border-focus: #000000;
+  --modal-bg: #000000;
+  --modal-bg-hover: #000000;
+  --modal-border: #363636;
+  --modal-text: #000000;
+  --memory-tab-active-bg: #000000;
+  --memory-entry-bg: #000000;
+  --memory-entry-text: #000000;
+  --project-item-bg: #000000;
+  --project-item-hover: #000000;
+  --icon-button-bg: #000000;
+  --icon-button-hover: #000000;
+  --button-border-light: #000000;
+  --button-border-dark: #000000;
 }
 
 /* ------------------------------------------------------------------

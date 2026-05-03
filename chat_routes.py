@@ -273,6 +273,136 @@ def new_chat():
     print(f"ðŸ“ Created new chat: {filename}")
     return jsonify({"filename": filename})
 # --------------------------------------------------
+# Auto-name Chat (from first user message — model-generated title)
+# --------------------------------------------------
+@chat_bp.route("/chats/auto-name", methods=["POST"])
+def auto_name_chat():
+    import re as _re
+    import requests as _requests
+
+    data = request.get_json() or {}
+    old_filename = data.get("filename", "")
+    first_message = data.get("first_message", "").strip()
+
+    if not old_filename or not first_message:
+        return jsonify({"error": "Missing filename or first_message"}), 400
+
+    chats_dir = get_chats_dir()
+    old_path = os.path.join(chats_dir, old_filename)
+
+    if not os.path.exists(old_path):
+        return jsonify({"error": "Chat not found"}), 404
+
+    # --- Ask the model for a smart title ---
+    raw_name = None
+    try:
+        with open(os.path.join(os.getcwd(), "settings.json"), "r", encoding="utf-8") as _sf:
+            _settings = json.load(_sf)
+        _port = _settings.get("llama_args", {}).get("port", 8080)
+        _api_url = f"http://127.0.0.1:{_port}"
+
+        # Truncate very long first messages — only need the gist
+        excerpt = first_message[:400]
+
+        _prompt = (
+            "<|im_start|>system\n"
+            "You generate short chat thread titles based strictly on what the message says. Do not infer, assume, or add details not present in the message. Reply with only the title — no explanation, no punctuation at the end, no quotes.\n"
+            "<|im_end|>\n"
+            "<|im_start|>user\n"
+            f"Thread title for: {excerpt}\n"
+            "<|im_end|>\n"
+            "<|im_start|>assistant\n"
+        )
+
+        _payload = {
+            "prompt": _prompt,
+            "temperature": 0.3,
+            "n_predict": 20,
+            "top_p": 0.9,
+            "repeat_penalty": 1.1,
+            "stream": False,
+            "stop": ["<|im_end|>", "\n", "<|im_start|>"],
+        }
+
+        _resp = _requests.post(f"{_api_url}/completion", json=_payload, timeout=15)
+        _resp.raise_for_status()
+        raw_name = _resp.json().get("content", "").strip()
+        # Strip any stray quotes/punctuation the model adds
+        raw_name = _re.sub(r'^["\']|["\']$', '', raw_name).strip()
+        raw_name = _re.sub(r'[.!?,;]+$', '', raw_name).strip()
+        print(f"🏷️ Model suggested title: '{raw_name}'")
+    except Exception as _e:
+        print(f"⚠️ Model title generation failed, falling back to word-chop: {_e}")
+
+    # Fallback: word-chop if model call failed or returned empty
+    if not raw_name:
+        text = _re.sub(r'[*_#`>]', '', first_message)
+        sentence = _re.split(r'[.!?]', text)[0].strip() or text
+        raw_name = ' '.join(sentence.split()[:5])
+
+    # Capitalise + strip illegal filename chars
+    raw_name = raw_name[:1].upper() + raw_name[1:] if raw_name else 'New Chat'
+    raw_name = _re.sub(r'[\\/:*?"<>|]', '', raw_name).strip() or 'New Chat'
+
+    # Preserve character prefix and date suffix — format: "Character - Title - Mon DD.txt"
+    # ✅ FIX: Match prefix against known characters so multi-part names like
+    # "Gemma - GPT-5" are preserved intact instead of being truncated to "Gemma"
+    name_no_ext = old_filename.replace(".txt", "")
+    parts = name_no_ext.split(" - ")
+
+    # Load known characters to find the correct prefix length
+    char_prefix = None
+    try:
+        char_index_path = os.path.join(os.getcwd(), "characters", "index.json")
+        with open(char_index_path, "r", encoding="utf-8") as _cf:
+            known_chars = json.load(_cf)
+        # Try progressively longer prefixes until one matches a known character
+        for i in range(len(parts), 0, -1):
+            candidate = " - ".join(parts[:i])
+            if candidate in known_chars:
+                char_prefix = candidate
+                break
+    except Exception as _ce:
+        print(f"⚠️ Could not load character list for prefix detection: {_ce}")
+
+    # Fallback: use parts[0] if no known character matched
+    if not char_prefix:
+        char_prefix = parts[0]
+
+    # Date suffix is always the last segment (e.g. "Apr 30")
+    date_suffix = parts[-1]
+
+    # Rebuild: if the filename had more than just prefix + date, include the date
+    remaining_parts = name_no_ext[len(char_prefix):].lstrip(" -").split(" - ")
+    if len(remaining_parts) >= 2:
+        # Had a title + date — replace title, keep date
+        new_name_no_ext = f"{char_prefix} - {raw_name} - {date_suffix}"
+    elif len(remaining_parts) == 1 and remaining_parts[0] != char_prefix:
+        # Had only one extra segment (no date or no title)
+        new_name_no_ext = f"{char_prefix} - {raw_name}"
+    else:
+        new_name_no_ext = raw_name
+
+    new_filename = f"{new_name_no_ext}.txt"
+    new_path = os.path.join(chats_dir, new_filename)
+
+    # Collision guard
+    counter = 1
+    base = new_name_no_ext
+    while os.path.exists(new_path) and new_path != old_path:
+        new_filename = f"{base} ({counter}).txt"
+        new_path = os.path.join(chats_dir, new_filename)
+        counter += 1
+
+    if old_path == new_path:
+        return jsonify({"success": True, "new_filename": new_filename, "skipped": True})
+
+    os.rename(old_path, new_path)
+    print(f"🏷️ Auto-named: {old_filename} → {new_filename}")
+    return jsonify({"success": True, "new_filename": new_filename})
+
+
+# --------------------------------------------------
 # Delete Chat
 # --------------------------------------------------
 @chat_bp.route("/chats/delete/<filename>", methods=["DELETE"])
@@ -324,8 +454,20 @@ def save_chat_messages():
         with open(filepath, "w", encoding="utf-8") as f:
             for i, msg in enumerate(messages):
                 role = msg.get("role")
-                content = msg.get("content", "")
+                raw_content = msg.get("content", "")
                 timestamp = msg.get("timestamp", "")
+
+                # Handle multimodal — extract text only, images not saved to disk
+                if isinstance(raw_content, list):
+                    text_parts = [p.get("text", "") for p in raw_content if p.get("type") == "text"]
+                    has_image = any(p.get("type") == "image_url" for p in raw_content)
+                    content = " ".join(text_parts).strip()
+                    if has_image and not content:
+                        content = "[image]"
+                    elif has_image:
+                        content = f"{content} [image]"
+                else:
+                    content = raw_content
 
                 # Use speaker from message, fallback to defaults
                 speaker = msg.get("speaker")
@@ -402,8 +544,19 @@ def update_chat():
         with open(filepath, "w", encoding="utf-8") as f:
             for msg in messages:
                 role = msg.get("role")
-                content = msg.get("content", "")
+                raw_content = msg.get("content", "")
                 timestamp = msg.get("timestamp", "")
+
+                if isinstance(raw_content, list):
+                    text_parts = [p.get("text", "") for p in raw_content if p.get("type") == "text"]
+                    has_image = any(p.get("type") == "image_url" for p in raw_content)
+                    content = " ".join(text_parts).strip()
+                    if has_image and not content:
+                        content = "[image]"
+                    elif has_image:
+                        content = f"{content} [image]"
+                else:
+                    content = raw_content
                 speaker = msg.get("speaker") or ("User" if role == "user" else char_name)
                 prefix = f"[{timestamp}] " if timestamp else ""
                 f.write(f"{prefix}{speaker}: {content}\n\n")
