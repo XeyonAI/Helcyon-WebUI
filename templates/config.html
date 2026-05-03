@@ -219,16 +219,18 @@
         </label>
       </div>
 
-      <!-- Memory checkboxes hidden in free version — kept for JS compatibility -->
-      <input type="checkbox" id="use-personal-memory" style="display:none;" />
-      <input type="checkbox" id="use-global-memory" style="display:none;" />
+      <div style="margin: 8px 0 4px 0; display:flex; align-items:center; gap:8px;">
+        <input type="checkbox" id="use-personal-memory" style="width:16px; height:16px; cursor:pointer;" />
+        <label for="use-personal-memory" style="margin:0; cursor:pointer; font-size:13px; color:#ccc;">
+          👤 Use personal memory <span style="color:#888; font-size:11px;">(character's own memory file)</span>
+        </label>
+      </div>
 
-      <div style="margin: 8px 0 12px 0; padding: 10px 14px; background: rgba(102,126,234,0.08); border: 1px solid rgba(102,126,234,0.25); border-radius: 8px; display:flex; align-items:center; justify-content:space-between; gap:12px;">
-        <div>
-          <div style="font-size:13px; color:#ccc;">🧠 <strong style="color:#fff;">Character Memory</strong></div>
-          <div style="font-size:11px; color:#888; margin-top:2px;">Characters that remember you — Pro feature</div>
-        </div>
-        <button onclick="window.open('https://xeyonai.gumroad.com/l/bsmupk','_blank')" style="background:linear-gradient(135deg,#667eea,#764ba2); border:none; color:#fff; font-size:12px; font-weight:600; padding:6px 14px; border-radius:6px; cursor:pointer; white-space:nowrap;">⭐ Go Pro</button>
+      <div style="margin: 4px 0 12px 0; display:flex; align-items:center; gap:8px;">
+        <input type="checkbox" id="use-global-memory" style="width:16px; height:16px; cursor:pointer;" />
+        <label for="use-global-memory" style="margin:0; cursor:pointer; font-size:13px; color:#ccc;">
+          🌐 Use global memory <span style="color:#888; font-size:11px;">(shared memory file for all opted-in characters)</span>
+        </label>
       </div>
 
       <div style="margin: 4px 0 12px 0; display:flex; align-items:center; gap:8px;">

@@ -5,8 +5,8 @@
   "min_p": 0.05,
   "top_k": 40,
   "repeat_penalty": 1.1,
-  "llama_server_exe": "I:\\llama.cpp\\build\\bin\\Release\\llama-server.exe",
-  "llama_models_dir": "I:\\models",
+  "llama_server_exe": "",
+  "llama_models_dir": "C:\\HWUI-Models",
   "llama_show_console": true,
   "llama_args": {
     "port": 5000,
@@ -18,10 +18,7 @@
     "chat_template": "chatml",
     "parallel": 1
   },
-  "llama_last_model": "helcyon-claude-v3.0-Q6_K.gguf",
-  "mmproj_path": "",
+  "llama_last_model": "",
   "active_theme": "midnight",
-  "active_system_prompt": "Helcyon-base.txt",
-  "current_situation": "",
-  "brave_api_key": ""
+  "active_system_prompt": ""
 }
