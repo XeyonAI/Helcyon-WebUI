@@ -3579,21 +3579,27 @@ def list_models():
     # Build grouped structure: root models first, then one entry per subfolder
     groups = []
 
-    # Root-level .gguf files
-    root_models = sorted([f for f in os.listdir(models_dir)
-                          if f.lower().endswith('.gguf') and os.path.isfile(os.path.join(models_dir, f))])
-    if root_models:
-        groups.append({"folder": None, "models": root_models})
-
-    # Subfolders
+    # Collect subfolder models first so we can exclude them from root list
+    subfolder_filenames = set()
+    subfolders = []
     for entry in sorted(os.listdir(models_dir)):
         sub_path = os.path.join(models_dir, entry)
         if os.path.isdir(sub_path) and not entry.startswith('.'):
             load_labels(sub_path)
             sub_models = sorted([f for f in os.listdir(sub_path) if f.lower().endswith('.gguf')])
             if sub_models:
-                # Store as subfolder/filename so backend can find it
-                groups.append({"folder": entry, "models": sub_models})
+                subfolder_filenames.update(sub_models)
+                subfolders.append({"folder": entry, "models": sub_models})
+
+    # Root-level .gguf files — exclude any filename already present in a subfolder
+    root_models = sorted([f for f in os.listdir(models_dir)
+                          if f.lower().endswith('.gguf')
+                          and os.path.isfile(os.path.join(models_dir, f))
+                          and f not in subfolder_filenames])
+    if root_models:
+        groups.append({"folder": None, "models": root_models})
+
+    groups.extend(subfolders)
 
     # Flat list for backwards compat (used by get_model display name matching)
     all_models = []

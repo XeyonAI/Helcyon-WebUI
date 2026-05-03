@@ -10,8 +10,8 @@
   "llama_show_console": true,
   "llama_args": {
     "port": 5000,
-    "n_gpu_layers": 50,
-    "ctx_size": 12288,
+    "n_gpu_layers": 34,
+    "ctx_size": 8192,
     "cache_type_k": "q8_0",
     "cache_type_v": "q8_0",
     "timeout": 0,
@@ -19,6 +19,6 @@
     "parallel": 1
   },
   "llama_last_model": "",
-  "active_theme": "midnight",
+  "active_theme": "ChatGPT",
   "active_system_prompt": ""
 }

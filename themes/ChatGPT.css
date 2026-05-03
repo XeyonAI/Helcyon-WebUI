@@ -24,11 +24,13 @@
   --model-msg-bg: #212121;
   --model-msg-text: #ffffff;
   --msg-border: #383838;
-  --input-bg: #3e3e3e;
+  --input-bg: #2a2a2a;
   --input-border: #626262;
-  --field-bg: #262626;
+  --field-bg: #1a1a1a;
   --field-border: #404040;
   --field-border-focus: #5f5f5f;
+  --token-panel-bg: #1f1f1f;
+  --token-panel-border: #000000;
   --modal-bg: #303030;
   --modal-bg-hover: #575757;
   --modal-border: #363636;
