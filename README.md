@@ -1,6 +1,17 @@
-# Helcyon-WebUI (HWUI) v1.0
+# Helcyon-WebUI (HWUI) Free v1.0
 
 **Professional AI chat interface for local LLMs**
+
+<p align="center">
+  <img src="static/images/Main_UI.jpg" alt="HWUI Main Interface" width="48%" />
+  &nbsp;&nbsp;
+  <img src="static/images/Project_manager.jpg" alt="Project Manager" width="48%" />
+</p>
+<p align="center">
+  <img src="static/images/Chatacter_creator.png" alt="Character Creator" width="48%" />
+  &nbsp;&nbsp;
+  <img src="static/images/Theme_designer.jpg" alt="Theme Designer" width="48%" />
+</p>
 
 A clean, powerful web interface designed specifically for [llama.cpp](https://github.com/ggerganov/llama.cpp) servers. Built to get out of the way and let you focus on conversations with your AI — no bloat, no unnecessary complexity.
 
