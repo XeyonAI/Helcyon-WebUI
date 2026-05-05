@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <title>Helcyon-WebUI</title>
-  <link rel="stylesheet" href="/style.css?v=5">
+  <link rel="stylesheet" href="/style.css?v=19">
   <link rel="stylesheet" href="/theme-files/midnight.css" id="active-theme-link">
   <script>
     // Always fetch active theme with cache-bust so saved changes appear immediately
@@ -60,6 +60,14 @@
     <div><strong>Helcyon-WebUI</strong></div>
     <!-- Model trigger — floating below top bar, right aligned -->
     <div style="position:fixed; top:72px; right:12px; z-index:999; display:flex; align-items:center; gap:8px;">
+      <!-- OpenAI active indicator -->
+      <div id="openai-indicator" title="OpenAI backend active" style="display:none; align-items:center; gap:7px; background:rgba(0,180,100,0.12); border:1px solid rgba(0,200,100,0.35); border-radius:20px; padding:6px 14px; white-space:nowrap;">
+        <span style="width:8px; height:8px; border-radius:50%; background:#00e87a; display:inline-block; box-shadow:0 0 6px #00e87a; flex-shrink:0;"></span>
+        <div style="display:flex; flex-direction:column; line-height:1.3;">
+          <span style="font-size:12px; color:#4dffaa; font-weight:600;">☁️ OpenAI</span>
+          <span id="openai-indicator-model" style="font-size:10px; color:#2aaa66;">gpt-4o</span>
+        </div>
+      </div>
       <button id="model-display" onclick="toggleModelPicker()" title="Switch model" style="
         background: transparent;
         border: 1px solid var(--modal-border, #2d394b);
@@ -99,6 +107,7 @@
     ">
       <div id="model-picker-list" style="padding: 6px 0; overflow-y: auto; max-height: 70vh;"></div>
       <div id="model-picker-status" style="display:none; padding:8px 14px; border-top:1px solid var(--modal-border, #2d394b); color:#8ab4d4; font-size:12px; text-align:center;"></div>
+      <div id="picker-actual-model" style="padding:5px 12px 5px 12px; border-top:1px solid var(--modal-border, #2d394b); color:#555; font-size:10px; font-family:monospace; word-break:break-all; line-height:1.4;"></div>
       <div style="padding: 8px 10px; border-top: 1px solid var(--modal-border, #2d394b); display:flex; gap:6px; justify-content:flex-end;">
         <button onclick="unloadModel()" style="background:rgba(100,30,30,0.4); border:1px solid #6a2a2a; color:#e88; border-radius:6px; padding:3px 10px; font-size:11px; cursor:pointer; margin:0;">⏹ Unload</button>
         <button onclick="closeModelPicker()" style="background:transparent; border:1px solid var(--modal-border, #2d394b); color:#aaa; border-radius:6px; padding:3px 10px; font-size:11px; cursor:pointer; margin:0;">Close</button>
@@ -206,6 +215,8 @@
                 <div class="input-menu-divider"></div>
                 <button onclick="manualSaveChat(); closeInputMenu()" id="save-chat-btn">💾 Save Chat</button>
                 <button onclick="showUpgradeModal('memory'); closeInputMenu()" title="Upgrade to HWUI Pro">⭐ Go Pro</button>
+                <div class="input-menu-divider"></div>
+                <button onclick="regenerate(); closeInputMenu()">🔄 Regenerate</button>
                 <div class="input-menu-divider"></div>
                 <button onclick="deleteLastMessages(); closeInputMenu()" class="input-menu-danger">🗑 Delete Last</button>
                 <button onclick="clearChat(); closeInputMenu()" class="input-menu-danger">✕ Clear Chat</button>
@@ -520,9 +531,9 @@ Example: You're helping Bob track his gym progress. Keep detailed logs with date
     <div class="modal-body">
       <div id="memory-list"></div>
       <div id="memory-add-panel" style="display:none;">
-        <input id="memory-add-title" type="text" placeholder="Title" class="memory-add-input" />
-        <input id="memory-add-keywords" type="text" placeholder="Keywords (comma separated)" class="memory-add-input" />
-        <textarea id="memory-add-body" rows="4" placeholder="Memory content..." class="memory-add-input"></textarea>
+        <input id="memory-add-title" type="text" placeholder="Title" class="memory-add-input" style="font-size:13px; font-family:inherit;" />
+        <input id="memory-add-keywords" type="text" placeholder="Keywords (comma separated)" class="memory-add-input" style="font-size:13px; font-family:inherit;" />
+        <textarea id="memory-add-body" rows="4" placeholder="Memory content..." class="memory-add-input" style="font-size:13px; font-family:inherit; resize:vertical;"></textarea>
         <button onclick="submitAddMemory()" class="save-btn">💾 Save Entry</button>
         <button onclick="toggleMemoryAddPanel()" class="cancel-btn">Cancel</button>
       </div>
@@ -657,7 +668,41 @@ function sanitizeMarkdown(text) {
   return text;
 }
 
-// Ensure marked.js fallback is always available
+// Strip ChatML tokens and role-leakage ONLY from text outside fenced code blocks.
+// Content inside ``` fences is preserved verbatim — so shard generation works correctly.
+function stripChatMLOutsideCodeBlocks(text, charName, userName) {
+  // Split on fenced code blocks (``` or ~~~), preserving the delimiters
+  const parts = text.split(/(```[\s\S]*?```|~~~[\s\S]*?~~~)/g);
+  return parts.map(function(part, i) {
+    // Odd indices are code block matches — leave untouched
+    if (i % 2 === 1) return part;
+    // Even indices are plain text — apply all the usual strips
+    return part
+      .replace(/<\|im_start\|>assistant/gi, '')
+      .replace(/<\|im_start\|>user/gi, '')
+      .replace(/<\|im_start\|>system/gi, '')
+      .replace(/<\|im_end\|>/gi, '')
+      .replace(/\bim_end\|?>/gi, '')
+      .replace(/<\/\|im_end\|>/gi, '')
+      .replace(/_end\|?>/gi, '')
+      .replace(/End\|>?/gi, '')
+      .replace(/\n(?:user|assistant|system)(?:\n|:)/gi, '\n')  // strip role header only — [\s\S]*$ was wiping real responses mid-stream
+      .replace(new RegExp('^' + (charName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':\\s*', 'gim'), '')
+      .replace(new RegExp('^' + (userName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':\\s*', 'gim'), '')
+      .replace(/^User:\s*/gim, '')
+      .replace(/^Assistant:\s*/gim, '')
+      .replace(/\[Author['']s Note:[^\]]*\]/gi, '')
+      .replace(/^STYLE REMINDER:.*$/gim, '')
+      .replace(/\[MEMORY[_ ]ADD:[^|\]]*\|[^|\]]*\|([^\]]*)\]/gi, '$1')
+      .replace(/\[MEMORY[_ ]ADD:[^\]]*\]/gi, '')
+      .replace(/^MEMORY[_ ]ADD:[^|]*\|[^|]*\|(.+)$/gim, '$1')
+      .replace(/^MEMORY[_ ]ADD:[^|]*\|(.+)$/gim, '$1')
+      .replace(/^MEMORY[_ ]ADD:[^\n]*$/gim, '')
+      .replace(/^[ \t]+/gm, '');
+  }).join('');
+}
+
+
 if (typeof marked === "undefined") {
   console.warn("⚠️ Marked.js not found — using custom parser.");
   window.marked = {
@@ -674,6 +719,22 @@ if (typeof marked === "undefined") {
 
       // Pre-process: isolate --- / *** / ___ lines so they always become their own block
       txt = txt.replace(/^[ \t]*([-*_]{3,})[ \t]*$/gm, '\n\n$1\n\n');
+
+      // Pre-process: extract fenced code blocks BEFORE splitting into paragraphs.
+      // Replace each ```lang\n...\n``` with a unique placeholder, store the rendered HTML.
+      const _codeBlocks = [];
+      txt = txt.replace(/```(\w*)\n?([\s\S]*?)```/g, function(_, lang, code) {
+        const escaped = code.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/^\n|\n$/g,'');
+        const langLabel = lang ? `<span class="code-lang">${lang}</span>` : '';
+        const html =
+          `<div class="code-block-wrapper">` +
+            `<div class="code-block-header">${langLabel}<button class="code-copy-btn" onclick="copyCodeBlock(this)">Copy</button></div>` +
+            `<pre><code>${escaped}</code></pre>` +
+          `</div>`;
+        const placeholder = `\x00CODE${_codeBlocks.length}\x00`;
+        _codeBlocks.push(html);
+        return `\n\n${placeholder}\n\n`;
+      });
 
       // Split into blocks on blank lines
       let blocks = txt.split(/\n\n+/);
@@ -751,6 +812,13 @@ if (typeof marked === "undefined") {
         html += `<p>${parseInline(para)}</p>`;
       });
 
+      // Restore fenced code blocks from placeholders
+      // Strip <p> wrappers FIRST (before restoring), then substitute
+      if (_codeBlocks.length) {
+        html = html.replace(/<p>\x00CODE(\d+)\x00<\/p>/g, '\x00CODE$1\x00');
+        html = html.replace(/\x00CODE(\d+)\x00/g, (_, i) => _codeBlocks[+i]);
+      }
+
       return html;
     },
     setOptions: function(opts) { return; }
@@ -785,6 +853,12 @@ if (typeof marked === "undefined") {
         else if (!noModel) parts.push('Text only');
         if (data.vram_used !== null && data.vram_total !== null) parts.push('VRAM ' + data.vram_used + '/' + data.vram_total + ' GB');
         pickerStatus.textContent = parts.join(' · ');
+      }
+      // Show actual filename so user can confirm which file is loaded
+      const actualEl = document.getElementById('picker-actual-model');
+      if (actualEl) {
+        actualEl.textContent = noModel ? '' : (data.model || '');
+        actualEl.style.display = noModel ? 'none' : 'block';
       }
     } catch(e) {
       const nameSpanE = document.getElementById('model-display-name');
@@ -840,9 +914,10 @@ if (typeof marked === "undefined") {
           editBtn.className = 'model-edit-btn';
           editBtn.title = 'Rename';
           editBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>';
-          editBtn.style.cssText = 'background:transparent; border:none; color:rgba(255,255,255,0.35); cursor:pointer; padding:2px 4px; border-radius:3px; opacity:0; transition:opacity 0.1s; flex-shrink:0; line-height:1; margin:0;';
-          editBtn.onmouseover = (e) => { e.stopPropagation(); editBtn.style.color='#fff'; editBtn.style.background='rgba(255,255,255,0.1)'; };
-          editBtn.onmouseout  = (e) => { e.stopPropagation(); editBtn.style.color='rgba(255,255,255,0.35)'; editBtn.style.background='transparent'; };
+          // Larger fixed hit area — 28x28 so it's easy to click without missing onto the row
+          editBtn.style.cssText = 'background:transparent; border:none; color:rgba(255,255,255,0.4); cursor:pointer; padding:0; width:28px; height:28px; border-radius:4px; opacity:0; transition:opacity 0.1s, background 0.1s; flex-shrink:0; line-height:1; margin:0; display:flex; align-items:center; justify-content:center;';
+          editBtn.onmouseover = (e) => { e.stopPropagation(); editBtn.style.color='#fff'; editBtn.style.background='rgba(255,255,255,0.12)'; editBtn.style.opacity='1'; };
+          editBtn.onmouseout  = (e) => { e.stopPropagation(); editBtn.style.color='rgba(255,255,255,0.4)'; editBtn.style.background='transparent'; editBtn.style.opacity='0'; };
           editBtn.onclick = (e) => { e.stopPropagation(); startModelRename(row, labelSpan, m, label); };
 
           row.onmouseover = () => { row.style.background = isActive ? 'rgba(40,80,50,0.35)' : 'rgba(255,255,255,0.06)'; editBtn.style.opacity = '1'; };
@@ -856,7 +931,11 @@ if (typeof marked === "undefined") {
           labelSpan.textContent = label;
           labelSpan.style.cssText = 'flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
 
-          row.onclick = () => loadModel(fullPath);
+          row.onclick = (e) => {
+            // Don't load model if clicking the edit button or anything inside it
+            if (e.target.closest('.model-edit-btn')) return;
+            loadModel(fullPath);
+          };
           row.appendChild(tick);
           row.appendChild(labelSpan);
           row.appendChild(editBtn);
@@ -986,6 +1065,8 @@ if (typeof marked === "undefined") {
       await fetch('/unload_model', { method: 'POST' });
       const nameSpanU = document.getElementById('model-display-name');
       if (nameSpanU) { nameSpanU.textContent = 'No model loaded'; nameSpanU.style.color = '#a05050'; }
+      const actualElU = document.getElementById('picker-actual-model');
+      if (actualElU) { actualElU.textContent = ''; actualElU.style.display = 'none'; }
       status.textContent = '✅ Unloaded';
       setTimeout(() => closeModelPicker(), 1000);
     } catch(e) {
@@ -1497,7 +1578,8 @@ async function loadChatHistory() {
       spanText.className = 'model-text';
       let html = marked.parse(sanitizeMarkdown(entry.model));
       html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
-      spanText.innerHTML = html;
+      // NOTE: renderModelHTML called after span is in DOM (see modelDiv.appendChild below)
+      spanText._pendingHtml = html;
       
       const modelCopyBtn = document.createElement('button');
       modelCopyBtn.className = 'copy-btn';
@@ -1511,6 +1593,12 @@ async function loadChatHistory() {
       modelDiv.appendChild(spanText);
       modelDiv.appendChild(modelCopyBtn);
       chat.appendChild(modelDiv);
+      // Now span is in the DOM — safe to render (code blocks inserted as siblings)
+      if (spanText._pendingHtml !== undefined) {
+        renderModelHTML(spanText, spanText._pendingHtml);
+        addCodeCopyButtons(modelDiv);
+        delete spanText._pendingHtml;
+      }
 
     });
     
@@ -1957,6 +2045,14 @@ function persistChatState() {
         } else {
           console.log('✅ Renamed:', filename, '→', data.new_filename);
           
+          // Migrate colour from old filename key to new filename key
+          const colors = getChatColors();
+          if (colors[filename]) {
+            colors[data.new_filename] = colors[filename];
+            delete colors[filename];
+            localStorage.setItem('chatColors', JSON.stringify(colors));
+          }
+
           if (currentChatFilename === filename) {
             currentChatFilename = data.new_filename;
             console.log('📌 Updated currentChatFilename to:', currentChatFilename);
@@ -2380,7 +2476,7 @@ async function openChat(filename) {
           if (typeof marked !== "undefined") {
             let html = marked.parse(sanitizeMarkdown(content));
             html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
-            modelSpan.innerHTML = html;
+            modelSpan._pendingHtml = html;
           } else {
             // Fallback: wrap paragraphs manually
             let html = content
@@ -2390,7 +2486,7 @@ async function openChat(filename) {
               .map(para => `<p>${para}</p>`)
               .join('');
             html = html.replace(/\*([^\n*]+?)\*/g, '<em>$1</em>');
-            modelSpan.innerHTML = html;
+            modelSpan._pendingHtml = html;
           }
           
           var modelActionBar = document.createElement("div");
@@ -2440,6 +2536,12 @@ async function openChat(filename) {
           div.appendChild(modelSpan);
           div.appendChild(modelActionBar);
           div.appendChild(makeTimestampEl(msg.timestamp));
+          // Span is now in DOM — render HTML with code blocks as proper siblings
+          if (modelSpan._pendingHtml !== undefined) {
+            renderModelHTML(modelSpan, modelSpan._pendingHtml);
+            addCodeCopyButtons(div);
+            delete modelSpan._pendingHtml;
+          }
                     
           wrapper.appendChild(modelAvatar);
           wrapper.appendChild(div);
@@ -2523,8 +2625,15 @@ async function openChat(filename) {
   // SEND PROMPT (with auto-create chat)
   // ==================================================
   async function sendPrompt() {
-    console.log('🔴 sendPrompt() called');
+    console.log('🔴 sendPrompt() called', new Date().getTime());
     console.trace();
+    // Guard against double-fire (e.g. Enter key + button click race)
+    if (window._sendPromptInFlight) {
+      console.warn('⛔ sendPrompt() double-fire blocked');
+      return;
+    }
+    window._sendPromptInFlight = true;
+    setTimeout(() => { window._sendPromptInFlight = false; }, 500);
     
     if (!currentChatFilename) {
       
@@ -2905,7 +3014,9 @@ async function openChat(filename) {
       streamEl.style.wordWrap = 'break-word';
       streamEl.style.overflowWrap = 'break-word';
 
+      // Store reader globally so stopGeneration() can cancel it cleanly
       const reader = response.body.getReader();
+      window._activeReader = reader;
       const decoder = new TextDecoder("utf-8");
       let fullMessage = "";
       let cleanedMessage = "";
@@ -2919,8 +3030,15 @@ async function openChat(filename) {
       // marked.parse cost is acceptable at typical token rates.
 
       while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
+        let readResult;
+        try {
+          readResult = await reader.read();
+        } catch (readErr) {
+          console.warn('⚠️ Stream read error (connection dropped?):', readErr);
+          break;
+        }
+        const { value, done } = readResult;
+        if (done) { console.log('✅ Stream done signal received'); break; }
         
         const chunk = decoder.decode(value, { stream: true });
         fullMessage += chunk;
@@ -2928,45 +3046,20 @@ async function openChat(filename) {
         // Buffer text for TTS — pass cleaned chunk so sentence splitting works correctly
         if (typeof bufferTextForTTS === 'function') {
           const ttsChunk = chunk
-            .replace(/<\|im_start\|>assistant/gi, '')
-            .replace(/<\|im_start\|>user/gi, '')
-            .replace(/<\|im_start\|>system/gi, '')
+            .replace(/<\|im_start\|>(assistant|user|system)[^\n]*/gi, '')
+            .replace(/<\|im_start\|>/gi, '')
             .replace(/<\|im_end\|>/gi, '')
+            .replace(/<\/?\|im_end\|?>/gi, '')
             .replace(/\bim_end\|?>/gi, '')
             .replace(/_end\|?>/gi, '')
-            .replace(/End\|>?/gi, '')
-            .replace(/\n(?:user|assistant|system)\b[\s\S]*$/i, '')
-            .replace(new RegExp(charName + ':\s*', 'gim'), '')
+            .replace(/\n(?:user|assistant|system)(?:\n|:)[\s\S]*$/i, '')  // only match actual ChatML turn headers
+            .replace(new RegExp(charName + ':\\s*', 'gim'), '')
             .replace(/^User:\s*/gim, '')
             .replace(/^Assistant:\s*/gim, '');
           bufferTextForTTS(ttsChunk);
         }
 
-        cleanedMessage = fullMessage
-          .replace(/<\|im_start\|>assistant/gi, "")
-          .replace(/<\|im_start\|>user/gi, "")
-          .replace(/<\|im_start\|>system/gi, "")
-          .replace(/<\|im_end\|>/gi, "")
-          .replace(/\bim_end\|?>/gi, '')
-          .replace(/<\/\|im_end\|>/gi, "")
-          // Partial ChatML token fragments that survive chunk-level stripping
-          .replace(/_end\|?>/gi, '')
-          .replace(/End\|>?/gi, '')
-          // Role-tag leakage: model generates next turn — strip from the point leakage starts
-          .replace(/\n(?:user|assistant|system)\b[\s\S]*$/i, '')
-          .replace(new RegExp(`^${userName}:\\s*`, 'gim'), "")
-          .replace(new RegExp(`^${charName}:\\s*`, 'gim'), "")
-          .replace(/^User:\s*/gim, "")
-          .replace(/^Assistant:\s*/gim, "")
-          .replace(/\[Author['']s Note:[^\]]*\]/gi, "")
-          .replace(/^STYLE REMINDER:.*$/gim, "")
-          .replace(/\[MEMORY[_ ]ADD:[^|\]]*\|[^|\]]*\|([^\]]*)\]/gi, "$1")
-          .replace(/\[MEMORY[_ ]ADD:[^\]]*\]/gi, "")
-          .replace(/^MEMORY[_ ]ADD:[^|]*\|[^|]*\|(.+)$/gim, "$1")
-          .replace(/^MEMORY[_ ]ADD:[^|]*\|(.+)$/gim, "$1")
-          .replace(/^MEMORY[_ ]ADD:[^\n]*$/gim, "")
-          .replace(/^[ \t]+/gm, "")
-          .trim();
+        cleanedMessage = stripChatMLOutsideCodeBlocks(fullMessage, charName, userName).trim();
 
         let html = marked.parse(sanitizeMarkdown(cleanedMessage));
         html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
@@ -2977,25 +3070,35 @@ async function openChat(filename) {
       {
         let html = marked.parse(sanitizeMarkdown(cleanedMessage));
         html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
-        streamEl.innerHTML = html;
+        renderModelHTML(streamEl, html);
+        addCodeCopyButtons(streamEl.parentNode || streamEl);
         chat.scrollTop = chat.scrollHeight;
       }
 
       // ── Empty response guard ─────────────────────────────────────────
       // Model occasionally fires EOS as first token — retry exactly once.
-      if (!cleanedMessage || cleanedMessage.trim().length < 2) {
+      // Only retry if model sent nothing at all (fullMessage empty).
+      // Checking cleanedMessage caused retries when stripping ate the content,
+      // firing a 2nd /chat POST → browser drops 1st connection → srv stop: cancel task.
+      if (!fullMessage || fullMessage.trim().length < 2) {
         if (isRegenerate === 'retry') {
           console.error('❌ Empty response on retry too — giving up.');
           streamEl.innerHTML = '<em style="color:#e07070; font-size:0.9em;">⚠️ Model returned empty response twice. Try regenerating manually.</em>';
         } else {
-          console.warn('⚠️ Empty response detected — retrying once...');
+          console.warn('⚠️ Empty response detected (model sent nothing) — retrying once...');
           streamEl.innerHTML = '<em style="color:#888; font-size:0.9em;">⟳ Empty response, retrying…</em>';
+          try { if (window._activeReader) await window._activeReader.cancel(); } catch(e) {}
+          window._activeReader = null;
           await new Promise(r => setTimeout(r, 900));
           if (modelWrapper && modelWrapper.parentNode) modelWrapper.remove();
           window.isSending = false;
           await fetchAndDisplayResponse(input, chat, 'retry');
         }
         return;
+      }
+      if (!cleanedMessage || cleanedMessage.trim().length < 2) {
+        console.warn('⚠️ cleanedMessage empty after stripping — raw fallback');
+        cleanedMessage = fullMessage.replace(/<\|im_start\|>\w*/gi, '').replace(/<\|im_end\|>/gi, '').trim();
       }
       // ─────────────────────────────────────────────────────────────────
 
@@ -3303,7 +3406,13 @@ async function openChat(filename) {
       return;
     }
 
-    const continuePrefix = window.loadedChat[lastAssistantIdx].content || '';
+    // Only use the last ~200 chars of the previous response as the continue prefix.
+    // Sending the full message makes the model think the response is nearly done
+    // and it fires EOS after just a few tokens ("isn" etc).
+    const fullPrevContent = window.loadedChat[lastAssistantIdx].content || '';
+    const continuePrefix = fullPrevContent.length > 200
+      ? fullPrevContent.slice(-200)
+      : fullPrevContent;
     window.loadedChat.splice(lastAssistantIdx, 1);
 
     // Keep existing bubble — stream directly into it
@@ -3396,46 +3505,17 @@ async function openChat(filename) {
         const chunk = decoder.decode(value, { stream: true });
         rawFull += chunk;
 
-        const cleaned = rawFull
-          .replace(/<\|im_start\|>assistant/gi, '')
-          .replace(/<\|im_start\|>user/gi, '')
-          .replace(/<\|im_start\|>system/gi, '')
-          .replace(/<\|im_end\|>/gi, '')
-          .replace(/\bim_end\|?>/gi, '')
-          .replace(/<\/\|im_end\|>/gi, '')
-          .replace(/_end\|?>/gi, '')
-          .replace(/End\|>?/gi, '')
-          .replace(/\n(?:user|assistant|system)\b[\s\S]*$/i, '')
-          .replace(new RegExp(`^${userName}:\\s*`, 'gim'), '')
-          .replace(new RegExp(`^${charName}:\\s*`, 'gim'), '')
-          .replace(/^User:\s*/gim, '')
-          .replace(/^Assistant:\s*/gim, '')
-          .replace(/^[ \t]+/gm, '')
-          .trim();
+        const cleaned = stripChatMLOutsideCodeBlocks(rawFull, charName, userName).trim();
 
         streamEl.innerHTML = typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(cleaned)) : cleaned;
         chat.scrollTop = chat.scrollHeight;
       }
       decoder.decode();
 
-      let finalText = rawFull
-        .replace(/<\|im_start\|>assistant/gi, '')
-        .replace(/<\|im_start\|>user/gi, '')
-        .replace(/<\|im_start\|>system/gi, '')
-        .replace(/<\|im_end\|>/gi, '')
-        .replace(/\bim_end\|?>/gi, '')
-        .replace(/<\/\|im_end\|>/gi, '')
-        .replace(/_end\|?>/gi, '')
-        .replace(/End\|>?/gi, '')
-        .replace(/\n(?:user|assistant|system)\b[\s\S]*$/i, '')
-        .replace(new RegExp(`^${userName}:\\s*`, 'gim'), '')
-        .replace(new RegExp(`^${charName}:\\s*`, 'gim'), '')
-        .replace(/^User:\s*/gim, '')
-        .replace(/^Assistant:\s*/gim, '')
-        .replace(/^[ \t]+/gm, '')
-        .trim();
+      let finalText = stripChatMLOutsideCodeBlocks(rawFull, charName, userName).trim();
 
-      streamEl.innerHTML = typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(finalText)) : finalText;
+      renderModelHTML(streamEl, typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(finalText)) : finalText);
+      addCodeCopyButtons(streamEl.parentNode || streamEl);
       window.loadedChat.push({ role: 'assistant', content: finalText, speaker: currentCharacter?.name || charName, timestamp: new Date().toISOString() });
       console.log('\u2705 Continue: complete');
       await autoSaveCurrentChat();
@@ -3906,15 +3986,159 @@ async function stopGeneration() {
   // ==================================================
   // COPY MESSAGE
   // ==================================================
+  function copyCodeBlock(btn) {
+    const code = btn.closest('.code-block-wrapper').querySelector('code');
+    if (!code) return;
+    navigator.clipboard.writeText(code.innerText).then(() => {
+      btn.textContent = '✓ Copied';
+      btn.style.color = '#6f6';
+      setTimeout(() => { btn.textContent = 'Copy'; btn.style.color = ''; }, 1800);
+    }).catch(() => {
+      btn.textContent = '✗ Failed';
+      setTimeout(() => { btn.textContent = 'Copy'; }, 1800);
+    });
+  }
+
+  // renderModelHTML — THE FIX for code block horizontal overflow.
+  //
+  // Root cause: setting spanEl.innerHTML = html where html contains block-level
+  // .code-block-wrapper divs causes the browser to expand the inline SPAN to fit
+  // them, blowing out the layout to thousands of pixels wide.
+  //
+  // This function never puts block elements inside the span. Instead:
+  //   1. Parse the html string, extract code-block-wrapper sections as DOM nodes.
+  //   2. Split the remaining html on placeholder tokens.
+  //   3. Set each text segment as innerHTML of a fresh span, append to parent.
+  //   4. Insert code block nodes directly into the parent (as siblings, not children of span).
+  //
+  // spanEl  — the .model-text SPAN (already in the DOM or about to be appended)
+  // html    — the full marked.parse() output string
+  // After this call, spanEl contains only inline content; code blocks are siblings after it.
+  function renderModelHTML(spanEl, html) {
+    // Build a throwaway container to parse the HTML properly.
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+
+    // Collect code-block-wrapper nodes and replace each with a unique placeholder TEXT node
+    // so we can split the serialised HTML on them later.
+    const codeBlocks = [];
+    tmp.querySelectorAll('.code-block-wrapper').forEach(function(cb, i) {
+      const placeholder = `\x00CODEBLOCK_${i}\x00`;
+      cb.parentNode.replaceChild(document.createTextNode(placeholder), cb);
+      codeBlocks.push(cb);
+    });
+
+    // Re-serialise — now contains placeholder strings where code blocks were.
+    const safeHtml = tmp.innerHTML;
+
+    // Split on placeholders.
+    const parts = safeHtml.split(/\x00CODEBLOCK_(\d+)\x00/);
+    // parts alternates: [text, index, text, index, ...text]
+
+    // We need a reference node to insert siblings after. Use spanEl as the anchor.
+    // All pieces get inserted after spanEl in order.
+    let insertAfter = spanEl;
+
+    // Clear spanEl — we'll repopulate it with the first text segment only if it comes first,
+    // but it's simpler to always make spanEl hold the first text chunk and add the rest as siblings.
+    spanEl.innerHTML = '';
+
+    let firstTextDone = false;
+    for (let i = 0; i < parts.length; i++) {
+      if (i % 2 === 0) {
+        // Text segment
+        const textHtml = parts[i];
+        if (!firstTextDone) {
+          spanEl.innerHTML = textHtml;
+          firstTextDone = true;
+          // insertAfter stays as spanEl
+        } else if (textHtml.trim() !== '') {
+          // Inline continuation text — wrap in a span so it's a sibling node
+          const continuationSpan = document.createElement('span');
+          continuationSpan.className = 'model-text-cont';
+          continuationSpan.innerHTML = textHtml;
+          insertAfter.parentNode.insertBefore(continuationSpan, insertAfter.nextSibling);
+          insertAfter = continuationSpan;
+        }
+      } else {
+        // Code block index
+        const cb = codeBlocks[parseInt(parts[i], 10)];
+        if (cb && insertAfter.parentNode) {
+          insertAfter.parentNode.insertBefore(cb, insertAfter.nextSibling);
+          insertAfter = cb;
+        }
+      }
+    }
+  }
+
+  // Wrap every <pre><code> block inside an element with a Copy button header.
+  // Called after marked.parse() sets innerHTML — works with both real marked and the fallback parser.
+  function addCodeCopyButtons(el) {
+    el.querySelectorAll('pre').forEach(pre => {
+      if (pre.closest('.code-block-wrapper')) return; // already wrapped
+      const code = pre.querySelector('code');
+      const langMatch = code && code.className.match(/language-(\w+)/);
+      const lang = langMatch ? langMatch[1] : '';
+      const langLabel = lang ? `<span class="code-lang">${lang}</span>` : '';
+      const wrapper = document.createElement('div');
+      wrapper.className = 'code-block-wrapper';
+      wrapper.innerHTML =
+        `<div class="code-block-header">${langLabel}<button class="code-copy-btn" onclick="copyCodeBlock(this)">Copy</button></div>`;
+      pre.parentNode.insertBefore(wrapper, pre);
+      wrapper.appendChild(pre);
+    });
+  }
+
   function copyMessage(button) {
       const messageDiv = button.closest('.message');
       const contentEl = messageDiv.querySelector('.model-text, .user-text');
       
       let messageText = '';
-      
-      contentEl.childNodes.forEach(node => {
+
+      // Collect all nodes to walk — for model messages, code blocks are siblings
+      // of .model-text after the renderModelHTML fix, so we need to gather them too.
+      // Build a flat list: contentEl childNodes + any .code-block-wrapper siblings + .model-text-cont siblings
+      const nodesToWalk = [];
+
+      if (contentEl) {
+          // Walk the span's own children first
+          contentEl.childNodes.forEach(n => nodesToWalk.push(n));
+
+          // Then walk siblings that are code blocks or continuation spans
+          let sibling = contentEl.nextSibling;
+          while (sibling) {
+              if (sibling.nodeType === Node.ELEMENT_NODE) {
+                  if (sibling.classList && (sibling.classList.contains('code-block-wrapper') || sibling.classList.contains('model-text-cont'))) {
+                      nodesToWalk.push(sibling);
+                  }
+              }
+              sibling = sibling.nextSibling;
+          }
+      }
+
+      nodesToWalk.forEach(node => {
           if (node.nodeType === Node.ELEMENT_NODE) {
-              if (node.tagName === 'EM' || node.tagName === 'I') {
+              // Code block — extract language and raw text, wrap in fences
+              if (node.classList && node.classList.contains('code-block-wrapper')) {
+                  const langEl = node.querySelector('.code-block-lang');
+                  const lang = langEl ? langEl.textContent.trim() : '';
+                  const codeEl = node.querySelector('pre code') || node.querySelector('pre') || node.querySelector('code');
+                  const code = codeEl ? codeEl.textContent : node.textContent;
+                  messageText += '```' + lang + '\n' + code.trim() + '\n```\n\n';
+              }
+              else if (node.classList && node.classList.contains('model-text-cont')) {
+                  // Continuation span — recurse its children as plain text
+                  node.childNodes.forEach(child => {
+                      if (child.nodeType === Node.TEXT_NODE) {
+                          const t = child.textContent.trim();
+                          if (t) messageText += t + ' ';
+                      } else if (child.nodeType === Node.ELEMENT_NODE && child.tagName === 'P') {
+                          const t = child.innerHTML.replace(/<em>(.*?)<\/em>/g, '*$1*').replace(/<i>(.*?)<\/i>/g, '*$1*').replace(/<[^>]+>/g, '');
+                          if (t.trim()) messageText += t.trim() + '\n\n';
+                      }
+                  });
+              }
+              else if (node.tagName === 'EM' || node.tagName === 'I') {
                   messageText += `*${node.textContent.trim()}*`;
               }
               else if (node.tagName === 'P') {
@@ -4093,7 +4317,7 @@ async function loadCharacterMemory() {
           ${formatted}
         </div>
         <div id="memory-edit-${i}" style="display:none;">
-          <textarea id="memory-edit-text-${i}" rows="6" class="memory-edit-textarea"># Memory: ${entry}</textarea>
+          <textarea id="memory-edit-text-${i}" rows="6" class="memory-edit-textarea" style="font-size:13px; font-family:inherit; resize:vertical;"># Memory: ${entry}</textarea>
           <div style="margin-top:6px; display:flex; gap:8px;">
             <button onclick="saveEditMemory(${i})" class="save-btn mem-edit-btn">💾 Save</button>
             <button onclick="cancelEditMemory(${i})" class="cancel-btn mem-edit-btn">Cancel</button>
@@ -4196,7 +4420,20 @@ function closeMemoryModal() {
 
 function toggleMemoryAddPanel() {
   const panel = document.getElementById('memory-add-panel');
-  panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+  const isHidden = panel.style.display === 'none' || panel.style.display === '';
+  panel.style.display = isHidden ? 'block' : 'none';
+  if (isHidden) {
+    // Scroll the modal body down so the new entry panel is visible
+    const modalBody = panel.closest('.modal-body') || panel.parentElement;
+    setTimeout(() => {
+      panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      // Also scroll the modal body container itself
+      if (modalBody) modalBody.scrollTop = modalBody.scrollHeight;
+    }, 50);
+    // Focus the title field
+    const titleEl = document.getElementById('memory-add-title');
+    if (titleEl) setTimeout(() => titleEl.focus(), 80);
+  }
 }
 
 async function submitAddMemory() {
@@ -4341,6 +4578,7 @@ function showMemoryConfirmInBubble(msgDiv, character, title, keywords, body) {
     await loadCharacterList();
     await loadProjects();
     loadModelDisplay(); // fire and forget — non-critical
+    checkOpenAIIndicator(); // show/hide OpenAI status dot
     
     // Set up character dropdown change handler
     // Set up character dropdown change handler
@@ -4558,115 +4796,279 @@ let activeProjectName = null;
 
 async function loadProjects() {
   try {
-    const res = await fetch('/projects/list');
+    const [res, groupRes] = await Promise.all([
+      fetch('/projects/list'),
+      fetch('/projects/groups')
+    ]);
     const data = await res.json();
-    
+    const groups = await groupRes.json(); // { groupName: [projectName, ...] }
+
     const listDiv = document.getElementById('projects-list');
     const currentDisplay = document.getElementById('current-project-display');
-    
-    // Update active project display
+
     activeProjectName = data.active;
-    
+
     if (currentDisplay) {
       currentDisplay.textContent = data.active || 'None';
       currentDisplay.style.color = data.active ? '#6a9fb5' : '#666';
     }
-    
-    // Update indicator above character bar
+
     const indicator = document.getElementById('active-project-indicator');
     const nameSpan = document.getElementById('active-project-name');
-    
     if (data.active) {
       indicator.style.display = 'block';
       nameSpan.textContent = data.active;
     } else {
       indicator.style.display = 'none';
     }
-    
-    // Update projects list in modal
-    if (listDiv) {
-      listDiv.innerHTML = '';
-      
-      if (data.projects.length === 0) {
-        listDiv.innerHTML = '<p style="color: #666; font-size: 13px; margin: 10px 0;">No projects yet. Create one above!</p>';
-      } else {
-        data.projects.forEach(project => {
-          const item = document.createElement('div');
-          item.className = 'project-item';
-          
-          const nameDiv = document.createElement('div');
-          nameDiv.className = 'project-name-section';
-          
-          const name = document.createElement('span');
-          name.textContent = project.display_name;
-          name.className = 'project-name';
-          
-          // Show active badge
-          if (project.name === data.active) {
-            const badge = document.createElement('span');
-            badge.textContent = '✓ Active';
-            badge.className = 'active-badge';
-            nameDiv.appendChild(name);
-            nameDiv.appendChild(badge);
-          } else {
-            nameDiv.appendChild(name);
-          }
-          
-          const buttons = document.createElement('div');
-          buttons.className = 'project-buttons';
-          
-          // Switch button (if not active)
-          if (project.name !== data.active) {
-            const switchBtn = document.createElement('button');
-            switchBtn.textContent = '↻';
-            switchBtn.title = 'Switch to this project';
-            switchBtn.className = 'project-switch-btn';
-            switchBtn.onclick = () => switchProject(project.name);
-            buttons.appendChild(switchBtn);
-          }
-          
-          const editBtn = document.createElement('button');
-          editBtn.textContent = '✏️';
-          editBtn.title = 'Edit instructions';
-          editBtn.onclick = () => openEditProject(project.name);
-          
-          const deleteBtn = document.createElement('button');
-          deleteBtn.textContent = '❌';
-          deleteBtn.title = 'Delete project';
-          deleteBtn.onclick = () => deleteProject(project.name);
-          
-          buttons.appendChild(editBtn);
-          buttons.appendChild(deleteBtn);
-          
-          item.appendChild(nameDiv);
-          item.appendChild(buttons);
-          listDiv.appendChild(item);
-        });
-        
-        
-        // Add "Back to Global Chats" option
-        if (data.active) {
-          const backItem = document.createElement('div');
-          backItem.className = 'back-to-global-item';
-          backItem.onclick = () => switchProject(null);
-          
-          const switchBtn = document.createElement('div');
-          switchBtn.className = 'back-button';
-          switchBtn.textContent = '↻';
-          
-          const backText = document.createElement('div');
-          backText.className = 'back-text';
-          backText.textContent = 'Back to Global Chats';
-          
-          backItem.appendChild(switchBtn);
-          backItem.appendChild(backText);
-          listDiv.appendChild(backItem);
-        }
-      }
+
+    if (!listDiv) return;
+    listDiv.innerHTML = '';
+
+    if (data.projects.length === 0) {
+      listDiv.innerHTML = '<p style="color: #666; font-size: 13px; margin: 10px 0;">No projects yet. Create one above!</p>';
+      return;
     }
-    
+
+    // Build reverse lookup: projectName -> groupName
+    const projectGroup = {};
+    for (const [gName, members] of Object.entries(groups)) {
+      members.forEach(p => { projectGroup[p] = gName; });
+    }
+
+    // All known group names
+    const groupNames = Object.keys(groups);
+
+    // Build the assign-group picker for a project
+    function showGroupPicker(btn, projectName) {
+      // Close any open picker
+      document.querySelectorAll('.group-picker-dropdown').forEach(d => d.remove());
+
+      const picker = document.createElement('div');
+      picker.className = 'group-picker-dropdown';
+
+      const currentGroup = projectGroup[projectName];
+
+      // Ungroup option if currently grouped
+      if (currentGroup) {
+        const ungroupOpt = document.createElement('div');
+        ungroupOpt.className = 'group-picker-option ungroup';
+        ungroupOpt.textContent = '✕ Remove from group';
+        ungroupOpt.onclick = () => { assignProjectGroup(projectName, null); picker.remove(); };
+        picker.appendChild(ungroupOpt);
+      }
+
+      // Existing groups
+      groupNames.forEach(g => {
+        if (g === currentGroup) return;
+        const opt = document.createElement('div');
+        opt.className = 'group-picker-option';
+        opt.textContent = '📂 ' + g;
+        opt.onclick = () => { assignProjectGroup(projectName, g); picker.remove(); };
+        picker.appendChild(opt);
+      });
+
+      // New group option
+      const newOpt = document.createElement('div');
+      newOpt.className = 'group-picker-option new-group';
+      newOpt.textContent = '➕ New folder…';
+      newOpt.onclick = () => {
+        picker.remove();
+        const gName = prompt('Folder name:');
+        if (gName && gName.trim()) assignProjectGroup(projectName, gName.trim());
+      };
+      picker.appendChild(newOpt);
+
+      // Position under button
+      const rect = btn.getBoundingClientRect();
+      const modalRect = btn.closest('.modal-content').getBoundingClientRect();
+      picker.style.top = (rect.bottom - modalRect.top + 4) + 'px';
+      picker.style.left = (rect.left - modalRect.left) + 'px';
+      btn.closest('.modal-content').style.position = 'relative';
+      btn.closest('.modal-content').appendChild(picker);
+
+      // Close on outside click
+      setTimeout(() => {
+        document.addEventListener('click', function handler(e) {
+          if (!picker.contains(e.target)) { picker.remove(); document.removeEventListener('click', handler); }
+        });
+      }, 10);
+    }
+
+    function buildProjectItem(project) {
+      const item = document.createElement('div');
+      item.className = 'project-item';
+
+      const nameDiv = document.createElement('div');
+      nameDiv.className = 'project-name-section';
+
+      const name = document.createElement('span');
+      name.textContent = project.display_name;
+      name.className = 'project-name';
+      nameDiv.appendChild(name);
+
+      if (project.name === data.active) {
+        const badge = document.createElement('span');
+        badge.textContent = '✓';
+        badge.className = 'active-badge';
+        badge.title = 'Active';
+        nameDiv.appendChild(badge);
+      }
+
+      const buttons = document.createElement('div');
+      buttons.className = 'project-buttons';
+
+      // Folder assign button
+      const assignBtn = document.createElement('button');
+      assignBtn.textContent = '📂';
+      assignBtn.title = 'Move to folder';
+      assignBtn.className = 'project-assign-btn';
+      assignBtn.onclick = (e) => { e.stopPropagation(); showGroupPicker(assignBtn, project.name); };
+      buttons.appendChild(assignBtn);
+
+      if (project.name !== data.active) {
+        const switchBtn = document.createElement('button');
+        switchBtn.textContent = '↻';
+        switchBtn.title = 'Switch to this project';
+        switchBtn.className = 'project-switch-btn';
+        switchBtn.onclick = () => switchProject(project.name);
+        buttons.appendChild(switchBtn);
+      }
+
+      const editBtn = document.createElement('button');
+      editBtn.textContent = '✏️';
+      editBtn.title = 'Edit instructions';
+      editBtn.onclick = () => openEditProject(project.name);
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.textContent = '❌';
+      deleteBtn.title = 'Delete project';
+      deleteBtn.onclick = () => deleteProject(project.name);
+
+      buttons.appendChild(editBtn);
+      buttons.appendChild(deleteBtn);
+
+      item.appendChild(nameDiv);
+      item.appendChild(buttons);
+      return item;
+    }
+
+    // Determine grouped vs ungrouped projects
+    const grouped = new Set(Object.values(groups).flat());
+    const ungrouped = data.projects.filter(p => !grouped.has(p.name));
+
+    // Render ungrouped first
+    ungrouped.forEach(p => listDiv.appendChild(buildProjectItem(p)));
+
+    // Render each group as a collapsible section
+    for (const [gName, members] of Object.entries(groups)) {
+      const existingMembers = data.projects.filter(p => members.includes(p.name));
+      if (existingMembers.length === 0) continue;
+
+      const header = document.createElement('div');
+      header.className = 'project-group-header';
+
+      const toggle = document.createElement('span');
+      toggle.className = 'project-group-toggle';
+      toggle.textContent = '▾';
+
+      const label = document.createElement('span');
+      label.className = 'project-group-label';
+      label.textContent = '📂 ' + gName;
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'project-group-delete';
+      delBtn.textContent = '✕';
+      delBtn.title = 'Delete folder (projects stay)';
+      delBtn.onclick = (e) => { e.stopPropagation(); deleteGroup(gName); };
+
+      header.appendChild(toggle);
+      header.appendChild(label);
+      header.appendChild(delBtn);
+
+      const children = document.createElement('div');
+      children.className = 'project-group-children';
+      existingMembers.forEach(p => children.appendChild(buildProjectItem(p)));
+
+      header.onclick = () => {
+        const collapsed = children.classList.toggle('collapsed');
+        toggle.classList.toggle('collapsed', collapsed);
+      };
+
+      listDiv.appendChild(header);
+      listDiv.appendChild(children);
+    }
+
+    // Back to global chats
+    if (data.active) {
+      const backItem = document.createElement('div');
+      backItem.className = 'back-to-global-item';
+      backItem.onclick = () => switchProject(null);
+
+      const switchBtn = document.createElement('div');
+      switchBtn.className = 'back-button';
+      switchBtn.textContent = '↻';
+
+      const backText = document.createElement('div');
+      backText.className = 'back-text';
+      backText.textContent = 'Back to Global Chats';
+
+      backItem.appendChild(switchBtn);
+      backItem.appendChild(backText);
+      listDiv.appendChild(backItem);
+    }
+
   } catch (err) {
     console.error('Failed to load projects:', err);
+  }
+}
+
+async function assignProjectGroup(projectName, groupName) {
+  try {
+    const groupRes = await fetch('/projects/groups');
+    const groups = await groupRes.json();
+
+    // Remove project from all groups first
+    for (const g of Object.keys(groups)) {
+      groups[g] = groups[g].filter(p => p !== projectName);
+    }
+
+    // Add to new group if specified
+    if (groupName) {
+      if (!groups[groupName]) groups[groupName] = [];
+      groups[groupName].push(projectName);
+    }
+
+    // Prune empty groups
+    for (const g of Object.keys(groups)) {
+      if (groups[g].length === 0) delete groups[g];
+    }
+
+    await fetch('/projects/groups/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groups })
+    });
+
+    await loadProjects();
+  } catch (err) {
+    console.error('Failed to assign group:', err);
+  }
+}
+
+async function deleteGroup(groupName) {
+  try {
+    const groupRes = await fetch('/projects/groups');
+    const groups = await groupRes.json();
+    delete groups[groupName];
+    await fetch('/projects/groups/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groups })
+    });
+    await loadProjects();
+  } catch (err) {
+    console.error('Failed to delete group:', err);
   }
 }
 
@@ -5166,6 +5568,22 @@ function showToast(message, duration = 3500) {
   toast.style.opacity = '1';
   clearTimeout(toast._hideTimeout);
   toast._hideTimeout = setTimeout(() => { toast.style.opacity = '0'; }, duration);
+}// ── OpenAI status indicator ──────────────────────────────────────
+async function checkOpenAIIndicator() {
+  try {
+    const res  = await fetch('/get_openai_settings');
+    const data = await res.json();
+    const dot  = document.getElementById('openai-indicator');
+    if (!dot) return;
+    if (data.backend_mode === 'openai' && data.openai_api_key) {
+      dot.style.display = 'flex';
+      dot.title = 'OpenAI active — ' + (data.openai_model || 'gpt-4o');
+      const modelSpan = document.getElementById('openai-indicator-model');
+      if (modelSpan) modelSpan.textContent = data.openai_model || 'gpt-4o';
+    } else {
+      dot.style.display = 'none';
+    }
+  } catch(e) { /* silent — non-critical */ }
 }
 
 </script>

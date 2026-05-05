@@ -504,7 +504,12 @@ def get_stop_tokens():
         print("📐 Using Qwen stop tokens (<|im_end|>)", flush=True)
         return ["<|im_end|>", "<|im_start|>"]
     else:
-        return ["<|im_end|>", "\n<|im_start|>", "<|im_start|>", "\nuser\n", "\nUser\n", "\nassistant\n", "\nAssistant\n"]
+        # ⚠️ Do NOT add word-based stops like "\nuser\n" or "\nassistant\n" —
+        # they fire on normal prose and kill responses mid-flow.
+        # ⚠️ Do NOT add "\n<|im_start|>" — llama.cpp matches stop tokens against the token
+        # stream and fires when the model writes a newline before any < character, killing
+        # responses mid-sentence. "<|im_end|>" alone catches real ChatML leakage.
+        return ["<|im_end|>", "<|im_start|>"]
 
 
 def strip_chatml_leakage(text):
@@ -512,6 +517,7 @@ def strip_chatml_leakage(text):
     import re
     if not text:
         return ""
+    original = text
     # Full tokens
     text = re.sub(r"<\|im_end\|>", "", text)
     text = re.sub(r"<\|im_start\|>\w*", "", text)
@@ -531,12 +537,26 @@ def strip_chatml_leakage(text):
     text = re.sub(r"(?<![<|])_start\|?\w*", "", text)
     # Bare "end|>" fragment — left behind when "<|im_" was stripped from previous chunk
     text = re.sub(r"\bend\|?>", "", text)
-    # ">user" / ">assistant" — left when "<|im_start|>" stripped, leaving ">user"
-    text = re.sub(r">(?:user|assistant|system)\b[\s\S]*$", "", text, flags=re.IGNORECASE)
-    # "\nuser" / "\nassistant" — model generating next turn after stop
-    text = re.sub(r"\n(?:user|assistant|system)\b[\s\S]*$", "", text, flags=re.IGNORECASE)
-    # Bare role word at start of chunk — chunk boundary split right after stop token
-    text = re.sub(r"^(?:user|assistant|system)\b[\s\S]*$", "", text, flags=re.IGNORECASE)
+    # ">user" / ">assistant" — left when "<|im_start|>" stripped, leaving ">user\n"
+    # Strip role header tokens only — NOT [\s\S]*$ which wipes real content mid-chunk
+    # ⚠️ These run per-chunk on a live stream. [\s\S]*$ on a chunk like "\nassistant\nHello"
+    # wipes the entire response, leaving cleanedMessage empty, triggering a retry,
+    # firing a 2nd /chat POST → browser drops 1st connection → "srv stop: cancel task"
+    _before = text
+    text = re.sub(r">(?:user|assistant|system)(?:\n|:)", "\n", text, flags=re.IGNORECASE)
+    if text != _before:
+        print(f"\u2702\ufe0f [strip_chatml] FIRED: >role pattern. Was: {repr(_before[-80:])}", flush=True)
+    _before = text
+    text = re.sub(r"\n(?:user|assistant|system)(?:\n|:)", "\n", text, flags=re.IGNORECASE)
+    if text != _before:
+        print(f"\u2702\ufe0f [strip_chatml] FIRED: \\nrole pattern. Was: {repr(_before[-80:])}", flush=True)
+    _before = text
+    text = re.sub(r"^(?:user|assistant|system)(?:\n|:)", "", text, flags=re.IGNORECASE)
+    if text != _before:
+        print(f"\u2702\ufe0f [strip_chatml] FIRED: ^role pattern. Was: {repr(_before[:80])}", flush=True)
+    # Log if chunk was significantly shortened
+    if len(original) > 10 and len(text) < len(original) * 0.5:
+        print(f"\u26a0\ufe0f [strip_chatml] Chunk shrank >50%: {len(original)}\u2192{len(text)} chars. End was: {repr(original[-60:])}", flush=True)
     return text
 
 
@@ -972,6 +992,72 @@ def stream_vision_response(payload):
             continue
 
     print(f"\n🎯 VISION DONE: {total_chunks} chunks, {len(''.join(all_text))} chars total", flush=True)
+
+# --------------------------------------------------
+# Stream OpenAI API response (cloud backend)
+# --------------------------------------------------
+def stream_openai_response(messages, api_key, model, temperature, max_tokens, top_p, frequency_penalty=0.0, presence_penalty=0.0):
+    global abort_generation
+    abort_generation = False
+
+    import sys
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "top_p": top_p,
+        "frequency_penalty": frequency_penalty,
+        "presence_penalty": presence_penalty,
+        "stream": True,
+    }
+    print(f"☁️ OpenAI stream: model={model}, msgs={len(messages)}", flush=True)
+    response = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers=headers,
+        json=payload,
+        stream=True,
+        timeout=None,
+    )
+    print(f"🔗 OpenAI response status: {response.status_code}", flush=True)
+    if response.status_code != 200:
+        err = response.text[:300]
+        print(f"❌ OpenAI error: {err}", flush=True)
+        yield f"[OpenAI error {response.status_code}: {err}]"
+        return
+
+    total_chunks = 0
+    all_text = []
+    for line in response.iter_lines(chunk_size=1):
+        if abort_generation:
+            print("🛑 OpenAI generation aborted", flush=True)
+            response.close()
+            break
+        if not line:
+            continue
+        try:
+            line_str = line.decode("utf-8").strip()
+            if line_str.startswith("data:"):
+                line_str = line_str[5:].strip()
+            if line_str == "[DONE]":
+                break
+            j = json.loads(line_str)
+            delta = j.get("choices", [{}])[0].get("delta", {})
+            chunk = delta.get("content") or ""
+            total_chunks += 1
+            if chunk:
+                all_text.append(chunk)
+                yield chunk
+                sys.stdout.flush()
+        except Exception as e:
+            print(f"❌ OpenAI parse error: {e}", flush=True)
+            continue
+
+    print(f"\n☁️ OpenAI DONE: {total_chunks} chunks, {len(''.join(all_text))} chars total", flush=True)
 
 # --------------------------------------------------
 # Global abort flag for stopping generation
@@ -1725,8 +1811,22 @@ def chat():
    
     # ✅ INJECT CHARACTER NOTE if present (every 4 messages)
     # Trim if needed (secondary safety net)
-    from truncation import trim_chat_history
-    messages = trim_chat_history(messages)
+    # ⚠️ Example dialogue (~2000 tokens) gets appended to system message AFTER this trim.
+    # Pass its estimated size as overhead so the trimmer accounts for it upfront.
+    from truncation import trim_chat_history, rough_token_count
+    _ex_overhead = 0
+    _char_ex_pre = char_data.get("example_dialogue", "").strip()
+    if not _char_ex_pre:
+        try:
+            import json as _j
+            with open("settings.json", "r", encoding="utf-8") as _sf:
+                _char_ex_pre = _j.load(_sf).get("global_example_dialog", "").strip()
+        except Exception:
+            pass
+    if _char_ex_pre:
+        _ex_overhead = rough_token_count(_char_ex_pre)
+        print(f"📐 Example dialogue overhead: ~{_ex_overhead} tokens (pre-accounted in trim)")
+    messages = trim_chat_history(messages, extra_system_overhead=_ex_overhead)
     
     print(f"🔍 DEBUG: After trimming, {len(messages)} messages remain")
     
@@ -1870,20 +1970,11 @@ def chat():
             print(f"Last 500 chars:\n{system_content[-500:]}")
             print("="*80 + "\n")
     
-# 🔥 If continuation, inject a meta-instruction RIGHT BEFORE the last user message
+# Continuation reminder injection removed — mid-conversation system messages
+    # confuse Helcyon (trained on clean ChatML with system only at position 0)
+    # causing immediate EOS on first token in long chats.
     if len(assistant_messages) > 0:
-        print("🔄 Continuation detected - injecting continuation context")
-        
-        # Insert a system message near the end that explicitly tells model to continue naturally
-        continuation_msg = {
-            "role": "system",
-            "content": "Continue the conversation naturally. Do NOT greet the user again or recap previous messages. Respond directly to the most recent message as if no break occurred."
-        }
-        
-        # Insert it right before the last user message (so it's the last thing the model sees before generating)
-        insert_position = len(messages) - 1  # Right before the latest user message
-        messages.insert(insert_position, continuation_msg)
-        print(f"✅ Inserted continuation reminder at position {insert_position}")
+        print("🔄 Continuation detected")
     else:
         print("🆕 New conversation detected - allowing greeting")
 
@@ -1946,12 +2037,16 @@ def chat():
     print("="*60 + "\n")
         
     # --- Final safety clamp ---
-    # Words average ~1.3 tokens each, so 7500 words = ~9750 tokens.
+    # Last-resort guard only — truncation.py already handles smart context trimming above.
+    # This only fires if the prompt is genuinely enormous (system block + very long history).
+    # Words average ~1.3 tokens each. 16384 ctx * 0.85 headroom / 1.3 = ~10700 words max.
     # ⚠️ IMPORTANT: Do NOT truncate from the front of the prompt.
     # The system message (containing example dialogue + style instructions) is at the front.
     # Losing it causes style collapse. Instead: preserve the system block and drop
     # oldest conversation turns from the middle until the prompt fits.
-    MAX_WORDS_APPROX = 7500
+    # ⚠️ CRITICAL: Always keep at least the final user turn — otherwise the model sees no
+    # user message and fires a stop token immediately, producing 0-1 tokens of output.
+    MAX_WORDS_APPROX = 10500  # ~13650 tokens — safe headroom for 16k context
     words = prompt.split()
 
     if len(words) > MAX_WORDS_APPROX:
@@ -1971,12 +2066,18 @@ def chat():
         turns = conversation_block.split("<|im_start|>")
         turns = [t for t in turns if t.strip()]
 
-        while turns and len(" ".join(turns).split()) > convo_budget:
-            turns.pop(0)
+        # ✅ FIX: Always protect the last 2 turns (final user msg + assistant open tag)
+        # so the model always has a user message to respond to.
+        protected_tail = turns[-2:] if len(turns) >= 2 else turns[:]
+        trimmable = turns[:-2] if len(turns) >= 2 else []
 
-        trimmed_convo = "<|im_start|>" + "<|im_start|>".join(turns) if turns else ""
+        while trimmable and len(" ".join(trimmable + protected_tail).split()) > convo_budget:
+            trimmable.pop(0)
+
+        surviving_turns = trimmable + protected_tail
+        trimmed_convo = "<|im_start|>" + "<|im_start|>".join(surviving_turns) if surviving_turns else ""
         prompt = system_block + trimmed_convo
-        print(f"✂️ Prompt trimmed: kept system block ({system_words} words) + {len(turns)} conversation turns (was {len(words)} words total)", flush=True)
+        print(f"✂️ Prompt trimmed: kept system block ({system_words} words) + {len(surviving_turns)} conversation turns (was {len(words)} words total)", flush=True)
     
     prompt = prompt.strip().replace("\x00", "")
 
@@ -2176,9 +2277,55 @@ def chat():
     else:
         # --------------------------------------------------------
         # TEXT-ONLY PATH
+        # OpenAI cloud path takes priority if backend_mode == "openai"
         # For ChatML models (Helcyon/Mistral): raw /completion with pre-built prompt
         # For jinja/Gemma/other models: /v1/chat/completions with messages array
         # --------------------------------------------------------
+
+        # ── OpenAI cloud backend fork ──────────────────────────
+        try:
+            with open('settings.json', 'r') as _oaisf:
+                _oaist = json.load(_oaisf)
+        except Exception:
+            _oaist = {}
+
+        if _oaist.get('backend_mode', 'local') == 'openai':
+            _oai_key   = _oaist.get('openai_api_key', '').strip()
+            _oai_model = _oaist.get('openai_model', 'gpt-4o').strip() or 'gpt-4o'
+            if not _oai_key:
+                return "⚠️ OpenAI backend selected but no API key set. Check config page.", 500
+
+            print(f"☁️ OPENAI PATH: model={_oai_model}", flush=True)
+
+            # Build clean messages array: system block + conversation
+            _oai_messages = [{"role": "system", "content": system_text + ("\n\n" + memory if memory else "")}]
+            for _m in active_chat:
+                _role = _m.get("role", "user")
+                _content = _m.get("content", "")
+                if isinstance(_content, list):
+                    _content = " ".join(p.get("text", "") for p in _content if p.get("type") == "text")
+                if _content:
+                    _oai_messages.append({"role": _role, "content": _content})
+
+            try:
+                return Response(
+                    stream_with_context(stream_openai_response(
+                        messages          = _oai_messages,
+                        api_key           = _oai_key,
+                        model             = _oai_model,
+                        temperature       = sampling["temperature"],
+                        max_tokens        = sampling["max_tokens"],
+                        top_p             = sampling["top_p"],
+                        frequency_penalty = sampling.get("frequency_penalty", 0.0),
+                        presence_penalty  = sampling.get("presence_penalty", 0.0),
+                    )),
+                    content_type="text/event-stream; charset=utf-8",
+                )
+            except Exception as e:
+                print(f"❌ OpenAI chat error: {e}", flush=True)
+                return f"⚠️ Error contacting OpenAI: {e}", 500
+        # ── End OpenAI fork ────────────────────────────────────
+
         try:
             with open('settings.json', 'r') as _sf:
                 _st = json.load(_sf)
@@ -2238,6 +2385,8 @@ def chat():
                 "temperature": sampling["temperature"],
                 "max_tokens": sampling["max_tokens"],
                 "top_p": sampling["top_p"],
+                "frequency_penalty": sampling.get("frequency_penalty", 0.0),
+                "presence_penalty": sampling.get("presence_penalty", 0.0),
                 "stream": True,
             }
             try:
@@ -2260,6 +2409,8 @@ def chat():
             "min_p": sampling.get("min_p", 0.05),
             "top_k": sampling.get("top_k", 40),
             "repeat_penalty": sampling["repeat_penalty"],
+            "frequency_penalty": sampling.get("frequency_penalty", 0.0),
+            "presence_penalty": sampling.get("presence_penalty", 0.0),
             "stream": True,
             "stop": get_stop_tokens(),
         }
@@ -2324,7 +2475,9 @@ def chat():
 
             def _chat_search_intent_stream():
                 import re as _csre2
-                _ROLE_LEAK = _csre2.compile(r'\n(?:user|assistant|system)\b', _csre2.IGNORECASE)
+                # Only halt on actual ChatML turn headers (newline + role + newline/colon)
+                # NOT on prose like "The user needs..." or "As an assistant..."
+                _ROLE_LEAK = _csre2.compile(r'\n(?:user|assistant|system)(?:\n|:)', _csre2.IGNORECASE)
 
                 yield "🗂️ *Searching chat history...*\n\n"
 
@@ -2390,6 +2543,7 @@ def chat():
                     m = _ROLE_LEAK.search(combined)
                     if m:
                         safe = combined[:m.start()]
+                        print(f"🛑 [chat_search_stream] ROLE_LEAK halt! Matched: {repr(m.group())} in: {repr(combined[-80:])}", flush=True)
                         if safe:
                             yield safe
                         _halted[0] = True
@@ -2730,7 +2884,9 @@ def chat():
                     _buf = ""
                     _tail = ""
                     _TAIL_LEN = 40
-                    _ROLE_LEAK = _re3_inner.compile(r'\n(?:user|assistant|system)\b', _re3_inner.IGNORECASE)
+                    # Only halt on actual ChatML turn headers (newline + role + newline/colon)
+                    # NOT on prose like "The user needs..." or "As an assistant..."
+                    _ROLE_LEAK = _re3_inner.compile(r'\n(?:user|assistant|system)(?:\n|:)', _re3_inner.IGNORECASE)
 
                     # Stream live, watching for [CHAT SEARCH: ...] tag as secondary fallback
                     _accumulated = []
@@ -2751,6 +2907,7 @@ def chat():
                             m = _ROLE_LEAK.search(combined)
                             if m:
                                 safe = combined[:m.start()]
+                                print(f"🛑 [_filtered_stream] ROLE_LEAK halt! Matched: {repr(m.group())} in: {repr(combined[-80:])}", flush=True)
                                 if safe:
                                     yield safe
                                 _halted[0] = True
@@ -2844,6 +3001,11 @@ def chat():
                         return
 
                     # Normal end-of-stream flush (no chat search tag)
+                    total_yielded = len("".join(_accumulated))
+                    if _halted[0]:
+                        print(f"🛑 [_filtered_stream] Stream halted by ROLE_LEAK. Total accumulated: {total_yielded} chars", flush=True)
+                    else:
+                        print(f"✅ [_filtered_stream] Stream complete. Total accumulated: {total_yielded} chars", flush=True)
                     if not _halted[0]:
                         _tail = _re3_inner.sub(r'\n(?:user|assistant|system)\b[^\n]*$', '', _tail, flags=_re3_inner.IGNORECASE)
                         if _tail and not _suppress[0]:
@@ -4104,7 +4266,9 @@ def load_sampling_settings():
         "top_p": 0.95,
         "min_p": 0.05,
         "top_k": 40,
-        "repeat_penalty": 1.1
+        "repeat_penalty": 1.1,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0
     }
  
     
@@ -4231,6 +4395,101 @@ def save_brave_api_key_route():
         return jsonify({"status": "ok"})
     except Exception as e:
         print(f"❌ save_brave_api_key failed: {e}")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+# --------------------------------------------------
+# OpenAI Backend Settings Routes
+# --------------------------------------------------
+@app.route("/get_openai_settings", methods=["GET"])
+def get_openai_settings_route():
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            s = json.load(f)
+        return jsonify({
+            "backend_mode":    s.get("backend_mode", "local"),
+            "openai_api_key":  s.get("openai_api_key", ""),
+            "openai_model":    s.get("openai_model", "gpt-4o"),
+        })
+    except Exception as e:
+        return jsonify({"backend_mode": "local", "openai_api_key": "", "openai_model": "gpt-4o", "error": str(e)})
+
+@app.route("/save_openai_settings", methods=["POST"])
+def save_openai_settings_route():
+    data = request.get_json()
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            s = json.load(f)
+        s["backend_mode"]   = data.get("backend_mode", "local")
+        s["openai_api_key"] = data.get("openai_api_key", "").strip()
+        s["openai_model"]   = data.get("openai_model", "gpt-4o").strip()
+        import tempfile, shutil
+        tmp = SETTINGS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(s, f, indent=2)
+        shutil.move(tmp, SETTINGS_FILE)
+        mode = s["backend_mode"]
+        print(f"✅ OpenAI settings saved — backend_mode={mode}, model={s['openai_model']}")
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        print(f"❌ save_openai_settings failed: {e}")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/get_openai_models", methods=["GET"])
+def get_openai_models_route():
+    """Fetch available chat models from OpenAI using the stored API key."""
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            s = json.load(f)
+        api_key = s.get("openai_api_key", "").strip()
+        if not api_key:
+            return jsonify({"status": "error", "error": "No API key set"}), 400
+
+        r = requests.get(
+            "https://api.openai.com/v1/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return jsonify({"status": "error", "error": f"OpenAI returned {r.status_code}: {r.text[:200]}"}), 502
+
+        all_models = r.json().get("data", [])
+
+        # Filter to chat-capable models only — exclude embeddings, tts, whisper, dall-e, etc.
+        CHAT_PREFIXES = ("gpt-", "o1", "o3", "o4", "chatgpt")
+        EXCLUDE_SUFFIXES = ("-instruct", "-search", "-realtime", "-audio")
+        EXCLUDE_CONTAINS = ("embedding", "tts", "whisper", "dall-e", "moderation", "babbage", "davinci", "ada", "curie")
+
+        chat_ids = []
+        for m in all_models:
+            mid = m.get("id", "")
+            ml = mid.lower()
+            if not any(ml.startswith(p) for p in CHAT_PREFIXES):
+                continue
+            if any(ml.endswith(s) for s in EXCLUDE_SUFFIXES):
+                continue
+            if any(x in ml for x in EXCLUDE_CONTAINS):
+                continue
+            chat_ids.append(mid)
+
+        # Sort: put flagship models first, then by name
+        def _sort_key(mid):
+            ml = mid.lower()
+            if "gpt-4o" in ml and "mini" not in ml:
+                return (0, mid)
+            if "gpt-4o-mini" in ml:
+                return (1, mid)
+            if ml.startswith("o"):
+                return (2, mid)
+            return (3, mid)
+
+        chat_ids.sort(key=_sort_key)
+        print(f"✅ OpenAI models fetched: {len(chat_ids)} chat models")
+        return jsonify({"status": "ok", "models": chat_ids})
+
+    except Exception as e:
+        print(f"❌ get_openai_models failed: {e}")
         return jsonify({"status": "error", "error": str(e)}), 500
 
 

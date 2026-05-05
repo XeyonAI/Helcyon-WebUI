@@ -78,7 +78,8 @@ def get_instruction_layer():
 
         "MEMORY TAGS:\n"
         "ONLY write a memory tag if the user EXPLICITLY asks — 'save that', 'remember this', 'add that to memory'. "
-        "NEVER write one on your own initiative. When asked, use EXACTLY this format on a single line:\n"
+        "ALWAYS write from your own first-person perspective. Example: 'John told me about...'\n"
+        "NEVER write one on your own initiative. When asked, use EXACTLY this format on a single line:\n"        
         "[MEMORY ADD: Title | keyword1, keyword2 | Body in first person.]\n"
         "Three sections separated by TWO pipe characters. Must start with [MEMORY ADD: and end with ].\n\n"
 

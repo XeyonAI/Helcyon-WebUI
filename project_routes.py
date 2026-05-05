@@ -440,3 +440,36 @@ def set_sticky_doc(project_name):
     
     print(f"📌 Pinned doc set to: {filename} for project: {project_name}")
     return jsonify({"success": True, "sticky_doc_file": filename})
+
+
+# --------------------------------------------------
+# Project Groups (manual subfolders)
+# _groups.json: { "groupName": ["projectName", ...], ... }
+# --------------------------------------------------
+GROUPS_FILE = os.path.join(os.getcwd(), "projects", "_groups.json")
+
+def load_groups():
+    if os.path.exists(GROUPS_FILE):
+        try:
+            with open(GROUPS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def save_groups(groups):
+    ensure_projects_dir()
+    with open(GROUPS_FILE, "w", encoding="utf-8") as f:
+        json.dump(groups, f, indent=2, ensure_ascii=False)
+
+@project_bp.route("/projects/groups", methods=["GET"])
+def get_groups():
+    return jsonify(load_groups())
+
+@project_bp.route("/projects/groups/save", methods=["POST"])
+def save_groups_route():
+    data = request.json
+    groups = data.get("groups", {})
+    save_groups(groups)
+    print(f"📂 Groups saved: {list(groups.keys())}")
+    return jsonify({"success": True})

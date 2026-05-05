@@ -225,7 +225,7 @@ def rename_chat():
     # We just need to sanitize and add .txt
     
     # Sanitize the new name (but preserve " - " separators)
-    safe_name = "".join(c for c in new_name if c.isalnum() or c in (' ', '-', '_')).strip()
+    safe_name = "".join(c for c in new_name if c.isalnum() or c in (' ', '-', '_', '.')).strip()
     
     # Build new filename
     new_filename = f"{safe_name}.txt"

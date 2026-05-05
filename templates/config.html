@@ -39,16 +39,43 @@
       <label>Top P:</label>
       <input type="number" id="top_p" step="0.05" min="0" max="1" />
 
-      <label>Min P:</label>
-      <input type="number" id="min_p" step="0.01" min="0" max="1" />
+      <div id="local-only-params">
+        <label>Min P:</label>
+        <input type="number" id="min_p" step="0.01" min="0" max="1" />
 
-      <label>Top K:</label>
-      <input type="number" id="top_k" step="1" min="0" max="100" />
+        <label>Top K:</label>
+        <input type="number" id="top_k" step="1" min="0" max="100" />
 
-      <label>Repeat Penalty:</label>
-      <input type="number" id="repeat_penalty" step="0.01" min="0.8" max="2" />
+        <label>Repeat Penalty:</label>
+        <input type="number" id="repeat_penalty" step="0.01" min="0.8" max="2" />
+      </div>
+      <div id="local-only-note" style="display:none; font-size:11px; color:#666; margin-bottom:10px; padding:5px 8px; background:rgba(255,255,255,0.03); border-radius:4px; border:1px solid #2a2a2a;">
+        ⚠️ Min P, Top K and Repeat Penalty are not used by OpenAI
+      </div>
 
-      <button id="saveSettingsBtn" style="background-color: #1f5a3a; border-color: #248050; color: white;">💾 Save Settings</button>
+      <label>Frequency Penalty:</label>
+      <input type="number" id="frequency_penalty" step="0.01" min="0" max="2" />
+
+      <label>Presence Penalty:</label>
+      <input type="number" id="presence_penalty" step="0.01" min="0" max="2" />
+
+      <!-- Sampling Presets -->
+      <div style="border-top:1px solid #2a2a2a; padding-top:8px; margin-top:4px;">
+        <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:#666; margin-bottom:6px;">Sampling Presets</div>
+        <div style="display:flex; gap:4px; margin-bottom:6px;">
+          <select id="sampling-preset-select" onchange="onSamplingPresetSelect()" style="flex:1; background:#1a1a2a; border:1px solid #444; color:#ccc; border-radius:3px; font-size:12px; padding:3px 4px;">
+            <option value="">— select preset —</option>
+          </select>
+          <button onclick="loadSamplingPreset()" style="background:#1f3a5a; border:1px solid #245080; color:white; border-radius:3px; padding:3px 7px; font-size:12px; cursor:pointer; align-self:stretch;">Load</button>
+          <button onclick="deleteSamplingPreset()" style="background:#5a1f1f; border:1px solid #8a2424; color:white; border-radius:3px; padding:3px 7px; font-size:12px; cursor:pointer; align-self:stretch;">🗑️</button>
+        </div>
+        <input id="sampling-preset-name" type="text" placeholder="Preset name..." style="background:#111; border:1px solid #333; color:#ccc; border-radius:3px; font-size:12px; padding:3px 6px; width:100%; box-sizing:border-box; margin-bottom:4px;">
+        <button id="update-sampling-preset-btn" onclick="updateSamplingPreset()" style="display:none; background:#2a3a1a; border:1px solid #4a6a2a; color:#afa; border-radius:3px; padding:4px 7px; font-size:12px; cursor:pointer; width:100%; margin-bottom:4px;">🔄 Update Preset</button>
+        <button onclick="saveSamplingPreset()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; border-radius:3px; padding:4px 7px; font-size:12px; cursor:pointer; width:100%; margin-bottom:4px;">💾 Save Preset</button>
+        <div id="sampling-preset-status" style="font-size:11px; color:#aaa; min-height:14px;"></div>
+      </div>
+
+      <button id="saveSettingsBtn" style="background-color: #1f5a3a; border-color: #248050; color: white;">💾 Save & Apply</button>
 
       <hr style="margin: 20px 0; border-color: #333;">
 
@@ -135,6 +162,49 @@
       <div id="brave-key-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
       <button onclick="saveBraveKey()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:4px;">💾 Save Search Key</button>
       <button onclick="clearBraveKey()" style="background:#3a1a1a; border:1px solid #6a2a2a; color:#e88; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">✕ Clear Key (use DDG fallback)</button>
+
+      <hr style="margin: 20px 0; border-color: #333;">
+
+      <h3>☁️ OpenAI Backend</h3>
+      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:6px;">Backend Mode</label>
+      <div style="display:flex; gap:0; margin-bottom:10px; border:1px solid #333; border-radius:4px; overflow:hidden;">
+        <button id="mode-local-btn" onclick="setBackendMode('local')"
+          style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#1a3a2a; color:#6f6; font-weight:bold;">
+          🖥️ Local
+        </button>
+        <button id="mode-openai-btn" onclick="confirmOpenAISwitch()"
+          style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#111; color:#888;">
+          ☁️ OpenAI
+        </button>
+      </div>
+
+      <!-- OpenAI switch confirmation modal -->
+      <div id="openai-confirm-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:9999; align-items:center; justify-content:center;">
+        <div style="background:#1a1f2a; border:1px solid #3a5a7a; border-radius:10px; padding:24px 20px; max-width:300px; width:90%; box-shadow:0 8px 32px rgba(0,0,0,0.6);">
+          <div style="font-size:22px; text-align:center; margin-bottom:10px;">⚠️</div>
+          <div style="font-size:14px; color:#ddd; text-align:center; margin-bottom:8px; font-weight:bold;">Switch to OpenAI?</div>
+          <div style="font-size:12px; color:#999; text-align:center; margin-bottom:20px; line-height:1.5;">Your conversations will be sent to <span style="color:#7ab4f5;">OpenAI's servers</span>. Make sure you're comfortable with that before continuing.</div>
+          <div style="display:flex; gap:8px;">
+            <button onclick="cancelOpenAISwitch()" style="flex:1; padding:8px 0; background:#2a1a1a; border:1px solid #6a2a2a; color:#e88; border-radius:6px; font-size:13px; cursor:pointer;">✕ Cancel</button>
+            <button onclick="confirmOpenAISwitchOK()" style="flex:1; padding:8px 0; background:#1a2a4a; border:1px solid #2a4a8a; color:#7ab4f5; border-radius:6px; font-size:13px; cursor:pointer; font-weight:bold;">☁️ Connect</button>
+          </div>
+        </div>
+      </div>
+
+      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">OpenAI API Key</label>
+      <input id="openai-api-key" type="password" placeholder="sk-..." style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:6px;">
+
+      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Model</label>
+      <div style="display:flex; gap:6px; align-items:center; margin-bottom:4px;">
+        <select id="openai-model" style="flex:1; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; height:28px;">
+          <option value="gpt-4o">gpt-4o</option>
+        </select>
+        <button onclick="fetchOpenAIModels()" title="Fetch models from OpenAI" style="background:#1a2a3a; border:1px solid #2a4a6a; color:#7ab4f5; border-radius:4px; padding:0 8px; font-size:12px; cursor:pointer; height:28px; white-space:nowrap; flex-shrink:0;">🔄 Fetch</button>
+      </div>
+      <div style="font-size:10px; color:#555; margin-bottom:8px;">Click 🔄 Fetch to load your available models</div>
+
+      <div id="openai-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
+      <button onclick="saveOpenAISettings()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">💾 Save OpenAI Settings</button>
 
       <hr style="margin: 20px 0; border-color: #333;">
 
@@ -1202,13 +1272,15 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       const res = await fetch("/get_sampling_settings");
       const settings = await res.json();
       
-      // ✅ FIXED: Use getElementById instead of querySelector
-      document.getElementById('temperature').value = settings.temperature || 0.8;
-      document.getElementById('max_tokens').value = settings.max_tokens || 4096;
-      document.getElementById('top_p').value = settings.top_p || 0.95;
-      document.getElementById('min_p').value = settings.min_p || 0.05;
-      document.getElementById('top_k').value = settings.top_k || 40;
-      document.getElementById('repeat_penalty').value = settings.repeat_penalty || 1.1;
+      // Use ?? so that 0 values display correctly (|| would treat 0 as falsy)
+      document.getElementById('temperature').value    = settings.temperature       ?? 0.8;
+      document.getElementById('max_tokens').value     = settings.max_tokens        ?? 4096;
+      document.getElementById('top_p').value          = settings.top_p             ?? 0.95;
+      document.getElementById('min_p').value          = settings.min_p             ?? 0.05;
+      document.getElementById('top_k').value          = settings.top_k             ?? 40;
+      document.getElementById('repeat_penalty').value    = settings.repeat_penalty    ?? 1.1;
+      document.getElementById('frequency_penalty').value = settings.frequency_penalty ?? 0.0;
+      document.getElementById('presence_penalty').value  = settings.presence_penalty  ?? 0.0;
       
       console.log('✅ Loaded sampling settings:', settings);
     } catch (err) {
@@ -1225,6 +1297,8 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
         min_p: parseFloat(document.getElementById('min_p').value) || 0.05,
         top_k: parseInt(document.getElementById('top_k').value) || 40,
         repeat_penalty: parseFloat(document.getElementById('repeat_penalty').value) || 1.1,
+        frequency_penalty: parseFloat(document.getElementById('frequency_penalty').value) || 0.0,
+        presence_penalty: parseFloat(document.getElementById('presence_penalty').value) || 0.0,
       };
       
       const res = await fetch("/save_sampling_settings", {
@@ -2003,6 +2077,7 @@ async function loadLlamaConfig() {
     document.getElementById('llama-ctx-size').value = a.ctx_size ?? 16384;
     document.getElementById('llama-chat-template').value = a.chat_template ?? 'chatml';
     populateLlamaPresetDropdown();
+    populateSamplingPresetDropdown();
   } catch(e) {
     console.error('Failed to load llama config:', e);
   }
@@ -2079,6 +2154,130 @@ async function resetToDefault() {
 
 // ==================================================
 // LLAMA CONFIG PRESETS
+// ==================================================
+// Sampling Presets
+// ==================================================
+function getSamplingPresets() {
+  try { return JSON.parse(localStorage.getItem('hwui_sampling_presets') || '{}'); }
+  catch(e) { return {}; }
+}
+
+function saveSamplingPresetsToStorage(presets) {
+  localStorage.setItem('hwui_sampling_presets', JSON.stringify(presets));
+}
+
+function populateSamplingPresetDropdown() {
+  const sel = document.getElementById('sampling-preset-select');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">— select preset —</option>';
+  const presets = getSamplingPresets();
+  Object.keys(presets).sort().forEach(name => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+  if (current && presets[current]) sel.value = current;
+}
+
+function onSamplingPresetSelect() {
+  const name = document.getElementById('sampling-preset-select').value;
+  const nameInput = document.getElementById('sampling-preset-name');
+  const updateBtn = document.getElementById('update-sampling-preset-btn');
+  if (name) {
+    nameInput.value = name;
+    if (updateBtn) updateBtn.style.display = 'block';
+  } else {
+    nameInput.value = '';
+    if (updateBtn) updateBtn.style.display = 'none';
+  }
+}
+
+function updateSamplingPreset() {
+  const name = document.getElementById('sampling-preset-select').value;
+  const status = document.getElementById('sampling-preset-status');
+  if (!name) { status.style.color = '#e88'; status.textContent = '❌ Select a preset first'; setTimeout(() => status.textContent = '', 2000); return; }
+  const preset = {
+    temperature:       parseFloat(document.getElementById('temperature').value) || 0.8,
+    max_tokens:        parseInt(document.getElementById('max_tokens').value) || 4096,
+    top_p:             parseFloat(document.getElementById('top_p').value) || 0.95,
+    min_p:             parseFloat(document.getElementById('min_p').value) || 0.05,
+    top_k:             parseInt(document.getElementById('top_k').value) || 40,
+    repeat_penalty:    parseFloat(document.getElementById('repeat_penalty').value) || 1.1,
+    frequency_penalty: parseFloat(document.getElementById('frequency_penalty').value) || 0.0,
+    presence_penalty:  parseFloat(document.getElementById('presence_penalty').value) || 0.0,
+  };
+  const presets = getSamplingPresets();
+  presets[name] = preset;
+  saveSamplingPresetsToStorage(presets);
+  populateSamplingPresetDropdown();
+  document.getElementById('sampling-preset-select').value = name;
+  status.style.color = '#6dbf8a';
+  status.textContent = `✅ Preset "${name}" updated`;
+  setTimeout(() => status.textContent = '', 2500);
+}
+
+function saveSamplingPreset() {
+  const name = document.getElementById('sampling-preset-name').value.trim();
+  const status = document.getElementById('sampling-preset-status');
+  if (!name) { status.style.color = '#e88'; status.textContent = '❌ Enter a preset name first'; setTimeout(() => status.textContent = '', 2000); return; }
+  const preset = {
+    temperature:       parseFloat(document.getElementById('temperature').value) || 0.8,
+    max_tokens:        parseInt(document.getElementById('max_tokens').value) || 4096,
+    top_p:             parseFloat(document.getElementById('top_p').value) || 0.95,
+    min_p:             parseFloat(document.getElementById('min_p').value) || 0.05,
+    top_k:             parseInt(document.getElementById('top_k').value) || 40,
+    repeat_penalty:    parseFloat(document.getElementById('repeat_penalty').value) || 1.1,
+    frequency_penalty: parseFloat(document.getElementById('frequency_penalty').value) || 0.0,
+    presence_penalty:  parseFloat(document.getElementById('presence_penalty').value) || 0.0,
+  };
+  const presets = getSamplingPresets();
+  presets[name] = preset;
+  saveSamplingPresetsToStorage(presets);
+  populateSamplingPresetDropdown();
+  document.getElementById('sampling-preset-select').value = name;
+  document.getElementById('sampling-preset-name').value = '';
+  const updateBtn = document.getElementById('update-sampling-preset-btn');
+  if (updateBtn) updateBtn.style.display = 'none';
+  status.style.color = '#6dbf8a';
+  status.textContent = `✅ Preset "${name}" saved`;
+  setTimeout(() => status.textContent = '', 2500);
+}
+
+function loadSamplingPreset() {
+  const name = document.getElementById('sampling-preset-select').value;
+  const status = document.getElementById('sampling-preset-status');
+  if (!name) { status.style.color = '#e88'; status.textContent = '❌ Select a preset first'; setTimeout(() => status.textContent = '', 2000); return; }
+  const presets = getSamplingPresets();
+  const p = presets[name];
+  if (!p) return;
+  document.getElementById('temperature').value        = p.temperature       ?? 0.8;
+  document.getElementById('max_tokens').value         = p.max_tokens        ?? 4096;
+  document.getElementById('top_p').value              = p.top_p             ?? 0.95;
+  document.getElementById('min_p').value              = p.min_p             ?? 0.05;
+  document.getElementById('top_k').value              = p.top_k             ?? 40;
+  document.getElementById('repeat_penalty').value     = p.repeat_penalty    ?? 1.1;
+  document.getElementById('frequency_penalty').value  = p.frequency_penalty ?? 0.0;
+  document.getElementById('presence_penalty').value   = p.presence_penalty  ?? 0.0;
+  status.style.color = '#6dbf8a';
+  status.textContent = `✅ Loaded "${name}" — hit Save & Apply to use`;
+  setTimeout(() => status.textContent = '', 3000);
+}
+
+function deleteSamplingPreset() {
+  const name = document.getElementById('sampling-preset-select').value;
+  const status = document.getElementById('sampling-preset-status');
+  if (!name) { status.style.color = '#e88'; status.textContent = '❌ Select a preset first'; setTimeout(() => status.textContent = '', 2000); return; }
+  if (!confirm(`Delete preset "${name}"?`)) return;
+  const presets = getSamplingPresets();
+  delete presets[name];
+  saveSamplingPresetsToStorage(presets);
+  populateSamplingPresetDropdown();
+  status.style.color = '#aaa';
+  status.textContent = `🗑 Preset "${name}" deleted`;
+  setTimeout(() => status.textContent = '', 2000);
+}
+
 // ==================================================
 function getLlamaPresets() {
   try { return JSON.parse(localStorage.getItem('hwui_llama_presets') || '{}'); }
@@ -2944,8 +3143,152 @@ function previewThemeVar(varName, value) {
     await saveBraveKey();
   }
 
-  // Load brave key on page load
-  loadBraveKey();
+  // ── OpenAI Backend Settings ──────────────────────────────────────
+  let _currentBackendMode = 'local';
+
+  function confirmOpenAISwitch() {
+    // Only show confirmation if not already in OpenAI mode
+    if (_currentBackendMode === 'openai') return;
+    const modal = document.getElementById('openai-confirm-modal');
+    if (modal) { modal.style.display = 'flex'; }
+  }
+
+  function cancelOpenAISwitch() {
+    const modal = document.getElementById('openai-confirm-modal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  function confirmOpenAISwitchOK() {
+    const modal = document.getElementById('openai-confirm-modal');
+    if (modal) modal.style.display = 'none';
+    setBackendMode('openai');
+  }
+
+  function setBackendMode(mode) {
+    _currentBackendMode = mode;
+    const localBtn    = document.getElementById('mode-local-btn');
+    const openaiBtn   = document.getElementById('mode-openai-btn');
+    const localParams = document.getElementById('local-only-params');
+    const localNote   = document.getElementById('local-only-note');
+    if (mode === 'openai') {
+      localBtn.style.background  = '#111'; localBtn.style.color  = '#888'; localBtn.style.fontWeight = 'normal';
+      openaiBtn.style.background = '#1a2a4a'; openaiBtn.style.color = '#7ab4f5'; openaiBtn.style.fontWeight = 'bold';
+      if (localParams) { localParams.style.opacity = '0.3'; localParams.style.pointerEvents = 'none'; }
+      if (localNote)   { localNote.style.display = 'block'; }
+    } else {
+      localBtn.style.background  = '#1a3a2a'; localBtn.style.color  = '#6f6'; localBtn.style.fontWeight = 'bold';
+      openaiBtn.style.background = '#111'; openaiBtn.style.color = '#888'; openaiBtn.style.fontWeight = 'normal';
+      if (localParams) { localParams.style.opacity = '1'; localParams.style.pointerEvents = 'auto'; }
+      if (localNote)   { localNote.style.display = 'none'; }
+    }
+  }
+
+  function _setOpenAIModelSelect(savedModel) {
+    const sel = document.getElementById('openai-model');
+    if (!sel) return;
+    // If the saved model is already an option, select it
+    for (let i = 0; i < sel.options.length; i++) {
+      if (sel.options[i].value === savedModel) {
+        sel.value = savedModel;
+        return;
+      }
+    }
+    // Not in list yet — add it and select it
+    if (savedModel) {
+      const opt = document.createElement('option');
+      opt.value = savedModel;
+      opt.textContent = savedModel;
+      sel.insertBefore(opt, sel.firstChild);
+      sel.value = savedModel;
+    }
+  }
+
+  async function fetchOpenAIModels() {
+    const status = document.getElementById('openai-status');
+    if (status) { status.textContent = '⏳ Fetching models…'; status.style.color = '#aaa'; }
+    try {
+      const res  = await fetch('/get_openai_models');
+      const data = await res.json();
+      if (data.status !== 'ok') {
+        if (status) { status.textContent = '❌ ' + (data.error || 'Failed to fetch'); status.style.color = '#f66'; }
+        return;
+      }
+      const sel = document.getElementById('openai-model');
+      const current = sel ? sel.value : '';
+      if (sel) {
+        sel.innerHTML = '';
+        data.models.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m; opt.textContent = m;
+          sel.appendChild(opt);
+        });
+        // Re-select previously saved model if it's in the list
+        if (current) _setOpenAIModelSelect(current);
+      }
+      if (status) { status.textContent = `✅ ${data.models.length} models loaded`; status.style.color = '#6f6'; }
+    } catch(e) {
+      if (status) { status.textContent = '❌ Fetch failed: ' + e.message; status.style.color = '#f66'; }
+    }
+  }
+
+  async function loadOpenAISettings() {
+    try {
+      const res  = await fetch('/get_openai_settings');
+      const data = await res.json();
+      setBackendMode(data.backend_mode || 'local');
+      const keyInput = document.getElementById('openai-api-key');
+      if (keyInput) keyInput.value = data.openai_api_key || '';
+      _setOpenAIModelSelect(data.openai_model || 'gpt-4o');
+      const status = document.getElementById('openai-status');
+      if (status) {
+        if (data.backend_mode === 'openai' && data.openai_api_key) {
+          status.textContent = '✅ OpenAI active — ' + (data.openai_model || 'gpt-4o');
+          status.style.color = '#6f6';
+        } else if (data.backend_mode === 'openai') {
+          status.textContent = '⚠️ OpenAI mode set but no API key';
+          status.style.color = '#fa4';
+        } else {
+          status.textContent = 'Using local llama.cpp';
+          status.style.color = '#888';
+        }
+      }
+    } catch(e) { console.warn('Could not load OpenAI settings:', e); }
+  }
+
+  async function saveOpenAISettings() {
+    const key   = (document.getElementById('openai-api-key').value || '').trim();
+    const model = (document.getElementById('openai-model').value   || 'gpt-4o').trim();
+    const status = document.getElementById('openai-status');
+    try {
+      const res = await fetch('/save_openai_settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ backend_mode: _currentBackendMode, openai_api_key: key, openai_model: model })
+      });
+      const data = await res.json();
+      if (data.status === 'ok') {
+        if (_currentBackendMode === 'openai' && key) {
+          status.textContent = '✅ OpenAI active — ' + model;
+          status.style.color = '#6f6';
+        } else if (_currentBackendMode === 'openai') {
+          status.textContent = '⚠️ OpenAI mode set but no API key';
+          status.style.color = '#fa4';
+        } else {
+          status.textContent = 'Saved — using local llama.cpp';
+          status.style.color = '#888';
+        }
+      } else {
+        status.textContent = '❌ Save failed: ' + (data.error || 'unknown');
+        status.style.color = '#f66';
+      }
+    } catch(e) {
+      console.error('Failed to save OpenAI settings:', e);
+      status.textContent = '❌ Save failed';
+      status.style.color = '#f66';
+    }
+  }
+
+  loadOpenAISettings();
 </script>
 </body>
 </html>

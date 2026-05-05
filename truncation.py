@@ -1,10 +1,10 @@
 import re
 
 CONTEXT_WINDOW     = 16384  # llama.cpp context size — updated to match --ctx-size
-GENERATION_RESERVE = 1024   # tokens reserved for the model's response
+GENERATION_RESERVE = 4096   # tokens reserved for model response — must match max_tokens in settings.json
 SYSTEM_BUFFER      = 200    # small safety margin for ChatML overhead tokens
 
-# Max tokens available for prompt = CONTEXT_WINDOW - GENERATION_RESERVE = 15360
+# Max tokens available for prompt = CONTEXT_WINDOW - GENERATION_RESERVE = 12288
 # Of that, the system message takes what it takes — the rest goes to conversation history.
 
 def rough_token_count(text) -> int:
@@ -19,7 +19,7 @@ def rough_token_count(text) -> int:
     return len(re.findall(r'\w+|[^\s\w]', text))
 
 
-def trim_chat_history(messages, token_budget: int = None):
+def trim_chat_history(messages, token_budget: int = None, extra_system_overhead: int = 0):
     if not messages:
         return []
 
@@ -29,7 +29,9 @@ def trim_chat_history(messages, token_budget: int = None):
 
     # Measure actual system message size
     system_tokens = rough_token_count(system_msg.get("content", "")) if system_msg else 0
-    print(f"📊 System message: ~{system_tokens} tokens")
+    # Account for content added to system message AFTER trim (e.g. example dialogue)
+    system_tokens += extra_system_overhead
+    print(f"📊 System message: ~{system_tokens} tokens (includes {extra_system_overhead} overhead)")
 
     # Dynamically calculate how much room is left for conversation history
     prompt_budget = CONTEXT_WINDOW - GENERATION_RESERVE - SYSTEM_BUFFER

@@ -1,0 +1,155 @@
+/* ============================================================
+   HWUI Theme: OpenAI Layout
+   Flat solid background — no wallpaper. Clean chat like ChatGPT/Grok.
+   Drop into theme-files/ and select from Theme dropdown in Config.
+   Colours still controlled by Theme Editor as normal.
+   ============================================================ */
+
+:root {
+  --topbar-bg: #1b2d3d;
+  --container-bg: #1c2d3f;
+  --chat-bg: #111e29;
+  --project-header-bg: #0e151f;
+  --sidebar-bg: #172330;
+  --chat-item-bg: #172836;
+  --sidebar-button-hover: #253a4a;
+  --new-chat-btn-bg: #2a7006;
+  --new-chat-btn-text: #ffffff;
+  --char-dropdown-bg: #161d26;
+  --char-dropdown-border: #284564;
+  --sidebar-footer-btn-bg: #1c3041;
+  --sidebar-footer-btn-border: #264862;
+  --user-msg-bg: #1e2c3b;
+  --user-msg-text: #ffffff;
+  --model-msg-bg: #0f171e;
+  --model-msg-text: #ffffff;
+  --msg-border: #344859;
+  --input-bg: #161f2b;
+  --input-border: #364857;
+  --field-bg: #0e151d;
+  --field-border: #20364d;
+  --field-border-focus: #294b65;
+  --token-panel-bg: #1e2d3c;
+  --token-panel-border: #323b47;
+  --modal-bg: #15232e;
+  --modal-bg-hover: #2c3a4e;
+  --modal-border: #29363e;
+  --modal-text: #b2b2b2;
+  --memory-tab-active-bg: #243f59;
+  --memory-entry-bg: #131e29;
+  --memory-entry-text: #929292;
+  --project-item-bg: #14202a;
+  --project-item-hover: #17202c;
+  --icon-button-bg: #23394a;
+  --icon-button-hover: #2f3e55;
+  --button-border-light: #2d5284;
+  --button-border-dark: #bd0e0e;
+}
+
+/* ------------------------------------------------------------------
+   1. KILL BACKGROUND IMAGE — flat colour fills full scroll depth
+------------------------------------------------------------------ */
+html {
+  background: var(--chat-bg) !important;
+  background-image: none !important;
+  background-color: var(--chat-bg) !important;
+  min-height: 100% !important;
+}
+
+body {
+  background: var(--chat-bg) !important;
+  background-image: none !important;
+  background-color: var(--chat-bg) !important;
+  min-height: 100% !important;
+}
+
+#app {
+  background: var(--chat-bg) !important;
+  background-image: none !important;
+  min-height: 100vh !important;
+  height: auto !important;
+}
+
+/* ------------------------------------------------------------------
+   2. STRIP CONTAINER PILLAR
+------------------------------------------------------------------ */
+/* Chat page only — config page keeps its own width */
+.chat-page #container,
+.chat-page #center-column {
+  background-color: transparent !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  padding: 0.5rem 1.5rem !important;
+  max-width: 900px !important;
+}
+
+@media (max-width: 1400px) {
+  .chat-page #container, .chat-page #center-column { max-width: 800px !important; }
+}
+@media (max-width: 1024px) {
+  .chat-page #container, .chat-page #center-column { max-width: 680px !important; }
+}
+
+#chat {
+  background: transparent !important;
+  background-color: transparent !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+/* ------------------------------------------------------------------
+   3. CHARACTER CARD
+------------------------------------------------------------------ */
+#character-bar {
+  background: var(--container-bg) !important;
+  border-radius: 10px !important;
+  padding: 16px !important;
+  border: 1px solid rgba(255,255,255,0.07) !important;
+  margin-bottom: 16px !important;
+}
+
+/* ------------------------------------------------------------------
+   4. ALL MESSAGE BUBBLES — no background, no border, plain text
+   User: right-aligned. Model: left-aligned.
+------------------------------------------------------------------ */
+.model-msg,
+.user-msg {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  padding: 6px 0 10px 0 !important;
+  max-width: 100% !important;
+}
+
+/* User bubble — restore background/border so Theme Editor controls it */
+.user-msg {
+  background-color: var(--user-msg-bg) !important;
+  border: var(--msg-border-width) solid var(--msg-border) !important;
+  border-radius: 12px !important;
+  padding: 10px 14px 16px 14px !important;
+}
+
+.user-wrapper {
+  flex-direction: row-reverse !important;
+}
+
+/* Constrain user message to ~60% width, don't let it flex-fill */
+.user-wrapper .message {
+  flex: 0 1 60% !important;
+}
+
+.model-wrapper {
+  flex-direction: row !important;
+  width: 100% !important;
+}
+
+.message-wrapper {
+  margin: 2px 0 !important;
+}
+
+hr.msg-separator {
+  opacity: 0.15 !important;
+  margin: 4px 0 8px 0 !important;
+}

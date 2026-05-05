@@ -215,6 +215,7 @@ body {
   padding: 1.5rem;
   border-radius: 12px;
   box-shadow: 0 0 30px rgba(0, 0, 0, 0.6);
+  overflow-x: hidden;
 }
 /* CHAT PAGE: PUSH CONTENT RIGHT FOR SIDEBAR */
 .chat-page #center-column,
@@ -860,6 +861,11 @@ small {
 
 .model-text {
   line-height: 1.6;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow-x: hidden;
 }
 /* preserve line breaks in model replies */
 #chat .message {
@@ -1970,18 +1976,20 @@ hr.msg-separator {
 #projects-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
 }
 .project-item {
   background: var(--project-item-bg);
   border: 1px solid var(--project-item-border);
   border-radius: 6px;
-  padding: 5px 20px;
+  padding: 5px 10px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 15px;
+  gap: 8px;
   transition: background 0.2s;
+  min-height: 0;
+  line-height: 1.3;
 }
 .project-item:hover {
   background: var(--project-item-hover);
@@ -1989,13 +1997,119 @@ hr.msg-separator {
 .project-name-section {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex: 1;
+  min-width: 0;
 }
 .project-name {
-  font-size: 18px;
+  font-size: 13px;
   color: #ddd;
   font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Group header row */
+.project-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 4px 3px;
+  margin-top: 6px;
+  border-top: 1px solid #2a2a2a;
+  cursor: pointer;
+  user-select: none;
+}
+.project-group-header:first-child {
+  border-top: none;
+  margin-top: 0;
+}
+.project-group-toggle {
+  font-size: 10px;
+  color: #666;
+  transition: transform 0.15s;
+  display: inline-block;
+}
+.project-group-toggle.collapsed {
+  transform: rotate(-90deg);
+}
+.project-group-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #aaa;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  flex: 1;
+}
+.project-group-delete {
+  background: none !important;
+  border: none !important;
+  color: #555 !important;
+  font-size: 11px !important;
+  padding: 1px 3px !important;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.project-group-header:hover .project-group-delete {
+  opacity: 1;
+}
+.project-group-children {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 12px;
+}
+.project-group-children.collapsed {
+  display: none;
+}
+/* Assign-to-group button */
+.project-assign-btn {
+  background: none !important;
+  border: 1px solid #333 !important;
+  color: #666 !important;
+  font-size: 11px !important;
+  padding: 2px 5px !important;
+  border-radius: 3px !important;
+  cursor: pointer;
+  transition: all 0.15s !important;
+}
+.project-assign-btn:hover {
+  border-color: #555 !important;
+  color: #aaa !important;
+}
+/* Group picker dropdown */
+.group-picker-dropdown {
+  position: absolute;
+  background: #1a1a1a;
+  border: 1px solid #444;
+  border-radius: 5px;
+  z-index: 9999;
+  min-width: 160px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  overflow: hidden;
+}
+.group-picker-option {
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #ccc;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.group-picker-option:hover {
+  background: #2a2a2a;
+  color: #fff;
+}
+.group-picker-option.active-group {
+  color: #6a9fb5;
+}
+.group-picker-option.new-group {
+  color: #888;
+  border-top: 1px solid #333;
+}
+.group-picker-option.ungroup {
+  color: #c0a060;
+  border-bottom: 1px solid #333;
 }
 .active-badge {
   background: rgba(40, 167, 69, 0.2);
@@ -2014,7 +2128,7 @@ hr.msg-separator {
   background: var(--project-item-bg);
   border: 1px solid #444;
   color: #fff;
-  padding: 6px 12px;
+  padding: 3px 8px;
   border-radius: 4px;
   cursor: pointer;
   font-size: 12px;
@@ -2671,3 +2785,86 @@ button#stop-btn {
 
 /* Hide old button-row */
 #button-row { display: none !important; }
+
+/* ==================== CODE BLOCK WITH COPY BUTTON ==================== */
+.code-block-wrapper {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  position: relative;
+  margin: 8px 0;
+  border-radius: 6px;
+  border: 1px solid var(--msg-border, #333);
+  overflow: hidden;
+}
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background: rgba(0,0,0,0.4);
+  min-height: 28px;
+  max-height: 32px;
+  border-radius: 6px 6px 0 0;
+  box-sizing: border-box;
+  width: 100%;
+  overflow: visible;
+}
+.code-lang {
+  font-size: 11px;
+  color: #888;
+  font-family: monospace;
+  margin: 0;
+  padding: 0;
+}
+/* Reset ALL global button overrides for the copy button */
+button.code-copy-btn,
+.code-copy-btn {
+  all: unset !important;
+  display: inline-block !important;
+  box-sizing: border-box !important;
+  background: rgba(255,255,255,0.08) !important;
+  border: 1px solid rgba(255,255,255,0.2) !important;
+  color: #ccc !important;
+  border-radius: 4px !important;
+  padding: 2px 10px !important;
+  font-size: 11px !important;
+  font-family: 'Segoe UI', sans-serif !important;
+  cursor: pointer !important;
+  margin: 0 0 0 auto !important;
+  flex-shrink: 0 !important;
+  line-height: 1.6 !important;
+  transition: background 0.15s, color 0.15s !important;
+}
+button.code-copy-btn:hover,
+.code-copy-btn:hover {
+  background: rgba(255,255,255,0.18) !important;
+  color: #fff !important;
+}
+.code-block-wrapper pre {
+  margin: 0 !important;
+  padding: 10px 14px !important;
+  border-radius: 0 0 6px 6px !important;
+  border: none !important;
+  overflow-x: auto !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  display: block !important;
+}
+
+/* Prevent code blocks from blowing out the message column */
+.model-text {
+  overflow-x: hidden !important;
+  min-width: 0 !important;
+}
+.code-block-wrapper pre code {
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  overflow-wrap: break-word !important;
+  background: none !important;
+  padding: 0 !important;
+  font-size: 13px !important;
+}

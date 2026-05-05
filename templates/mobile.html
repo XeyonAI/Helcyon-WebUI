@@ -22,10 +22,20 @@ const marked={parse:function(txt){
     s=s.replace(/`([^`]+)`/g,'<code>$1</code>');
     return s;
   }
+  // Handle fenced code blocks before splitting into paragraphs
+  txt=txt.replace(/```(\w*)\n?([\s\S]*?)```/g,function(_,lang,code){
+    const escaped=esc(code.replace(/^\n|\n$/g,''));
+    const langLabel=lang?'<span class="m-code-lang">'+lang+'</span>':'';
+    return '<div class="m-code-wrap">'+
+      '<div class="m-code-hdr">'+langLabel+'<button class="m-copy-btn" onclick="mCopyCode(this)">Copy</button></div>'+
+      '<pre><code>'+escaped+'</code></pre></div>';
+  });
   txt=txt.replace(/^[ \t]*([-*_]{3,})[ \t]*$/gm,'\n\n$1\n\n');
   let blocks=txt.split(/\n\n+/);
   let html='';
   blocks.forEach(function(block){
+    // Pass through already-rendered code block divs unchanged
+    if(block.trimStart().startsWith('<div class="m-code-wrap">')){html+=block;return;}
     let lines=block.split('\n').filter(function(l){return l.trim()!=='';});
     if(!lines.length)return;
     let first=lines[0];
@@ -113,6 +123,12 @@ const marked={parse:function(txt){
     .msg-bubble li { margin: 0 0 0.15em 0; }
     .msg-bubble strong { color: #d0e4f8; }
     .msg-bubble code { background: var(--surface2); padding: 1px 5px; border-radius: 4px; font-size: 13px; font-family: monospace; }
+    .m-code-wrap { margin: 6px 0; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
+    .m-code-hdr { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; background: rgba(0,0,0,0.4); min-height: 28px; }
+    .m-code-lang { font-size: 11px; color: #888; font-family: monospace; }
+    .m-copy-btn { background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15); color: #aaa; border-radius: 4px; padding: 3px 10px; font-size: 11px; cursor: pointer; margin-left: auto; }
+    .m-code-wrap pre { margin: 0; padding: 10px 12px; background: #0d0f14; overflow-x: auto; border-radius: 0; font-size: 13px; line-height: 1.5; }
+    .m-code-wrap pre code { background: none; padding: 0; font-size: 13px; }
     .msg-bubble strong { color: #dde; font-weight: 600; }
     .msg-bubble br { display: block; content: ''; margin: 2px 0; }
   </style>
@@ -127,6 +143,7 @@ const marked={parse:function(txt){
         <div id="header-name">Helcyon</div>
         <div id="header-status">Ready</div>
       </div>
+      <button id="mobile-openai-btn" onclick="toggleMobileOpenAI()" title="Toggle OpenAI backend" style="flex-shrink:0;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:6px 9px;color:var(--text-dim);font-size:15px;cursor:pointer;line-height:1;">☁️</button>
       <button id="tts-toggle" onclick="toggleTTS()">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07M18.36 5.64a9 9 0 0 1 0 12.73"/></svg>
         <span id="tts-label">TTS</span>
@@ -144,6 +161,15 @@ const marked={parse:function(txt){
       </select>
     </div>
   </div>
+  <!-- OpenAI active banner — sits between header and chat -->
+  <div id="mobile-openai-banner" style="display:none;background:rgba(0,180,100,0.15);border-bottom:1px solid rgba(0,200,100,0.3);padding:5px 14px;align-items:center;justify-content:space-between;gap:8px;flex-shrink:0;">
+    <div style="display:flex;align-items:center;gap:7px;">
+      <span style="width:7px;height:7px;border-radius:50%;background:#00e87a;display:inline-block;box-shadow:0 0 6px #00e87a;flex-shrink:0;"></span>
+      <span style="font-size:12px;color:#4dffaa;font-weight:600;">☁️ OpenAI</span>
+      <span id="mobile-openai-model" style="font-size:11px;color:#2aaa66;"></span>
+    </div>
+    <button onclick="toggleMobileOpenAI()" style="background:rgba(200,50,50,0.25);border:1px solid rgba(200,80,80,0.4);color:#e88;border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;">Disconnect</button>
+  </div>
   <div id="chat"><div id="typing-indicator"><span></span><span></span><span></span></div></div>
   <div id="input-area">
     <div id="text-row">
@@ -151,6 +177,10 @@ const marked={parse:function(txt){
       <button id="send-btn" onclick="sendText()">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
       </button>
+    </div>
+    <div id="resume-row" style="display:flex;gap:6px;padding:0 0 4px;">
+      <button onclick="resumeLastResponse()" style="flex:1;background:rgba(40,80,120,0.3);border:1px solid #2a4a6a;color:#7ab4f5;border-radius:8px;padding:5px 0;font-size:12px;cursor:pointer;">🔄 Resume</button>
+      <button onclick="continueResponse()" style="flex:1;background:rgba(40,60,40,0.3);border:1px solid #2a4a2a;color:#6dbf8a;border-radius:8px;padding:5px 0;font-size:12px;cursor:pointer;">▶ Continue</button>
     </div>
     <button id="ptt-btn" onclick="toggleMic()">
       <svg class="mic-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
@@ -173,6 +203,19 @@ const marked={parse:function(txt){
       </div>
     </div>
     <div id="chat-list-items" style="overflow-y:auto;flex:1;padding:8px 0;"></div>
+  </div>
+</div>
+
+<!-- OpenAI Confirmation Modal -->
+<div id="mobile-openai-modal" style="display:none;position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,0.75);align-items:center;justify-content:center;">
+  <div style="background:var(--surface);border:1px solid #3a5a7a;border-radius:14px;padding:24px 20px;max-width:300px;width:88%;box-shadow:0 8px 32px rgba(0,0,0,0.6);">
+    <div style="font-size:24px;text-align:center;margin-bottom:10px;">⚠️</div>
+    <div style="font-size:15px;color:var(--text);text-align:center;margin-bottom:8px;font-weight:bold;">Switch to OpenAI?</div>
+    <div style="font-size:13px;color:var(--text-dim);text-align:center;margin-bottom:20px;line-height:1.5;">Your conversations will be sent to <span style="color:#7ab4f5;">OpenAI's servers</span>. Make sure you're comfortable with that.</div>
+    <div style="display:flex;gap:8px;">
+      <button onclick="closeMobileOpenAIModal()" style="flex:1;padding:10px 0;background:#2a1a1a;border:1px solid #6a2a2a;color:#e88;border-radius:8px;font-size:14px;cursor:pointer;">✕ Cancel</button>
+      <button onclick="confirmMobileOpenAI()" style="flex:1;padding:10px 0;background:#1a2a4a;border:1px solid #2a4a8a;color:#7ab4f5;border-radius:8px;font-size:14px;cursor:pointer;font-weight:bold;">☁️ Connect</button>
+    </div>
   </div>
 </div>
 
@@ -211,12 +254,14 @@ const TTS_START_THRESHOLD=1;
 let TTS_MAX_CHUNK_LENGTH=300;
 
 function fixViewport(){const h=window.visualViewport?window.visualViewport.height:window.innerHeight;document.getElementById('app').style.height=h+'px';}
+function mCopyCode(btn){const code=btn.closest('.m-code-wrap').querySelector('code');if(!code)return;navigator.clipboard.writeText(code.innerText).then(function(){btn.textContent='✓ Copied';btn.style.color='#6f6';setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);}).catch(function(){btn.textContent='✗ Failed';setTimeout(function(){btn.textContent='Copy';},1800);});}
 if(window.visualViewport){window.visualViewport.addEventListener('resize',fixViewport);window.visualViewport.addEventListener('scroll',fixViewport);}
 window.addEventListener('resize',fixViewport);
 fixViewport();
 
 window.addEventListener('DOMContentLoaded',async()=>{
   await loadUserName();await loadCharacterList();await loadProjects();loadTTSPrefs();
+  checkMobileOpenAI();
   // Push initial state so back button has somewhere to go
   history.replaceState({view:'chatlist'},'');
   await openChatList();
@@ -1148,7 +1193,7 @@ async function openModelPicker(){
   try{
     const r=await fetch('/get_model');
     const d=await r.json();
-    document.getElementById('model-current').textContent=d.model||'No model loaded';
+    document.getElementById('model-current').textContent=d.label||d.model||'No model loaded';
   }catch(e){}
   // Load voices
   loadMobileVoices();
@@ -1159,21 +1204,33 @@ async function openModelPicker(){
     const r=await fetch('/list_models');
     const d=await r.json();
     if(!d.models||!d.models.length){el.innerHTML='<div style="padding:16px;color:var(--text-dim);text-align:center;">No models found</div>';return;}
+    const labels=d.labels||{};
     const cur=document.getElementById('model-current').textContent;
     el.innerHTML='';
-    d.models.forEach(m=>{
-      const stem=m.replace(/\.gguf$/i,'');
-      const isActive=stem===cur||cur.includes(stem);
-      const item=document.createElement('div');
-      item.style.cssText='padding:12px 16px;border-bottom:1px solid var(--border);cursor:pointer;display:flex;align-items:center;gap:10px;'+(isActive?'background:rgba(40,80,50,0.2);':'');
-      const dot=document.createElement('span');
-      dot.style.cssText='width:8px;height:8px;border-radius:50%;flex-shrink:0;background:'+(isActive?'#3a8a5a':'var(--border)');
-      const name=document.createElement('div');
-      name.style.cssText='font-size:13px;color:'+(isActive?'#6dbf8a':'var(--text)')+';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;';
-      name.textContent=(isActive?'▶ ':'')+stem;
-      item.appendChild(dot);item.appendChild(name);
-      item.onclick=()=>loadModel(m);
-      el.appendChild(item);
+    const groups=d.groups||[{folder:null,models:d.models}];
+    groups.forEach(group=>{
+      if(group.folder){
+        const hdr=document.createElement('div');
+        hdr.style.cssText='padding:8px 16px 3px;font-size:10px;font-weight:600;letter-spacing:0.8px;text-transform:uppercase;color:#666;';
+        hdr.textContent=group.folder;
+        el.appendChild(hdr);
+      }
+      group.models.forEach(m=>{
+        const stem=m.replace(/\.gguf$/i,'');
+        const label=labels[m]||stem;
+        const isActive=label===cur||stem===cur||cur.includes(stem);
+        const item=document.createElement('div');
+        item.style.cssText='padding:12px 16px;border-bottom:1px solid var(--border);cursor:pointer;display:flex;align-items:center;gap:10px;'+(isActive?'background:rgba(40,80,50,0.2);':'');
+        const dot=document.createElement('span');
+        dot.style.cssText='width:8px;height:8px;border-radius:50%;flex-shrink:0;background:'+(isActive?'#3a8a5a':'var(--border)');
+        const name=document.createElement('div');
+        name.style.cssText='font-size:13px;color:'+(isActive?'#6dbf8a':'var(--text)')+';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;';
+        name.textContent=(isActive?'▶ ':'')+label;
+        item.appendChild(dot);item.appendChild(name);
+        const fullPath=group.folder?group.folder+'/'+m:m;
+        item.onclick=()=>loadModel(fullPath,label);
+        el.appendChild(item);
+      });
     });
   }catch(e){el.innerHTML='<div style="padding:16px;color:#e88;">Error: '+e.message+'</div>';}
 }
@@ -1183,21 +1240,22 @@ function closeModelPicker(){
   document.getElementById('model-status').style.display='none';
 }
 
-async function loadModel(filename){
+async function loadModel(filename,label){
   const status=document.getElementById('model-status');
   const el=document.getElementById('model-list-items');
   const cur=document.getElementById('model-current');
+  const displayName=label||filename.replace(/\.gguf$/i,'');
   status.style.display='block';
   status.style.color='var(--accent)';
-  status.textContent='⏳ Loading '+filename.replace(/\.gguf$/i,'')+'...';
+  status.textContent='⏳ Loading '+displayName+'...';
   el.style.opacity='0.4';el.style.pointerEvents='none';
   try{
     const r=await fetch('/load_model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:filename})});
     const d=await r.json();
     if(d.status==='ok'){
-      cur.textContent=d.model;
+      cur.textContent=d.label||displayName;
       status.style.color='#6dbf8a';
-      status.textContent='✅ Loaded: '+d.model;
+      status.textContent='✅ Loaded: '+(d.label||displayName);
       el.style.opacity='1';el.style.pointerEvents='all';
       setTimeout(()=>closeModelPicker(),1500);
     }else{
@@ -1388,8 +1446,127 @@ function fmtTime(d){
   const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   return days[d.getDay()]+' '+d.getDate()+' '+months[d.getMonth()]+', '+time;
 }
+// ── Resume / Continue ────────────────────────────────────────────
+async function resumeLastResponse() {
+  if (!mobileChatFilename) { showToast('⚠️ No chat file to resume from'); return; }
+  showToast('🔄 Fetching full response from server...');
+  try {
+    const res = await fetch('/chats/open/' + encodeURIComponent(mobileChatFilename));
+    if (!res.ok) { showToast('⚠️ Could not load chat file'); return; }
+    const data = await res.json();
+    const msgs = data.messages || [];
+    // Find last assistant message from file
+    let lastAI = null;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'assistant') { lastAI = msgs[i]; break; }
+    }
+    if (!lastAI) { showToast('⚠️ No assistant message found in file'); return; }
+    const fullText = lastAI.content || '';
+    // Find last AI bubble in the DOM and replace its content
+    const bubbles = document.querySelectorAll('.msg-wrap.ai');
+    if (bubbles.length) {
+      const lastBubble = bubbles[bubbles.length - 1];
+      const textDiv = lastBubble.querySelector('.msg-bubble > div');
+      if (textDiv) {
+        if (typeof marked !== 'undefined') { textDiv.innerHTML = marked.parse(fullText); }
+        else { textDiv.textContent = fullText; }
+      }
+      // Also update chatHistory last assistant entry
+      for (let i = chatHistory.length - 1; i >= 0; i--) {
+        if (chatHistory[i].role === 'assistant') { chatHistory[i].content = fullText; break; }
+      }
+      scrollToBottom();
+      showToast('✅ Full response restored');
+    } else {
+      showToast('⚠️ No AI bubble to update');
+    }
+  } catch(e) { showToast('⚠️ Resume failed: ' + e.message); }
+}
+
+async function continueResponse() {
+  // Sends a nudge so the model picks up where it left off
+  const lastAI = chatHistory.slice().reverse().find(m => m.role === 'assistant');
+  if (!lastAI) { showToast('⚠️ Nothing to continue'); return; }
+  // Check if it looks truncated — ends mid-sentence (no terminal punctuation)
+  const tail = (lastAI.content || '').trimEnd();
+  const terminated = /[.!?…"'»\]]$/.test(tail);
+  if (terminated) {
+    showToast('Response looks complete — use Resume if text is missing');
+    return;
+  }
+  await sendMessage('[Please continue from where you left off]');
+}
+
 let toastTimer=null;
 function showToast(msg,dur=2800){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),dur);}
+
+// ── OpenAI Mobile Backend ────────────────────────────────────────
+async function checkMobileOpenAI() {
+  try {
+    const res  = await fetch('/get_openai_settings');
+    const data = await res.json();
+    updateMobileOpenAIUI(data.backend_mode === 'openai' && !!data.openai_api_key, data.openai_model || '');
+  } catch(e) { /* silent */ }
+}
+
+function updateMobileOpenAIUI(active, model) {
+  const btn    = document.getElementById('mobile-openai-btn');
+  const banner = document.getElementById('mobile-openai-banner');
+  const modelSpan = document.getElementById('mobile-openai-model');
+  if (active) {
+    if (btn)    { btn.style.background = 'rgba(0,180,100,0.25)'; btn.style.borderColor = 'rgba(0,200,100,0.5)'; btn.style.color = '#4dffaa'; }
+    if (banner) { banner.style.display = 'flex'; }
+    if (modelSpan) modelSpan.textContent = model;
+  } else {
+    if (btn)    { btn.style.background = 'var(--surface2)'; btn.style.borderColor = 'var(--border)'; btn.style.color = 'var(--text-dim)'; }
+    if (banner) { banner.style.display = 'none'; }
+  }
+}
+
+function toggleMobileOpenAI() {
+  // If already in OpenAI mode, disconnect immediately
+  fetch('/get_openai_settings').then(r=>r.json()).then(data => {
+    if (data.backend_mode === 'openai') {
+      // Switch back to local
+      fetch('/save_openai_settings', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({backend_mode: 'local', openai_api_key: data.openai_api_key, openai_model: data.openai_model})
+      }).then(() => {
+        updateMobileOpenAIUI(false, '');
+        showToast('🖥️ Switched to local');
+      });
+    } else {
+      // Show confirmation modal
+      if (data.openai_api_key) {
+        document.getElementById('mobile-openai-modal').style.display = 'flex';
+      } else {
+        showToast('⚠️ No API key set — configure in desktop config page');
+      }
+    }
+  }).catch(e => showToast('⚠️ Could not reach server'));
+}
+
+function closeMobileOpenAIModal() {
+  document.getElementById('mobile-openai-modal').style.display = 'none';
+}
+
+async function confirmMobileOpenAI() {
+  closeMobileOpenAIModal();
+  try {
+    const res  = await fetch('/get_openai_settings');
+    const data = await res.json();
+    await fetch('/save_openai_settings', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({backend_mode: 'openai', openai_api_key: data.openai_api_key, openai_model: data.openai_model})
+    });
+    updateMobileOpenAIUI(true, data.openai_model || 'gpt-4o');
+    showToast('☁️ Connected to OpenAI — ' + (data.openai_model || 'gpt-4o'));
+  } catch(e) {
+    showToast('⚠️ Failed to connect');
+  }
+}
 </script>
 </body>
 </html>
