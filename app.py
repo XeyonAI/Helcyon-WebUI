@@ -4525,21 +4525,32 @@ def get_active_theme_path():
 
 @app.route("/get_theme", methods=["GET"])
 def get_theme():
-    """Read CSS custom properties from the active theme file."""
+    """Read CSS custom properties — style.css defaults first, active theme overlaid on top."""
     try:
+        vars_dict = {}
+
+        # Step 1: seed defaults from style.css :root so every variable has a value
+        style_path = os.path.join(os.path.dirname(__file__), "style.css")
+        if os.path.exists(style_path):
+            with open(style_path, "r", encoding="utf-8") as f:
+                style_css = f.read()
+            for match in re.finditer(r'(--[\w-]+)\s*:\s*([^;]+);', style_css):
+                vars_dict[match.group(1).strip()] = match.group(2).strip()
+
+        # Step 2: overlay active theme file (adds/overwrites theme-specific values)
         path = get_active_theme_path()
         if not os.path.exists(path):
-            # Migration: fall back to legacy theme.css or style.css
             for fallback in ["theme.css", "style.css"]:
                 fb = os.path.join(os.path.dirname(__file__), fallback)
                 if os.path.exists(fb):
                     path = fb
                     break
-        with open(path, "r", encoding="utf-8") as f:
-            css = f.read()
-        vars_dict = {}
-        for match in re.finditer(r'(--[\w-]+)\s*:\s*([^;]+);', css):
-            vars_dict[match.group(1).strip()] = match.group(2).strip()
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                css = f.read()
+            for match in re.finditer(r'(--[\w-]+)\s*:\s*([^;]+);', css):
+                vars_dict[match.group(1).strip()] = match.group(2).strip()
+
         return jsonify(vars_dict)
     except Exception as e:
         print(f"❌ get_theme failed: {e}")

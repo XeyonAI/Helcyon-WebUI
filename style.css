@@ -23,6 +23,7 @@
   --model-msg-bg: #131d27;
   --model-msg-text: #e0e0e0;
   --msg-border: #27394b;
+  --hr-color: #ffffff4d;
   --msg-border-width: 1px;
   --input-bg: #0c1013;
   --char-dropdown-bg: #080f14;
@@ -803,9 +804,9 @@ button {
 /* ------------------ Config Page Main Text ------------------ */
 .message hr {
   border: none;
-  border-top: 1px solid var(--msg-border);
-  margin: 5px 0;
-  opacity: 0.6;
+  border-top: 2px solid var(--hr-color, #ffffff4d);
+  margin: 8px 0;
+  opacity: 1;
 }
 
 /* Tighten browser-default heading margins inside chat bubbles */
@@ -820,7 +821,7 @@ button {
 /* Tighten hr inside chat bubbles */
 .model-text hr, .user-text hr, .model-text-cont hr {
   border: none;
-  border-top: 1px solid rgba(255, 255, 255, 0.25);
+  border-top: 2px solid var(--hr-color, #ffffff4d);
   margin: 8px 0;
   opacity: 1;
 }
@@ -878,6 +879,17 @@ button {
   border-top: 1px solid var(--msg-border);
   margin: 2rem 0;
   opacity: 0.6;
+}
+
+/* Chat bubble hr — must beat #container hr specificity */
+#container .model-text hr,
+#container .user-text hr,
+#container .model-text-cont hr,
+#container .message hr {
+  border: none;
+  border-top: 2px solid var(--hr-color, #ffffff4d);
+  margin: 32px 0;
+  opacity: 1;
 }
 
 #config-page * {

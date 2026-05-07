@@ -1550,7 +1550,7 @@ async function loadChatHistory() {
       const userStrong = document.createElement('strong');
       userStrong.textContent = userName + ': ';
       
-      const userText = document.createElement('span');
+      const userText = document.createElement('div');
       userText.className = 'user-text';
       userText.textContent = entry.user;
       
@@ -1574,7 +1574,7 @@ async function loadChatHistory() {
       const nameStrong = document.createElement('strong');
       nameStrong.textContent = currentCharacter.name + ': ';
       
-      const spanText = document.createElement('span');
+      const spanText = document.createElement('div');
       spanText.className = 'model-text';
       let html = marked.parse(sanitizeMarkdown(entry.model));
       html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
@@ -2469,7 +2469,7 @@ async function openChat(filename) {
           var modelStrong = document.createElement("strong");
           modelStrong.textContent = charName + ": ";
           
-          var modelSpan = document.createElement("span");
+          var modelSpan = document.createElement("div");
           modelSpan.className = "model-text";
 
           // Use Marked.js for consistent formatting (same as live streaming)
@@ -2917,7 +2917,7 @@ async function openChat(filename) {
         const nameStrong = document.createElement("strong");
         nameStrong.textContent = currentCharName + ': ';
 
-        const spanText = document.createElement("span");
+        const spanText = document.createElement("div");
         spanText.className = "model-text";
 
         const copyBtn = document.createElement("button");
@@ -2986,7 +2986,7 @@ async function openChat(filename) {
       const nameStrong = document.createElement("strong");
       nameStrong.textContent = currentCharName + ': ';
 
-      const spanText = document.createElement("span");
+      const spanText = document.createElement("div");
       spanText.className = "model-text";
 
       const copyBtn = document.createElement("button");
@@ -3476,7 +3476,7 @@ async function openChat(filename) {
         msgDiv.className = 'message model-msg';
         const nameStrong = document.createElement('strong');
         nameStrong.textContent = charName + ': ';
-        streamEl = document.createElement('span');
+        streamEl = document.createElement('div');
         streamEl.className = 'model-text';
         const copyBtn = document.createElement('button');
         copyBtn.className = 'copy-btn';
@@ -4053,8 +4053,8 @@ async function stopGeneration() {
           firstTextDone = true;
           // insertAfter stays as spanEl
         } else if (textHtml.trim() !== '') {
-          // Inline continuation text — wrap in a span so it's a sibling node
-          const continuationSpan = document.createElement('span');
+          // Continuation text — wrap in a div so block elements (p, hr) render correctly
+          const continuationSpan = document.createElement('div');
           continuationSpan.className = 'model-text-cont';
           continuationSpan.innerHTML = textHtml;
           insertAfter.parentNode.insertBefore(continuationSpan, insertAfter.nextSibling);
