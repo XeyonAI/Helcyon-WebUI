@@ -59,8 +59,8 @@ body {
   line-height: 1.5;
 }
 .chat-page #main {
-  margin-top: 0;  /* Removed gap to match config page */
-  margin-left: 10px;  /* Space from left sidebar */
+  margin-top: 0;
+  padding-left: 250px;  /* Match fixed sidebar width so flex centering is relative to remaining space */
 }
 
 /* ------------------ Top Bar ------------------ */
@@ -210,7 +210,6 @@ body {
   flex: 1;
   max-width: 770px;
   min-width: 600px;
-  margin-left: 300px;  /* Space from left sidebar */
   background-color: var(--container-bg);
   padding: 1.5rem;
   border-radius: 12px;
@@ -220,13 +219,12 @@ body {
 /* CHAT PAGE: PUSH CONTENT RIGHT FOR SIDEBAR */
 .chat-page #center-column,
 .chat-page #container {
-  margin-left: 100px;
+  margin-left: 0;
 }
 
-/* Config page: push content right for sampling sidebar */
-body:not(.chat-page) #container,
-body:not(.chat-page) #center-column {
-  margin-left: 110px;
+/* Config page: push #main content right to clear fixed sampling sidebar */
+#config-page #main {
+  padding-left: 275px;
 }
 
 #center-column h3, #center-column h2, #center-column label {
@@ -1162,12 +1160,15 @@ body {
   }
   
   .chat-page #main {
-    margin-left: 60px;
+    padding-left: 220px;
+  }
+  
+  #config-page #main {
+    padding-left: 220px;
   }
   
   #container,
   #center-column {
-    margin-left: 30px;
     max-width: 600px;
   }
 }
@@ -1180,12 +1181,15 @@ body {
   }
   
   .chat-page #main {
-    margin-left: 40px;
+    padding-left: 180px;
+  }
+  
+  #config-page #main {
+    padding-left: 180px;
   }
   
   #container,
   #center-column {
-    margin-left: 40px;
     max-width: 500px;
   }
 }  /* â† ADD THIS CLOSING BRACE */
@@ -1199,12 +1203,14 @@ body {
     display: none;
   }
   
-  /* Remove all margins */
+  /* Remove all margins/padding */
   .chat-page #main,
+  #config-page #main,
   .config-page #container,
   #container,
   #center-column {
     margin-left: 0;
+    padding-left: 0;
     max-width: 100%;
   }
   

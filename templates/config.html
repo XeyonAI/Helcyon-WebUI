@@ -237,8 +237,7 @@
 
       <!-- Save as row -->
       <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
-        <input type="text" id="system-prompt-filename" placeholder="Type new filename to Save As..." style="flex:1; font-size:13px;"/>
-        <button onclick="saveSystemPromptAs()" style="background-color:#1f3a5a; border-color:#245080; color:white; white-space:nowrap;">💾 Save As</button>
+        <button onclick="saveSystemPromptAs()" style="background-color:#1f3a5a; border-color:#245080; color:white; white-space:nowrap;">💾 Save As New Template</button>
       </div>
 
       <label>System Prompt:</label>
@@ -529,7 +528,6 @@
       // Auto-select and load active
       if (data.active) {
         select.value = data.active;
-        document.getElementById('system-prompt-filename').value = data.active;
         updateActiveIndicator(data.active);
         await loadSelectedSystemPrompt(data.active);
       }
@@ -548,25 +546,29 @@
     try {
       const res = await fetch('/system_prompts/load/' + encodeURIComponent(filename));
       if (!res.ok) return;
-      const text = await res.text();
-      document.getElementById('global-system-prompt').value = text.trim();
-      document.getElementById('system-prompt-filename').value = filename;
+      const raw = await res.text();
+      const text = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+      document.getElementById('global-system-prompt').value = text;
     } catch (err) {
       console.error('Error loading system prompt file:', err);
     }
     // Load paired example dialog
     try {
       const exRes = await fetch('/system_prompts/load_example/' + encodeURIComponent(filename));
-      const exText = exRes.ok ? await exRes.text() : '';
-      document.getElementById('global-example-dialog').value = exText.trim();
+      const exRaw = exRes.ok ? await exRes.text() : '';
+      const exText = exRaw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+      document.getElementById('global-example-dialog').value = exText;
     } catch (err) {
       console.warn('Could not load paired example dialog:', err);
     }
   }
 
   async function saveSystemPromptAs() {
-    let filename = document.getElementById('system-prompt-filename').value.trim();
-    if (!filename) { alert('Enter a filename first (e.g. my_prompt.txt)'); return; }
+    const suggested = document.getElementById('system-prompt-file-select').value || '';
+    let filename = prompt('Save as template name:', suggested.replace('.txt', '') || '');
+    if (filename === null) return; // cancelled
+    filename = filename.trim();
+    if (!filename) { alert('Please enter a name.'); return; }
     if (!filename.endsWith('.txt')) filename += '.txt';
     const text = document.getElementById('global-system-prompt').value;
     const exText = document.getElementById('global-example-dialog').value;
@@ -577,21 +579,46 @@
         body: text
       });
       const data = await res.json();
-      // Also save paired example dialog
       await fetch('/system_prompts/save_example/' + encodeURIComponent(filename), {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
         body: exText
       });
       if (data.status === 'saved') {
-        await loadSystemPromptList();
+        // Reload list but DON'T let it auto-switch to the active prompt
+        await loadSystemPromptListNoAutoLoad();
+        // Explicitly select and show the newly saved file
         document.getElementById('system-prompt-file-select').value = filename;
+        document.getElementById('system-prompt-filename') && (document.getElementById('system-prompt-filename').value = filename);
         alert('✅ Saved as: ' + filename);
       } else {
         alert('❌ Save failed');
       }
     } catch (err) {
       alert('❌ Save error: ' + err);
+    }
+  }
+
+  // Like loadSystemPromptList but skips the auto-load of the active prompt
+  async function loadSystemPromptListNoAutoLoad() {
+    try {
+      const res = await fetch('/system_prompts/list');
+      const data = await res.json();
+      const select = document.getElementById('system-prompt-file-select');
+      const currentVal = select.value; // preserve current selection
+      select.innerHTML = '<option value="">-- Select Template --</option>';
+      for (const f of data.files) {
+        const opt = document.createElement('option');
+        opt.value = f;
+        opt.textContent = f;
+        if (f === data.active) opt.textContent += ' ✅';
+        select.appendChild(opt);
+      }
+      // Restore whatever was selected before, don't switch to active
+      if (currentVal) select.value = currentVal;
+      if (data.active) updateActiveIndicator(data.active);
+    } catch (err) {
+      console.error('Error loading system prompt list:', err);
     }
   }
 
@@ -652,7 +679,7 @@
   // Overwrite the currently selected file
   async function saveGlobalSystemPrompt() {
     const select = document.getElementById('system-prompt-file-select');
-    const filename = select.value || document.getElementById('system-prompt-filename').value.trim();
+    const filename = select.value;
     if (!filename) { alert('No template selected. Use Save As to create a new one.'); return; }
     const text = document.getElementById('global-system-prompt').value;
     const exText = document.getElementById('global-example-dialog').value;
@@ -750,7 +777,6 @@
       if (data.system_prompt) {
         const spSelect = document.getElementById('system-prompt-file-select');
         if (spSelect) spSelect.value = data.system_prompt;
-        document.getElementById('system-prompt-filename').value = data.system_prompt;
         updateActiveIndicator(data.system_prompt);
         await loadSelectedSystemPrompt(data.system_prompt);
         updateBindIndicator(true);
