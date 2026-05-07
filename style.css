@@ -818,50 +818,15 @@ button {
 }
 
 /* Tighten hr inside chat bubbles */
-.model-text hr, .user-text hr {
+.model-text hr, .user-text hr, .model-text-cont hr {
   border: none;
-  border-top: 1px solid var(--msg-border);
-  margin: 4px 0;
-  opacity: 0.6;
+  border-top: 1px solid rgba(255, 255, 255, 0.25);
+  margin: 8px 0;
+  opacity: 1;
 }
 
-/* Kill paragraph bottom margin when directly before an hr */
-.model-text p + hr, .user-text p + hr,
-.model-text-cont p + hr {
-  margin-top: 0 !important;
-}
-
-/* Also zero the p's own bottom margin when it precedes an hr (:has widely supported 2024+) */
-.model-text p:has(+ hr), .user-text p:has(+ hr),
-.model-text-cont p:has(+ hr) {
-  margin-bottom: 0 !important;
-}
-
-/* Same for ul/ol directly before an hr */
-.model-text ul + hr, .model-text ol + hr,
-.user-text ul + hr, .user-text ol + hr,
-.model-text-cont ul + hr, .model-text-cont ol + hr {
-  margin-top: 0 !important;
-}
-
-.model-text ul:has(+ hr), .model-text ol:has(+ hr),
-.user-text ul:has(+ hr), .user-text ol:has(+ hr),
-.model-text-cont ul:has(+ hr), .model-text-cont ol:has(+ hr) {
-  margin-bottom: 0 !important;
-}
-
-/* Kill paragraph top margin when directly after an hr */
-.model-text hr + p, .user-text hr + p,
-.model-text-cont hr + p {
-  margin-top: 0 !important;
-}
-
-/* Same for ul/ol directly after an hr */
-.model-text hr + ul, .model-text hr + ol,
-.user-text hr + ul, .user-text hr + ol,
-.model-text-cont hr + ul, .model-text-cont hr + ol {
-  margin-top: 0 !important;
-}
+/* hr spacing — equal top and bottom, no adjacent-selector tricks needed */
+/* Elements above/below hr keep their own margins; hr margin adds on top cleanly */
 
 /* model-text-cont: used for content after code blocks — must mirror model-text spacing */
 .model-text-cont {
@@ -878,7 +843,7 @@ button {
 }
 .model-text-cont ul,
 .model-text-cont ol {
-  margin: 0.3em 0 1.3em 0 !important;
+  margin: 0.3em 0 0.5em 0 !important;
   padding-left: 1.5em !important;
   line-height: 1.3 !important;
 }
@@ -891,12 +856,6 @@ button {
 .model-text-cont h4, .model-text-cont h5, .model-text-cont h6 {
   margin: 0.4em 0 0.2em 0;
   line-height: 1.3;
-}
-.model-text-cont hr {
-  border: none;
-  border-top: 1px solid var(--msg-border);
-  margin: 4px 0;
-  opacity: 0.6;
 }
 .model-text-cont strong {
   display: inline !important;
@@ -1726,7 +1685,7 @@ hr.msg-separator {
 .model-text ol,
 .user-text ul,
 .user-text ol {
-  margin: 0.3em 0 1.3em 0 !important;
+  margin: 0.3em 0 0.5em 0 !important;
   padding-left: 1.5em !important;
   line-height: 1.3 !important;
 }
