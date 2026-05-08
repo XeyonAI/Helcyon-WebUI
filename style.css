@@ -844,14 +844,14 @@ button {
 }
 .model-text-cont ul,
 .model-text-cont ol {
-  margin: 0.3em 0 0.5em 0 !important;
+  margin: 0.6em 0 0.8em 0 !important;
   padding-left: 1.5em !important;
-  line-height: 1.3 !important;
+  line-height: 1.6 !important;
 }
 .model-text-cont li {
-  margin: 0 0 0.15em 0 !important;
+  margin: 0 0 0.4em 0 !important;
   padding: 0 !important;
-  line-height: 1.3 !important;
+  line-height: 1.6 !important;
 }
 .model-text-cont h1, .model-text-cont h2, .model-text-cont h3,
 .model-text-cont h4, .model-text-cont h5, .model-text-cont h6 {
@@ -1697,9 +1697,9 @@ hr.msg-separator {
 .model-text ol,
 .user-text ul,
 .user-text ol {
-  margin: 0.3em 0 0.5em 0 !important;
+  margin: 0.6em 0 0.8em 0 !important;
   padding-left: 1.5em !important;
-  line-height: 1.3 !important;
+  line-height: 1.6 !important;
 }
 
 .message ul li,
@@ -1708,9 +1708,9 @@ hr.msg-separator {
 .model-text ol li,
 .user-text ul li,
 .user-text ol li {
-  margin: 0 0 0.15em 0 !important;
+  margin: 0 0 0.4em 0 !important;
   padding: 0 !important;
-  line-height: 1.3 !important;
+  line-height: 1.6 !important;
 }
 
 .message ul li:last-child,
