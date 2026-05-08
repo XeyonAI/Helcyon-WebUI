@@ -836,7 +836,7 @@ button {
   line-height: 1.6;
 }
 .model-text-cont p {
-  margin: 0 0 0.4em 0 !important;
+  margin: 0 0 0.8em 0 !important;
   line-height: 1.6;
 }
 .model-text-cont p:last-child {
@@ -2427,7 +2427,7 @@ button#stop-btn {
 
 /* Add breathing room to streamed text */
 .model-text p {
-  margin: 0 0 0.4em 0 !important;
+  margin: 0 0 0.8em 0 !important;
   line-height: 1.6;
 }
 
