@@ -1546,7 +1546,7 @@ hr.msg-separator {
   backdrop-filter: blur(4px);
   align-items: center;
   justify-content: center;
-  padding-left: 120px;
+  padding-left: 250px;
   padding-top: 0;
   box-sizing: border-box;
 }

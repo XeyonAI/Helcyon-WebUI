@@ -21,8 +21,7 @@ call venv\Scripts\activate.bat
 echo [3/5] Installing PyTorch...
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 --quiet
 
-echo [4/5] Installing remaining dependencies...
-pip install flask flask-cors requests psutil faster-whisper openai-whisper --quiet
+pip install flask flask-cors requests psutil faster-whisper openai-whisper python-docx odfpy --quiet
 
 echo [5/5] Setting up models folder and config...
 
