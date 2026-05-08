@@ -20,10 +20,11 @@
   --sidebar-footer-btn-bg: #2c2c2c;
   --sidebar-footer-btn-border: #323232;
   --user-msg-bg: #313131;
-  --user-msg-text: #ffffff;
+  --user-msg-text: #dadada;
   --model-msg-bg: #212121;
-  --model-msg-text: #ffffff;
+  --model-msg-text: #dadada;
   --msg-border: #383838;
+  --hr-color: #6b6b6b;
   --input-bg: #3e3e3e;
   --input-border: #626262;
   --field-bg: #191919;

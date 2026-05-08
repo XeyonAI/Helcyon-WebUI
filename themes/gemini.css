@@ -6,25 +6,25 @@
    ============================================================ */
 
 :root {
-  --topbar-bg: #191919;
-  --container-bg: #1d1d1d;
-  --chat-bg: #0f0f10;
+  --topbar-bg: #1e1f20;
+  --container-bg: #1e1f20;
+  --chat-bg: #131314;
   --project-header-bg: #062b46;
-  --sidebar-bg: #171717;
+  --sidebar-bg: #1e1f20;
   --chat-item-bg: #2e2e2e;
   --sidebar-button-hover: #143257;
   --new-chat-btn-bg: #00335a;
-  --new-chat-btn-text: #ffffff;
+  --new-chat-btn-text: #c8c8c8;
   --char-dropdown-bg: #202020;
   --char-dropdown-border: #303030;
-  --sidebar-footer-btn-bg: #18191b;
-  --sidebar-footer-btn-border: #253958;
-  --user-msg-bg: #1c1f24;
-  --user-msg-text: #e2e2e2;
-  --model-msg-bg: #212121;
-  --model-msg-text: #e2e2e2;
+  --sidebar-footer-btn-bg: #1e1f20;
+  --sidebar-footer-btn-border: #25497f;
+  --user-msg-bg: #282a2c;
+  --user-msg-text: #d3d3d3;
+  --model-msg-bg: #1e1f20;
+  --model-msg-text: #d3d3d3;
   --msg-border: #191919;
-  --hr-color: #505050;
+  --hr-color: #292929;
   --input-bg: #131313;
   --input-border: #202020;
   --field-bg: #0d0d0d;
@@ -32,12 +32,12 @@
   --field-border-focus: #5f5f5f;
   --token-panel-bg: #1f1f1f;
   --token-panel-border: #000000;
-  --modal-bg: #1c1c1c;
+  --modal-bg: #1e1f20;
   --modal-bg-hover: #16394e;
   --modal-border: #363636;
   --modal-text: #b2b2b2;
   --memory-tab-active-bg: #3e505b;
-  --memory-entry-bg: #292929;
+  --memory-entry-bg: #121212;
   --memory-entry-text: #929292;
   --project-item-bg: #1e1e1e;
   --project-item-hover: #0d3248;
