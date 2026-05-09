@@ -836,7 +836,7 @@ button {
   line-height: 1.6;
 }
 .model-text-cont p {
-  margin: 0 0 0.8em 0 !important;
+  margin: 0 0 1.1em 0 !important;
   line-height: 1.6;
 }
 .model-text-cont p:last-child {
@@ -1546,7 +1546,7 @@ hr.msg-separator {
   backdrop-filter: blur(4px);
   align-items: center;
   justify-content: center;
-  padding-left: 250px;
+  padding-left: 120px;
   padding-top: 0;
   box-sizing: border-box;
 }
@@ -2427,7 +2427,7 @@ button#stop-btn {
 
 /* Add breathing room to streamed text */
 .model-text p {
-  margin: 0 0 0.8em 0 !important;
+  margin: 0 0 1.1em 0 !important;
   line-height: 1.6;
 }
 
