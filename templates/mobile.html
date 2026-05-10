@@ -943,7 +943,6 @@ function bufferTextForTTS(chunk){
   if(ttsSentenceBuffer===''&&ttsQueue.length===0&&!ttsProcessing)ttsStreamingComplete=false;
   chunk=fixContractionsForTTS(chunk);
   chunk=chunk.replace(/\.{3}/g,'. ').replace(/\u2026/g,'. ').replace(/\.{2}/g,'. ');
-  chunk=chunk.replace(/:/g,'. ');
   chunk=chunk.replace(/\s*\(\s*/g,'. ').replace(/\s*\)\s*/g,'. ');
   chunk=chunk.replace(/^>\s*/gm,'').replace(/\s*>\s*/g,'. ');
   chunk=chunk.replace(/\u{1F4AF}/gu,'one hundred percent');
@@ -953,7 +952,7 @@ function bufferTextForTTS(chunk){
   const lines=ttsSentenceBuffer.split('\n');
   ttsSentenceBuffer=lines.pop();
   for(const line of lines)splitAndQueue(line);
-  const sentenceRegex=/[^.!?:;]+[.!?:;]+[)"'*_]*\s*/g;
+  const sentenceRegex=/[^.!?]+[.!?]+[)"'*_]*\s*/g;
   let match,lastIndex=0;
   while((match=sentenceRegex.exec(ttsSentenceBuffer))!==null){
     splitAndQueue(match[0]);
@@ -983,12 +982,15 @@ async function processQueue(){
   ttsProcessing=true;
 
   async function fetchAudio(sentence){
-    try{
-      const response=await fetch('/api/tts/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:sentence,voice:ttsVoice||'Sol'})});
-      if(!response.ok)return null;
-      const blob=await response.blob();
-      return URL.createObjectURL(blob);
-    }catch(err){console.error('TTS fetch error:',err);return null;}
+    for(let attempt=0;attempt<2;attempt++){
+      try{
+        const response=await fetch('/api/tts/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:sentence,voice:ttsVoice||'Sol'})});
+        if(response.ok){const blob=await response.blob();return URL.createObjectURL(blob);}
+        console.warn(`TTS fetch ${response.status} (attempt ${attempt+1})`);
+      }catch(err){console.warn(`TTS fetch error (attempt ${attempt+1}):`,err);}
+      if(attempt===0)await new Promise(r=>setTimeout(r,200));
+    }
+    return null;
   }
 
   if(ttsQueue.length===0){ttsProcessing=false;const cb=ttsOnComplete;ttsOnComplete=null;if(cb)cb();return;}

@@ -3,6 +3,7 @@ import os
 import re
 import time
 import tempfile
+from io import BytesIO
 import numpy as np
 import soundfile as sf
 from threading import Lock
@@ -77,23 +78,23 @@ warmup()
 # AUDIO TRIM — strips the generated ". " pad and F5's own silence,
 # then prepends a clean 80ms buffer so browser never clips first word
 # ----------------------------------------------------------------
-def trim_leading_silence(path, silence_threshold=0.005, buffer_ms=80):
-    """Strip leading silence, prepend clean buffer. Non-destructive on failure."""
+def trim_leading_silence(audio, sr, silence_threshold=0.005, buffer_ms=80):
+    """Strip leading silence, prepend clean buffer. Returns modified array; non-destructive on failure."""
     try:
-        audio, sr = sf.read(path)
         abs_audio = np.abs(audio) if audio.ndim == 1 else np.abs(audio).max(axis=1)
         above = np.where(abs_audio > silence_threshold)[0]
         if len(above) == 0:
-            return  # all silence — leave as-is
+            return audio
         # Keep 30ms before first sound to avoid hard cut artefacts
         start = max(0, above[0] - int(sr * 0.03))
         trimmed = audio[start:]
         # Prepend clean silence so browser player has time to initialise
         buffer_samples = int(sr * buffer_ms / 1000)
         silence = np.zeros((buffer_samples,) if audio.ndim == 1 else (buffer_samples, audio.shape[1]))
-        sf.write(path, np.concatenate([silence, trimmed]), sr)
+        return np.concatenate([silence, trimmed])
     except Exception as e:
         print(f"⚠️  Trim failed (non-critical): {e}")
+        return audio
 
 
 app = Flask(__name__)
@@ -293,8 +294,7 @@ def clean_text(text):
     text = re.sub(r'\.\s*,', '.', text)        # ., → .
     text = re.sub(r',\s*,+', ',', text)        # ,, → ,
 
-    # Pad the start so F5 doesn't clip the first word
-    return ". " + text
+    return text
 
 @app.route('/tts_to_audio', methods=['POST'])
 def tts_to_audio():
@@ -314,24 +314,30 @@ def tts_to_audio():
     with open(txt_path, 'r', encoding='utf-8') as f:
         ref_text = f.read().strip()
 
-    tmp_path = tempfile.mktemp(suffix='.wav')
-
     try:
+        # First chunk of a response uses fewer diffusion steps for faster first-byte latency.
+        # Subsequent chunks use full quality. Difference at nfe_step=20 vs 24 is barely
+        # perceptible on a single sentence; saves ~1-1.5s on the opening wait.
+        first_chunk = data.get('first_chunk', False)
+        nfe = 20 if first_chunk else 24
+
         t_start = time.time()
         with tts_lock:
             wav, sr, _ = tts.infer(
                 ref_file=wav_path,
                 ref_text=ref_text,
                 gen_text=text,
-                file_wave=tmp_path,
                 speed=1.0,
-                nfe_step=24,
-                cfg_strength=1.0
+                nfe_step=nfe,
+                cfg_strength=2.0
             )
         elapsed = time.time() - t_start
-        print(f"✅ Generated in {elapsed:.2f}s | Voice: {voice}")
-        trim_leading_silence(tmp_path)
-        return send_file(tmp_path, mimetype='audio/wav')
+        print(f"✅ Generated in {elapsed:.2f}s | Voice: {voice} | nfe_step: {nfe}{'  [first chunk]' if first_chunk else ''}")
+        wav = trim_leading_silence(wav, sr)
+        buf = BytesIO()
+        sf.write(buf, wav, sr, format='WAV')
+        buf.seek(0)
+        return send_file(buf, mimetype='audio/wav')
 
     except Exception as e:
         print(f"❌ F5 Error: {e}")

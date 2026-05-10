@@ -1,11 +1,31 @@
 import re
+import json
+import os
 
-CONTEXT_WINDOW     = 16384  # llama.cpp context size — updated to match --ctx-size
+# Read ctx_size from settings.json so CONTEXT_WINDOW always matches the running server.
+# Hardcoding this separately from settings.json is the root cause of KV exhaustion:
+# the trim allows prompts sized for 16384 tokens when the server might be at 12288.
+def _read_ctx_size():
+    try:
+        _path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+        with open(_path, "r", encoding="utf-8") as _f:
+            return int(json.load(_f).get("llama_args", {}).get("ctx_size", 16384))
+    except Exception:
+        return 16384
+
+CONTEXT_WINDOW     = _read_ctx_size()
 GENERATION_RESERVE = 4096   # tokens reserved for model response — must match max_tokens in settings.json
 SYSTEM_BUFFER      = 200    # small safety margin for ChatML overhead tokens
 
-# Max tokens available for prompt = CONTEXT_WINDOW - GENERATION_RESERVE = 12288
-# Of that, the system message takes what it takes — the rest goes to conversation history.
+# BPE correction factor: rough_token_count undercounts real Llama/Mistral BPE tokens
+# by ~20-25% (each English word = 1 rough token but averages ~1.25 BPE tokens).
+# Dividing the rough budget by this factor ensures real token usage stays within ctx_size.
+TOKEN_FUDGE = 1.25
+
+# Effective rough-token budget for the full prompt (system + conversation):
+#   (CONTEXT_WINDOW - GENERATION_RESERVE - SYSTEM_BUFFER) / TOKEN_FUDGE
+# This leaves real-token headroom equal to GENERATION_RESERVE for model output.
+
 
 def rough_token_count(text) -> int:
     # Handle multimodal content (list of parts)
@@ -33,8 +53,11 @@ def trim_chat_history(messages, token_budget: int = None, extra_system_overhead:
     system_tokens += extra_system_overhead
     print(f"📊 System message: ~{system_tokens} tokens (includes {extra_system_overhead} overhead)")
 
-    # Dynamically calculate how much room is left for conversation history
-    prompt_budget = CONTEXT_WINDOW - GENERATION_RESERVE - SYSTEM_BUFFER
+    # Dynamically calculate how much room is left for conversation history.
+    # Divide by TOKEN_FUDGE to compensate for BPE undercount — without this,
+    # rough budgets translate to real token counts that overflow ctx_size during generation.
+    raw_prompt_budget = CONTEXT_WINDOW - GENERATION_RESERVE - SYSTEM_BUFFER
+    prompt_budget = int(raw_prompt_budget / TOKEN_FUDGE)
     conversation_budget = max(prompt_budget - system_tokens, 1024)  # never go below 1024
 
     # Allow caller to override if needed
@@ -42,7 +65,8 @@ def trim_chat_history(messages, token_budget: int = None, extra_system_overhead:
         conversation_budget = token_budget
 
     print(f"📊 Conversation budget: ~{conversation_budget} tokens "
-          f"(context {CONTEXT_WINDOW} - gen {GENERATION_RESERVE} - buffer {SYSTEM_BUFFER} - system {system_tokens})")
+          f"(ctx {CONTEXT_WINDOW} - gen {GENERATION_RESERVE} - buf {SYSTEM_BUFFER} "
+          f"÷ fudge {TOKEN_FUDGE} - system {system_tokens})")
 
     # Trim conversation history to fit budget (keep most recent messages)
     total = 0

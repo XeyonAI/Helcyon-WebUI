@@ -499,7 +499,6 @@ function bufferTextForTTS(chunk) {
 
   // Normalise dashes, strip ellipsis to single pause, no stacking dots
   chunk = chunk.replace(/\.{3}/g, '. ').replace(/\u2026/g, '. ').replace(/\.{2}/g, '. ');
-  chunk = chunk.replace(/:/g, '. ');
   chunk = chunk.replace(/\s*\(\s*/g, '. ').replace(/\s*\)\s*/g, '. ');
   chunk = chunk.replace(/^>\s*/gm, '').replace(/\s*>\s*/g, '. ');  // strip > list markers
   // Replace specific emojis with spoken words before catch-all strips them
@@ -521,7 +520,10 @@ function bufferTextForTTS(chunk) {
 
   // Also check the current incomplete line for sentence endings
   // so we don't wait for a newline to start playing
-  const sentenceRegex = /[^.!?:;]+[.!?:;]+[)"'*_]*\s*/g;
+  // Emoji counted as sentence terminator — model often ends a sentence with an emoji
+  // instead of punctuation; without this the sentence stays in the buffer unqueued,
+  // gets merged with the next line, and F5 gets a run-on chunk with no prosody break.
+  const sentenceRegex = /[^.!?]+(?:[.!?]+|(?:[\u{1F000}-\u{1FFFF}\u{1F300}-\u{1FAFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}\u2600-\u27BF])+)[)"'*_]*\s*/gu;
   let match;
   let lastIndex = 0;
   while ((match = sentenceRegex.exec(ttsSentenceBuffer)) !== null) {
@@ -564,7 +566,6 @@ function splitAndQueue(text) {
     .replace(/(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '')
     .replace(/\*\*/g, '').replace(/\*/g, '').replace(/_/g, '')
     .replace(/^[-*•>]\s+/, '').replace(/^\d+\.\s+/, '').replace(/\s*>\s*/g, '. ')
-    .replace(/:/g, '. ')
     .replace(/\s*\(\s*/g, '. ').replace(/\s*\)\s*/g, '. ')
     .trim();
 
@@ -669,21 +670,28 @@ async function processQueue() {
   const btn = document.getElementById('tts-toggle-btn');
   if (btn) btn.classList.add('speaking');
 
-  // Fetch a sentence from TTS server, return a blob URL or null
-  async function fetchAudio(sentence) {
-    try {
-      const response = await fetch('/api/tts/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: sentence, voice: ttsVoice })
-      });
-      if (!response.ok) return null;
-      const blob = await response.blob();
-      return URL.createObjectURL(blob);
-    } catch (err) {
-      console.error('❌ TTS fetch error:', err);
-      return null;
+  // Fetch a sentence from TTS server, return a blob URL or null.
+  // Retries once on transient failure so a single F5 hiccup doesn't drop a sentence.
+  async function fetchAudio(sentence, firstChunk = false) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const response = await fetch('/api/tts/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: sentence, voice: ttsVoice, first_chunk: firstChunk })
+        });
+        if (response.ok) {
+          const blob = await response.blob();
+          return URL.createObjectURL(blob);
+        }
+        console.warn(`⚠️ TTS fetch ${response.status} (attempt ${attempt + 1}): "${sentence.substring(0, 40)}"`);
+      } catch (err) {
+        console.warn(`⚠️ TTS fetch error (attempt ${attempt + 1}):`, err);
+      }
+      if (attempt === 0) await new Promise(r => setTimeout(r, 200));
     }
+    console.error('❌ TTS fetch failed after retry');
+    return null;
   }
 
   // Check if queue is empty
@@ -696,10 +704,12 @@ async function processQueue() {
   // Pre-fetch buffer: always keep 3 sentences generating ahead
   const prefetchBuffer = [];
 
-  // Start fetching first 2 sentences immediately
-  const initialFetches = Math.min(2, ttsQueue.length);
+  // Start fetching first sentence immediately — play it as soon as ready,
+  // chunk 2 will be generating in parallel during playback of chunk 1.
+  // first_chunk=true tells F5 server to use nfe_step=20 for faster first-byte latency.
+  const initialFetches = Math.min(1, ttsQueue.length);
   for (let i = 0; i < initialFetches; i++) {
-    prefetchBuffer.push(fetchAudio(ttsQueue.shift()));
+    prefetchBuffer.push(fetchAudio(ttsQueue.shift(), true));  // first chunk — fast path
   }
 
   while (true) {
@@ -1097,7 +1107,6 @@ function replayLastAudio() {
       .replace(/\*\*/g, '').replace(/\*/g, '').replace(/_/g, '')
       .replace(/\s*[\u2013\u2014]\s*/g, '. ').replace(/\s*--\s*/g, '. ')
       .replace(/\.{3}/g, '. ').replace(/\u2026/g, '. ')
-      .replace(/:/g, '. ')
       .replace(/\s*\(\s*/g, '. ').replace(/\s*\)\s*/g, '. ')
       ;
 

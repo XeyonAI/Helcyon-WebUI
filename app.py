@@ -3,7 +3,7 @@ from flask_cors import CORS
 import requests, os, json, re, hashlib, time, subprocess
 import psutil
 from datetime import datetime, timedelta
-from truncation import trim_chat_history
+from truncation import trim_chat_history, rough_token_count
 from tts_routes import tts_bp
 from utils.session_handler import get_system_prompt, get_instruction_layer, get_tone_primer
 from whisper_routes import whisper_bp
@@ -69,54 +69,173 @@ app.register_blueprint(tts_bp, url_prefix='/api/tts')
 app.register_blueprint(whisper_bp)
 
 # --------------------------------------------------
+# Document helpers
+# --------------------------------------------------
+
+_DOC_STOPWORDS = {
+    'the', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'of', 'and', 'or',
+    'document', 'file', 'pdf', 'scan', 'check', 'look', 'show', 'search',
+    'read', 'open', 'load', 'get', 'fetch', 'find', 'use', 'can', 'you',
+    'please', 'me', 'my', 'what', 'does', 'say', 'tell', 'about', 'from',
+    'this', 'that', 'there', 'here', 'its', 'with', 'have', 'has', 'see',
+    'according', 'reference', 'view', 'know', 'give', 'write', 'are',
+    'was', 'were', 'been', 'will', 'would', 'could', 'should', 'just', 'not',
+}
+
+# Strong document-intent phrases — used as trigger in the chat route
+_DOC_STRONG_TRIGGERS = [
+    'according to', 'reference the', 'look in', 'check the', 'scan the',
+    'scan my', 'from the document', 'in the document', 'from the file',
+    'in the file', 'what does it say', 'what does the', 'show me the document',
+    'show me the file', 'show me the pdf', 'open the document', 'open the file',
+    'read the document', 'read the file', 'read the pdf',
+]
+# "document/pdf/attachment" with word boundaries — avoids "docker", "profile", etc.
+_DOC_NOUN_RE = re.compile(r'\b(document|documents|pdf|attachment|attachments)\b', re.IGNORECASE)
+
+
+def _read_doc_content(filepath, max_chars=None):
+    """Read any supported document format; returns content string or None on failure."""
+    fname = os.path.basename(filepath).lower()
+    content = None
+    try:
+        if fname.endswith(('.txt', '.md')):
+            try:
+                with open(filepath, 'r', encoding='utf-8-sig') as f:
+                    content = f.read()
+            except UnicodeDecodeError:
+                with open(filepath, 'r', encoding='latin-1') as f:
+                    content = f.read()
+        elif fname.endswith('.docx'):
+            try:
+                import docx as _docx
+                content = "\n".join(p.text for p in _docx.Document(filepath).paragraphs)
+            except ImportError:
+                content = "[DOCX content - python-docx required to read]"
+        elif fname.endswith('.odt'):
+            try:
+                from odf import text as _odf_text, teletype as _teletype
+                from odf.opendocument import load as _odf_load
+                _doc = _odf_load(filepath)
+                content = "\n".join(_teletype.extractText(p) for p in _doc.getElementsByType(_odf_text.P))
+            except ImportError:
+                content = "[ODT content - odfpy required to read]"
+        elif fname.endswith('.pdf'):
+            try:
+                import PyPDF2
+                with open(filepath, 'rb') as f:
+                    content = "".join(pg.extract_text() or '' for pg in PyPDF2.PdfReader(f).pages)
+            except ImportError:
+                content = "[PDF content - PyPDF2 required to read]"
+            except Exception as e:
+                print(f"⚠️ PDF read failed {fname}: {e}")
+    except Exception as e:
+        print(f"⚠️ Failed to read {fname}: {e}")
+    if content is not None and max_chars and len(content) > max_chars:
+        content = content[:max_chars]
+    return content
+
+
+def _doc_query_keywords(user_query):
+    """Extract meaningful content keywords from a user query for doc matching."""
+    if not user_query:
+        return []
+    words = user_query.lower().replace('_', ' ').replace('-', ' ').split()
+    return [w.strip("'\".,!?;:") for w in words
+            if w.strip("'\".,!?;:") not in _DOC_STOPWORDS and len(w.strip("'\".,!?;:")) > 2]
+
+
+def _score_doc(fname, filepath, query_keywords):
+    """Score one document against query keywords.
+    Filename hits: 3×.  Text-content-preview hits (first 1 000 chars): 1×.
+    Uses word-boundary regex so 'doc' never hits 'docker'."""
+    fname_norm = fname.lower().replace('_', ' ').replace('-', ' ').replace('.', ' ')
+    score = 0
+    for kw in query_keywords:
+        pat = r'\b' + re.escape(kw) + r'\b'
+        if re.search(pat, fname_norm):
+            score += 3
+    # Content preview — text files only; skips heavy binary parsing on every request
+    if fname.lower().endswith(('.txt', '.md')) and score == 0:
+        preview = (_read_doc_content(filepath, max_chars=1000) or '').lower()
+        for kw in query_keywords:
+            if re.search(r'\b' + re.escape(kw) + r'\b', preview):
+                score += 1
+    return score
+
+
+_PERSPECTIVE_RE = re.compile(r'^\[PERSPECTIVE:\s*(\w+)\s*\]$', re.IGNORECASE)
+
+def _extract_perspective(content):
+    """Check the first non-empty line for a [PERSPECTIVE: ...] tag.
+    If found, strip it and return (prefix, suffix, content_without_tag):
+      • prefix — framing header injected BEFORE the document content
+      • suffix — voice reminder injected AFTER the document content (only populated
+        for first_person_account, to defeat voice contagion: the model finishes
+        reading first-person prose with the reminder, not the prose itself, as the
+        last context before generation)
+    If no tag is found, return ("", "", content) — no regressions for untagged docs."""
+    lines = content.split('\n')
+    for i, line in enumerate(lines):
+        if not line.strip():
+            continue
+        m = _PERSPECTIVE_RE.match(line.strip())
+        if m:
+            value = m.group(1).lower()
+            rest = '\n'.join(lines[i + 1:]).lstrip('\n')
+            if value == 'first_person_account':
+                prefix = (
+                    "The following was written by the user about their own experience, in their own words. "
+                    "When discussing this content, always refer to it as the user's experience — use 'you' and 'your' throughout. "
+                    "Never adopt first person as if the experience is your own.\n\n"
+                )
+                suffix = (
+                    "\n\n──── End of the user's first-person account ────\n\n"
+                    "VOICE INSTRUCTION FOR YOUR RESPONSE: The text above is the user's first-person record of an event they lived. When responding about it:\n"
+                    "• Use second person ONLY — \"you\", \"your\" — speaking directly to the user about what happened to them\n"
+                    "• Convert the user's \"I\"/\"my\" to \"you\"/\"your\" when retelling events\n"
+                    "• Do NOT use first person (you did not live this experience)\n"
+                    "• Do NOT use third person such as \"the user\" or \"they\" (that distances them from their own experience)\n"
+                    "• Example: the account says \"I parked outside the gym\" → you say \"You parked outside the gym\" — never \"I parked...\", never \"The user parked...\""
+                )
+            elif value == 'third_person_account':
+                prefix = "The following is the user's written account about someone else:\n\n"
+                suffix = ""
+            else:
+                prefix = "The following is reference material:\n\n"
+                suffix = ""
+            return prefix, suffix, rest
+        break  # first non-empty line is not a tag — stop
+    return "", "", content
+
+
+# --------------------------------------------------
 # Load Documents
 # --------------------------------------------------
 def load_project_documents(project_name, user_query=""):
-    """Load the single best-matching document from a project's documents folder.
-    Uses keyword matching against filenames to find the most relevant doc.
-    If no query provided or no match found, returns empty string."""
+    """Load the best-matching document from a project's documents folder.
+    Scores filename (3×) and text-file content preview (1×).
+    Returns empty string when no match or no usable keywords."""
     if not project_name:
         return ""
-    
+
     projects_dir = os.path.join(os.path.dirname(__file__), "projects")
     docs_dir = os.path.join(projects_dir, project_name, "documents")
-    
     if not os.path.exists(docs_dir):
         return ""
 
-    MAX_CHARS_PER_DOC = 8000    # ~2k tokens per document
-
-    # ── Keyword extraction ───────────────────────────────────────
-    # Expanded stopwords: includes action verbs so 'read', 'open' etc.
-    # don't accidentally match filenames like 'readme.txt'
-    stopwords = {
-        'the', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'of', 'and', 'or',
-        'document', 'file', 'pdf', 'scan', 'check', 'look', 'show', 'search',
-        'read', 'open', 'load', 'get', 'fetch', 'find', 'use', 'can', 'you',
-        'please', 'me', 'my', 'what', 'does', 'say', 'tell', 'about', 'from',
-        'this', 'that', 'there', 'here', 'its', 'with', 'have', 'has', 'see',
-        'according', 'reference', 'view', 'know', 'give', 'show', 'write',
-    }
-    query_keywords = []
-    if user_query:
-        words = user_query.lower().replace('_', ' ').replace('-', ' ').split()
-        query_keywords = [w for w in words if w not in stopwords and len(w) > 2]
-
+    query_keywords = _doc_query_keywords(user_query)
     if not query_keywords:
-        print(f"⭕ No usable keywords from query — skipping document load")
+        print("⭕ No usable keywords from query — skipping document load")
         return ""
 
-    # ── Find best-matching file ──────────────────────────────────
     all_files = [f for f in os.listdir(docs_dir) if os.path.isfile(os.path.join(docs_dir, f))]
-    
-    best_file = None
-    best_score = 0
+
+    best_file, best_score = None, 0
     for fname in all_files:
-        fname_norm = fname.lower().replace('_', ' ').replace('-', ' ').replace('.', ' ')
-        score = sum(1 for kw in query_keywords if kw in fname_norm)
-        if score > best_score:
-            best_score = score
-            best_file = fname
+        s = _score_doc(fname, os.path.join(docs_dir, fname), query_keywords)
+        if s > best_score:
+            best_score, best_file = s, fname
 
     if not best_file or best_score == 0:
         print(f"⏭️ No document matched keywords: {query_keywords}")
@@ -124,70 +243,24 @@ def load_project_documents(project_name, user_query=""):
 
     print(f"✅ Best match: '{best_file}' (score={best_score}, keywords={query_keywords})")
 
-    # ── Read the file ────────────────────────────────────────────
-    filepath = os.path.join(docs_dir, best_file)
-    content = None
-
-    try:
-        if best_file.endswith(('.txt', '.md')):
-            # Try UTF-8 with BOM handling first, fall back to latin-1
-            try:
-                with open(filepath, 'r', encoding='utf-8-sig') as f:
-                    content = f.read()
-            except UnicodeDecodeError:
-                with open(filepath, 'r', encoding='latin-1') as f:
-                    content = f.read()
-                print(f"⚠️ {best_file} read with latin-1 fallback (non-UTF8 encoding)")
-
-        elif best_file.endswith('.docx'):
-            try:
-                import docx
-                doc = docx.Document(filepath)
-                content = "\n".join([para.text for para in doc.paragraphs])
-            except ImportError:
-                content = "[DOCX content - python-docx required to read]"
-
-        elif best_file.endswith('.odt'):
-            try:
-                from odf import text as odf_text, teletype
-                from odf.opendocument import load as odf_load
-                doc = odf_load(filepath)
-                allparas = doc.getElementsByType(odf_text.P)
-                content = "\n".join([teletype.extractText(para) for para in allparas])
-            except ImportError:
-                content = "[ODT content - odfpy required to read]"
-
-        elif best_file.endswith('.pdf'):
-            try:
-                import PyPDF2
-                with open(filepath, 'rb') as f:
-                    pdf_reader = PyPDF2.PdfReader(f)
-                    content = "".join(page.extract_text() for page in pdf_reader.pages)
-            except ImportError:
-                content = "[PDF content - PyPDF2 required to read]"
-            except Exception as e:
-                print(f"⚠️ Failed to read PDF {best_file}: {e}")
-
-    except Exception as e:
-        print(f"⚠️ Failed to read document {best_file}: {e}")
-
-    if content is None:
+    MAX_CHARS_PER_DOC = 8000
+    content = _read_doc_content(os.path.join(docs_dir, best_file), max_chars=MAX_CHARS_PER_DOC)
+    if not content:
         return ""
 
-    # Cap content length
     original_len = len(content)
-    if original_len > MAX_CHARS_PER_DOC:
-        content = content[:MAX_CHARS_PER_DOC]
-        print(f"✂️ Trimmed {best_file}: {original_len} → {MAX_CHARS_PER_DOC} chars")
+    if original_len == MAX_CHARS_PER_DOC:
+        print(f"✂️ Trimmed {best_file} to {MAX_CHARS_PER_DOC} chars")
     else:
         print(f"📄 Loaded {best_file}: {original_len} chars (~{original_len//4} tokens)")
 
+    prefix, suffix, content = _extract_perspective(content)
     return (
         "\n\n"
         "═══════════════════════════════════════════════════════════\n"
         "PROJECT DOCUMENTS\n"
         "═══════════════════════════════════════════════════════════\n\n"
-        f"### Document: {best_file}\n\n{content}\n\n"
+        f"### Document: {best_file}\n\n{prefix}{content}{suffix}\n\n"
         "═══════════════════════════════════════════════════════════\n"
         "END PROJECT DOCUMENTS\n"
         "═══════════════════════════════════════════════════════════\n\n"
@@ -197,8 +270,8 @@ def load_project_documents(project_name, user_query=""):
 # Load Global Documents (always available, no project required)
 # --------------------------------------------------
 def load_global_documents(user_query=""):
-    """Load the single best-matching document from the global_documents folder.
-    Keyword-matched against filenames. Injected regardless of active project.
+    """Load the best-matching document from the global_documents folder.
+    Scores filename (3×) and text-file content preview (1×).
     Drop any .txt/.md/.pdf/.docx file into global_documents/ to add it to the pool."""
     global_docs_dir = os.path.join(os.path.dirname(__file__), "global_documents")
 
@@ -209,103 +282,102 @@ def load_global_documents(user_query=""):
     if not all_files:
         return ""
 
-    MAX_CHARS_PER_DOC = 12000  # ~3k tokens — richer than project docs, global library warrants it
-
-    stopwords = {
-        'the', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'of', 'and', 'or',
-        'document', 'file', 'pdf', 'scan', 'check', 'look', 'show', 'search',
-        'read', 'open', 'load', 'get', 'fetch', 'find', 'use', 'can', 'you',
-        'please', 'me', 'my', 'what', 'does', 'say', 'tell', 'about', 'from',
-        'this', 'that', 'there', 'here', 'its', 'with', 'have', 'has', 'see',
-        'according', 'reference', 'view', 'know', 'give', 'show', 'write',
-    }
-    query_keywords = []
-    if user_query:
-        words = user_query.lower().replace('_', ' ').replace('-', ' ').split()
-        query_keywords = [w for w in words if w not in stopwords and len(w) > 2]
-
+    query_keywords = _doc_query_keywords(user_query)
     if not query_keywords:
         return ""
 
-    best_file = None
-    best_score = 0
+    best_file, best_score = None, 0
     for fname in all_files:
-        fname_norm = fname.lower().replace('_', ' ').replace('-', ' ').replace('.', ' ')
-        score = sum(1 for kw in query_keywords if kw in fname_norm)
-        if score > best_score:
-            best_score = score
-            best_file = fname
+        s = _score_doc(fname, os.path.join(global_docs_dir, fname), query_keywords)
+        if s > best_score:
+            best_score, best_file = s, fname
 
     if not best_file or best_score == 0:
-        print(f"⭕ Global docs: no filename match for keywords: {query_keywords}")
+        print(f"⭕ Global docs: no match for keywords: {query_keywords}")
         return ""
 
     print(f"🌐 Global doc match: '{best_file}' (score={best_score})")
 
-    filepath = os.path.join(global_docs_dir, best_file)
-    content = None
-
-    try:
-        if best_file.endswith(('.txt', '.md')):
-            try:
-                with open(filepath, 'r', encoding='utf-8-sig') as f:
-                    content = f.read()
-            except UnicodeDecodeError:
-                with open(filepath, 'r', encoding='latin-1') as f:
-                    content = f.read()
-
-        elif best_file.endswith('.docx'):
-            try:
-                import docx
-                doc = docx.Document(filepath)
-                content = "\n".join([para.text for para in doc.paragraphs])
-            except ImportError:
-                content = "[DOCX content - python-docx required to read]"
-
-        elif best_file.endswith('.odt'):
-            try:
-                from odf import text as odf_text, teletype
-                from odf.opendocument import load as odf_load
-                doc = odf_load(filepath)
-                allparas = doc.getElementsByType(odf_text.P)
-                content = "\n".join([teletype.extractText(para) for para in allparas])
-            except ImportError:
-                content = "[ODT content - odfpy required to read]"
-
-        elif best_file.endswith('.pdf'):
-            try:
-                import PyPDF2
-                with open(filepath, 'rb') as f:
-                    pdf_reader = PyPDF2.PdfReader(f)
-                    content = "".join(page.extract_text() for page in pdf_reader.pages)
-            except ImportError:
-                content = "[PDF content - PyPDF2 required to read]"
-            except Exception as e:
-                print(f"⚠️ Global doc PDF read failed {best_file}: {e}")
-
-    except Exception as e:
-        print(f"⚠️ Failed to read global doc {best_file}: {e}")
-
-    if content is None:
+    MAX_CHARS_PER_DOC = 12000
+    content = _read_doc_content(os.path.join(global_docs_dir, best_file), max_chars=MAX_CHARS_PER_DOC)
+    if not content:
         return ""
 
     original_len = len(content)
-    if original_len > MAX_CHARS_PER_DOC:
-        content = content[:MAX_CHARS_PER_DOC]
-        print(f"✂️ Trimmed global doc {best_file}: {original_len} → {MAX_CHARS_PER_DOC} chars")
+    if original_len == MAX_CHARS_PER_DOC:
+        print(f"✂️ Trimmed global doc {best_file} to {MAX_CHARS_PER_DOC} chars")
     else:
         print(f"📄 Global doc loaded: {best_file} ({original_len} chars)")
 
+    prefix, suffix, content = _extract_perspective(content)
     return (
         "\n\n"
         "═══════════════════════════════════════════════════════════\n"
         "GLOBAL REFERENCE DOCUMENTS\n"
         "═══════════════════════════════════════════════════════════\n\n"
-        f"### Document: {best_file}\n\n{content}\n\n"
+        f"### Document: {best_file}\n\n{prefix}{content}{suffix}\n\n"
         "═══════════════════════════════════════════════════════════\n"
         "END GLOBAL REFERENCE DOCUMENTS\n"
         "═══════════════════════════════════════════════════════════\n\n"
     )
+
+# --------------------------------------------------
+# Parse uploaded document for inline chat attachment
+# --------------------------------------------------
+@app.route('/parse_document', methods=['POST'])
+def parse_document():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    file = request.files['file']
+    filename = file.filename or 'document'
+    raw = file.read()
+    content = None
+
+    try:
+        if filename.lower().endswith(('.txt', '.md')):
+            try:
+                content = raw.decode('utf-8-sig')
+            except UnicodeDecodeError:
+                content = raw.decode('latin-1')
+
+        elif filename.lower().endswith('.docx'):
+            try:
+                import docx, io
+                doc = docx.Document(io.BytesIO(raw))
+                content = "\n".join(para.text for para in doc.paragraphs)
+            except ImportError:
+                return jsonify({'error': 'python-docx is required to read .docx files'}), 500
+
+        elif filename.lower().endswith('.odt'):
+            try:
+                from odf import text as odf_text, teletype
+                from odf.opendocument import load as odf_load
+                import io
+                doc = odf_load(io.BytesIO(raw))
+                allparas = doc.getElementsByType(odf_text.P)
+                content = "\n".join(teletype.extractText(p) for p in allparas)
+            except ImportError:
+                return jsonify({'error': 'odfpy is required to read .odt files'}), 500
+
+        elif filename.lower().endswith('.pdf'):
+            try:
+                import PyPDF2, io
+                pdf_reader = PyPDF2.PdfReader(io.BytesIO(raw))
+                content = "".join(page.extract_text() or '' for page in pdf_reader.pages)
+            except ImportError:
+                return jsonify({'error': 'PyPDF2 is required to read .pdf files'}), 500
+
+        else:
+            return jsonify({'error': f'Unsupported file type: {filename}'}), 400
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    if content is None:
+        return jsonify({'error': 'Could not read document content'}), 500
+
+    return jsonify({'filename': filename, 'content': content})
+
 
 # --------------------------------------------------
 # Load persisted chat history (if it exists)
@@ -560,98 +632,237 @@ def strip_chatml_leakage(text):
     return text
 
 
-def do_web_search(query):
-    """DuckDuckGo Instant Answer search + top page fetch."""
-    import urllib.parse, urllib.request, re as _re
+# --------------------------------------------------
+# Web search — shared constants, helpers, backends
+# --------------------------------------------------
 
-    # Domains that produce useless or misleading page content — never fetch or cite
-    _JUNK_DOMAINS = {
-        'knowyourmeme.com', 'reddit.com', 'twitter.com', 'x.com',
-        'facebook.com', 'instagram.com', 'tiktok.com', 'youtube.com',
-        'quora.com', 'pinterest.com', 'tumblr.com', 'imgur.com',
-        'giphy.com', 'tenor.com', '9gag.com', 'ifunny.co',
-    }
-    def _is_junk(u):
-        try:
-            host = urllib.parse.urlparse(u).netloc.lower().lstrip('www.')
-            return any(host == d or host.endswith('.' + d) for d in _JUNK_DOMAINS)
-        except Exception:
-            return False
+# Domains we never cite — login-walled, image-only, SEO spam, low signal.
+# Reddit / YouTube / Twitter are NOT in here on purpose: their snippets are often
+# the most relevant result for "how do I…" or "what's the consensus on…" queries,
+# and frontier search engines surface them. We just don't try to fetch their pages
+# (handled separately via _NO_FETCH_DOMAINS).
+_BLOCK_DOMAINS = frozenset({
+    'pinterest.com', 'quora.com', 'knowyourmeme.com',
+    'instagram.com', 'tiktok.com', 'facebook.com',
+    'tumblr.com', '9gag.com', 'ifunny.co',
+})
 
-    out = {"summary": "", "results": [], "top_url": "", "top_text": ""}
+# Domains whose snippets we cite, but whose pages we don't fetch
+# (JS-rendered or login-walled — fetching returns useless HTML).
+_NO_FETCH_DOMAINS = frozenset({
+    'youtube.com', 'youtu.be', 'twitter.com', 'x.com',
+    'imgur.com', 'giphy.com', 'tenor.com',
+})
+
+# Realistic browser UA — many sites 403 generic / library UAs.
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/121.0.0.0 Safari/537.36"
+)
+
+
+def _domain_of(url):
     try:
-        encoded = urllib.parse.quote_plus(query)
+        import urllib.parse as _up
+        host = _up.urlparse(url).netloc.lower()
+        if host.startswith('www.'):
+            host = host[4:]
+        return host
+    except Exception:
+        return ''
+
+
+def _is_blocked(url):
+    """Hard-block — never cite, never fetch."""
+    h = _domain_of(url)
+    if not h:
+        return True
+    return any(h == d or h.endswith('.' + d) for d in _BLOCK_DOMAINS)
+
+
+def _is_no_fetch(url):
+    """Cite (snippet useful) but don't fetch the page."""
+    h = _domain_of(url)
+    return any(h == d or h.endswith('.' + d) for d in _NO_FETCH_DOMAINS)
+
+
+def _fetch_page_text(url, timeout=6, max_chars=2500):
+    """Fetch a URL with a real browser UA, return clean main-content text.
+
+    Removes <script>/<style>/<noscript> blocks (with their contents) before
+    flattening tags — fixes the crude flat strip that left JS source / CSS
+    in the result. Tries <main>/<article> first so nav/header/footer/sidebar
+    boilerplate doesn't flood the model.
+    """
+    import urllib.parse as _up, urllib.request as _ur, urllib.error as _ue
+    import gzip as _gz, zlib as _zl
+    import re as _re
+
+    try:
+        req = _ur.Request(url, headers={
+            "User-Agent": _BROWSER_UA,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate",
+        })
+        with _ur.urlopen(req, timeout=timeout) as r:
+            raw = r.read()
+            enc_hdr = (r.headers.get("Content-Encoding") or "").lower()
+            if enc_hdr == "gzip" or raw[:2] == b'\x1f\x8b':
+                try:
+                    raw = _gz.decompress(raw)
+                except Exception:
+                    pass
+            elif enc_hdr == "deflate":
+                try:
+                    raw = _zl.decompress(raw)
+                except Exception:
+                    pass
+            ct = r.headers.get("Content-Type", "") or ""
+            charset = "utf-8"
+            m = _re.search(r"charset=([^\s;]+)", ct, _re.IGNORECASE)
+            if m:
+                charset = m.group(1).strip().strip('"').strip("'")
+            try:
+                html = raw.decode(charset, errors="ignore")
+            except Exception:
+                html = raw.decode("utf-8", errors="ignore")
+    except _ue.HTTPError as e:
+        print(f"⚠️ fetch HTTP {e.code} for {url}", flush=True)
+        return ""
+    except Exception as e:
+        print(f"⚠️ fetch error {url}: {e}", flush=True)
+        return ""
+
+    # Strip script/style/noscript and their contents (with their text nodes).
+    html = _re.sub(r"(?is)<script\b[^>]*>.*?</script>", " ", html)
+    html = _re.sub(r"(?is)<style\b[^>]*>.*?</style>", " ", html)
+    html = _re.sub(r"(?is)<noscript\b[^>]*>.*?</noscript>", " ", html)
+    # Strip common boilerplate sections.
+    html = _re.sub(r"(?is)<(nav|header|footer|aside|form)\b[^>]*>.*?</\1>", " ", html)
+
+    # Try main content extraction.
+    body_html = ""
+    for tag in ("main", "article"):
+        m = _re.search(rf"(?is)<{tag}\b[^>]*>(.*?)</{tag}>", html)
+        if m:
+            body_html = m.group(1)
+            break
+    if not body_html:
+        m = _re.search(r"(?is)<body\b[^>]*>(.*?)</body>", html)
+        body_html = m.group(1) if m else html
+
+    text = _re.sub(r"<[^>]+>", " ", body_html)
+    # Decode common HTML entities.
+    text = (text
+            .replace("&nbsp;", " ").replace("&#160;", " ")
+            .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+            .replace("&quot;", '"').replace("&#39;", "'").replace("&apos;", "'"))
+    text = _re.sub(r"\s+", " ", text).strip()
+    return text[:max_chars]
+
+
+# Tokens that suggest the user wants fresh / time-sensitive content.
+_FRESHNESS_KEYWORDS_DAY = (
+    'today', 'right now', 'currently', 'this hour', 'this morning',
+    'this afternoon', 'this evening', 'tonight', 'breaking', 'just now',
+    'happening now',
+)
+_FRESHNESS_KEYWORDS_WEEK = (
+    'this week', 'past week', 'last week', 'recent', 'recently', 'latest',
+    'newest', 'fresh news',
+)
+
+
+def _detect_freshness(query):
+    """Return Brave 'freshness' param if the query is time-sensitive."""
+    q = (query or "").lower()
+    if any(k in q for k in _FRESHNESS_KEYWORDS_DAY):
+        return 'pd'  # past 24h
+    if any(k in q for k in _FRESHNESS_KEYWORDS_WEEK):
+        return 'pw'  # past week
+    return None
+
+
+def do_web_search(query):
+    """DuckDuckGo Instant Answer search + top page fetch (fallback when no Brave key)."""
+    import urllib.parse as _up, urllib.request as _ur
+
+    out = {"summary": "", "results": [], "top_url": "", "top_text": "", "pages": []}
+    try:
+        encoded = _up.quote_plus(query)
         url = f"https://api.duckduckgo.com/?q={encoded}&format=json&no_html=1&skip_disambig=1"
-        req = urllib.request.Request(url, headers={"User-Agent": "HWUI/1.0"})
-        with urllib.request.urlopen(req, timeout=8) as r:
+        req = _ur.Request(url, headers={"User-Agent": _BROWSER_UA})
+        with _ur.urlopen(req, timeout=8) as r:
             ddg = json.loads(r.read().decode("utf-8"))
-        out["summary"] = ddg.get("AbstractText", "").strip()
-        _abstract_url = ddg.get("AbstractURL", "").strip()
-        if _abstract_url and not _is_junk(_abstract_url):
-            out["top_url"] = _abstract_url
-        for item in ddg.get("RelatedTopics", [])[:5]:
+        out["summary"] = (ddg.get("AbstractText") or "").strip()
+        abstract_url = (ddg.get("AbstractURL") or "").strip()
+        if abstract_url and not _is_blocked(abstract_url):
+            out["top_url"] = abstract_url
+        for item in ddg.get("RelatedTopics", [])[:8]:
             if isinstance(item, dict) and item.get("FirstURL"):
+                u = item["FirstURL"]
+                if _is_blocked(u):
+                    continue
                 out["results"].append({
-                    "title": item.get("Text", "")[:120],
-                    "url": item["FirstURL"],
-                    "snippet": item.get("Text", "")[:200],
+                    "title": (item.get("Text", "") or "")[:160],
+                    "url": u,
+                    "snippet": (item.get("Text", "") or "")[:300],
+                    "age": "",
                 })
-        # Fall back to first non-junk result URL if AbstractURL was empty/junk
         if not out["top_url"]:
             out["top_url"] = next(
-                (r["url"] for r in out["results"] if not _is_junk(r["url"])),
-                ""
+                (r["url"] for r in out["results"] if not _is_no_fetch(r["url"])),
+                next((r["url"] for r in out["results"]), "")
             )
     except Exception as e:
         print(f"⚠️ DDG search error: {e}")
 
-    if out["top_url"]:
-        try:
-            req2 = urllib.request.Request(
-                out["top_url"],
-                headers={"User-Agent": "Mozilla/5.0 (compatible; HWUI/1.0)"}
-            )
-            with urllib.request.urlopen(req2, timeout=8) as r:
-                raw = r.read().decode("utf-8", errors="ignore")
-            text = _re.sub(r"<[^>]+>", " ", raw)
-            text = _re.sub(r"\s+", " ", text).strip()
-            out["top_text"] = text[:2000]
-        except Exception as e:
-            print(f"⚠️ Page fetch error: {e}")
-
+    if out["top_url"] and not _is_no_fetch(out["top_url"]):
+        text = _fetch_page_text(out["top_url"], timeout=6, max_chars=2500)
+        if text:
+            out["top_text"] = text
+            out["pages"].append({"url": out["top_url"], "title": "", "text": text})
     return out
 
 
-
 def do_brave_search(query, api_key):
-    """Brave Search API — requires free API key from https://api.search.brave.com"""
-    import urllib.parse, urllib.request
+    """Brave Search API — uses extra_snippets, summary, freshness, multi-page fetch.
 
-    # Domains that produce useless or misleading page content — never fetch or cite
-    _JUNK_DOMAINS = {
-        'knowyourmeme.com', 'reddit.com', 'twitter.com', 'x.com',
-        'facebook.com', 'instagram.com', 'tiktok.com', 'youtube.com',
-        'quora.com', 'pinterest.com', 'tumblr.com', 'imgur.com',
-        'giphy.com', 'tenor.com', '9gag.com', 'ifunny.co',
-    }
-    def _is_junk(u):
-        try:
-            host = urllib.parse.urlparse(u).netloc.lower().lstrip('www.')
-            return any(host == d or host.endswith('.' + d) for d in _JUNK_DOMAINS)
-        except Exception:
-            return False
+    Improvements over the bare-bones version:
+      - count=10 and extra_snippets give 2-3× more material per result
+      - summary=1 asks Brave for an answer-style summary block when available
+      - freshness auto-detected from query keywords (today/latest/recent)
+      - infobox + news verticals merged into results when present
+      - top 3 fetchable pages parallel-fetched (was: single page)
+      - blocked domains filtered, no-fetch domains kept as citations only
+    """
+    import urllib.parse as _up, urllib.request as _ur, urllib.error as _ue
+    import gzip as _gz
+    from concurrent.futures import ThreadPoolExecutor
 
-    out = {"summary": "", "results": [], "top_url": "", "top_text": ""}
+    out = {"summary": "", "results": [], "top_url": "", "top_text": "", "pages": []}
     try:
-        encoded = urllib.parse.quote_plus(query)
-        url = f"https://api.search.brave.com/res/v1/web/search?q={encoded}&count=5"
-        req = urllib.request.Request(url, headers={
+        params = {
+            "q": query,
+            "count": "10",
+            "extra_snippets": "1",
+            "summary": "1",
+            "safesearch": "moderate",
+        }
+        fresh = _detect_freshness(query)
+        if fresh:
+            params["freshness"] = fresh
+            print(f"🔍 Brave freshness={fresh} (time-sensitive query)", flush=True)
+
+        api_url = "https://api.search.brave.com/res/v1/web/search?" + _up.urlencode(params)
+        req = _ur.Request(api_url, headers={
             "Accept": "application/json",
             "Accept-Encoding": "gzip",
-            "X-Subscription-Token": api_key
+            "X-Subscription-Token": api_key,
         })
-        with urllib.request.urlopen(req, timeout=8) as r:
-            import gzip as _gz
+        with _ur.urlopen(req, timeout=8) as r:
             raw = r.read()
             try:
                 raw = _gz.decompress(raw)
@@ -659,38 +870,98 @@ def do_brave_search(query, api_key):
                 pass
             data = json.loads(raw.decode("utf-8"))
 
-        results = data.get("web", {}).get("results", [])
-        for item in results[:5]:
+        # Brave summarizer (only on plans that support it; harmless otherwise).
+        summarizer = data.get("summarizer") or {}
+        if isinstance(summarizer, dict):
+            stext = summarizer.get("summary") or ""
+            if stext:
+                out["summary"] = stext[:600]
+
+        # Infobox (knowledge panel for entities/places/people).
+        infobox = data.get("infobox") or {}
+        if isinstance(infobox, dict) and not out["summary"]:
+            ib_results = infobox.get("results") or []
+            if isinstance(ib_results, list) and ib_results:
+                ib = ib_results[0]
+                desc = ib.get("long_desc") or ib.get("description") or ""
+                if desc:
+                    out["summary"] = desc[:600]
+
+        # Web results.
+        web_results = ((data.get("web") or {}).get("results") or [])
+        for item in web_results[:10]:
+            u = item.get("url", "") or ""
+            if not u or _is_blocked(u):
+                continue
+            base_snippet = (item.get("description") or "")
+            extras = item.get("extra_snippets") or []
+            if isinstance(extras, list) and extras:
+                snippet = (base_snippet + " … " + " · ".join(extras[:3]))[:700]
+            else:
+                snippet = base_snippet[:400]
             out["results"].append({
-                "title": item.get("title", "")[:120],
-                "url": item.get("url", ""),
-                "snippet": item.get("description", "")[:300],
+                "title": (item.get("title") or "")[:160],
+                "url": u,
+                "snippet": snippet,
+                "age": (item.get("age") or "")[:40],
             })
 
-        # Pick first non-junk result as top_url
-        top = next((r for r in out["results"] if r.get("url") and not _is_junk(r["url"])), None)
-        if top:
-            out["top_url"] = top["url"]
-            out["summary"] = top["snippet"]
+        # News vertical — particularly useful for time-sensitive queries.
+        news_results = ((data.get("news") or {}).get("results") or [])
+        existing_urls = {r["url"] for r in out["results"]}
+        for item in news_results[:3]:
+            u = item.get("url", "") or ""
+            if not u or _is_blocked(u) or u in existing_urls:
+                continue
+            out["results"].append({
+                "title": (item.get("title") or "")[:160],
+                "url": u,
+                "snippet": (item.get("description") or "")[:400],
+                "age": (item.get("age") or "")[:40],
+            })
 
-        # Fetch top page text
-        if out["top_url"]:
-            try:
-                import re as _re
-                req2 = urllib.request.Request(
-                    out["top_url"],
-                    headers={"User-Agent": "Mozilla/5.0 (compatible; HWUI/1.0)"}
-                )
-                with urllib.request.urlopen(req2, timeout=8) as r2:
-                    raw2 = r2.read().decode("utf-8", errors="ignore")
-                text = _re.sub(r"<[^>]+>", " ", raw2)
-                text = _re.sub(r"\s+", " ", text).strip()
-                out["top_text"] = text[:2000]
-            except Exception as e:
-                print(f"⚠️ Brave page fetch error: {e}")
+        # Pick fetch targets — prefer fetchable, fall back to no-fetch for top_url.
+        fetchable = [r for r in out["results"] if not _is_no_fetch(r["url"])]
+        if fetchable:
+            out["top_url"] = fetchable[0]["url"]
+            targets = fetchable[:3]
+        elif out["results"]:
+            out["top_url"] = out["results"][0]["url"]
+            targets = []
+        else:
+            targets = []
 
+        # Parallel-fetch top pages (small N — bounded blast radius).
+        if targets:
+            with ThreadPoolExecutor(max_workers=len(targets)) as ex:
+                futures = [(t, ex.submit(_fetch_page_text, t["url"], 6, 2500)) for t in targets]
+                for t, fut in futures:
+                    try:
+                        text = fut.result(timeout=8)
+                    except Exception:
+                        text = ""
+                    if text and len(text) > 80:
+                        out["pages"].append({
+                            "url": t["url"],
+                            "title": t.get("title", ""),
+                            "text": text,
+                        })
+        if out["pages"]:
+            out["top_text"] = out["pages"][0]["text"]
+
+        # Last-resort summary from top snippet so format_search_results has something.
+        if not out["summary"] and out["results"]:
+            out["summary"] = out["results"][0].get("snippet", "")[:400]
+
+    except _ue.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="ignore")[:200]
+        except Exception:
+            pass
+        print(f"⚠️ Brave HTTP {e.code}: {body}", flush=True)
     except Exception as e:
-        print(f"⚠️ Brave search error: {e}")
+        print(f"⚠️ Brave search error: {e}", flush=True)
 
     return out
 
@@ -721,35 +992,177 @@ def do_search(query):
 
 def format_search_results(query, res):
     """Format search results into a block for model injection.
-    Includes top page content plus snippets from all results — gives model
-    broad context to synthesise a thorough response like a frontier model would.
-    """
-    # Header is for internal reference only — not included in model output
-    # to prevent it leaking into the response text
-    lines = []
 
-    # Top page — full content (most useful, fetched via HTTP)
-    if res["top_url"]:
-        lines.append(f"\nTop result: {res['top_url']}")
-    if res["top_text"]:
-        lines.append(f"Page content:\n{res['top_text'][:1500]}")
-    elif res["summary"]:
+    Layout:
+      Summary (Brave summarizer / infobox / fallback snippet)
+      [1..3] Fetched pages with title, URL, cleaned content (~1500 chars each)
+      Other relevant results with snippets + age
+    """
+    lines = []
+    pages = res.get("pages") or []
+    seen_urls = {p.get("url") for p in pages if p.get("url")}
+
+    if res.get("summary"):
         lines.append(f"Summary: {res['summary']}")
 
-    # Additional results — titles + snippets for breadth
-    if res["results"]:
-        lines.append("\nOther relevant results:")
-        for r in res["results"][:5]:
-            lines.append(f"• {r['title']}")
-            if r.get("snippet"):
-                lines.append(f"  {r['snippet']}")
-            lines.append(f"  {r['url']}")
+    if pages:
+        lines.append("\nTop sources:")
+        for i, p in enumerate(pages, 1):
+            title = (p.get("title") or "").strip()
+            lines.append(f"\n[{i}] {title}" if title else f"\n[{i}]")
+            lines.append(f"URL: {p['url']}")
+            text = (p.get("text") or "")[:1500]
+            if text:
+                lines.append(f"Content:\n{text}")
+    elif res.get("top_url"):
+        lines.append(f"\nTop result: {res['top_url']}")
+        if res.get("top_text"):
+            lines.append(f"Page content:\n{res['top_text'][:1500]}")
 
-    if not res["summary"] and not res["results"] and not res["top_text"]:
+    other = [r for r in (res.get("results") or []) if r.get("url") not in seen_urls]
+    if other:
+        lines.append("\nOther relevant results:")
+        for r in other[:8]:
+            lines.append(f"• {r.get('title','')}")
+            snip = r.get("snippet") or ""
+            if snip:
+                lines.append(f"  {snip}")
+            age = r.get("age") or ""
+            if age:
+                lines.append(f"  (Published: {age})")
+            if r.get("url"):
+                lines.append(f"  {r['url']}")
+
+    if not pages and not res.get("summary") and not other and not res.get("top_text"):
         lines.append("No results found.")
 
     lines.append("[END WEB SEARCH RESULTS]")
     return "\n".join(lines)
+
+
+# --------------------------------------------------
+# Chat history search — trigger detection patterns
+# --------------------------------------------------
+# Both the early-memory-skip check (in chat() prep) and the primary trigger
+# (in the chat route proper) must agree on whether a message is a cross-session
+# recall request — otherwise we end up skipping memory injection but then NOT
+# firing the search, leaving the model with neither memory nor results.
+#
+# Structural rule: fire only when a RECALL VERB and a CROSS-SESSION MARKER
+# co-occur within ~80 chars (in either order). A recall verb alone ("remember
+# the capital of France") or a cross-session marker alone ("in another chat
+# you might find") is not enough — both have to be present, because that's
+# what distinguishes "the user is asking about a previous session" from
+# in-thread back-references and general-knowledge recall.
+
+_CHAT_RECALL_VERBS = (
+    r'(?:remember(?:ed|s|ing)?|recall(?:ed|s|ing)?|'
+    r'told\s+you|told\s+me|tell\s+you|'
+    r'mention(?:ed|s|ing)?|'
+    r'said|saying|spoke|spoken|speak|'
+    r'talk(?:ed|s|ing)?|chat(?:ted|s|ting)?|'
+    r'discuss(?:ed|es|ing)?)'
+)
+
+_CHAT_CROSS_SESSION_MARKERS = (
+    r'(?:'
+    # Explicit "another/previous/last chat/conversation/session"
+    r'in\s+(?:a|an|the|another|a\s+different|that\s+other|some\s+other|our\s+last|'
+    r'our\s+previous|our\s+earlier|the\s+last|the\s+previous)\s+'
+    r'(?:chat|conversation|session|talk|discussion)|'
+    r'(?:a|the|our|another|some)\s+(?:previous|earlier|past|last|other|different|prior)\s+'
+    r'(?:chat|conversation|session|talk|discussion)|'
+    r'from\s+(?:a|an|the|another|our\s+last|our\s+previous|some\s+other)\s+'
+    r'(?:previous|earlier|past|last|other|different|chat|conversation|session)|'
+    # Time-distance markers paired with subjects/verbs
+    r'last\s+time(?:\s+(?:we|i|you))?|'
+    r'(?:the\s+)?other\s+(?:day|time|night|week)|'
+    r'(?:a\s+|last\s+)?(?:few\s+|couple\s+(?:of\s+)?)?(?:days?|weeks?|months?|years?)\s+ago|'
+    r'a\s+(?:while|bit)\s+(?:ago|back)|'
+    r'(?:way\s+)?back\s+(?:when|then)|'
+    r'earlier\s+(?:today|this\s+(?:week|month|year))|'
+    r'previously,?\s+we|'
+    r'before,?\s+(?:we|i|you)|'
+    r'ages\s+ago'
+    r')'
+)
+
+# Compile once, reuse in both call sites.
+_CHAT_SEARCH_TRIGGER_RE = re.compile(
+    rf'\b{_CHAT_RECALL_VERBS}\b.{{0,80}}\b{_CHAT_CROSS_SESSION_MARKERS}\b'
+    r'|'
+    rf'\b{_CHAT_CROSS_SESSION_MARKERS}\b.{{0,80}}\b{_CHAT_RECALL_VERBS}\b',
+    re.IGNORECASE | re.DOTALL
+)
+
+
+# --------------------------------------------------
+# Character memory — parsing + matching helpers
+# --------------------------------------------------
+# Memory file format (per character, in memories/<name>_memory.txt):
+#   # Memory: Title
+#   Keywords: kw1, kw2, kw3
+#
+#   Body text on multiple lines.
+#
+# Old inline parser had several issues that this helper addresses:
+#   - Block titles leaked into the injected body (split on '# Memory:' kept
+#     the title on the next line of the block, plus the literal "Keywords:"
+#     line, both of which the model sees as part of the memory)
+#   - Trailing punctuation on the keywords line poisoned the last keyword
+#     (e.g. "Keywords: kevin, neighbour below." → final keyword is the
+#     literal "neighbour below." with the period — never matches anything)
+#   - Substring keyword matching produced false positives (keyword "art"
+#     matching "starting"/"smart"/"particle"; keyword "garden" double-counting
+#     when "gardening" is also a keyword in the same block)
+
+def _parse_memory_blocks(text):
+    """Parse memory file text into structured blocks.
+
+    Returns list of {title, body, keywords} dicts. The title is pulled from
+    the '# Memory:' header line itself; the body has the title and keywords
+    line stripped, so what gets injected into the prompt is just the prose.
+    """
+    if not text or not text.strip():
+        return []
+    # Capture the title in a group so re.split returns titles between bodies.
+    parts = re.split(r"(?m)^#\s*Memory:\s*([^\n]*)\n", text)
+    # parts = [pre_first_block, title1, body1, title2, body2, ...]
+    blocks = []
+    for i in range(1, len(parts) - 1, 2):
+        title = (parts[i] or "").strip() or "Untitled"
+        body_raw = parts[i + 1]
+        keywords = []
+        body_lines = []
+        for line in body_raw.splitlines():
+            if line.strip().lower().startswith("keywords:"):
+                kwstr = line.split(":", 1)[1]
+                # Allow `,` `;` and `:` as separators (parallel to the now-deleted
+                # alternate loader) — strips per-keyword trailing punctuation
+                # so "Keywords: foo, bar." doesn't end with a literal "bar."
+                for kw in re.split(r"[,;:]+", kwstr):
+                    kw = kw.strip().lower()
+                    kw = re.sub(r"[\.\!\?,;:]+$", "", kw).strip()
+                    if kw:
+                        keywords.append(kw)
+            else:
+                body_lines.append(line)
+        body = "\n".join(body_lines).strip()
+        blocks.append({"title": title, "body": body, "keywords": keywords})
+    return blocks
+
+
+def _kw_match(kw, text_lower):
+    """Word-boundary, case-insensitive keyword match.
+
+    text_lower must already be .lower()'d by the caller (avoids re-lowering
+    the user message once per keyword). Uses re.escape so keywords containing
+    regex metacharacters (rare but possible — e.g. punctuation, hyphens)
+    don't break the match.
+    """
+    if not kw:
+        return False
+    return re.search(r"\b" + re.escape(kw) + r"\b", text_lower) is not None
 
 
 def do_chat_search(query, current_filename=None):
@@ -1350,7 +1763,6 @@ def chat():
             user_input_lower = user_input.lower()
             sticky_docs = project_config.get("sticky_docs", False) if os.path.exists(config_path) else False
             sticky_doc_file = project_config.get("sticky_doc_file") if os.path.exists(config_path) else None
-            document_triggers = ['document', 'file', 'pdf', 'according to', 'doc', 'scan the', 'scan my', 'look up', 'timeline', 'journal', 'diary', 'show me', 'search', 'reference the', 'look in', 'check the']
 
             # Helper: load a specific file directly by name (no keyword matching)
             def load_pinned_doc_direct(proj_name, fname):
@@ -1359,44 +1771,39 @@ def chat():
                 if not os.path.exists(fpath):
                     print(f"⚠️ Pinned doc not found on disk: {fpath}")
                     return ""
-                try:
-                    with open(fpath, 'r', encoding='utf-8') as pf:
-                        content = pf.read()
-                    MAX_CHARS_PER_DOC = 8000
-                    if len(content) > MAX_CHARS_PER_DOC:
-                        content = content[:MAX_CHARS_PER_DOC]
-                    return (
-                        "\n\n"
-                        "═══════════════════════════════════════════════════════════\n"
-                        "PROJECT DOCUMENTS\n"
-                        "═══════════════════════════════════════════════════════════\n\n"
-                        f"### Document: {fname}\n\n{content}\n\n"
-                        "═══════════════════════════════════════════════════════════\n"
-                        "END PROJECT DOCUMENTS\n"
-                        "═══════════════════════════════════════════════════════════\n\n"
-                    )
-                except Exception as e:
-                    print(f"❌ Failed to read pinned doc {fname}: {e}")
+                content = _read_doc_content(fpath, max_chars=8000)
+                if not content:
+                    print(f"❌ Failed to read pinned doc {fname}")
                     return ""
+                prefix, suffix, content = _extract_perspective(content)
+                return (
+                    "\n\n"
+                    "═══════════════════════════════════════════════════════════\n"
+                    "PROJECT DOCUMENTS\n"
+                    "═══════════════════════════════════════════════════════════\n\n"
+                    f"### Document: {fname}\n\n{prefix}{content}{suffix}\n\n"
+                    "═══════════════════════════════════════════════════════════\n"
+                    "END PROJECT DOCUMENTS\n"
+                    "═══════════════════════════════════════════════════════════\n\n"
+                )
 
-            # Helper: check if user is requesting a DIFFERENT doc by keyword
+            # Helper: check if user is requesting a DIFFERENT doc than the pinned one
             def user_requesting_different_doc(user_q, current_pinned):
-                """Returns True if user seems to be asking for a doc that isn't the pinned one."""
-                stopwords = {'the', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'of', 'and', 'or',
-                             'document', 'file', 'pdf', 'scan', 'check', 'look', 'show', 'search', 'read', 'open'}
-                words = user_q.lower().replace('_', ' ').split()
-                keywords = [w for w in words if w not in stopwords and len(w) > 2]
+                """True when the message has doc intent AND no keyword matches the pinned filename."""
+                keywords = _doc_query_keywords(user_q)
                 if not keywords or not current_pinned:
                     return False
                 pinned_lower = current_pinned.lower().replace('_', ' ').replace('.', ' ')
-                # If any keyword matches the pinned doc, user is asking for the same one
+                # If any keyword matches the pinned doc name, user is asking for the same one
                 for kw in keywords:
-                    if kw in pinned_lower:
+                    if re.search(r'\b' + re.escape(kw) + r'\b', pinned_lower):
                         return False
-                # No keyword matches the pinned doc name - they may want something else
-                # Only return True if a trigger word is also present (to avoid false positives)
-                has_trigger = any(t in user_q.lower() for t in document_triggers)
-                return has_trigger
+                # No keyword hits the pinned filename — check for document intent before switching
+                has_intent = (
+                    any(t in user_q.lower() for t in _DOC_STRONG_TRIGGERS) or
+                    bool(_DOC_NOUN_RE.search(user_q))
+                )
+                return has_intent
 
             if sticky_docs and sticky_doc_file:
                 # Check if user is asking for a DIFFERENT doc than the pinned one
@@ -1456,8 +1863,8 @@ def chat():
                                 json.dump(cfg, f, indent=2)
                         except Exception as e:
                             print(f"⚠️ Could not save auto-pin: {e}")
-                elif any(trigger in user_input_lower for trigger in document_triggers):
-                    # Multiple docs - use keyword trigger to find and pin one
+                elif (any(t in user_input_lower for t in _DOC_STRONG_TRIGGERS) or bool(_DOC_NOUN_RE.search(user_input))):
+                    # Multiple docs - use intent trigger to find and pin one
                     project_documents = load_project_documents(active_project, user_input)
                     if project_documents:
                         print(f"📌 Sticky mode - first trigger, loading and pinning doc")
@@ -1475,16 +1882,16 @@ def chat():
                             except Exception as e:
                                 print(f"⚠️ Could not save pinned doc: {e}")
                 else:
-                    print(f"📌 Sticky ON, multiple docs, waiting for trigger word")
+                    print(f"📌 Sticky ON, multiple docs, waiting for doc intent")
 
-            elif any(trigger in user_input_lower for trigger in document_triggers):
-                # Normal keyword trigger (sticky OFF)
+            elif (any(t in user_input_lower for t in _DOC_STRONG_TRIGGERS) or bool(_DOC_NOUN_RE.search(user_input))):
+                # Non-sticky path: doc intent detected, keyword-match to find the right file
                 project_documents = load_project_documents(active_project, user_input)
                 if project_documents:
                     print(f"📄 User requested documents - loading {len(project_documents)} chars")
                     print(f"📄 DOCUMENT CONTENT PREVIEW:\n{project_documents[:1000]}")
             else:
-                print(f"⭕ Skipped document loading - no trigger detected")
+                print(f"⭕ Skipped document loading - no doc intent detected")
             
     except Exception as e:
         print(f"⚠️ Failed to load project data: {e}")
@@ -1551,17 +1958,13 @@ def chat():
 
         # 🧠 INJECT SESSION SUMMARY — only on fresh chats
         # A chat is "new" if there are no real assistant replies yet.
-        # We treat it as new if: no assistant messages at all, OR exactly one assistant
-        # message that is either flagged as opening line OR is very short (≤30 words —
-        # opening lines are brief greetings, not real replies).
+        # Keyed purely on the is_opening_line flag — NOT on word count.
+        # The old ≤30-word branch caused curt replies ("Yeah, fair." / "Mm.")
+        # to silently reset the chat into new-chat state and re-inject the full
+        # session summary on every subsequent turn. ⚠️ DO NOT re-add word-count check.
         assistant_msgs = [m for m in active_chat if m.get("role") == "assistant"]
         def _is_opening_line_msg(m):
-            if m.get("is_opening_line"):
-                return True
-            content = m.get("content", "")
-            if isinstance(content, list):
-                content = " ".join(p.get("text","") for p in content if p.get("type")=="text")
-            return len(content.split()) <= 30
+            return bool(m.get("is_opening_line"))
 
         _is_new_chat = (
             len(assistant_msgs) == 0 or
@@ -1656,16 +2059,6 @@ def chat():
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
 
-    def extract_keywords_from_block(block):
-        """Extract keywords from a memory block's Keywords line."""
-        lines = block.split('\n')
-        for line in lines:
-            if line.strip().lower().startswith('keywords:'):
-                keywords_str = line.split(':', 1)[1].strip()
-                keywords = [kw.strip().lower() for kw in keywords_str.split(',')]
-                return keywords
-        return []
-
     memory_text = ""
     use_personal = char_data.get("use_personal_memory", True)  # default on for backward compat
     use_global = char_data.get("use_global_memory", False)
@@ -1682,80 +2075,93 @@ def chat():
             memory_text += global_text
 
     print(f"🧠 Memory flags — personal: {use_personal}, global: {use_global}, total chars: {len(memory_text)}")
-    
+
     chosen_blocks = []
 
     # Skip memory injection if this is a cross-chat recall request —
-    # chat search will inject raw snippets instead, memory would just confuse the model
-    import re as _cs_early_re
-    _cs_early_check = _cs_early_re.search(
-        r'\b(?:do you remember|remember (?:when|that|what)|'
-        r'we (?:talked|spoke|discussed|chatted) (?:about|regarding)|'
-        r'in (?:a|an|the|another|a different|that other) (?:chat|conversation|session)|'
-        r'(?:other|different|another|previous|earlier|last) (?:chat|conversation|session)|'
-        r'I told (?:you|her|him|them)|'
-        r'we (?:already|previously) (?:talked|spoke|discussed))\b',
-        user_input, _cs_early_re.IGNORECASE
-    )
-    _skip_memory_for_chat_search = bool(_cs_early_check)
+    # chat search will inject raw snippets instead, memory would just confuse the model.
+    # Uses the shared _CHAT_SEARCH_TRIGGER_RE (defined near do_chat_search) so this
+    # decision stays in lockstep with the primary trigger downstream — otherwise
+    # we end up skipping memory but not firing the search, leaving the model with
+    # neither.
+    _skip_memory_for_chat_search = bool(_CHAT_SEARCH_TRIGGER_RE.search(user_input))
     if _skip_memory_for_chat_search:
         print("🗂️ Chat search intent detected early — skipping memory injection", flush=True)
 
     if memory_text and not _skip_memory_for_chat_search:
-        blocks = re.split(r"(?m)^# Memory:", memory_text)
-        user_input_lower = user_input.lower()
-        
-        # Score ALL memory blocks
-        scored_blocks = []
-        
-        for b in blocks:
-            if not b.strip():
-                continue
-                
-            keywords = extract_keywords_from_block(b)
-            
-            # Calculate match score
-            # Give MORE weight to specific/rare keywords, LESS to common ones
-            common_keywords = {'claire', 'chris', 'neville', '4d', '3d'}
-            
-            score = 0
-            matched_keywords = []
-            
-            for kw in keywords:
-                if kw in user_input_lower:
-                    # Rare keyword = 3 points, common keyword = 1 point
-                    if kw in common_keywords:
-                        score += 1
-                    else:
-                        score += 3
-                    matched_keywords.append(kw)
-            
-            if score > 0:
-                scored_blocks.append({
-                    'score': score,
-                    'block': b.strip(),
-                    'matched_keywords': matched_keywords
-                })
-        
-        # Sort by score (highest first)
-        scored_blocks.sort(key=lambda x: x['score'], reverse=True)
-        
-        # In RP mode, cap to 1 memory block to preserve context space for conversation turns
-        # (formatting instructions live in conversation, not system block — RP needs that room)
-        MAX_MEMORIES = 1 if project_rp_mode else 2
-        
-        if scored_blocks:
-            chosen_blocks = [item['block'] for item in scored_blocks[:MAX_MEMORIES]]
-            
-            print(f"🧠 Memory retrieval:")
-            for i, item in enumerate(scored_blocks[:MAX_MEMORIES]):
-                print(f"   #{i+1}: Score {item['score']} - Matched: {', '.join(item['matched_keywords'])}")
-        else:
-            print("🧠 No keyword matches found, no memory injected")
+        memory_blocks = _parse_memory_blocks(memory_text)
 
-    # Format multiple memories
+        # Compute keyword frequency across blocks within this character's memory.
+        # A keyword that appears in 2+ blocks can't differentiate between memories
+        # so it gets downweighted. Replaces the old hardcoded
+        # {claire, chris, neville, 4d, 3d} list, which only made sense for one
+        # specific user's data and silently did nothing for everyone else.
+        kw_block_count = {}
+        for blk in memory_blocks:
+            for kw in set(blk["keywords"]):  # dedupe within-block
+                kw_block_count[kw] = kw_block_count.get(kw, 0) + 1
+
+        user_input_lower = user_input.lower()
+        scored_items = []
+        for blk in memory_blocks:
+            score = 0
+            matched = []
+            seen = set()
+            for kw in blk["keywords"]:
+                if kw in seen:  # don't double-count overlapping kw entries
+                    continue
+                seen.add(kw)
+                if _kw_match(kw, user_input_lower):
+                    # 1 point if keyword appears in 2+ blocks (low signal,
+                    # can't differentiate); 3 points if unique to this block.
+                    score += 1 if kw_block_count.get(kw, 1) >= 2 else 3
+                    matched.append(kw)
+            if score > 0:
+                scored_items.append({
+                    "score": score,
+                    "matches": len(matched),
+                    "block": blk,
+                    "matched_keywords": matched,
+                })
+
+        # Sort: score desc, then match-count desc (more distinct keywords beats
+        # one super-rare hit), then title for stable ordering on full ties.
+        scored_items.sort(
+            key=lambda x: (-x["score"], -x["matches"], x["block"]["title"].lower())
+        )
+
+        # In RP mode, cap to 1 memory block to preserve context space for
+        # conversation turns (formatting instructions live in conversation,
+        # not system block — RP needs that room).
+        MAX_MEMORIES = 1 if project_rp_mode else 2
+
+        if scored_items:
+            top = scored_items[:MAX_MEMORIES]
+            chosen_blocks = [
+                f"### {item['block']['title']}\n{item['block']['body']}"
+                for item in top
+            ]
+            print(
+                f"🧠 Memory retrieval — {len(memory_blocks)} blocks loaded, "
+                f"{len(scored_items)} matched, top {len(top)} chosen:"
+            )
+            for i, item in enumerate(top):
+                print(
+                    f"   #{i+1}: '{item['block']['title']}' "
+                    f"score={item['score']} matched={', '.join(item['matched_keywords'])}"
+                )
+        else:
+            print(
+                f"🧠 No keyword matches across {len(memory_blocks)} blocks — "
+                f"no memory injected"
+            )
+
     if chosen_blocks:
-        memory = "Relevant memories:\n\n" + "\n\n---\n\n".join(chosen_blocks) + "\n"
+        memory = (
+            "Relevant memories:\n\n"
+            + "\n\n---\n\n".join(chosen_blocks)
+            + "\n"
+        )
     else:
         memory = ""
 
@@ -1813,27 +2219,43 @@ def chat():
     # Trim if needed (secondary safety net)
     # ⚠️ Example dialogue (~2000 tokens) gets appended to system message AFTER this trim.
     # Pass its estimated size as overhead so the trimmer accounts for it upfront.
-    from truncation import trim_chat_history, rough_token_count
     _ex_overhead = 0
     _char_ex_pre = char_data.get("example_dialogue", "").strip()
-    if not _char_ex_pre:
+    if not _char_ex_pre and not _is_jinja_model:
+        # Fallback chain mirrors actual resolution below — jinja models skip both fallbacks
+        # Priority 2: global_example_dialog from settings.json
         try:
-            import json as _j
             with open("settings.json", "r", encoding="utf-8") as _sf:
-                _char_ex_pre = _j.load(_sf).get("global_example_dialog", "").strip()
+                _char_ex_pre = json.load(_sf).get("global_example_dialog", "").strip()
         except Exception:
             pass
+        if not _char_ex_pre:
+            # Priority 3: .example.txt file — must match the path resolution used below
+            try:
+                _active_sp_pre = char_data.get("system_prompt") or get_active_prompt_filename()
+                _base_pre = _active_sp_pre.rsplit('.', 1)[0] if '.' in _active_sp_pre else _active_sp_pre
+                _ex_path_pre = os.path.join(get_system_prompts_dir(), _base_pre + '.example.txt')
+                if os.path.exists(_ex_path_pre):
+                    with open(_ex_path_pre, 'r', encoding='utf-8') as _ef_pre:
+                        _char_ex_pre = _ef_pre.read().strip()
+                    if _char_ex_pre:
+                        print(f"📐 Pre-calc: found {_base_pre}.example.txt for overhead measurement")
+            except Exception:
+                pass
     if _char_ex_pre:
-        _ex_overhead = rough_token_count(_char_ex_pre)
-        print(f"📐 Example dialogue overhead: ~{_ex_overhead} tokens (pre-accounted in trim)")
+        # Include the ex_block wrapper text (═══ headers, style rules, reminder lines)
+        # which adds ~400 rough tokens on top of the raw dialogue. Without this, the
+        # trim budget under-estimates system overhead and allows too large a context.
+        _EX_WRAPPER_OVERHEAD = 400
+        _ex_overhead = rough_token_count(_char_ex_pre) + _EX_WRAPPER_OVERHEAD
+        print(f"📐 Example dialogue overhead: ~{_ex_overhead} tokens (dialogue + {_EX_WRAPPER_OVERHEAD} wrapper, pre-accounted in trim)")
     messages = trim_chat_history(messages, extra_system_overhead=_ex_overhead)
     
     print(f"🔍 DEBUG: After trimming, {len(messages)} messages remain")
     
     # (project instructions are already in the system message above - no need to repeat)
-    
- 
-# ✅ FIX: Re-attach example_dialogue INSIDE system block with clear fencing
+
+    # ✅ Re-attach example_dialogue INSIDE system block with clear fencing
     ex_block = ""
     has_paragraph_style = False  # used by example dialogue style rules block below
 
@@ -2399,12 +2821,32 @@ def chat():
                 return f"⚠️ Error contacting model: {e}", 500
 
         # ── Raw prompt path (ChatML / Helcyon / Mistral) ──
+
+        # ── Dynamic n_predict: cap to actual KV space remaining after prompt ──
+        # rough_token_count undercounts real BPE tokens by ~20-25%.  Multiplying by
+        # 1.25 gives a realistic estimate of real tokens in the prompt string.
+        # Without this cap, n_predict can exceed available KV slots → model stops
+        # mid-BPE-token (mid-word) → "truncated" stays 0 because the PROMPT fit.
+        try:
+            with open("settings.json", "r", encoding="utf-8") as _snf:
+                _ctx_size_live = int(json.load(_snf).get("llama_args", {}).get("ctx_size", 16384))
+        except Exception:
+            _ctx_size_live = 16384
+        _prompt_real_est = int(rough_token_count(prompt) * 1.25)
+        _available_for_gen = max(256, _ctx_size_live - _prompt_real_est)
+        _n_predict = min(sampling["max_tokens"], _available_for_gen)
+        if _n_predict < sampling["max_tokens"]:
+            print(f"⚠️ n_predict capped: ~{_prompt_real_est} est. real tokens / {_ctx_size_live} ctx "
+                  f"→ n_predict={_n_predict} (max_tokens={sampling['max_tokens']})", flush=True)
+        else:
+            print(f"✅ n_predict={_n_predict} (prompt ~{_prompt_real_est} real / {_ctx_size_live} ctx)", flush=True)
+
         payload = {
             "model": CURRENT_MODEL,
             "prompt": prompt,
             "temperature": sampling["temperature"],
             "max_tokens": sampling["max_tokens"],
-            "n_predict": sampling["max_tokens"],  # llama.cpp /completion uses n_predict, not max_tokens
+            "n_predict": _n_predict,  # dynamically capped to available KV space
             "top_p": sampling["top_p"],
             "min_p": sampling.get("min_p", 0.05),
             "top_k": sampling.get("top_k", 40),
@@ -2430,25 +2872,15 @@ def chat():
         import re as _csre
         _cs_user_msg = user_input.strip()
 
-        # Chat history search — only fires on EXPLICIT past-session recall requests.
-        # Phrases must clearly reference a previous chat/conversation, not just use
-        # "remember" or "we talked" in ordinary conversational context.
-        _should_chat_search = bool(_csre.search(
-            r'\b(?:'
-            r'do you remember|'
-            r'do(?:es)? (?:she|he|it) remember|'
-            r'remember (?:when we|what we|the time we|the time I|what I said|what I told you)|'
-            r'we (?:talked|spoke|discussed|chatted) (?:about|regarding)\b.{0,40}\b(?:before|last time|earlier|previously|in another|in a previous)|'
-            r'(?:I|we) (?:mentioned|told you|said|talked) (?:about|that) (?:in another|in a different|in a previous|last time)|'
-            r'in (?:a|an|the|another|a different|that other) (?:chat|conversation|session)\b|'
-            r'(?:another|previous|earlier|last|different|other) (?:chat|conversation|session)\b|'
-            r'(?:from|in) (?:a|an|another) (?:previous|earlier|other|different) (?:chat|conversation)\b|'
-            r'you (?:should|might|may|would) (?:remember|recall|know) (?:from|that we|what I|when I)|'
-            r'I told you (?:about|that|in|last)\b|'
-            r'we (?:already|previously) (?:talked|spoke|discussed) (?:about|regarding)'
-            r')\b',
-            _cs_user_msg, _csre.IGNORECASE
-        ))
+        # Chat history search — only fires on EXPLICIT cross-session recall requests.
+        # Uses the shared _CHAT_SEARCH_TRIGGER_RE so the primary trigger stays in
+        # lockstep with the early-memory-skip check above. Structural rule: a
+        # recall verb (remember / told you / discussed / mentioned / said /
+        # talked / spoke / chatted) AND a cross-session marker (in another chat,
+        # last time we, the other day, a few days ago, …) must co-occur within
+        # ~80 chars. Either alone is not enough — that's what kept firing on
+        # in-thread back-references and general-knowledge recall before.
+        _should_chat_search = bool(_CHAT_SEARCH_TRIGGER_RE.search(_cs_user_msg))
 
         if _should_chat_search:
             print(f"🗂️ Chat search intent detected: {repr(_cs_user_msg[:80])}", flush=True)
@@ -2501,6 +2933,25 @@ def chat():
 
                 # Rebuild messages array with augmented user turn
                 _cs_msgs = [dict(m) for m in messages]
+
+                # Strip stale WEB SEARCH RESULTS and CHAT HISTORY RESULTS from all
+                # prior user turns — same pattern as the web-search rebuild path.
+                # Without this, accumulated search blocks re-feed the model every turn.
+                _cs_last_user_idx = None
+                for i in range(len(_cs_msgs) - 1, -1, -1):
+                    if _cs_msgs[i].get("role") == "user":
+                        _cs_last_user_idx = i
+                        break
+                for i, _csm in enumerate(_cs_msgs):
+                    if _csm.get("role") == "user" and i != _cs_last_user_idx:
+                        _csc = _csm.get("content", "")
+                        if isinstance(_csc, str):
+                            if "WEB SEARCH RESULTS" in _csc:
+                                _csc = _re.split(r'\[WEB SEARCH RESULTS', _csc)[0].strip()
+                            if "CHAT HISTORY RESULTS" in _csc:
+                                _csc = _re.split(r'\[CHAT HISTORY RESULTS', _csc)[0].strip()
+                            _cs_msgs[i] = {"role": "user", "content": _csc}
+
                 for i in range(len(_cs_msgs) - 1, -1, -1):
                     if _cs_msgs[i].get("role") == "user":
                         _cs_msgs[i] = {"role": "user", "content": _augmented_msg}
@@ -2594,16 +3045,84 @@ def chat():
                 ).strip()
                 print(f"🔍 Search trigger check on: {repr(_user_msg[:100])}", flush=True)
 
-                # Opt-in search: ONLY fire on clear, unambiguous search requests.
-                # Keep this list TIGHT — single common words cause false positives.
-                _should_search = bool(_re.search(
-                    r'\b(?:do a search|search for|search up|search that up|'
-                    r'look it up|look that up|look up|find out(?:\s+(?:about|what|who|when|where|why|how|if))?|'
-                    r'google that|look online|check online|'
-                    r'any (?:news|updates|info) (?:on|about)|'
-                    r'(?:get me |give me )?up to date (?:info|news|updates) (?:on|about))',
-                    _user_msg, _re.IGNORECASE
-                ))
+                # Opt-in search: only fire on unambiguous imperative requests.
+                # The pattern is intentionally tight — bare "find out" / "look up"
+                # without a clear object are the main false-positive sources, so
+                # those branches require structure after the verb.
+                _trigger_pat = (
+                    r'\b(?:'
+                    r'do (?:a |another )?search(?:\s+(?:for|on|about|up))?|'
+                    r'search\s+(?:for|up|online|the (?:web|net|internet))|'
+                    r'look\s+(?:it|that|this|them|these|those)\s+up|'
+                    r'look\s+up\s+\w+|'
+                    r'find out\s+(?:about|what|who|when|where|why|how|if|whether)\s+\w|'
+                    r'google\s+(?:that|it|the\b|\w)|'
+                    r'check\s+online|look\s+online|search\s+online|'
+                    r'any (?:news|updates|info|word) (?:on|about)\b|'
+                    r'(?:get|give)\s+me\s+(?:the\s+)?(?:latest|current|up[ -]to[ -]date|fresh)\s+'
+                    r'(?:info|news|status|updates?)?\s*(?:on|about)\b'
+                    r')'
+                )
+                _trigger_matches = list(_re.finditer(_trigger_pat, _user_msg, _re.IGNORECASE))
+
+                # Clause-scoped self-reference filter. For each trigger match,
+                # walk back to the nearest clause boundary (`,`/`.`/`?`/`!`/`;`
+                # or words like `but`/`please`/`then`/`anyway`/`so`/`however`/
+                # `actually`) and check ONLY the clause that contains the
+                # trigger for an I-verb opener. This way, narration earlier in
+                # the message ("the web search wasn't working when I tried
+                # earlier,") doesn't suppress an explicit later request
+                # ("search up and find out X") — they live in different clauses.
+                #
+                # Within a clause, an I-verb opener (`I want / I'd / let me /
+                # I'll / trying to / …`) means narration UNLESS `you` appears
+                # between it and the trigger — that's delegation ("I want YOU
+                # to search …"), and should fire.
+                _opener_re = _re.compile(
+                    r"\b(?:"
+                    r"I(?:'m| am)?\s+(?:trying|going|gonna|hoping|planning|thinking|"
+                    r"about|having|needing|wanting|hoping|meaning)(?:\s+to)?|"
+                    r"I'?(?:ll| will| would| should| might| could| may|'d)\b|"
+                    r"I (?:want|need|hope|wish|tried|hate|love|like|already|just|usually|"
+                    r"often|sometimes|might|may|should|would|could)\b|"
+                    r"let me\b|help me\b|let's\b|"
+                    r"(?:can|should|may|could) I\b|"
+                    r"trying to\b|hoping to\b|going to\b|wanted to\b|planning to\b"
+                    r")",
+                    _re.IGNORECASE
+                )
+                _boundary_re = _re.compile(
+                    r'[,.;!?]|\b(?:but|please|then|anyway|actually|however|so)\b',
+                    _re.IGNORECASE
+                )
+
+                def _is_self_ref_at(msg, pos):
+                    pre = msg[max(0, pos - 100):pos]
+                    bms = list(_boundary_re.finditer(pre))
+                    clause = pre[bms[-1].end():] if bms else pre
+                    oms = list(_opener_re.finditer(clause))
+                    if not oms:
+                        return False
+                    after = clause[oms[-1].end():]
+                    if _re.search(r'\byou\b', after, _re.IGNORECASE):
+                        return False  # delegation, not narration
+                    return True
+
+                _should_search = False
+                _firing_trigger = None
+                for _m in _trigger_matches:
+                    if not _is_self_ref_at(_user_msg, _m.start()):
+                        _should_search = True
+                        _firing_trigger = _m.group(0)
+                        break
+                if _trigger_matches and not _should_search:
+                    print(
+                        f"💬 Self-referential context around all {len(_trigger_matches)} "
+                        f"trigger phrase(s) ({repr(_user_msg[:80])}) — suppressing search",
+                        flush=True,
+                    )
+                elif _should_search:
+                    print(f"🔍 Search trigger fired on phrase: {repr(_firing_trigger)}", flush=True)
 
                 if not _should_search:
                     print(f"\U0001f4ac No search trigger — responding from context", flush=True)
@@ -2616,12 +3135,19 @@ def chat():
                 _q = _re.sub(r'(?i)^(?:(?:hey|hi|okay|ok|yes|yeah|sure|babe|no|oh)[\.,!\s]*)+', '', _q).strip()
                 _q = _re.sub(r'(?i)^(?:grok|helcyon|claude|gemma|samantha|nebula)[,\.]?\s*', '', _q).strip()
                 _q = _re.sub(
-                    r'\b(?:can you |could you |please )?'
-                    r'(?:do a search(?:\s+and\s+(?:find out|tell me|show me))?|'
-                    r'search(?:\s+up)?(?:\s+for)?(?:\s+and\s+(?:find out|tell me|show me))?|'
-                    r'look(?:\s+it)?\s+up(?:\s+and\s+(?:tell me|show me))?|'
-                    r'find out(?:\s+about)?|tell me about)\s*'
-                    r'(?:info about\s*|info on\s*|info\s*|about\s*|on\s*|for\s*)?',
+                    r'\b(?:can you |could you |would you |please )?'
+                    r'(?:do (?:a |another )?search(?:\s+(?:for|on|about|up))?'
+                    r'(?:\s+and\s+(?:find out|tell me|show me))?|'
+                    r'search\s+(?:for|up|online|the (?:web|net|internet))'
+                    r'(?:\s+for)?(?:\s+and\s+(?:find out|tell me|show me))?|'
+                    r'look\s+(?:it|that|this|them|these|those)\s+up'
+                    r'(?:\s+and\s+(?:tell me|show me))?|'
+                    r'look\s+up|'
+                    r'find out\s+(?:about|what|who|when|where|why|how|if|whether)?|'
+                    r'tell me about|'
+                    r'google\s+(?:that|it|the)?|'
+                    r'check\s+online|look\s+online|search\s+online)\s*'
+                    r'(?:info about\s*|info on\s*|info\s*|about\s*|on\s*|for\s*|the\s*)?',
                     ' ', _q, flags=_re.IGNORECASE
                 ).strip()
                 _q = _re.sub(r'[,\s]*(?:please|for me|right now|would you|can you)[?.]?\s*$', '', _q, flags=_re.IGNORECASE).strip()
@@ -2632,9 +3158,13 @@ def chat():
                 # that's always the actual topic. No model needed for this.
                 if len(_q) > 80:
                     _trigger_re = (
-                        r'\b(?:do a search|search for|search up|search that up|'
-                        r'look it up|look that up|look up|find out(?:\s+(?:about|what|who|when|where|why|how|if))?|'
-                        r'google that|look online|check online)\s*'
+                        r'\b(?:do (?:a |another )?search(?:\s+(?:for|on|about|up))?|'
+                        r'search\s+(?:for|up|online|the (?:web|net|internet))|'
+                        r'look\s+(?:it|that|this|them|these|those)\s+up|'
+                        r'look\s+up|'
+                        r'find out\s+(?:about|what|who|when|where|why|how|if|whether)?|'
+                        r'google\s+(?:that|it|the)?|'
+                        r'look online|check online|search online)\s*'
                         r'(?:about|for|on|up)?\s*'
                     )
                     _tmatches = list(_re.finditer(_trigger_re, _user_msg, _re.IGNORECASE))
@@ -2686,11 +3216,12 @@ def chat():
                 res = do_search(query)
                 results_block = format_search_results(query, res)
                 # Only count as having results if there is actual substantive content
-                has_results = bool(res["summary"] or res["top_text"])
+                has_results = bool(res.get("summary") or res.get("top_text") or res.get("pages"))
                 print(f"🔍 Search done. has_results={has_results}", flush=True)
                 print(f"   summary={repr(res['summary'][:120])}", flush=True)
                 print(f"   top_url={res['top_url']}", flush=True)
                 print(f"   top_text_len={len(res['top_text'])}", flush=True)
+                print(f"   pages_fetched={len(res.get('pages') or [])}", flush=True)
                 print(f"   related_count={len(res['results'])}", flush=True)
 
                 # Rebuild the prompt with search results baked into the user turn
@@ -2699,30 +3230,12 @@ def chat():
                 # to the grounded content directly.
                 if has_results:
                     import urllib.parse as _urlparse
-                    # Domains that are never useful as a cited source
-                    _junk_domains = {
-                        'knowyourmeme.com', 'reddit.com', 'twitter.com', 'x.com',
-                        'facebook.com', 'instagram.com', 'tiktok.com', 'youtube.com',
-                        'quora.com', 'pinterest.com', 'tumblr.com', 'imgur.com',
-                        'giphy.com', 'tenor.com', '9gag.com', 'ifunny.co',
-                    }
-                    def _is_junk_url(u):
-                        try:
-                            from urllib.parse import urlparse as _up
-                            host = _up(u).netloc.lower().lstrip('www.')
-                            return any(host == d or host.endswith('.' + d) for d in _junk_domains)
-                        except Exception:
-                            return False
-
-                    # Best available URL: AbstractURL > first non-junk result > DDG search page
+                    # Top citation URL — already filtered against _BLOCK_DOMAINS
+                    # in do_brave_search. Only fall back to a search page if Brave
+                    # returned literally nothing.
                     _src = res.get('top_url', '')
-                    if not _src or _is_junk_url(_src):
-                        _src = next(
-                            (r['url'] for r in res['results'] if r.get('url') and not _is_junk_url(r['url'])),
-                            ''
-                        )
                     if not _src:
-                        _src = f"https://duckduckgo.com/?q={_urlparse.quote_plus(query)}"
+                        _src = f"https://search.brave.com/search?q={_urlparse.quote_plus(query)}"
                     augmented_user_msg = (
                         f"{user_input.strip()}\n\n"
                         f"[WEB SEARCH RESULTS FOR: {query}]\n"
@@ -2763,10 +3276,13 @@ def chat():
                 for i, m in enumerate(search_messages):
                     if m.get("role") == "user" and i != _last_user_idx:
                         content = m.get("content", "")
-                        if isinstance(content, str) and "WEB SEARCH RESULTS" in content:
-                            # Strip everything from the search block onwards, keep original user text only
-                            clean = _re.split(r'\[WEB SEARCH RESULTS', content)[0].strip()
-                            search_messages[i] = {"role": "user", "content": clean}
+                        if isinstance(content, str):
+                            if "WEB SEARCH RESULTS" in content:
+                                # Strip everything from the search block onwards, keep original user text only
+                                content = _re.split(r'\[WEB SEARCH RESULTS', content)[0].strip()
+                            if "CHAT HISTORY RESULTS" in content:
+                                content = _re.split(r'\[CHAT HISTORY RESULTS', content)[0].strip()
+                            search_messages[i] = {"role": "user", "content": content}
 
                 # Replace the last user turn with the augmented version
                 for i in range(len(search_messages) - 1, -1, -1):
@@ -2852,11 +3368,31 @@ def chat():
                     # Flush any remaining buffer
                     if _line_buf and not _is_hr(_line_buf):
                         yield _clean_line(_line_buf)
-                    # Always append source link ourselves — never trust the model to do it
-                    if has_results and _src:
+                    # Always append source links ourselves — never trust the model to do it.
+                    # Surface every page we actually fetched (typically 1-3) so the user
+                    # can verify each fetched source, not just the top one.
+                    if has_results:
                         _full_response = "".join(_response_chunks)
-                        if _src not in _full_response:
-                            yield f'\n\n<a href="{_src}" target="_blank" style="color:#7ab4f5;">🔗 Source: {_src}</a>'
+                        _pages = res.get("pages") or []
+                        _src_list = []
+                        if _pages:
+                            for p in _pages[:3]:
+                                u = p.get("url") or ""
+                                t = (p.get("title") or u).strip() or u
+                                if u and u not in _full_response:
+                                    _src_list.append((u, t))
+                        elif _src and _src not in _full_response:
+                            _src_list.append((_src, _src))
+
+                        if _src_list:
+                            yield "\n\n"
+                            for i, (u, t) in enumerate(_src_list):
+                                _label = f"🔗 Source: {t[:90]}" if i == 0 else f"🔗 {t[:90]}"
+                                yield (
+                                    f'<a href="{u}" target="_blank" '
+                                    f'style="color:#7ab4f5; display:block; margin-top:2px;">'
+                                    f'{_label}</a>'
+                                )
                 except Exception as e:
                     yield f"\n⚠️ Search error: {e}"
 
@@ -2954,6 +3490,23 @@ def chat():
                                 f"Tell the user honestly nothing was found. Do not invent details.]"
                             )
                         _cs_msgs = [dict(m) for m in messages]
+
+                        # Strip stale search blocks from prior user turns (mirrors web-search path)
+                        _cs_tag_last_idx = None
+                        for i in range(len(_cs_msgs) - 1, -1, -1):
+                            if _cs_msgs[i].get("role") == "user":
+                                _cs_tag_last_idx = i
+                                break
+                        for i, _cstm in enumerate(_cs_msgs):
+                            if _cstm.get("role") == "user" and i != _cs_tag_last_idx:
+                                _cstc = _cstm.get("content", "")
+                                if isinstance(_cstc, str):
+                                    if "WEB SEARCH RESULTS" in _cstc:
+                                        _cstc = _re.split(r'\[WEB SEARCH RESULTS', _cstc)[0].strip()
+                                    if "CHAT HISTORY RESULTS" in _cstc:
+                                        _cstc = _re.split(r'\[CHAT HISTORY RESULTS', _cstc)[0].strip()
+                                    _cs_msgs[i] = {"role": "user", "content": _cstc}
+
                         for i in range(len(_cs_msgs) - 1, -1, -1):
                             if _cs_msgs[i].get("role") == "user":
                                 _cs_msgs[i] = {"role": "user", "content": _aug}
@@ -4173,87 +4726,6 @@ def save_chat_manual():
         return jsonify({"status": "error", "error": str(e)}), 500
         
 # --------------------------------------------------
-# Character Memories
-# --------------------------------------------------
-
-def load_memories_for_character(character_name):
-    """Load and parse the memory file for a specific character."""
-    if not character_name:
-        print("⚠️ No character name provided.")
-        return []
-
-    base_dir = os.path.dirname(__file__)
-    memory_dir = os.path.join(base_dir, "memories")
-
-    filename = f"{character_name.lower()}_memory.txt"
-    file_path = os.path.join(memory_dir, filename)
-
-    if not os.path.exists(file_path):
-        print(f"⚠️ No memory file found for {character_name} at {file_path}")
-        return []
-
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            content = f.read()
-    except Exception as e:
-        print(f"❌ Error reading memory file: {e}")
-        return []
-
-    blocks = content.split("# Memory:")
-    memories = []
-    for block in blocks:
-        if not block.strip():
-            continue
-        lines = block.strip().splitlines()
-        title = lines[0].strip() if lines else "Untitled"
-        body_lines = []
-        keywords = []
-
-        for line in lines[1:]:
-            if line.lower().startswith("keywords:"):
-                keywords = [kw.strip().lower() for kw in re.split(r"[,:;]+", line.split(":", 1)[1]) if kw.strip()]
-            else:
-                body_lines.append(line.strip())
-
-        memories.append({
-            "title": title,
-            "body": " ".join(body_lines).strip(),
-            "keywords": keywords
-        })
-
-    print(f"✅ Loaded {len(memories)} memory blocks for {character_name}.")
-    return memories
-
-
-# --------------------------------------------------
-# Fetch Character Memories
-# --------------------------------------------------
-def fetch_character_memories(prompt, character_name, max_matches=2):
-    """Return relevant memory paragraphs for the given character and input."""
-    if not character_name:
-        print("⚠️ No character name provided to fetch_character_memories.")
-        return ""
-
-    prompt_lower = prompt.lower()
-    memories = load_memories_for_character(character_name)
-    matches = []
-
-    for mem in memories:
-        if any(k in prompt_lower for k in mem["keywords"]):
-            matches.append(f"[{mem['title']}]\n{mem['body']}")
-
-    if matches:
-        print(f"🧠 Matched {len(matches)} memory block(s) for {character_name}: {[m['title'] for m in memories if any(k in prompt_lower for k in m['keywords'])]}")
-        return "\n\n".join(matches[:max_matches])
-    else:
-        print(f"ℹ️ No memory match found for {character_name}.")
-        return ""
-# --------------------------------------------------
-# SUMMARIZE MEMORY FUNCTION
-# --------------------------------------------------
-
-
-# --------------------------------------------------
 # Sampling Settings Management (UNIFIED)
 # --------------------------------------------------
 SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "settings.json")
@@ -4902,9 +5374,11 @@ def add_character_memory():
     else:
         path = os.path.join(mem_dir, f"{character.lower()}_memory.txt")
 
-    entry = f"# Memory: {title}\nKeywords: {keywords}\n\n{body}\n\n"
-
+    needs_sep = os.path.exists(path) and os.path.getsize(path) > 0
+    entry = f"# Memory: {title}\nKeywords: {keywords}\n\n{body}"
     with open(path, "a", encoding="utf-8") as f:
+        if needs_sep:
+            f.write("\n\n")
         f.write(entry)
 
     return "OK", 200
@@ -4961,9 +5435,9 @@ def edit_character_memory():
 
     blocks[index] = rebuilt
 
-    new_text = "\n\n".join(f"# Memory:{b}" for b in blocks)
+    new_text = "\n\n".join(f"# Memory: {b.strip()}" for b in blocks)
     with open(path, "w", encoding="utf-8") as f:
-        f.write(new_text.strip())
+        f.write(new_text)
 
     return "OK", 200
 

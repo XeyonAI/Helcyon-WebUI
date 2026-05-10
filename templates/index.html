@@ -193,11 +193,15 @@
         <!-- Input -->
         <div id="input-area" style="position:fixed;bottom:20px;left:250px;right:0;z-index:9999;display:flex;flex-direction:column;align-items:center;pointer-events:none;background:transparent;padding:0;border:none;">
 
+          <!-- Document Preview Strip -->
+          <div id="doc-preview-strip" style="display:none;padding:4px 0;gap:8px;flex-wrap:wrap;max-width:760px;width:100%;pointer-events:all;"></div>
+
           <!-- Image Preview Strip -->
           <div id="image-preview-strip" style="display:none;padding:6px 0;gap:8px;flex-wrap:wrap;max-width:760px;width:100%;pointer-events:all;"></div>
 
-          <!-- Hidden file input -->
+          <!-- Hidden file inputs -->
           <input type="file" id="chat-image-input" accept="image/*" multiple style="display:none;" onchange="handleImageAttach(this)" />
+          <input type="file" id="chat-doc-input" accept=".txt,.md,.pdf,.docx,.odt" multiple style="display:none;" onchange="handleDocumentAttach(this)" />
 
           <!-- Floating pill -->
           <div id="input-row" style="pointer-events:all;display:flex;flex-direction:row;align-items:center;gap:6px;background:var(--container-bg,#131922);border:1px solid var(--sidebar-border,#2a2a2a);border-radius:16px;padding:8px 10px;box-shadow:0 4px 24px rgba(0,0,0,0.5);width:100%;max-width:760px;box-sizing:border-box;overflow:visible;">
@@ -212,6 +216,7 @@
               </button>
               <div id="input-menu" class="input-dropup">
                 <button onclick="document.getElementById('chat-image-input').click(); closeInputMenu()" title="Attach Image">📎 Attach Image</button>
+                <button onclick="document.getElementById('chat-doc-input').click(); closeInputMenu()" title="Attach Document">📄 Attach Document</button>
                 <div class="input-menu-divider"></div>
                 <button onclick="manualSaveChat(); closeInputMenu()" id="save-chat-btn">💾 Save Chat</button>
                 <button onclick="showUpgradeModal('memory'); closeInputMenu()" title="Upgrade to HWUI Pro">⭐ Go Pro</button>
@@ -625,6 +630,68 @@ function renderImagePreviews() {
     };
 
     wrapper.appendChild(thumb);
+    wrapper.appendChild(removeBtn);
+    strip.appendChild(wrapper);
+  });
+}
+
+// ================================================
+// DOCUMENT ATTACH SYSTEM
+// ================================================
+window.attachedDocuments = []; // array of {filename, content}
+
+async function handleDocumentAttach(input) {
+  const files = Array.from(input.files);
+  input.value = '';
+  if (!files.length) return;
+
+  for (const file of files) {
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+      const res = await fetch('/parse_document', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (data.error) { alert('Error reading document: ' + data.error); continue; }
+      window.attachedDocuments.push({ filename: data.filename, content: data.content });
+      renderDocumentPreviews();
+    } catch (err) {
+      alert('Failed to upload document: ' + err.message);
+    }
+  }
+}
+
+function renderDocumentPreviews() {
+  const strip = document.getElementById('doc-preview-strip');
+  strip.innerHTML = '';
+
+  if (!window.attachedDocuments || window.attachedDocuments.length === 0) {
+    strip.style.display = 'none';
+    return;
+  }
+
+  strip.style.display = 'flex';
+  window.attachedDocuments.forEach((doc, idx) => {
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'position:relative;display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,0.08);border:1px solid #555;border-radius:8px;padding:5px 10px;max-width:220px;box-sizing:border-box;';
+
+    const icon = document.createElement('span');
+    icon.textContent = '📄';
+    icon.style.cssText = 'font-size:15px;flex-shrink:0;';
+
+    const name = document.createElement('span');
+    name.textContent = doc.filename;
+    name.style.cssText = 'font-size:12px;color:#ccc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;';
+
+    const removeBtn = document.createElement('button');
+    removeBtn.textContent = '✕';
+    removeBtn.style.cssText = 'position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;background:#a00;color:#fff;border:none;cursor:pointer;font-size:11px;padding:0;line-height:18px;text-align:center;';
+    removeBtn.onclick = function() {
+      window.attachedDocuments.splice(idx, 1);
+      renderDocumentPreviews();
+    };
+
+    wrapper.appendChild(icon);
+    wrapper.appendChild(name);
     wrapper.appendChild(removeBtn);
     strip.appendChild(wrapper);
   });
@@ -2690,8 +2757,9 @@ async function openChat(filename) {
     const input = box.value.trim();
     const chat = document.getElementById('chat');
     const hasImages = window.attachedImages && window.attachedImages.length > 0;
+    const hasDocuments = window.attachedDocuments && window.attachedDocuments.length > 0;
 
-    if (!input && !hasImages) return;
+    if (!input && !hasImages && !hasDocuments) return;
     
     lastPrompt = input;
     localStorage.setItem('lastPrompt', input);
@@ -2747,10 +2815,31 @@ async function openChat(filename) {
       window.loadedChat = [];
     }
 
+    // Build document text prefix (prepended to user message for model context)
+    let docPrefix = '';
+    if (hasDocuments) {
+      window.attachedDocuments.forEach(doc => {
+        docPrefix += `[Attached document: ${doc.filename}]\n${doc.content}\n---\n`;
+      });
+
+      // Show document chips in the user message bubble (before the text)
+      window.attachedDocuments.forEach(doc => {
+        const chip = document.createElement('div');
+        chip.style.cssText = 'display:inline-flex;align-items:center;gap:5px;background:rgba(255,255,255,0.1);border:1px solid #555;border-radius:6px;padding:4px 8px;margin-bottom:4px;font-size:12px;color:#ccc;max-width:240px;';
+        chip.innerHTML = `<span style="font-size:15px;">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px;">${doc.filename}</span>`;
+        userDiv.insertBefore(chip, userStrong);
+      });
+
+      window.attachedDocuments = [];
+      renderDocumentPreviews();
+    }
+
+    const fullText = docPrefix ? (docPrefix + input) : input;
+
     // Build user message — multimodal if images attached, plain text otherwise
     if (hasImages) {
       const contentParts = [];
-      if (input) contentParts.push({ type: "text", text: input });
+      if (fullText) contentParts.push({ type: "text", text: fullText });
       window.attachedImages.forEach(img => {
         contentParts.push({
           type: "image_url",
@@ -2759,7 +2848,7 @@ async function openChat(filename) {
       });
       const _previewUrls = window.attachedImages.map(img => img.previewUrl);
       window.loadedChat.push({ role: "user", content: contentParts, speaker: activeUserName, timestamp: new Date().toISOString(), hasImage: true, previewUrls: _previewUrls });
-      
+
       // Show thumbnails in the user message bubble
       window.attachedImages.forEach(img => {
         const thumb = document.createElement('img');
@@ -2772,15 +2861,15 @@ async function openChat(filename) {
       window.attachedImages = [];
       renderImagePreviews();
     } else {
-      window.loadedChat.push({ role: "user", content: input, speaker: activeUserName, timestamp: new Date().toISOString() });
+      window.loadedChat.push({ role: "user", content: fullText, speaker: activeUserName, timestamp: new Date().toISOString() });
     }
 
     let contextMessages = window.loadedChat;
-    
+
     box.value = '';
     box.style.height = 'auto';
     try {
-      await fetchAndDisplayResponse(input, chat);
+      await fetchAndDisplayResponse(fullText, chat);
     } catch (err) {
       console.error("⚠️ sendPrompt error:", err);
       chat.innerHTML += '<div class="message error-msg">⚠️ Error sending message.</div>';
@@ -3406,13 +3495,47 @@ async function openChat(filename) {
       return;
     }
 
-    // Only use the last ~200 chars of the previous response as the continue prefix.
-    // Sending the full message makes the model think the response is nearly done
-    // and it fires EOS after just a few tokens ("isn" etc).
+    // Build continue prefix.
+    // If the last response is short/truncated (<200 chars), it ends mid-word and causes
+    // instant EOS. Use the second-to-last assistant message as prefix instead — it's complete.
+    // If the last response is long, take the last paragraph or sentence boundary.
     const fullPrevContent = window.loadedChat[lastAssistantIdx].content || '';
-    const continuePrefix = fullPrevContent.length > 200
-      ? fullPrevContent.slice(-200)
-      : fullPrevContent;
+    let continuePrefix = fullPrevContent;
+    if (fullPrevContent.length < 200) {
+      // Response is truncated — find the previous complete assistant message
+      let prevAssistantContent = '';
+      for (let i = lastAssistantIdx - 1; i >= 0; i--) {
+        if (window.loadedChat[i].role === 'assistant' && (window.loadedChat[i].content || '').length > 200) {
+          prevAssistantContent = window.loadedChat[i].content;
+          break;
+        }
+      }
+      if (prevAssistantContent) {
+        // Use last paragraph of the previous complete response
+        const tail = prevAssistantContent.slice(-600);
+        const lastParaBreak = tail.lastIndexOf('\n\n');
+        continuePrefix = lastParaBreak !== -1 ? tail.slice(lastParaBreak).trimStart() : tail.trimStart();
+        console.log('▶️ Using prev assistant message as prefix — truncated response was too short');
+      }
+      // else: no previous complete response, use what we have
+    } else {
+      // Response is long — take last paragraph or sentence boundary
+      const tail = fullPrevContent.slice(-600);
+      const lastParaBreak = tail.lastIndexOf('\n\n');
+      if (lastParaBreak !== -1 && lastParaBreak < tail.length - 20) {
+        continuePrefix = tail.slice(lastParaBreak).trimStart();
+      } else {
+        const lastSentenceEnd = tail.search(/[.!?][^.!?]{20,}$/);
+        if (lastSentenceEnd !== -1) {
+          continuePrefix = tail.slice(lastSentenceEnd + 1).trimStart();
+        } else {
+          const raw = fullPrevContent.slice(-200);
+          const lastSpace = raw.lastIndexOf(' ');
+          continuePrefix = lastSpace > 0 ? raw.slice(0, lastSpace) : raw;
+        }
+      }
+    }
+    console.log('▶️ Continue prefix (' + continuePrefix.length + ' chars):', JSON.stringify(continuePrefix.slice(0, 80)));
     window.loadedChat.splice(lastAssistantIdx, 1);
 
     // Keep existing bubble — stream directly into it
@@ -3491,8 +3614,12 @@ async function openChat(filename) {
       }
       chat.scrollTop = chat.scrollHeight;
 
-      // Stream raw chunks — same format as main parser
-      let rawFull = continuePrefix;
+      // Stream raw chunks — same format as main parser.
+      // rawFull starts as the FULL original message (not just the 200-char prefix sent to the
+      // backend). The stream contains only tokens generated after that prefix, so appending
+      // stream chunks to fullPrevContent correctly builds original + continuation without
+      // losing any of the front of the message.
+      let rawFull = fullPrevContent;
       const userName = activeUserName || 'User';
       streamEl.innerHTML = typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(rawFull)) : rawFull;
 

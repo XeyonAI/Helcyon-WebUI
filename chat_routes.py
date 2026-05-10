@@ -306,10 +306,27 @@ def auto_name_chat():
 
         _prompt = (
             "<|im_start|>system\n"
-            "You generate short chat thread titles based strictly on what the message says. Do not infer, assume, or add details not present in the message. Reply with only the title — no explanation, no punctuation at the end, no quotes.\n"
+            "You write short, punchy chat titles — the kind a human would scribble in a sidebar. "
+            "Rules: 4-6 words max. Drop filler like \"how to\", \"help with\", \"question about\", \"a/the/my\". "
+            "No punctuation at the end. No quotes. No explanation. Just the title.\n"
             "<|im_end|>\n"
             "<|im_start|>user\n"
-            f"Thread title for: {excerpt}\n"
+            "Message: Can you help me debug a memory leak in my Python script?\n"
+            "<|im_end|>\n"
+            "<|im_start|>assistant\n"
+            "Python Memory Leak Debug<|im_end|>\n"
+            "<|im_start|>user\n"
+            "Message: What's the best way to learn German grammar?\n"
+            "<|im_end|>\n"
+            "<|im_start|>assistant\n"
+            "Learning German Grammar<|im_end|>\n"
+            "<|im_start|>user\n"
+            "Message: Write me a short poem about autumn leaves falling\n"
+            "<|im_end|>\n"
+            "<|im_start|>assistant\n"
+            "Autumn Leaves Poem<|im_end|>\n"
+            "<|im_start|>user\n"
+            f"Message: {excerpt}\n"
             "<|im_end|>\n"
             "<|im_start|>assistant\n"
         )
@@ -317,7 +334,7 @@ def auto_name_chat():
         _payload = {
             "prompt": _prompt,
             "temperature": 0.3,
-            "n_predict": 20,
+            "n_predict": 16,
             "top_p": 0.9,
             "repeat_penalty": 1.1,
             "stream": False,
@@ -329,7 +346,12 @@ def auto_name_chat():
         raw_name = _resp.json().get("content", "").strip()
         # Strip any stray quotes/punctuation the model adds
         raw_name = _re.sub(r'^["\']|["\']$', '', raw_name).strip()
-        raw_name = _re.sub(r'[.!?,;]+$', '', raw_name).strip()
+        raw_name = _re.sub(r'[.!?,;:]+$', '', raw_name).strip()
+        # Hard cap: 6 words max — safety net if the model ignores the rule
+        _words = raw_name.split()
+        if len(_words) > 6:
+            raw_name = ' '.join(_words[:6])
+            raw_name = _re.sub(r'[.!?,;:]+$', '', raw_name).strip()
         print(f"🏷️ Model suggested title: '{raw_name}'")
     except Exception as _e:
         print(f"⚠️ Model title generation failed, falling back to word-chop: {_e}")
