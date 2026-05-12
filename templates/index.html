@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -128,6 +128,7 @@
         <h2>Chats</h2>
           <div class="sidebar-controls">
             <select id="chat-sort-select" onchange="sortChats()">
+              <option value="most-recent">Most Recent</option>
               <option value="newest">Newest First</option>
               <option value="oldest">Oldest First</option>
               <option value="alphabetical">A-Z</option>
@@ -701,6 +702,12 @@ function renderDocumentPreviews() {
 // Allows genuine --- separators through so marked.js renders them as <hr>.
 function sanitizeMarkdown(text) {
   if (!text) return text;
+  // Normalize non-breaking spaces (U+00A0) to regular spaces throughout.
+  // The model emits   after ALL list numbers (1. , 2. , …).
+  // Without this, the inline-list splitter below can't match "2. " because it
+  // sees   instead of a regular space, so the whole list stays on one line.
+  text = text.replace(/ /g, ' ');
+  console.log('[sanitize] after U+00A0 norm (first 300):', JSON.stringify(text.substring(0, 300)));
   // Guarantee --- separators always have blank lines around them BEFORE any other processing.
   // Without this, marked.js (with breaks:true) can interpret the line above a --- as a setext h2,
   // turning it into a heading and silently swallowing the separator — dropping everything after it.
@@ -724,12 +731,18 @@ function sanitizeMarkdown(text) {
   // pulls that content into the heading block — it never renders as a separate element.
   text = text.replace(/(#{1,6}[^\n]+)\n([^\n#])/g, "$1\n\n$2");
 
+  // Fix: inline numbered lists — model sometimes writes '1. text. 2. text. 3. text' all on one line.
+  // Split on sentence-ending punctuation + space + digit + period + space + Capital/Bold.
+  // Anchoring to punctuation prevents false splits on 'version 2.' or 'point 2.' references.
+  text = text.replace(/([.!?)\]]) (\d+\. )(?=\*\*|[A-Z])/g, '$1\n\n$2');
+  console.log('[sanitize] after inline-list split (first 300):', JSON.stringify(text.substring(0, 300)));
   // Fix: no blank line between heading/intro and numbered list item 1
   // Marked.js requires a blank line before a list — insert one before "1. " when preceded by text
   text = text.replace(/([^\n])\n(1\.\s)/g, "$1\n\n$2");
   // Fix: blank lines between numbered list items cause each item to become its own block
   // Collapse blank lines between consecutive numbered items so they stay in one block
   text = text.replace(/^(\d+\..+)\n\n(\d+\.\s)/gm, "$1\n$2");
+  console.log('[sanitize] FINAL (first 300):', JSON.stringify(text.substring(0, 300)));
   // Same fix for bullet lists — ensure blank line before - or * list items after any text line
   text = text.replace(/([^\n])\n([-*]\s)/g, "$1\n\n$2");
   return text;
@@ -1946,7 +1959,12 @@ function persistChatState() {
   function sortChatList(chats) {
     const sortMode = localStorage.getItem('chatSortMode') || 'newest';
 
-    if (sortMode === 'newest') {
+    if (sortMode === 'most-recent') {
+      // Pure mtime-based — the chat most recently edited goes on top,
+      // regardless of when it was originally created. Distinct from
+      // "Newest First" which prefers the filename date suffix (creation).
+      chats.sort((a, b) => b.modified - a.modified);
+    } else if (sortMode === 'newest') {
       chats.sort((a, b) => {
         const da = parseDateFromFilename(a.filename) ?? (a.modified * 1000);
         const db = parseDateFromFilename(b.filename) ?? (b.modified * 1000);
@@ -3157,7 +3175,10 @@ async function openChat(filename) {
       }
       // Final render to ensure last chunks are displayed
       {
-        let html = marked.parse(sanitizeMarkdown(cleanedMessage));
+        const _sanitized = sanitizeMarkdown(cleanedMessage);
+        console.log('[pipeline] sanitizeMarkdown output (first 300):', JSON.stringify(_sanitized.substring(0, 300)));
+        let html = marked.parse(_sanitized);
+        console.log('[pipeline] marked.parse output (first 500):', html.substring(0, 500));
         html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
         renderModelHTML(streamEl, html);
         addCodeCopyButtons(streamEl.parentNode || streamEl);

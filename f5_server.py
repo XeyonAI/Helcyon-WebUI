@@ -186,6 +186,166 @@ ACRONYMS = {
     r"\bNDAs\b": "N D A's",
     r"\bRTX\b":  "R T X",
     r"\bGTX\b":  "G T X",
+    # Internet slang / messaging
+    r"\bLOL\b":   "L O L",
+    r"\bLMAO\b":  "L M A O",
+    r"(?i)\bWTF\b":  "W T F",
+    r"\bSMH\b":   "S M H",
+    r"\bTBH\b":   "to be honest",
+    r"\bIIRC\b":  "I I R C",
+    r"\bIMO\b":   "in my opinion",
+    r"\bIMHO\b":  "in my humble opinion",
+    r"\bTLDR\b":  "T L D R",
+    r"\bTL;DR\b": "T L D R",
+    r"\bIDK\b":   "I D K",
+    r"\bIDC\b":   "I D C",
+    r"\bBTW\b":   "by the way",
+    r"\bFWIW\b":  "F W I W",
+    r"\bAFAIK\b": "A F A I K",
+    r"\bAFK\b":   "A F K",
+    r"\bGG\b":    "G G",
+    r"\bTGIF\b":  "T G I F",
+    r"\bRSVP\b":  "R S V P",
+    r"\bNSFW\b":  "N S F W",
+    r"\bSFW\b":   "S F W",
+    r"\bDM\b":    "D M",
+    r"\bDMs\b":   "D M's",
+    # Business / professional
+    r"\bCOO\b":   "C O O",
+    r"\bCMO\b":   "C M O",
+    r"\bCPO\b":   "C P O",
+    r"\bCIO\b":   "C I O",
+    r"\bVP\b":    "V P",
+    r"\bKPI\b":   "K P I",
+    r"\bKPIs\b":  "K P I's",
+    r"\bROI\b":   "R O I",
+    r"\bSLA\b":   "S L A",
+    r"\bOKR\b":   "O K R",
+    r"\bOKRs\b":  "O K R's",
+    r"\bNPS\b":   "N P S",
+    r"\bMRR\b":   "M R R",
+    r"\bARR\b":   "A R R",
+    r"\bB2B\b":   "B to B",
+    r"\bB2C\b":   "B to C",
+    r"\bGTM\b":   "G T M",
+    r"\bUSD\b":   "U S D",
+    r"\bGBP\b":   "G B P",
+    r"\bIPO\b":   "I P O",
+    r"\bETF\b":   "E T F",
+    r"\bVAT\b":   "V A T",
+    r"\bSEO\b":   "S E O",
+    r"\bCRM\b":   "C R M",
+    r"\bERP\b":   "E R P",
+    r"\bMVP\b":   "M V P",
+    r"\bQA\b":    "Q A",
+    r"\bUAT\b":   "U A T",
+    r"\bPOC\b":   "P O C",
+    # Tech / software / hardware / networking
+    r"\bSDK\b":   "S D K",
+    r"\bCLI\b":   "C L I",
+    r"\bIDE\b":   "I D E",
+    r"\bUX\b":    "U X",
+    r"\bDB\b":    "D B",
+    r"\bML\b":    "M L",
+    r"\bNLP\b":   "N L P",
+    r"\bAGI\b":   "A G I",
+    r"\bSaaS\b":  "S A A S",
+    r"\bIoT\b":   "I O T",
+    r"\bDNS\b":   "D N S",
+    r"\bCDN\b":   "C D N",
+    r"\bTLS\b":   "T L S",
+    r"\bSSL\b":   "S S L",
+    r"\bTCP\b":   "T C P",
+    r"\bUDP\b":   "U D P",
+    r"\bISP\b":   "I S P",
+    r"\bISPs\b":  "I S P's",
+    r"\bGHz\b":   "gigahertz",
+    r"\bMHz\b":   "megahertz",
+    r"\bkHz\b":   "kilohertz",
+    r"\bHz\b":    "hertz",
+    r"\bMbps\b":  "megabits per second",
+    r"\bGbps\b":  "gigabits per second",
+    r"\bkbps\b":  "kilobits per second",
+    r"\bHDMI\b":  "H D M I",
+    r"\bNVMe\b":  "N V me",
+    r"\bOCR\b":   "O C R",
+    r"\bIPv4\b":  "I P version 4",
+    r"\bIPv6\b":  "I P version 6",
+    r"\bVoIP\b":  "V O I P",
+    r"\bNFT\b":   "N F T",
+    r"\bNFTs\b":  "N F T's",
+    r"\bBTC\b":   "B T C",
+    r"\bETH\b":   "E T H",
+    r"\bAWS\b":   "A W S",
+    r"\bGCP\b":   "G C P",
+    r"CI/CD":     "C I C D",
+    r"\bOOP\b":   "O O P",
+    r"\bRPM\b":   "R P M",
+    r"\bUV\b":    "U V",
+    r"\bIR\b":    "I R",
+    # Chemical / scientific units (mixed-case — not caught by all-caps handler)
+    r"\bCO2\b":   "C O 2",
+    r"\bH2O\b":   "H 2 O",
+    r"\bppm\b":   "parts per million",
+    # Media / broadcasting / sport / gaming
+    r"\bBBC\b":   "B B C",
+    r"\bITV\b":   "I T V",
+    r"\bCNN\b":   "C N N",
+    r"\bNBC\b":   "N B C",
+    r"\bABC\b":   "A B C",
+    r"\bCBS\b":   "C B S",
+    r"\bHBO\b":   "H B O",
+    r"\bESPN\b":  "E S P N",
+    r"\bNFL\b":   "N F L",
+    r"\bNBA\b":   "N B A",
+    r"\bMLB\b":   "M L B",
+    r"\bNHL\b":   "N H L",
+    r"\bMLS\b":   "M L S",
+    r"\bUFC\b":   "U F C",
+    r"\bWWE\b":   "W W E",
+    r"\bDLC\b":   "D L C",
+    r"\bMMO\b":   "M M O",
+    r"\bRTS\b":   "R T S",
+    r"\bPvP\b":   "P V P",
+    r"\bPvE\b":   "P V E",
+    r"\bDPS\b":   "D P S",
+    r"\bXP\b":    "X P",
+    r"\bHP\b":    "H P",
+    r"\bMP\b":    "M P",
+    r"\bEP\b":    "E P",
+    r"\bLP\b":    "L P",
+    r"\bMC\b":    "M C",
+    r"\bPS5\b":   "P S 5",
+    r"\bPS4\b":   "P S 4",
+    r"\bPS3\b":   "P S 3",
+    # Government / agencies / UK
+    r"\bEU\b":    "E U",
+    r"\bUN\b":    "U N",
+    r"\bFBI\b":   "F B I",
+    r"\bCIA\b":   "C I A",
+    r"\bNSA\b":   "N S A",
+    r"\bMI5\b":   "M I 5",
+    r"\bMI6\b":   "M I 6",
+    r"\bCCTV\b":  "C C T V",
+    r"\bNATO\b":  "nay-to",
+    r"\bNHS\b":   "N H S",
+    r"\bGCHQ\b":  "G C H Q",
+    r"\bHMRC\b":  "H M R C",
+    r"\bDVLA\b":  "D V L A",
+    # Health / medical
+    r"\bBMI\b":   "B M I",
+    r"\bBPM\b":   "B P M",
+    r"\bECG\b":   "E C G",
+    r"\bEKG\b":   "E K G",
+    r"\bICU\b":   "I C U",
+    r"\bGP\b":    "G P",
+    r"\bADHD\b":  "A D H D",
+    r"\bOCD\b":   "O C D",
+    r"\bPTSD\b":  "P T S D",
+    r"\bCPTSD\b": "C P T S D",
+    r"\bBPD\b":   "B P D",
+    r"\bASD\b":   "A S D",
+    r"A&E":       "A and E",
 }
 
 def expand_acronyms(text):
@@ -209,12 +369,30 @@ def clean_text(text):
     # Words in the ACRONYMS dict are preserved as-is so expand_acronyms handles them.
     # Everything else (shouted words like "EXCITED", "AMAZING") becomes Title Case.
     _known_acronyms = {
+        # Core / original
         "AI","IS","IT","UK","US","PC","TV","OK","DJ","VR","AR","RP","UI",
         "API","URL","GPU","CPU","RAM","TTS","GPT","NPC","FPS","RPG","DNA",
         "RNA","MRI","IVF","CBD","THC","SSD","HDD","USB","HDR","VPN","SSH",
         "SQL","CSS","IQ","HR","PR","CEO","CFO","CTO","HQ","ETA","RTX","GTX",
         "MOT","TB","GB","MB","KB","HTML","JSON","HTTP","HTTPS","OS","IO",
         "LLM","VRAM","ASAP","FYI","DIY","IRL","OMG","NDA","NDAS","AM","PM",
+        # Internet slang
+        "LOL","LMAO","WTF","SMH","TBH","IIRC","IMO","IMHO","TLDR",
+        "IDK","IDC","BTW","FWIW","AFAIK","AFK","GG","TGIF","RSVP","NSFW","SFW","DM",
+        # Business / professional
+        "COO","CMO","CPO","CIO","VP","KPI","ROI","SLA","OKR","NPS","MRR","ARR",
+        "GTM","USD","GBP","IPO","ETF","VAT","SEO","CRM","ERP","MVP","QA","UAT","POC",
+        # Tech / software / hardware / networking
+        "SDK","CLI","IDE","UX","DB","ML","NLP","AGI","DNS","CDN","TLS","SSL",
+        "TCP","UDP","ISP","HDMI","OCR","NFT","BTC","ETH","AWS","GCP","OOP","RPM","UV","IR",
+        # Media / broadcasting / sport / gaming
+        "BBC","ITV","CNN","NBC","ABC","CBS","HBO","ESPN",
+        "NFL","NBA","MLB","NHL","MLS","UFC","WWE",
+        "DLC","MMO","RTS","DPS","XP","HP","MP","EP","LP","MC",
+        # Government / agencies / UK
+        "EU","UN","FBI","CIA","NSA","CCTV","NATO","NHS","GCHQ","HMRC","DVLA",
+        # Health / medical
+        "BMI","BPM","ECG","EKG","ICU","GP","ADHD","OCD","PTSD","CPTSD","BPD","ASD",
     }
     text = re.sub(r'\b[A-Z]{2,}\b', lambda m: m.group(0) if m.group(0) in _known_acronyms else m.group(0).title(), text)
 
@@ -277,12 +455,13 @@ def clean_text(text):
     text = re.sub(r'\bread\b', 'reed', text, flags=re.IGNORECASE)
     text = re.sub(r'\bvs\.?\b', 'versus', text, flags=re.IGNORECASE)
     text = re.sub(r'\bx+\b', '', text, flags=re.IGNORECASE)  # strip kiss x's (xx, xxx etc)
-    text = re.sub(r'\bGTAVI\b', 'G T A 6', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bGTAV\b', 'G T A 5', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bGTAIV\b', 'G T A 4', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bGTAIII\b', 'G T A 3', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bGTAII\b', 'G T A 2', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bGTA\b', 'G T A', text)
+    # GTA — single unified pattern covers GTA, GTA5, GTA 5, GTAV, GTA V, GTA VI, GTA 6 etc.
+    _GTA_ROMAN = {'I':'1','II':'2','III':'3','IV':'4','V':'5','VI':'6'}
+    def _gta_rep(m, _r=_GTA_ROMAN):
+        s = (m.group(1) or '').strip().upper()
+        num = _r.get(s, s if s.isdigit() else '')
+        return (f'jee tee ay {num} ' if num else 'jee tee ay ')
+    text = re.sub(r'\bGTA\s*(?:(VI|V|IV|III|II|I|[1-6])(?=\b|\s|$))?', _gta_rep, text, flags=re.IGNORECASE)
     # Handle mph with comma-formatted numbers e.g. "18,000 mph" or "18,000mph"
     text = re.sub(r'([\d,]+)\s*mph\b', lambda m: m.group(1).replace(',', '') + ' miles per hour', text, flags=re.IGNORECASE)
 

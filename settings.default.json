@@ -12,13 +12,14 @@
     "port": 5000,
     "n_gpu_layers": 34,
     "ctx_size": 8192,
-    "cache_type_k": "q8_0",
-    "cache_type_v": "q8_0",
+    "cache_type_k": "f16",
+    "cache_type_v": "f16",
     "timeout": 0,
     "chat_template": "chatml",
     "parallel": 1
   },
   "llama_last_model": "",
   "active_theme": "ChatGPT",
-  "active_system_prompt": ""
+  "active_system_prompt": "",
+  "diag_verbose": false
 }

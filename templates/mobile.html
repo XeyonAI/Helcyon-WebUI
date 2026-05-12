@@ -250,8 +250,19 @@ let mediaRecorder=null,audioChunks=[],isRecording=false;
 let ttsQueue=[],ttsProcessing=false,currentAudio=null,isPlayingAudio=false,ttsOnComplete=null;
 let replayTimeout=null;
 let ttsSentenceBuffer='',ttsStreamingComplete=false;
+// Streaming sentence batcher — accumulates detected sentences before
+// queuing so each TTS request carries enough prosodic context. Without
+// this, F5 receives one-sentence-at-a-time requests during streaming
+// (often 20–60 chars) and the audio sounds clipped/lower quality than
+// the Replay path which sends full multi-sentence lines.
+let ttsPendingBatch='',ttsFirstBatchSent=false;
 const TTS_START_THRESHOLD=1;
 let TTS_MAX_CHUNK_LENGTH=300;
+// Streaming batch thresholds — first batch shorter so audio starts fast,
+// subsequent batches longer for smooth prosody. Engine-aware: re-tuned
+// in initTTSEngine() once the active engine is known.
+let TTS_FIRST_BATCH_MIN=80;
+let TTS_BATCH_MIN=180;
 
 function fixViewport(){const h=window.visualViewport?window.visualViewport.height:window.innerHeight;document.getElementById('app').style.height=h+'px';}
 function mCopyCode(btn){const code=btn.closest('.m-code-wrap').querySelector('code');if(!code)return;navigator.clipboard.writeText(code.innerText).then(function(){btn.textContent='✓ Copied';btn.style.color='#6f6';setTimeout(function(){btn.textContent='Copy';btn.style.color='';},1800);}).catch(function(){btn.textContent='✗ Failed';setTimeout(function(){btn.textContent='Copy';},1800);});}
@@ -261,6 +272,7 @@ fixViewport();
 
 window.addEventListener('DOMContentLoaded',async()=>{
   await loadUserName();await loadCharacterList();await loadProjects();loadTTSPrefs();
+  initTTSEngine();
   checkMobileOpenAI();
   // Push initial state so back button has somewhere to go
   history.replaceState({view:'chatlist'},'');
@@ -469,6 +481,7 @@ async function handleStream(res){
   showTyping(false);
   // Reset TTS buffer for new response
   ttsSentenceBuffer='';ttsStreamingComplete=false;
+  ttsPendingBatch='';ttsFirstBatchSent=false;
 
   const wrap=document.createElement('div');wrap.className='msg-wrap ai';
   const s=document.createElement('div');s.className='msg-sender';s.textContent=characterName;
@@ -931,6 +944,49 @@ function splitAndQueue(text){
   if(!ttsProcessing&&ttsQueue.length>=TTS_START_THRESHOLD)processQueue();
 }
 
+async function initTTSEngine(){
+  try{
+    const res=await fetch('/api/tts/engine');
+    if(!res.ok)return;
+    const data=await res.json();
+    const engine=data.engine||'f5';
+    if(engine==='chatterbox'){
+      TTS_MAX_CHUNK_LENGTH=150;
+      TTS_FIRST_BATCH_MIN=60;
+      TTS_BATCH_MIN=120;
+    }else{
+      TTS_MAX_CHUNK_LENGTH=300;
+      TTS_FIRST_BATCH_MIN=80;
+      TTS_BATCH_MIN=180;
+    }
+    console.log(`\uD83D\uDD0A TTS engine: ${engine} \u2014 max=${TTS_MAX_CHUNK_LENGTH}, batch=${TTS_FIRST_BATCH_MIN}/${TTS_BATCH_MIN}`);
+  }catch(e){/* leave defaults */}
+}
+
+// Queue a detected sentence via the streaming batcher. Holds short
+// sentences until the running batch crosses the min-length threshold,
+// then hands the whole batch to splitAndQueue. First batch uses a
+// smaller threshold so audio starts fast; later batches use the larger
+// one for smoother prosody. \u26A0\uFE0F DO NOT bypass this on the streaming
+// path \u2014 sending one-sentence-at-a-time requests to F5 reintroduces
+// the lower-quality streaming audio that this whole batcher fixes.
+function batchAndQueue(sentence){
+  if(!sentence)return;
+  const trimmed=sentence.trim();
+  if(trimmed.length<=2)return;
+  ttsPendingBatch=ttsPendingBatch?ttsPendingBatch+' '+trimmed:trimmed;
+  const threshold=ttsFirstBatchSent?TTS_BATCH_MIN:TTS_FIRST_BATCH_MIN;
+  if(ttsPendingBatch.length>=threshold)flushPendingBatch();
+}
+
+function flushPendingBatch(){
+  if(!ttsPendingBatch)return;
+  const batch=ttsPendingBatch;
+  ttsPendingBatch='';
+  ttsFirstBatchSent=true;
+  splitAndQueue(batch);
+}
+
 function bufferTextForTTS(chunk){
   if(!ttsEnabled||!chunk)return;
   chunk=chunk.replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi,'')
@@ -940,7 +996,10 @@ function bufferTextForTTS(chunk){
              .replace(/\]\([^)]*\)/g,'')
              .replace(/https?:\/\/[^\s\])"'>]+/g,'')
              .replace(/[\u{1F517}\uD83D\uDD17]/gu,'');
-  if(ttsSentenceBuffer===''&&ttsQueue.length===0&&!ttsProcessing)ttsStreamingComplete=false;
+  if(ttsSentenceBuffer===''&&ttsQueue.length===0&&!ttsProcessing&&!ttsPendingBatch){
+    ttsStreamingComplete=false;
+    ttsFirstBatchSent=false;
+  }
   chunk=fixContractionsForTTS(chunk);
   chunk=chunk.replace(/\.{3}/g,'. ').replace(/\u2026/g,'. ').replace(/\.{2}/g,'. ');
   chunk=chunk.replace(/\s*\(\s*/g,'. ').replace(/\s*\)\s*/g,'. ');
@@ -951,11 +1010,20 @@ function bufferTextForTTS(chunk){
   ttsSentenceBuffer+=chunk;
   const lines=ttsSentenceBuffer.split('\n');
   ttsSentenceBuffer=lines.pop();
-  for(const line of lines)splitAndQueue(line);
-  const sentenceRegex=/[^.!?]+[.!?]+[)"'*_]*\s*/g;
+  // Paragraph break = natural prosody boundary \u2014 flush any pending
+  // batch before queuing the new line so we don't merge across it.
+  for(const line of lines){
+    flushPendingBatch();
+    batchAndQueue(line);
+  }
+  // Emoji-as-sentence-terminator: the model frequently ends a sentence
+  // with an emoji (no trailing punctuation). Without this branch the
+  // sentence stays in the buffer until the next newline and merges
+  // with whatever comes next.
+  const sentenceRegex=/[^.!?]+(?:[.!?]+|(?:[\u{1F000}-\u{1FFFF}\u{1F300}-\u{1FAFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}\u2600-\u27BF])+)[)"'*_]*\s*/gu;
   let match,lastIndex=0;
   while((match=sentenceRegex.exec(ttsSentenceBuffer))!==null){
-    splitAndQueue(match[0]);
+    batchAndQueue(match[0]);
     lastIndex=match.index+match[0].length;
   }
   if(lastIndex>0)ttsSentenceBuffer=ttsSentenceBuffer.substring(lastIndex);
@@ -967,10 +1035,9 @@ function flushTTSBuffer(){
     .replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu,'$1.')
     .replace(/(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu,'')
     .replace(/\*\*/g,'').replace(/\*/g,'').replace(/_/g,'').trim();
-  if(remaining.length>2){
-    ttsQueue.push(/[.!?]$/.test(remaining)?remaining:remaining+'.');
-  }
+  if(remaining.length>2)batchAndQueue(remaining);
   ttsSentenceBuffer='';
+  flushPendingBatch();
   setTimeout(()=>{
     ttsStreamingComplete=true;
     if(!ttsProcessing&&ttsQueue.length>0)processQueue();
@@ -996,32 +1063,36 @@ async function processQueue(){
   if(ttsQueue.length===0){ttsProcessing=false;const cb=ttsOnComplete;ttsOnComplete=null;if(cb)cb();return;}
 
   const prefetchBuffer=[];
-  const initialFetches=Math.min(2,ttsQueue.length);
-  for(let i=0;i<initialFetches;i++)prefetchBuffer.push(fetchAudio(ttsQueue.shift()));
+  const PREFETCH_DEPTH=3;
+  const topUp=()=>{while(prefetchBuffer.length<PREFETCH_DEPTH&&ttsQueue.length>0)prefetchBuffer.push(fetchAudio(ttsQueue.shift()));};
+  topUp();
 
   while(true){
     if(!ttsEnabled)break;
     const audioUrl=prefetchBuffer.length>0?await prefetchBuffer.shift():null;
-    while(prefetchBuffer.length<3&&ttsQueue.length>0)prefetchBuffer.push(fetchAudio(ttsQueue.shift()));
+    topUp();
     if(audioUrl){
       await new Promise((resolve)=>{
         currentAudio=new Audio(audioUrl);
         isPlayingAudio=true;
-        const prefetchInterval=setInterval(()=>{
-          while(prefetchBuffer.length<3&&ttsQueue.length>0)prefetchBuffer.push(fetchAudio(ttsQueue.shift()));
-        },50);
-        currentAudio.onended=()=>{clearInterval(prefetchInterval);URL.revokeObjectURL(audioUrl);isPlayingAudio=false;currentAudio=null;resolve();};
-        currentAudio.onerror=()=>{clearInterval(prefetchInterval);URL.revokeObjectURL(audioUrl);isPlayingAudio=false;currentAudio=null;resolve();};
-        currentAudio.play().catch(()=>{clearInterval(prefetchInterval);isPlayingAudio=false;currentAudio=null;resolve();});
+        // Keep the fetch pipeline saturated while audio plays — new
+        // sentences arriving from the streaming buffer need to start
+        // fetching immediately, not wait for playback to end.
+        const prefetchInterval=setInterval(topUp,50);
+        const cleanup=()=>{clearInterval(prefetchInterval);URL.revokeObjectURL(audioUrl);isPlayingAudio=false;currentAudio=null;resolve();};
+        currentAudio.onended=cleanup;
+        currentAudio.onerror=cleanup;
+        currentAudio.play().catch(cleanup);
       });
-      while(prefetchBuffer.length<3&&ttsQueue.length>0)prefetchBuffer.push(fetchAudio(ttsQueue.shift()));
+      topUp();
     }
     if(prefetchBuffer.length===0&&ttsQueue.length===0){
       if(ttsStreamingComplete)break;
+      // Streaming still in flight — wait briefly for more sentences
+      // to arrive from bufferTextForTTS, then re-check.
       await new Promise(r=>setTimeout(r,25));
-      if(ttsQueue.length>0){
-        while(prefetchBuffer.length<3&&ttsQueue.length>0)prefetchBuffer.push(fetchAudio(ttsQueue.shift()));
-      }else if(ttsStreamingComplete)break;
+      if(ttsQueue.length>0)topUp();
+      else if(ttsStreamingComplete)break;
     }
   }
 
@@ -1057,6 +1128,8 @@ function stopAllAudio(){
   ttsSentenceBuffer='';
   ttsStreamingComplete=false;
   ttsOnComplete=null;
+  ttsPendingBatch='';
+  ttsFirstBatchSent=false;
   const replayBtn=document.querySelector('.mobile-replay-btn.active');
   if(replayBtn)setReplayBtnIdle(replayBtn);
 }

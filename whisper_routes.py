@@ -12,28 +12,25 @@ whisper_bp = Blueprint('whisper', __name__)
 import re as _re
 
 TRANSCRIPT_FIXES = [
-    # Helcyon — Whisper never gets this right
-    (r'\bhellsion\b', 'Helcyon'),
-    (r'\bhelshin\b', 'Helcyon'),
-    (r'\bHilsion\b', 'Helcyon'),
+    # Helcyon — fuzzy phonetic catch-all (covers the vast majority of Whisper variants)
+    # Matches hel/hil/heel/hul + any middle consonants + sibilant/c/th + ion/ian/in/on/an endings
+    (r'\bh(?:el|il|eel|ul)[a-z]*?(?:sh?|c|th?)[iy]?(?:on|an|en|in|ion|yan)\b', 'Helcyon'),
+    # Outliers too phonetically distant for the fuzzy pattern
     (r'\bhouse\s*shun\b', 'Helcyon'),
     (r'\bhoseon\b', 'Helcyon'),
-    (r'\bhelcion\b', 'Helcyon'),
-    (r'\bhelshion\b', 'Helcyon'),
-    (r'\bheelshian\b', 'Helcyon'),
     (r'\bheathsin\b', 'Helcyon'),
-    (r'\bhelsion\b', 'Helcyon'),
     (r'\bhelsy\s*and\b', 'Helcyon'),
     (r'\bhealthy\s*and\b', 'Helcyon'),
     (r'\bhealthy\s*on\b', 'Helcyon'),
-    (r'\bhulsion\b', 'Helcyon'),
-    # Grok — Whisper mishears as similar-sounding words
+        # Grok — Whisper mishears as similar-sounding words
     (r'\bglock\b', 'Grok'),
     (r'\bgrock\b', 'Grok'),
     (r'\bgrook\b', 'Grok'),
     (r'\bgroc\b', 'Grok'),
     # Nebula
     (r'\bnibbula\b', 'Nebula'),
+    # Stanmer Park — Whisper hears as 'stamina park'
+    (r'\bstamina\s*park\b', 'Stanmer Park'),
     # "Deny, choose, be" — Whisper hears trailing "be" as the letter B
     (r'\b(deny[,.]?\s+choose[,.]?\s+)B\b', r'\1be'),
     # GPT-4o — Whisper reads the 'o' as zero
@@ -51,25 +48,39 @@ def correct_transcript(text):
 # Load model once at startup - 'base' is fast and accurate enough
 # Change to 'small' or 'medium' for better accuracy at cost of speed
 model = whisper.load_model("base")
-logging.info("âœ… Whisper model loaded")
+logging.info("✅ Whisper model loaded")
+
+# Allow only alphanumeric chars in the extension we derive from upload
+# filenames — guards against path-separator injection (e.g. a filename like
+# `evil.../passwd` would otherwise put `/passwd` into the tempfile suffix).
+_SAFE_EXT_RE = _re.compile(r'[^a-zA-Z0-9]')
+
+
+def _safe_ext(orig_name):
+    if '.' not in orig_name:
+        return '.webm'
+    raw = orig_name.rsplit('.', 1)[-1]
+    cleaned = _SAFE_EXT_RE.sub('', raw)[:10]
+    return f'.{cleaned}' if cleaned else '.webm'
+
 
 @whisper_bp.route('/api/whisper/transcribe', methods=['POST'])
 def transcribe():
+    tmp_path = None
     try:
         if 'audio' not in request.files:
             return jsonify({'error': 'No audio file provided'}), 400
 
         audio_file = request.files['audio']
 
-        # Save to temp file
-        # Detect file extension from uploaded filename so ffmpeg decodes correctly
-        orig_name = audio_file.filename or 'recording.webm'
-        ext = '.' + orig_name.rsplit('.', 1)[-1] if '.' in orig_name else '.webm'
+        # Save to temp file. Extension is sanitised to alphanumeric only so a
+        # malicious filename can't smuggle path separators into the suffix.
+        ext = _safe_ext(audio_file.filename or 'recording.webm')
         with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
             audio_file.save(tmp.name)
             tmp_path = tmp.name
 
-        logging.info(f"ðŸŽ¤ Transcribing audio: {tmp_path}")
+        logging.info(f"🎤 Transcribing audio: {tmp_path}")
 
         # Transcribe with Whisper
         result = model.transcribe(tmp_path, language='en')
@@ -78,12 +89,16 @@ def transcribe():
         # Post-process: correct known misheard words
         transcript = correct_transcript(transcript)
 
-        # Clean up temp file
-        os.unlink(tmp_path)
-
-        logging.info(f"âœ… Transcript: {transcript}")
+        logging.info(f"✅ Transcript: {transcript}")
         return jsonify({'transcript': transcript})
 
     except Exception as e:
-        logging.error(f"âŒ Whisper error: {e}")
+        logging.error(f"❌ Whisper error: {e}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        # Cleanup runs even if transcription raised — was leaking otherwise.
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError as _ce:
+                logging.warning(f"⚠️ Could not delete temp file {tmp_path}: {_ce}")

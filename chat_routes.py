@@ -1,9 +1,68 @@
 # chat_routes.py
-import os, json, shutil
+import os, json, re, shutil
 from flask import Blueprint, jsonify, request
 from datetime import datetime
 
-print("âœ… chat_routes blueprint loaded")
+print("✅ chat_routes blueprint loaded")
+
+# ISO-8601 timestamp prefix used on persisted chat lines: "[2026-05-11T14:32:18] Speaker: ..."
+# Compiled once at module load instead of recompiling per /chats/open call.
+_TS_PREFIX_RE = re.compile(
+    r'^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)\] '
+)
+
+
+def _atomic_write_text(filepath, text):
+    """Write `text` to `filepath` atomically.
+
+    Writes to a temp file in the same directory, then `os.replace`s it over
+    the destination. `os.replace` is atomic on both POSIX and Windows when
+    the source and destination are on the same filesystem. If the write
+    crashes mid-way, the destination file is unchanged — never truncated or
+    partially-overwritten. Prevents chat history from being destroyed by an
+    interrupted save.
+    """
+    import tempfile
+    d = os.path.dirname(filepath) or '.'
+    fd, tmp_path = tempfile.mkstemp(suffix='.tmp', prefix='.chatsave_', dir=d, text=True)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as tf:
+            tf.write(text)
+        os.replace(tmp_path, filepath)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+        raise
+
+
+def _format_chat_messages(messages, char_name):
+    """Serialise a message list into the on-disk chat-file format.
+
+    Each message becomes:  `[<timestamp>] <speaker>: <content>\\n\\n`
+    Timestamp prefix is omitted when missing. Multimodal content is flattened
+    to its text parts (images get an `[image]` placeholder).
+    """
+    lines = []
+    for msg in messages:
+        role = msg.get("role")
+        raw_content = msg.get("content", "")
+        timestamp = msg.get("timestamp", "")
+        if isinstance(raw_content, list):
+            text_parts = [p.get("text", "") for p in raw_content if p.get("type") == "text"]
+            has_image = any(p.get("type") == "image_url" for p in raw_content)
+            content = " ".join(text_parts).strip()
+            if has_image and not content:
+                content = "[image]"
+            elif has_image:
+                content = f"{content} [image]"
+        else:
+            content = raw_content
+        speaker = msg.get("speaker") or ("User" if role == "user" else char_name)
+        prefix = f"[{timestamp}] " if timestamp else ""
+        lines.append(f"{prefix}{speaker}: {content}\n\n")
+    return "".join(lines)
 
 chat_bp = Blueprint("chat_bp", __name__)
 CHATS_DIR = os.path.join(os.getcwd(), "chats")  # Legacy global chats
@@ -17,8 +76,8 @@ def get_active_project():
             with open(state_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 return data.get("active_project")
-        except:
-            pass
+        except Exception as e:
+            print(f"⚠️ get_active_project failed: {e}")
     return None
 
 def get_chats_dir():
@@ -50,7 +109,7 @@ def ensure_chats_dir():
 def list_chats():
     chats_dir = get_chats_dir()
     
-    print(f"ðŸª¶ /chats/list route triggered")
+    print(f"🪶 /chats/list route triggered")
     print(f"   Active project: {get_active_project()}")
     print(f"   Looking in: {chats_dir}")
     
@@ -106,7 +165,7 @@ def open_chat(filename):
         raw_text = f.read()
     
     print(f"\n{'='*60}")
-    print(f"ðŸ“‚ Loading: {filename}")
+    print(f"📂 Loading: {filename}")
     print(f"   From: {chats_dir}")
     print(f"{'='*60}\n")
     
@@ -116,23 +175,20 @@ def open_chat(filename):
         char_index_path = os.path.join(os.getcwd(), "characters", "index.json")
         with open(char_index_path, "r", encoding="utf-8") as f:
             available_characters = json.load(f)
-            print(f"ðŸ“‹ Known characters: {available_characters}")
+            print(f"📋 Known characters: {available_characters}")
     except Exception as e:
-        print(f"âš ï¸ Could not load character list: {e}")
+        print(f"⚠️ Could not load character list: {e}")
     
-    # âœ… Load list of valid user personas dynamically
+    # ✅ Load list of valid user personas dynamically
     valid_users = []
     try:
         user_index_path = os.path.join(os.getcwd(), "users", "index.json")
         with open(user_index_path, "r", encoding="utf-8") as f:
             valid_users = json.load(f)
-            print(f"ðŸ‘¤ Valid users: {valid_users}")
+            print(f"👤 Valid users: {valid_users}")
     except Exception as e:
-        print(f"âš ï¸ Could not load user list: {e}")
+        print(f"⚠️ Could not load user list: {e}")
     
-    import re as _re
-    _ts_pattern = _re.compile(r'^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)\] ')
-
     lines = raw_text.split('\n')
     messages = []
     current_role = None
@@ -142,7 +198,7 @@ def open_chat(filename):
     
     for line in lines:
         # Strip timestamp prefix if present
-        ts_match = _ts_pattern.match(line)
+        ts_match = _TS_PREFIX_RE.match(line)
         line_timestamp = None
         if ts_match:
             line_timestamp = ts_match.group(1)
@@ -199,7 +255,7 @@ def open_chat(filename):
             entry["timestamp"] = current_timestamp
         messages.append(entry)
     
-    print(f"ðŸ“Š Loaded {len(messages)} messages")
+    print(f"📊 Loaded {len(messages)} messages")
     return jsonify({"filename": filename, "messages": messages})
 
 # --------------------------------------------------
@@ -220,7 +276,7 @@ def rename_chat():
     if not os.path.exists(old_path):
         return jsonify({"error": "Original chat not found"}), 404
     
-    # âœ… The new_name should ALREADY include the character prefix (from frontend)
+    # ✅ The new_name should ALREADY include the character prefix (from frontend)
     # Frontend sends: "Gem - Copy - My New Title"
     # We just need to sanitize and add .txt
     
@@ -235,7 +291,7 @@ def rename_chat():
         return jsonify({"error": "A chat with that name already exists"}), 409
     
     os.rename(old_path, new_path)
-    print(f"âœï¸ Renamed: {old_filename} â†’ {new_filename}")
+    print(f"✏️ Renamed: {old_filename} → {new_filename}")
     
     return jsonify({"success": True, "new_filename": new_filename})
 
@@ -249,7 +305,7 @@ def new_chat():
     data = request.get_json() or {}
     char_name = data.get("character", "Unknown").strip()
     
-    print(f"ðŸ†• NEW CHAT REQUEST")
+    print(f"🆕 NEW CHAT REQUEST")
     print(f"   Character name: '{char_name}'")
     print(f"   Saving to: {chats_dir}")
     
@@ -270,7 +326,7 @@ def new_chat():
     with open(filepath, "w", encoding="utf-8") as f:
         f.write("")
     
-    print(f"ðŸ“ Created new chat: {filename}")
+    print(f"📝 Created new chat: {filename}")
     return jsonify({"filename": filename})
 # --------------------------------------------------
 # Auto-name Chat (from first user message — model-generated title)
@@ -437,7 +493,7 @@ def delete_chat(filename):
     
     try:
         os.remove(filepath)
-        print(f"ðŸ—‘ï¸ Deleted: {filename}")
+        print(f"🗑️ Deleted: {filename}")
         return jsonify({"success": True, "deleted": filename})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -447,64 +503,32 @@ def delete_chat(filename):
 # --------------------------------------------------
 @chat_bp.route("/chats/save", methods=["POST"])
 def save_chat_messages():
-    """Overwrite chat file with complete message history."""
+    """Overwrite chat file with complete message history (atomic)."""
     try:
         data = request.get_json()
         filename = data.get("filename")
         messages = data.get("messages")
-        
-        print(f"ðŸ’¾ FLASK: Received save request for {filename}")
-        print(f"ðŸ’¾ FLASK: Number of messages: {len(messages)}")
-        
+
         if not filename:
             return jsonify({"error": "No filename provided"}), 400
-        
         if messages is None:
             return jsonify({"error": "No messages provided"}), 400
-        
+
         chats_dir = get_chats_dir()
         filepath = os.path.join(chats_dir, filename)
-        
-        # Get character name from filename as fallback
+
+        # Character name fallback: parse from filename prefix
         char_name = "Assistant"
         if " - " in filename:
             char_name = filename.split(" - ", 1)[0]
-        
-        print(f"ðŸ’¾ FLASK: Writing to {filepath} (mode='w' = OVERWRITE)")
-        
-        # Rewrite entire file
-        with open(filepath, "w", encoding="utf-8") as f:
-            for i, msg in enumerate(messages):
-                role = msg.get("role")
-                raw_content = msg.get("content", "")
-                timestamp = msg.get("timestamp", "")
 
-                # Handle multimodal — extract text only, images not saved to disk
-                if isinstance(raw_content, list):
-                    text_parts = [p.get("text", "") for p in raw_content if p.get("type") == "text"]
-                    has_image = any(p.get("type") == "image_url" for p in raw_content)
-                    content = " ".join(text_parts).strip()
-                    if has_image and not content:
-                        content = "[image]"
-                    elif has_image:
-                        content = f"{content} [image]"
-                else:
-                    content = raw_content
-
-                # Use speaker from message, fallback to defaults
-                speaker = msg.get("speaker")
-                if not speaker:
-                    speaker = "User" if role == "user" else char_name
-
-                prefix = f"[{timestamp}] " if timestamp else ""
-                f.write(f"{prefix}{speaker}: {content}\n\n")
-                print(f"ðŸ’¾ FLASK: Wrote message {i+1}: {speaker} ({len(content)} chars)")
-        
-        print(f"ðŸ’¾ FLASK: Saved {len(messages)} messages to {filename}")
+        text = _format_chat_messages(messages, char_name)
+        _atomic_write_text(filepath, text)
+        print(f"💾 Saved {len(messages)} messages to {filename} ({len(text)} chars)")
         return jsonify({"success": True})
-        
+
     except Exception as e:
-        print(f"âŒ FLASK: Failed to save chat: {e}")
+        print(f"❌ Failed to save chat: {e}")
         return jsonify({"error": str(e)}), 500
         
         
@@ -533,11 +557,11 @@ def append_chat_turn():
             f.write(f"[{now_ts}] User: {user_msg}\n\n")
             f.write(f"[{now_ts}] {character}: {model_msg}\n\n")
         
-        print(f"ðŸ’¾ Appended turn to {filename}")
+        print(f"💾 Appended turn to {filename}")
         return jsonify({"status": "ok"})
         
     except Exception as e:
-        print(f"âŒ Failed to append chat: {e}")
+        print(f"❌ Failed to append chat: {e}")
         return jsonify({"error": str(e)}), 500
 
 # --------------------------------------------------
@@ -545,49 +569,29 @@ def append_chat_turn():
 # --------------------------------------------------
 @chat_bp.route('/chats/update', methods=['POST'])
 def update_chat():
-    """Overwrite entire chat file."""
+    """Overwrite entire chat file (atomic)."""
     try:
         data = request.get_json()
         filename = data.get("filename")
         messages = data.get("messages")
-        
+
         if not filename or messages is None:
             return jsonify({"error": "Missing data"}), 400
-        
+
         chats_dir = get_chats_dir()
         filepath = os.path.join(chats_dir, filename)
-        
-        # Get character name from filename
+
         char_name = "Assistant"
         if " - " in filename:
             char_name = filename.split(" - ", 1)[0]
-        
-        # Rewrite file
-        with open(filepath, "w", encoding="utf-8") as f:
-            for msg in messages:
-                role = msg.get("role")
-                raw_content = msg.get("content", "")
-                timestamp = msg.get("timestamp", "")
 
-                if isinstance(raw_content, list):
-                    text_parts = [p.get("text", "") for p in raw_content if p.get("type") == "text"]
-                    has_image = any(p.get("type") == "image_url" for p in raw_content)
-                    content = " ".join(text_parts).strip()
-                    if has_image and not content:
-                        content = "[image]"
-                    elif has_image:
-                        content = f"{content} [image]"
-                else:
-                    content = raw_content
-                speaker = msg.get("speaker") or ("User" if role == "user" else char_name)
-                prefix = f"[{timestamp}] " if timestamp else ""
-                f.write(f"{prefix}{speaker}: {content}\n\n")
-        
-        print(f"ðŸ“ Updated: {filename}")
+        text = _format_chat_messages(messages, char_name)
+        _atomic_write_text(filepath, text)
+        print(f"📝 Updated: {filename}")
         return jsonify({"success": True})
-        
+
     except Exception as e:
-        print(f"âŒ Update failed: {e}")
+        print(f"❌ Update failed: {e}")
         return jsonify({"error": str(e)}), 500
 
 
@@ -630,12 +634,12 @@ def copy_chat():
         new_path = os.path.join(chats_dir, new_filename)
         
         shutil.copy2(source_path, new_path)
-        print(f"ðŸ“‹ Copied: {source_filename} â†’ {new_filename}")
+        print(f"📋 Copied: {source_filename} → {new_filename}")
         
         return jsonify({"success": True, "new_filename": new_filename})
         
     except Exception as e:
-        print(f"âŒ Copy failed: {e}")
+        print(f"❌ Copy failed: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500

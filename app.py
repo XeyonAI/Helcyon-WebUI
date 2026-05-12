@@ -124,7 +124,22 @@ def _read_doc_content(filepath, max_chars=None):
             try:
                 import PyPDF2
                 with open(filepath, 'rb') as f:
-                    content = "".join(pg.extract_text() or '' for pg in PyPDF2.PdfReader(f).pages)
+                    # Accumulate page-by-page and break early once we've got
+                    # enough — the doc-scoring path only needs the first ~1000
+                    # chars (filename gate + content preview), so parsing every
+                    # page of a 100-page PDF just to discard the rest is pure
+                    # waste. Slack of 2× max_chars guards against text-extract
+                    # returning unexpectedly short pages.
+                    _parts = []
+                    _budget = (max_chars * 2) if max_chars else None
+                    _total = 0
+                    for pg in PyPDF2.PdfReader(f).pages:
+                        _txt = pg.extract_text() or ''
+                        _parts.append(_txt)
+                        _total += len(_txt)
+                        if _budget is not None and _total >= _budget:
+                            break
+                    content = "".join(_parts)
             except ImportError:
                 content = "[PDF content - PyPDF2 required to read]"
             except Exception as e:
@@ -137,12 +152,24 @@ def _read_doc_content(filepath, max_chars=None):
 
 
 def _doc_query_keywords(user_query):
-    """Extract meaningful content keywords from a user query for doc matching."""
+    """Extract meaningful content keywords from a user query for doc matching.
+
+    Tokenises on any non-alphanumeric character so possessives, contractions,
+    underscores, dashes, parentheses, and quotes all split cleanly:
+      "Smith's blood pressure"  → ["smith", "blood", "pressure"]
+      "what's the latest"       → ["latest"]               (stopwords dropped)
+      "look-up the 2024 notes"  → ["2024", "notes"]
+    The previous version did `.replace('_',' ').replace('-',' ').split()` then
+    `w.strip("'\\".,!?;:")` — which only stripped quotes at word boundaries,
+    leaving e.g. "smith's" intact as a single keyword. Filename gates and
+    web-search local-knowledge checks then ran `\\bsmith's\\b` against the
+    normalised filename text ("smith jones pdf") and missed.
+    """
     if not user_query:
         return []
-    words = user_query.lower().replace('_', ' ').replace('-', ' ').split()
-    return [w.strip("'\".,!?;:") for w in words
-            if w.strip("'\".,!?;:") not in _DOC_STOPWORDS and len(w.strip("'\".,!?;:")) > 2]
+    tokens = re.findall(r"[a-z0-9]+", user_query.lower())
+    return [t for t in tokens
+            if t not in _DOC_STOPWORDS and len(t) > 2]
 
 
 def _score_doc(fname, filepath, query_keywords):
@@ -155,8 +182,12 @@ def _score_doc(fname, filepath, query_keywords):
         pat = r'\b' + re.escape(kw) + r'\b'
         if re.search(pat, fname_norm):
             score += 3
-    # Content preview — text files only; skips heavy binary parsing on every request
-    if fname.lower().endswith(('.txt', '.md')) and score == 0:
+    # Content preview: always runs for short queries (≤2 keywords) across all file types
+    # so a single first-name query can match on filename + content combined, giving it a
+    # higher score than a competing doc that only has one of the two.
+    # For longer queries the old behaviour holds: txt/md only, and only when filename scored 0.
+    _short_query = len(query_keywords) <= 2
+    if _short_query or (fname.lower().endswith(('.txt', '.md')) and score == 0):
         preview = (_read_doc_content(filepath, max_chars=1000) or '').lower()
         for kw in query_keywords:
             if re.search(r'\b' + re.escape(kw) + r'\b', preview):
@@ -166,14 +197,19 @@ def _score_doc(fname, filepath, query_keywords):
 
 _PERSPECTIVE_RE = re.compile(r'^\[PERSPECTIVE:\s*(\w+)\s*\]$', re.IGNORECASE)
 
+_FAITHFULNESS_SUFFIX = (
+    "\n\nImportant: relay only what is explicitly stated in this document. "
+    "Do not infer, add, or extrapolate detail that isn't present. "
+    "If the document doesn't cover something, say so."
+)
+
 def _extract_perspective(content):
     """Check the first non-empty line for a [PERSPECTIVE: ...] tag.
     If found, strip it and return (prefix, suffix, content_without_tag):
       • prefix — framing header injected BEFORE the document content
-      • suffix — voice reminder injected AFTER the document content (only populated
-        for first_person_account, to defeat voice contagion: the model finishes
-        reading first-person prose with the reminder, not the prose itself, as the
-        last context before generation)
+      • suffix — injected AFTER the document content; all three tagged types carry
+        a faithfulness instruction; first_person_account also carries a voice reminder
+        to defeat voice contagion
     If no tag is found, return ("", "", content) — no regressions for untagged docs."""
     lines = content.split('\n')
     for i, line in enumerate(lines):
@@ -197,13 +233,14 @@ def _extract_perspective(content):
                     "• Do NOT use first person (you did not live this experience)\n"
                     "• Do NOT use third person such as \"the user\" or \"they\" (that distances them from their own experience)\n"
                     "• Example: the account says \"I parked outside the gym\" → you say \"You parked outside the gym\" — never \"I parked...\", never \"The user parked...\""
+                    + _FAITHFULNESS_SUFFIX
                 )
             elif value == 'third_person_account':
                 prefix = "The following is the user's written account about someone else:\n\n"
-                suffix = ""
+                suffix = _FAITHFULNESS_SUFFIX
             else:
                 prefix = "The following is reference material:\n\n"
-                suffix = ""
+                suffix = _FAITHFULNESS_SUFFIX
             return prefix, suffix, rest
         break  # first non-empty line is not a tag — stop
     return "", "", content
@@ -233,11 +270,17 @@ def load_project_documents(project_name, user_query=""):
 
     best_file, best_score = None, 0
     for fname in all_files:
+        # Gate: require at least one keyword in the filename before reading content.
+        # Pure content-only hits (score 1-2) are too weak — they match incidentally mentioned
+        # words rather than docs actually about the query topic.
+        _fn = fname.lower().replace('_', ' ').replace('-', ' ').replace('.', ' ')
+        if not any(re.search(r'\b' + re.escape(kw) + r'\b', _fn) for kw in query_keywords):
+            continue
         s = _score_doc(fname, os.path.join(docs_dir, fname), query_keywords)
         if s > best_score:
             best_score, best_file = s, fname
 
-    if not best_file or best_score == 0:
+    if not best_file or best_score < 3:
         print(f"⏭️ No document matched keywords: {query_keywords}")
         return ""
 
@@ -286,17 +329,34 @@ def load_global_documents(user_query=""):
     if not query_keywords:
         return ""
 
+    # Scale minimum score with query length.
+    # 1 keyword  → 3: must be a clean filename hit (score=3).
+    # 2 keywords → 5: blocks the 3+1 cross-source false positive where one keyword
+    #                  happens to be in the filename and a different keyword appears in
+    #                  the content — those two signals are unrelated and should not combine
+    #                  to trigger injection. Genuine 2-keyword matches need filename×2 (6)
+    #                  or filename + both keywords in content (3+1+1=5).
+    # 3+ keywords → 6: requires at least two filename hits or one filename + solid content.
+    _n_kws = len(query_keywords)
+    _min_score = 3 if _n_kws == 1 else (5 if _n_kws == 2 else 6)
+
     best_file, best_score = None, 0
     for fname in all_files:
+        # Gate: skip any doc whose filename shares no keyword with the query.
+        # Global docs are named reference files about specific people/topics — a filename
+        # hit is a necessary (not just sufficient) signal of genuine relevance.
+        _fn = fname.lower().replace('_', ' ').replace('-', ' ').replace('.', ' ')
+        if not any(re.search(r'\b' + re.escape(kw) + r'\b', _fn) for kw in query_keywords):
+            continue
         s = _score_doc(fname, os.path.join(global_docs_dir, fname), query_keywords)
         if s > best_score:
             best_score, best_file = s, fname
 
-    if not best_file or best_score == 0:
-        print(f"⭕ Global docs: no match for keywords: {query_keywords}")
+    if not best_file or best_score < _min_score:
+        print(f"⭕ Global docs: no strong match (keywords={query_keywords}, min={_min_score})")
         return ""
 
-    print(f"🌐 Global doc match: '{best_file}' (score={best_score})")
+    print(f"🌐 Global doc match: '{best_file}' (score={best_score}, min={_min_score}, keywords={query_keywords})")
 
     MAX_CHARS_PER_DOC = 12000
     content = _read_doc_content(os.path.join(global_docs_dir, best_file), max_chars=MAX_CHARS_PER_DOC)
@@ -426,7 +486,45 @@ with open('settings.json', 'r') as f:
     _llama_port = settings.get('llama_args', {}).get('port', 8080)
     API_URL = f'http://127.0.0.1:{_llama_port}'
     print(f"🔌 API_URL set to: {API_URL}")
-    
+    # `parallel > 1` enables concurrent slot scheduling in llama-server. HWUI's
+    # /chat path uses a global `abort_generation` flag and a single in-flight
+    # counter that aren't safe under concurrent requests sharing one server
+    # instance. Warn loudly so it can't drift unnoticed.
+    _parallel = int(settings.get('llama_args', {}).get('parallel', 1))
+    if _parallel > 1:
+        print("\n" + "!" * 70, flush=True)
+        print(f"⚠️  WARNING: llama_args.parallel = {_parallel} (>1)", flush=True)
+        print("    HWUI's /chat route is not parallel-safe. `abort_generation`", flush=True)
+        print("    is a global, and the in-flight tracker assumes one request", flush=True)
+        print("    per slot. Concurrent /chat requests will race. Set parallel:1", flush=True)
+        print("    in settings.json unless you know what you're doing.", flush=True)
+        print("!" * 70 + "\n", flush=True)
+
+def real_token_count(text):
+    """Exact BPE token count via llama-server's /tokenize endpoint.
+
+    Use this instead of `rough_token_count` anywhere accuracy matters.
+    `rough_token_count` is a word/punctuation counter — it undercounts BPE
+    by 25-40% on prompts heavy in Unicode separators (═══), emoji (⚠️ 🎯),
+    and ChatML role tags (<|im_start|>). Real BPE tokenizes these
+    differently than \\w+ heuristics.
+
+    Falls back to `rough_token_count(text) * 1.4` if /tokenize is
+    unreachable (llama-server not running, network blip).
+    """
+    try:
+        r = requests.post(
+            f"{API_URL}/tokenize",
+            json={"content": text},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            return len(r.json().get("tokens", []))
+        print(f"⚠️ /tokenize returned {r.status_code} — falling back to rough*1.4", flush=True)
+    except Exception as _e:
+        print(f"⚠️ /tokenize call failed: {_e!r} — falling back to rough*1.4", flush=True)
+    return int(rough_token_count(text) * 1.4)
+
 CURRENT_MODEL = None
 
 print("--------------------------------------------------")
@@ -626,6 +724,16 @@ def strip_chatml_leakage(text):
     text = re.sub(r"^(?:user|assistant|system)(?:\n|:)", "", text, flags=re.IGNORECASE)
     if text != _before:
         print(f"\u2702\ufe0f [strip_chatml] FIRED: ^role pattern. Was: {repr(_before[:80])}", flush=True)
+    # Strip example dialogue REMINDER block (handles single-chunk / non-streaming case)
+    # Full block: \u2550\u2550\u2550 separator + \u26a0\ufe0f REMINDER lines + closing \u2550\u2550\u2550 separator
+    text = re.sub(r'\u2550{3,}[^\n]*\n?\u26a0\ufe0f\s*REMINDER:[\s\S]*?\u2550{3,}[^\n]*\n?', '', text)
+    # From \u26a0\ufe0f REMINDER: to closing separator (no leading separator in chunk)
+    text = re.sub(r'\u26a0\ufe0f\s*REMINDER:[\s\S]*?\u2550{3,}[^\n]*\n?', '', text)
+    # Individual lines (cross-chunk fallback \u2014 one line per chunk)
+    text = re.sub(r'\u26a0\ufe0f\s*REMINDER:[^\n]*\n?', '', text)
+    text = re.sub(r'\u26a0\ufe0f\s*Repeating\s+or\s+paraphrasing[^\n]*\n?', '', text)
+    # Orphaned \u2550{3,} separator lines left after REMINDER content is stripped
+    text = re.sub(r'\u2550{3,}[^\n]*\n?', '', text)
     # Log if chunk was significantly shortened
     if len(original) > 10 and len(text) < len(original) * 0.5:
         print(f"\u26a0\ufe0f [strip_chatml] Chunk shrank >50%: {len(original)}\u2192{len(text)} chars. End was: {repr(original[-60:])}", flush=True)
@@ -1304,7 +1412,7 @@ def do_chat_search(query, current_filename=None):
 def stream_model_response(payload):
     global abort_generation
     abort_generation = False  # Reset flag at start
-    
+
     if app.debug:
         print("\n🧩 FULL PAYLOAD SENDING TO MODEL:", flush=True)
         print(json.dumps(payload, indent=2), flush=True)
@@ -1315,43 +1423,102 @@ def stream_model_response(payload):
         timeout=None
     )
     print(f"🔗 Response status: {response.status_code}", flush=True)
-    
+
     import sys
     total_chunks = 0
     all_text = []
-    
+    # Capture llama.cpp's stop metadata from the final SSE event so we can
+    # diagnose mid-response cutoffs (EOS vs stop-word vs n_predict limit vs
+    # KV truncation). Without this the only signal we get is char count,
+    # which can't distinguish "model decided it was done" from "stop word
+    # fired" from "ran out of context". ⚠️ DO NOT remove — load-bearing for
+    # debugging Helcyon mid-sentence cutoffs in long conversations.
+    last_event = {}
+
     for line in response.iter_lines(chunk_size=1):
         # Check abort flag
         if abort_generation:
             print("🛑 Generation aborted by user", flush=True)
             response.close()  # Close the connection
             break
-            
+
         if not line:
             continue
         try:
             line_str = line.decode("utf-8").strip()
-            
+
             if line_str.startswith("data:"):
                 line_str = line_str[5:].strip()
             if line_str == "[DONE]":
                 break
-            
+
             j = json.loads(line_str)
+            # Save every event with stop metadata — final event has stop=True
+            # and full per-completion statistics. Some llama.cpp builds also
+            # ship these on intermediate events with stop=False (no-op).
+            if j.get("stop") is True or "stopped_eos" in j or "tokens_predicted" in j:
+                last_event = j
             chunk = strip_chatml_leakage(j.get("content", ""))
             total_chunks += 1
-            
+
             if chunk:
                 all_text.append(chunk)
                 yield chunk
                 sys.stdout.flush()
 
-                
+
         except Exception as e:
             print(f"❌ Parse error: {e}", flush=True)
             continue
-    
+
     print(f"\n🎯 DONE: {total_chunks} chunks, {len(''.join(all_text))} chars total", flush=True)
+    # 🩺 Log llama.cpp's stop reason — load-bearing diagnostic for cutoffs.
+    if last_event:
+        _stop_eos    = last_event.get("stopped_eos", False)
+        _stop_word   = last_event.get("stopped_word", False)
+        _stop_limit  = last_event.get("stopped_limit", False)
+        _stopping_w  = last_event.get("stopping_word", "")
+        _tok_pred    = last_event.get("tokens_predicted", "?")
+        _tok_eval    = last_event.get("tokens_evaluated", "?")
+        _truncated   = last_event.get("truncated", False)
+        # Pick the dominant reason for a single human-readable line
+        if _stop_eos:
+            _reason = "EOS (model emitted end-of-stream token)"
+        elif _stop_word:
+            _reason = f"STOP WORD matched: {repr(_stopping_w)}"
+        elif _stop_limit:
+            _reason = "n_predict LIMIT reached"
+        else:
+            _reason = "unknown (no stopped_* flag in final event)"
+        print(
+            f"🩺 STOP REASON: {_reason} | "
+            f"tokens_predicted={_tok_pred} tokens_evaluated={_tok_eval} "
+            f"truncated={_truncated}",
+            flush=True,
+        )
+        # When the stop reason is unknown, dump the full final event so we can
+        # see fields llama.cpp set that we don't know to look for (slot id
+        # change, stopping_word == "", custom cancellation flags, …). Strongly
+        # correlated with server-side cancellation from a 2nd /chat preempting
+        # the first under `parallel: 1`. ⚠️ DO NOT remove until the cutoff is
+        # root-caused and fixed.
+        if not (_stop_eos or _stop_word or _stop_limit):
+            _safe_event = {
+                k: v for k, v in last_event.items()
+                if k not in ("content", "generation_settings", "prompt")
+            }
+            print(f"🩺 FINAL EVENT (full): {json.dumps(_safe_event, default=str)[:1500]}", flush=True)
+        # Flag the specific failure mode this diagnostic was added to catch:
+        # model emits EOS after only a handful of tokens in a long conversation.
+        if _stop_eos and isinstance(_tok_pred, int) and _tok_pred < 80:
+            print(
+                f"⚠️  PREMATURE EOS — model emitted end-of-stream after only "
+                f"{_tok_pred} tokens. Prompt likely contains a structural cue "
+                f"telling the model its turn is over before it really started.",
+                flush=True,
+            )
+    else:
+        print("🩺 STOP REASON: no metadata captured (final SSE event missing stop flags)", flush=True)
 
 # --------------------------------------------------
 # Stream vision/multimodal model response
@@ -1477,6 +1644,41 @@ def stream_openai_response(messages, api_key, model, temperature, max_tokens, to
 # --------------------------------------------------
 abort_generation = False
 
+# In-flight /chat tracker — load-bearing diagnostic for the mid-response cutoff
+# bug (final SSE event arrives with stop=true but no stopped_* flags, which
+# matches llama-server's behaviour when a 2nd request preempts the slot under
+# `parallel: 1`). If a 2nd /chat arrives while the 1st is still streaming, we
+# log it loudly with both request IDs; that confirms whether the cutoff is
+# being caused by a client-side resend racing the first request. ⚠️ DO NOT
+# remove until the cutoff is root-caused.
+import threading as _hwui_threading
+from flask import g as _hwui_g
+_chat_inflight_lock = _hwui_threading.Lock()
+_chat_inflight_count = 0
+_chat_request_seq = 0
+
+@app.teardown_request
+def _chat_inflight_teardown(_exc=None):
+    """Decrement the /chat in-flight counter after the request is fully done.
+    For streaming responses wrapped in `stream_with_context`, this fires after
+    the stream is exhausted (Flask keeps the request context alive until then).
+    No-op for non-/chat routes — they don't set `g._chat_my_req_id`.
+
+    Uses `g.pop()` to be idempotent: Flask debug mode auto-reloads the module
+    on file save, which can re-register this teardown so it fires twice per
+    request. Without pop, the counter would go negative."""
+    try:
+        rid = _hwui_g.pop("_chat_my_req_id", None)
+    except Exception:
+        rid = None
+    if rid is None:
+        return
+    global _chat_inflight_count
+    with _chat_inflight_lock:
+        _chat_inflight_count -= 1
+        _now = _chat_inflight_count
+    print(f"🩺 /chat req#{rid} ended (inflight={_now})", flush=True)
+
 @app.route("/abort_generation", methods=["POST"])
 def abort_generation_endpoint():
     """Stop the current generation immediately."""
@@ -1552,7 +1754,44 @@ def chat():
     print("🔴🔴🔴 CHAT ROUTE HIT - STARTING 🔴🔴🔴")
     import datetime
     import re, os, json, requests
-    
+
+    # 🩺 In-flight tracker — see comment above _chat_inflight_lock.
+    # Decrement is handled by @app.teardown_request which fires after the
+    # streaming response is exhausted (Flask keeps the request context alive
+    # via stream_with_context).
+    global _chat_inflight_count, _chat_request_seq
+    with _chat_inflight_lock:
+        _chat_request_seq += 1
+        _my_req_id = _chat_request_seq
+        _chat_inflight_count += 1
+        _concurrent = _chat_inflight_count
+    _hwui_g._chat_my_req_id = _my_req_id
+    if _concurrent > 1:
+        print(
+            f"🚨 CONCURRENT /chat DETECTED — req#{_my_req_id} entering while "
+            f"{_concurrent - 1} other /chat request(s) already in flight. "
+            f"With parallel:1 in llama-server this WILL preempt the earlier "
+            f"generation and cause STOP REASON: unknown on the cancelled one.",
+            flush=True,
+        )
+    else:
+        print(f"🩺 /chat req#{_my_req_id} entered (inflight={_concurrent})", flush=True)
+
+    # Single per-request snapshot of settings.json. Used by the
+    # request-critical code paths below (ctx_size for n_predict, ignore_eos
+    # diagnostic, diag_verbose verbose-logging gate). Other reads scattered
+    # through chat() pluck unrelated config and are left in place — they
+    # cache nothing and re-reading them per turn is microseconds.
+    try:
+        with open("settings.json", "r", encoding="utf-8") as _sf_req:
+            _req_settings = json.load(_sf_req)
+    except Exception as _se:
+        print(f"⚠️ /chat req#{_my_req_id} settings.json read failed: {_se!r}", flush=True)
+        _req_settings = {}
+    _ctx_size_req = int(_req_settings.get("llama_args", {}).get("ctx_size", 16384))
+    _ignore_eos_req = bool(_req_settings.get("ignore_eos", False))
+    _diag_verbose = bool(_req_settings.get("diag_verbose", False))
+
     data = request.get_json()
     print(f"🔍 DEBUG: Full request data keys: {data.keys()}")
     
@@ -1734,25 +1973,18 @@ def chat():
             config_path = os.path.join(projects_dir, active_project, "config.json")
             
             # Load project instructions
+            # Kept as raw text — folded into the [REPLY INSTRUCTIONS] depth-0 packet
+            # later in prompt assembly (not the system block at position 0). Heavy
+            # ═══ fencing was removed because the packet has its own framing.
             if os.path.exists(config_path):
                 with open(config_path, "r", encoding="utf-8") as f:
                     project_config = json.load(f)
                     project_instructions = project_config.get("instructions", "").strip()
                     project_rp_mode = project_config.get("rp_mode", False)
                     project_rp_opener = project_config.get("rp_opener", "").strip()
-                    
+
                     if project_instructions:
-                        project_instructions = (
-                            f"\n\n"
-                            f"═══════════════════════════════════════════════════════════\n"
-                            f"PROJECT CONTEXT\n"
-                            f"═══════════════════════════════════════════════════════════\n\n"
-                            f"{project_instructions}\n\n"
-                            f"═══════════════════════════════════════════════════════════\n"
-                            f"END PROJECT CONTEXT\n"
-                            f"═══════════════════════════════════════════════════════════\n\n"
-                        )
-                        print(f"📁 Injected project instructions for: {active_project}")
+                        print(f"📁 Loaded project instructions for: {active_project}")
                         print(f"   Instructions length: {len(project_instructions)} chars")
             
             
@@ -1951,10 +2183,11 @@ def chat():
 
         if char_data.get("main_prompt"):
             parts.append(strip_chatml(char_data["main_prompt"]))
-        
-        # ✅ ADD POST-HISTORY INSTRUCTIONS
-        if char_data.get("post_history"):
-            parts.append(f"\nPost-History Instructions:\n{strip_chatml(char_data['post_history'])}")
+
+        # post_history is no longer added to the system block — it moved to the
+        # [REPLY INSTRUCTIONS] depth-0 packet (folded into the last user turn)
+        # so it sits adjacent to the model's generation point. See the packet
+        # builder near the end of prompt assembly.
 
         # 🧠 INJECT SESSION SUMMARY — only on fresh chats
         # A chat is "new" if there are no real assistant replies yet.
@@ -1970,6 +2203,13 @@ def chat():
             len(assistant_msgs) == 0 or
             (len(assistant_msgs) == 1 and _is_opening_line_msg(assistant_msgs[0]))
         )
+
+        # character_note and author_note are no longer added here — both ride
+        # in the [REPLY INSTRUCTIONS] depth-0 packet (folded into the last
+        # user turn). Author's Note is used SillyTavern-style for short scene-
+        # state instructions ("alarm going off", "you feel drunk"), so it
+        # needs the same recency pull as character_note rather than being
+        # buried at position 0.
 
         char_context = "\n\n".join(parts)
 
@@ -2011,14 +2251,17 @@ def chat():
         _st_model = (CURRENT_MODEL or '').lower()
         _is_jinja_model = _st_template in ('jinja', 'qwen') or 'gemma' in _st_model or 'qwen' in _st_model
 
+        # project_instructions is intentionally NOT in system_text — it moved
+        # to the [REPLY INSTRUCTIONS] depth-0 packet (folded into the last
+        # user turn) for higher behavioural priority.
         if _is_jinja_model:
             system_text = (
-                f"{system_prompt}\n\n{char_context}{user_context}{project_instructions}{project_documents}"
+                f"{system_prompt}\n\n{char_context}{user_context}{project_documents}"
             )
             print("📐 Jinja model: skipping instruction layer + tone primer from system_text")
         else:
             system_text = (
-                f"{system_prompt}\n\n{char_context}{user_context}\n\n{instruction}\n\n{tone_primer}{project_instructions}{project_documents}"
+                f"{system_prompt}\n\n{char_context}{user_context}\n\n{instruction}\n\n{tone_primer}{project_documents}"
             )
 
         # 📊 LOG SYSTEM MESSAGE SIZE
@@ -2183,9 +2426,28 @@ def chat():
     if len(active_chat) > 20:
         active_chat = active_chat[-20:]
         print(f"⚠️ Trimmed conversation history to last 20 messages")
-    
+
+    # Drop leading assistant messages — Helcyon ChatML requires `S U A U A … U`.
+    # The frontend persists the character's opening line (and historically the
+    # project RP opener) as the first message in conversation_history, so on
+    # every subsequent turn it arrives at position 0 of active_chat and would
+    # land at position 1 of `messages`, producing `S A U A U …`. The model sees
+    # an assistant turn before any user input and generates 0 tokens. ⚠️ DO NOT remove —
+    # also covers any past trim-to-20 window that happens to start on an
+    # assistant turn.
+    _dropped_leading = 0
+    while active_chat and active_chat[0].get("role") == "assistant":
+        _dropped = active_chat.pop(0)
+        _dropped_leading += 1
+        _opening = " (is_opening_line)" if _dropped.get("is_opening_line") else ""
+        _c = _dropped.get("content", "")
+        _clen = sum(len(p.get("text", "")) for p in _c if p.get("type") == "text") if isinstance(_c, list) else len(_c)
+        print(f"🗑️ Dropped leading assistant message{_opening} from prompt ({_clen} chars)")
+    if _dropped_leading:
+        print(f"🗑️ Total leading assistant messages stripped: {_dropped_leading}")
+
     print(f"📊 Using {len(active_chat)} messages from conversation history")
-    
+
     # 🔥 NEW: Decide if this is a new conversation or continuation
     assistant_messages = [msg for msg in active_chat if msg.get("role") == "assistant"]
     print(f"🔍 DEBUG: Found {len(assistant_messages)} assistant messages in active_chat")
@@ -2196,26 +2458,21 @@ def chat():
         *active_chat  # ← THIS is the full conversation history (includes latest user msg)
     ]
 
-    # 🎭 INJECT RP OPENER into LLM context — synthetic first assistant message
-    # Only on new chats so the model treats it as its own prior output and continues the style
-    if project_rp_mode and project_rp_opener and _is_new_chat:
-        messages.insert(1, {"role": "assistant", "content": project_rp_opener})
-        print(f"🎭 RP opener injected into LLM context ({len(project_rp_opener)} chars)")
+    # 🎭 RP opener insertion removed — placing an assistant turn at position 1
+    # (before any user message) creates the same `S A U …` malformed sequence as
+    # the persisted-opening-line case stripped above, and causes the model to
+    # emit zero tokens. The opener is still displayed to the user by the
+    # frontend; the model gets style guidance from the system prompt + example
+    # dialogue instead. ⚠️ DO NOT re-add `messages.insert(1, …)` here for any
+    # role/content combination.
     
-    # ✅ INJECT AUTHOR'S NOTE if provided
-    author_note = data.get("author_note", "").strip()
-    if author_note:
-        # Insert near the end for maximum influence (before last 2-3 messages)
-        insert_position = max(1, len(messages) - 3)
-        
-        messages.insert(insert_position, {
-            "role": "system",
-            "content": f"[Author's Note: {author_note}]"
-        })
-        print(f"✅ Injected Author's Note at position {insert_position}: {author_note[:50]}...")
-        
-   
-    # ✅ INJECT CHARACTER NOTE if present (every 4 messages)
+    # character_note, author_note, post_history, and project_instructions
+    # ride in the [REPLY INSTRUCTIONS] depth-0 packet — appended to the last
+    # user turn's content during prompt assembly below. ⚠️ DO NOT re-add a
+    # messages.insert() here for any of those fields. Folding into the
+    # existing last user turn preserves `S U A U A … U` alternation; a new
+    # message (system or otherwise) would break it.
+
     # Trim if needed (secondary safety net)
     # ⚠️ Example dialogue (~2000 tokens) gets appended to system message AFTER this trim.
     # Pass its estimated size as overhead so the trimmer accounts for it upfront.
@@ -2249,9 +2506,74 @@ def chat():
         _EX_WRAPPER_OVERHEAD = 400
         _ex_overhead = rough_token_count(_char_ex_pre) + _EX_WRAPPER_OVERHEAD
         print(f"📐 Example dialogue overhead: ~{_ex_overhead} tokens (dialogue + {_EX_WRAPPER_OVERHEAD} wrapper, pre-accounted in trim)")
+
+    # Pre-account for the [REPLY INSTRUCTIONS] depth-0 packet, which is folded
+    # into the last user turn AFTER trimming. Without this the trimmer
+    # under-estimates the final prompt size and a fat packet (long project
+    # instructions + character note) could push past ctx_size at runtime.
+    _reply_packet_overhead = 0
+    if project_instructions and project_instructions.strip():
+        _reply_packet_overhead += rough_token_count(project_instructions) + 10
+    if _char_ex_pre:
+        _reply_packet_overhead += 60   # style reminder is fixed ~200 chars
+    _ph_pre = char_data.get("post_history", "").strip()
+    if _ph_pre:
+        _reply_packet_overhead += rough_token_count(_ph_pre) + 10
+    _an_pre = data.get("author_note", "").strip() if isinstance(data, dict) else ""
+    if _an_pre:
+        _reply_packet_overhead += rough_token_count(_an_pre) + 10
+    _cn_pre = char_data.get("character_note", "").strip()
+    if _cn_pre:
+        _reply_packet_overhead += rough_token_count(_cn_pre) + 10
+    if _reply_packet_overhead:
+        _reply_packet_overhead += 20   # [REPLY INSTRUCTIONS] header + separators
+        _ex_overhead += _reply_packet_overhead
+        print(f"📐 Reply-instructions packet overhead: ~{_reply_packet_overhead} tokens (pre-accounted in trim)")
+
     messages = trim_chat_history(messages, extra_system_overhead=_ex_overhead)
-    
+
     print(f"🔍 DEBUG: After trimming, {len(messages)} messages remain")
+
+    # 🩺 TRIMMED-HISTORY DUMP — diagnostic for deterministic mid-response
+    # cutoffs. Dumps the last 5 user/assistant pairs (up to 10 messages) with
+    # head/tail char previews and per-message rough-token counts; latest user
+    # turn is printed verbatim. Gated behind settings.json `diag_verbose: true`
+    # since it's heavy console output. Flip on when investigating cutoffs.
+    if _diag_verbose:
+        _convo_msgs = [m for m in messages if m.get("role") in ("user", "assistant")]
+        _tail_msgs = _convo_msgs[-10:]
+        print("\n" + "=" * 70, flush=True)
+        print(f"🩺 TRIMMED HISTORY DUMP — last {len(_tail_msgs)} user/asst messages "
+              f"of {len(_convo_msgs)} total in prompt", flush=True)
+        print("=" * 70, flush=True)
+        for _di, _dm in enumerate(_tail_msgs):
+            _idx_in_full = len(_convo_msgs) - len(_tail_msgs) + _di
+            _drole = _dm.get("role", "?").upper()
+            _dcontent = _dm.get("content", "")
+            if isinstance(_dcontent, list):
+                _dcontent = " ".join(
+                    p.get("text", "") for p in _dcontent if p.get("type") == "text"
+                )
+            if not isinstance(_dcontent, str):
+                _dcontent = str(_dcontent)
+            _dchars = len(_dcontent)
+            _dtok = rough_token_count(_dcontent)
+            _is_latest_user = (
+                _di == len(_tail_msgs) - 1 and _dm.get("role") == "user"
+            )
+            if _is_latest_user:
+                print(f"\n[msg #{_idx_in_full}] {_drole}  ({_dchars} chars, ~{_dtok} rough tokens)  ← LATEST", flush=True)
+                print("  FULL CONTENT:", flush=True)
+                for _line in _dcontent.splitlines() or [""]:
+                    print(f"    {_line}", flush=True)
+            else:
+                _head = _dcontent[:200].replace("\n", " ⏎ ")
+                _tail = _dcontent[-200:].replace("\n", " ⏎ ")
+                print(f"\n[msg #{_idx_in_full}] {_drole}  ({_dchars} chars, ~{_dtok} rough tokens)", flush=True)
+                print(f"  HEAD: {_head!r}", flush=True)
+                if _dchars > 400:
+                    print(f"  TAIL: {_tail!r}", flush=True)
+        print("=" * 70 + "\n", flush=True)
     
     # (project instructions are already in the system message above - no need to repeat)
 
@@ -2391,29 +2713,20 @@ def chat():
             print(f"Length: {len(system_content)} chars")
             print(f"Last 500 chars:\n{system_content[-500:]}")
             print("="*80 + "\n")
-    
-# Continuation reminder injection removed — mid-conversation system messages
-    # confuse Helcyon (trained on clean ChatML with system only at position 0)
-    # causing immediate EOS on first token in long chats.
+
+    # ⚠️ DO NOT inject any mid-conversation system messages here. A second
+    # system message anywhere after position 0 breaks ChatML alternation and
+    # broke Helcyon (Mistral Nemo) on the May 11 2026 diagnostic — role
+    # sequence went `S U A U A … S U` and the model emitted EOS after ~15
+    # tokens. The KV-cache root cause was the bigger fish that day, but the
+    # role-alternation finding stands on its own. If you need to give the
+    # model fresh per-turn instructions, use the [REPLY INSTRUCTIONS] depth-0
+    # packet below instead — it folds into the last user message, preserving
+    # `S U A U A … U` alternation.
     if len(assistant_messages) > 0:
         print("🔄 Continuation detected")
     else:
         print("🆕 New conversation detected - allowing greeting")
-
-    # Inject character note LAST — after continuation reminder — so it's the final
-    # system message the model reads before the user turn. This maximises adherence.
-    char_note = char_data.get("character_note", "").strip()
-    if char_note:
-        message_count = len([m for m in messages if m.get("role") in ["user", "assistant"]])
-        if message_count % 4 == 0 or message_count < 4:
-            insert_position = max(1, len(messages) - 1)
-            messages.insert(insert_position, {
-                "role": "system",
-                "content": f"[Character Note: {char_note}]"
-            })
-            print(f"✅ Injected Character Note at position {insert_position} (message #{message_count}): {char_note[:50]}...")
-        else:
-            print(f"⏭️ Skipped Character Note injection (message #{message_count})")
 
     # Build final ChatML prompt from ALL messages
     prompt_parts = []
@@ -2427,37 +2740,146 @@ def chat():
             ).strip()
         else:
             content = raw_content.strip()
-        prompt_parts.append(f"<|im_start|>{role}\n{content}\n<|im_end|>")       
-    
-    # Add the assistant start tag (with pre-fill for continuations)
+        prompt_parts.append(f"<|im_start|>{role}\n{content}\n<|im_end|>")
+
+    # ───────────────────────────────────────────────────────────────────────
+    # [REPLY INSTRUCTIONS] — depth-0 packet of instruction-following content.
+    # Folded into the last user turn (not a new message) so role alternation
+    # stays `S U A U A … U` and the prompt-structure diagnostic below is
+    # satisfied. Items are ordered least → most attention, so the field the
+    # model needs to obey most strongly lands closest to its generation point:
+    #   1. project_instructions  (broad context, lowest urgency)
+    #   2. style reminder        (points back to example_dialogue at the top)
+    #   3. post_history          (secondary behavioural tier)
+    #   4. author_note           (per-turn scene state — "alarm going off")
+    #   5. character_note        (top behavioural priority — placed last)
+    # Empty fields are skipped; if none are set the packet isn't built.
+    # The style reminder is a pointer, not a re-injection — example_dialogue
+    # samples themselves stay in the system block (~25 tokens here vs.
+    # hundreds for re-injecting the samples every turn).
+    # ───────────────────────────────────────────────────────────────────────
+    _reply_instr_items = []
+
+    if project_instructions and project_instructions.strip():
+        _reply_instr_items.append(f"Project context: {project_instructions.strip()}")
+
+    if char_data.get("example_dialogue", "").strip():
+        _reply_instr_items.append(
+            "Style: match the speaking-style examples shown at the top of context — "
+            "tone, vocabulary, rhythm, formatting. Write fresh content; never paraphrase the examples."
+        )
+
+    _ph_val = char_data.get("post_history", "").strip()
+    if _ph_val:
+        _ph_val = re.sub(r'<\|im_start\|>\w*', '', _ph_val)
+        _ph_val = re.sub(r'<\|im_end\|>', '', _ph_val).strip()
+        if _ph_val:
+            _reply_instr_items.append(f"Post-history: {_ph_val}")
+
+    _an_val = data.get("author_note", "").strip() if isinstance(data, dict) else ""
+    if _an_val:
+        _an_val = re.sub(r'<\|im_start\|>\w*', '', _an_val)
+        _an_val = re.sub(r'<\|im_end\|>', '', _an_val).strip()
+        if _an_val:
+            _reply_instr_items.append(f"Author's note: {_an_val}")
+
+    _cn_val = char_data.get("character_note", "").strip()
+    if _cn_val:
+        _cn_val = re.sub(r'<\|im_start\|>\w*', '', _cn_val)
+        _cn_val = re.sub(r'<\|im_end\|>', '', _cn_val).strip()
+        if _cn_val:
+            _reply_instr_items.append(f"Character note: {_cn_val}")
+
+    if _reply_instr_items and prompt_parts:
+        _packet = "\n\n[REPLY INSTRUCTIONS]\n\n" + "\n\n".join(_reply_instr_items)
+        # Fold into the existing last user turn rather than appending a second
+        # user message — keeps strict S U A U A … U alternation intact.
+        if prompt_parts[-1].startswith("<|im_start|>user\n") and prompt_parts[-1].endswith("\n<|im_end|>"):
+            prompt_parts[-1] = prompt_parts[-1][:-len("\n<|im_end|>")] + _packet + "\n<|im_end|>"
+            print(f"📌 [REPLY INSTRUCTIONS] depth-0 packet folded into last user turn "
+                  f"({len(_packet)} chars, {len(_reply_instr_items)} item(s))")
+        else:
+            print(f"⚠️ Last prompt_part is not a user turn — [REPLY INSTRUCTIONS] skipped "
+                  f"({len(_reply_instr_items)} item(s) would have been added)")
+
+    # Add the assistant start tag. This is the structural ChatML role marker
+    # telling the model whose turn it is — NOT an optional "pre-fill". Without
+    # it the prompt ends at the user turn's <|im_end|> and the model's natural
+    # next token is <|im_start|>, which is in the stop list, so generation
+    # halts after 1 token with 0 chars of output. ⚠️ DO NOT gate this on any
+    # toggle — `<|im_start|>assistant\n` must always be appended for /completion
+    # against ChatML models.
     continue_prefix = data.get("continue_prefix", "").strip()
     if continue_prefix:
         # True continue — model picks up exactly where it left off
         prompt_parts.append(f"<|im_start|>assistant\n{continue_prefix}")
         print(f"▶️ CONTINUE: Pre-filling assistant tag with prefix ({len(continue_prefix)} chars)")
-    elif len(assistant_messages) > 0:
-        # Continuation - pre-fill response to force continuation
-        prompt_parts.append("<|im_start|>assistant\n")
-        print("🔥 NUCLEAR: Pre-filled assistant response to force continuation")
     else:
-        # New conversation - let model start fresh
         prompt_parts.append("<|im_start|>assistant\n")
-        print("🆕 New conversation - model free to greet")
+        if len(assistant_messages) > 0:
+            print("🔄 Continuation — assistant tag appended")
+        else:
+            print("🆕 New conversation — assistant tag appended")
     
     # Join parts — the assistant tag must not be preceded by a bare newline
     # because the model's first token is often \n, which would then match
     # the stop sequence "\n<|im_start|>" and kill the response after 2 tokens.
     prompt = "\n".join(prompt_parts[:-1]) + "\n" + prompt_parts[-1]
-    
-    # 🔍 DEBUG: Check the end of the prompt
-    print("\n" + "="*60)
-    print("🔍 FINAL PROMPT DEBUG")
-    print("="*60)
-    print("Last 300 chars of prompt:")
-    print(prompt[-300:])
-    print("\n🛑 Stop tokens:", get_stop_tokens())
-    print("="*60 + "\n")
-        
+
+    # 🩺 Prompt structure check — always runs but only emits output when
+    # something is wrong (malformed ChatML sequence, mid-conversation system
+    # message, embedded ChatML fragment in user/assistant content). Cheap.
+    # The full diagnostic block (role-sequence dump, suspect-message preview,
+    # last 500 chars of prompt) is gated behind `diag_verbose` for when you
+    # need to investigate a specific turn.
+    _user_count = sum(1 for m in messages if m.get("role") == "user")
+    _asst_count = sum(1 for m in messages if m.get("role") == "assistant")
+    _sys_count  = sum(1 for m in messages if m.get("role") == "system")
+    _role_seq   = [m.get("role", "?")[:1].upper() for m in messages]
+    _expected_seq_ok = (
+        len(_role_seq) >= 2
+        and _role_seq[0] == "S"
+        and _role_seq[-1] == "U"
+        and all(_role_seq[i] == "U" and _role_seq[i+1] == "A"
+                for i in range(1, len(_role_seq) - 1, 2))
+    )
+    _mid_sys_positions = [i for i, r in enumerate(_role_seq) if r == "S" and i != 0]
+    _suspect_msgs = []
+    for i, m in enumerate(messages):
+        if m.get("role") not in ("user", "assistant"):
+            continue
+        c = m.get("content", "")
+        if isinstance(c, list):
+            c = " ".join(p.get("text", "") for p in c if p.get("type") == "text")
+        if not isinstance(c, str):
+            continue
+        for needle in ("<|im_end|>", "<|im_start|>", "\nassistant\n", "\nassistant:",
+                       "\nuser\n", "\nuser:", "\nsystem\n", "\nsystem:"):
+            if needle in c:
+                _suspect_msgs.append((i, m.get("role"), needle, c[:120]))
+                break
+
+    if not _expected_seq_ok:
+        print(f"⚠️ MALFORMED ROLE SEQUENCE — expected S U A U A … U, got {' '.join(_role_seq)}", flush=True)
+    if _mid_sys_positions:
+        print(f"⚠️ MID-CONVERSATION SYSTEM MSG(s) at positions {_mid_sys_positions} — may trigger early EOS", flush=True)
+    if _suspect_msgs:
+        print(f"⚠️ {len(_suspect_msgs)} message(s) contain embedded ChatML/role markers:", flush=True)
+        for idx, role, needle, preview in _suspect_msgs[:6]:
+            print(f"   msg #{idx} ({role}) has {repr(needle)}: {repr(preview)}", flush=True)
+
+    if _diag_verbose:
+        print("\n" + "="*60, flush=True)
+        print(f"🩺 TURN-COMPARISON DIAGNOSTIC", flush=True)
+        print("="*60, flush=True)
+        print(f"   Turn count       : user={_user_count} asst={_asst_count} sys={_sys_count}", flush=True)
+        print(f"   Role sequence    : {' '.join(_role_seq)}", flush=True)
+        print(f"   ChatML alternates: {_expected_seq_ok}", flush=True)
+        print("\n   Last 500 chars of prompt (everything right before <|im_start|>assistant):", flush=True)
+        print(prompt[-500:], flush=True)
+        print("\n🛑 Stop tokens:", get_stop_tokens(), flush=True)
+        print("="*60 + "\n", flush=True)
+
     # --- Final safety clamp ---
     # Last-resort guard only — truncation.py already handles smart context trimming above.
     # This only fires if the prompt is genuinely enormous (system block + very long history).
@@ -2823,23 +3245,45 @@ def chat():
         # ── Raw prompt path (ChatML / Helcyon / Mistral) ──
 
         # ── Dynamic n_predict: cap to actual KV space remaining after prompt ──
-        # rough_token_count undercounts real BPE tokens by ~20-25%.  Multiplying by
-        # 1.25 gives a realistic estimate of real tokens in the prompt string.
-        # Without this cap, n_predict can exceed available KV slots → model stops
-        # mid-BPE-token (mid-word) → "truncated" stays 0 because the PROMPT fit.
-        try:
-            with open("settings.json", "r", encoding="utf-8") as _snf:
-                _ctx_size_live = int(json.load(_snf).get("llama_args", {}).get("ctx_size", 16384))
-        except Exception:
-            _ctx_size_live = 16384
-        _prompt_real_est = int(rough_token_count(prompt) * 1.25)
+        # Use llama-server's /tokenize endpoint for an EXACT BPE count instead
+        # of the old rough_token_count * 1.25 estimate. The old estimate
+        # undercounted prompts heavy in emoji/separators/ChatML tags by 25-40%
+        # (a 35k-char prompt rough-counted as 7245 was really ~10000 real
+        # tokens). Inaccurate counts gave the budget calc a false sense of
+        # headroom and could push n_predict above what llama-server's slot
+        # could actually hold.
+        _ctx_size_live = _ctx_size_req
+        _prompt_real_est = real_token_count(prompt)
+        _prompt_rough = rough_token_count(prompt)
+        _prompt_chars  = len(prompt)
+        _ratio = (_prompt_real_est / _prompt_rough) if _prompt_rough else 0.0
+        print(
+            f"📐 prompt: {_prompt_chars} chars | real_tokens={_prompt_real_est} | "
+            f"rough={_prompt_rough} | real/rough={_ratio:.2f}",
+            flush=True,
+        )
         _available_for_gen = max(256, _ctx_size_live - _prompt_real_est)
         _n_predict = min(sampling["max_tokens"], _available_for_gen)
         if _n_predict < sampling["max_tokens"]:
-            print(f"⚠️ n_predict capped: ~{_prompt_real_est} est. real tokens / {_ctx_size_live} ctx "
+            print(f"⚠️ n_predict capped: {_prompt_real_est} real tokens / {_ctx_size_live} ctx "
                   f"→ n_predict={_n_predict} (max_tokens={sampling['max_tokens']})", flush=True)
         else:
-            print(f"✅ n_predict={_n_predict} (prompt ~{_prompt_real_est} real / {_ctx_size_live} ctx)", flush=True)
+            print(f"✅ n_predict={_n_predict} (prompt {_prompt_real_est} real / {_ctx_size_live} ctx)", flush=True)
+
+        # 🩺 DEBUG: ignore_eos toggle. When settings.json has
+        # `"ignore_eos": true`, this turn:
+        #   1) sends `ignore_eos: true` to llama.cpp so the real EOS token
+        #      can never be sampled (logit_bias[EOS] = -inf server-side);
+        #   2) drops `<|im_end|>` from the `stop` array so the same string
+        #      can't fire as a stop-word match either.
+        # ⚠️ DIAGNOSTIC ONLY — leave off in normal use. Read once at
+        # request entry into `_ignore_eos_req`.
+        _ignore_eos = _ignore_eos_req
+        _stop_tokens = get_stop_tokens()
+        if _ignore_eos:
+            _stop_tokens = [s for s in _stop_tokens if s != "<|im_end|>"]
+            print(f"🧪 ignore_eos=TRUE — dropping <|im_end|> from stop list; "
+                  f"effective stops: {_stop_tokens}", flush=True)
 
         payload = {
             "model": CURRENT_MODEL,
@@ -2854,12 +3298,19 @@ def chat():
             "frequency_penalty": sampling.get("frequency_penalty", 0.0),
             "presence_penalty": sampling.get("presence_penalty", 0.0),
             "stream": True,
-            "stop": get_stop_tokens(),
+            "stop": _stop_tokens,
+            "ignore_eos": _ignore_eos,
         }
 
-        if app.debug:
-            print("\n🧩 FULL PAYLOAD SENDING TO MODEL:", flush=True)
-            print(json.dumps(payload, indent=2), flush=True)
+        # 🩺 Unconditional sampling-payload log — diagnostic for the early-EOS
+        # cutoff. Shows the exact JSON sent to llama.cpp on every turn. Prompt
+        # is replaced by `<prompt: N chars>` so the log stays readable; the
+        # full prompt is already dumped above by "FINAL PROMPT SENT TO MODEL".
+        # ⚠️ DO NOT gate behind app.debug — we need this every turn until the
+        # cutoff is root-caused.
+        _log_payload = {k: v for k, v in payload.items() if k != "prompt"}
+        _log_payload["prompt"] = f"<prompt: {len(payload['prompt'])} chars>"
+        print(f"🩺 PAYLOAD → llama.cpp: {json.dumps(_log_payload)}", flush=True)
 
         use_web_search = char_data.get("use_web_search", False)
 
@@ -3057,7 +3508,7 @@ def chat():
                     r'look\s+up\s+\w+|'
                     r'find out\s+(?:about|what|who|when|where|why|how|if|whether)\s+\w|'
                     r'google\s+(?:that|it|the\b|\w)|'
-                    r'check\s+online|look\s+online|search\s+online|'
+                    r'check\s+online|look\s+online|search\s+online|find\s+(?:it\s+)?online|'
                     r'any (?:news|updates|info|word) (?:on|about)\b|'
                     r'(?:get|give)\s+me\s+(?:the\s+)?(?:latest|current|up[ -]to[ -]date|fresh)\s+'
                     r'(?:info|news|status|updates?)?\s*(?:on|about)\b'
@@ -3124,9 +3575,156 @@ def chat():
                 elif _should_search:
                     print(f"🔍 Search trigger fired on phrase: {repr(_firing_trigger)}", flush=True)
 
+                # --- Local knowledge pre-check ---
+                _local_doc_hint = False  # set True when a doc match suppresses the search
+                # Hard rule 1: explicit online-search phrases are an unambiguous user signal —
+                # never suppress via local doc match regardless of score.
+                _EXPLICIT_ONLINE_RE = (
+                    r'\b(?:search\s+online|look\s+online|find\s+(?:it\s+)?online|'
+                    r'search\s+the\s+(?:web|net|internet)|do\s+a\s+search\s+online)\b'
+                )
+                _explicit_online = _should_search and bool(
+                    _re.search(_EXPLICIT_ONLINE_RE, _user_msg, _re.IGNORECASE)
+                )
+                if _explicit_online:
+                    print(f"🌐 Explicit online search phrase — skipping local knowledge check", flush=True)
+                if _should_search and not _explicit_online:
+                    # Never suppress time-sensitive / current-events queries — local docs
+                    # cannot have current data so suppression here would always be wrong.
+                    _TIMESENSITIVE_RE = (
+                        r'\b(?:latest|newest|current|recent|today|tonight|tomorrow|'
+                        r'this\s+week|this\s+month|this\s+year|right\s+now|breaking|'
+                        r'release\s+date|comes?\s+out|coming\s+out|out\s+now|'
+                        r'when\s+is|when\s+does|when\s+will|'
+                        r'news|headlines?|update|updates|announcement|schedule|'
+                        r'new\s+(?:episode|season)|season\s+\d|episode\s+\d|trailer|'
+                        r'tour\s+dates?|concert\s+dates?|tickets?|standings?|scores?)\b'
+                    )
+                    if _re.search(_TIMESENSITIVE_RE, _user_msg, _re.IGNORECASE):
+                        print(f"🌐 Time-sensitive query — skipping local knowledge check", flush=True)
+                    else:
+                        _lk_kws = _doc_query_keywords(_user_msg)
+                        if _lk_kws:
+                            # Hard rule 2: only suppress when a proper noun from the query
+                            # matches a local doc filename. Proper nouns are capitalized
+                            # mid-sentence words (sentence-initial caps excluded — those are
+                            # grammatical, not proper nouns). Generic all-lowercase queries
+                            # are never suppressed.
+                            _sent_starts = {0}
+                            for _sb in _re.finditer(r'[.!?]\s+', _user_msg):
+                                _sent_starts.add(_sb.end())
+                            _proper_kws = set()
+                            for _wm in _re.finditer(r'\b([A-Z][a-z]+)\b', _user_msg):
+                                if _wm.start() not in _sent_starts and _wm.group(1).lower() in _lk_kws:
+                                    _proper_kws.add(_wm.group(1).lower())
+                            _local_hit = False
+                            _best_doc_score = 0
+                            _best_doc_name = ""
+                            # Threshold scales with query length — requires a strong specific
+                            # match, not just one incidental word appearing in a doc.
+                            # 1 keyword  → score ≥ 3  (must be a filename hit, e.g. a name)
+                            # 2 keywords → score ≥ 4  (at least one filename hit + something)
+                            # 3+ keywords → score ≥ 6 (two filename hits — genuinely specific)
+                            _n_kws = len(_lk_kws)
+                            _doc_threshold = 3 if _n_kws == 1 else (4 if _n_kws == 2 else 6)
+                            # 1. Re-score global docs directly — same logic as load_global_documents
+                            _global_dir = os.path.join(os.path.dirname(__file__), "global_documents")
+                            if os.path.exists(_global_dir):
+                                for _gf in os.listdir(_global_dir):
+                                    _gpath = os.path.join(_global_dir, _gf)
+                                    if os.path.isfile(_gpath):
+                                        _gs = _score_doc(_gf, _gpath, _lk_kws)
+                                        if _gs >= _doc_threshold and _gs > _best_doc_score:
+                                            _best_doc_score = _gs
+                                            _best_doc_name = _gf
+                                            _local_hit = True
+                            # 2. Fallback: keyword overlap in an already-loaded project doc
+                            if not _local_hit and project_documents:
+                                _doc_lower = project_documents.lower()
+                                _proj_hits = sum(
+                                    1 for kw in _lk_kws
+                                    if _re.search(r'\b' + _re.escape(kw) + r'\b', _doc_lower)
+                                )
+                                _proj_threshold = max(1, len(_lk_kws) // 2)
+                                if _proj_hits >= _proj_threshold:
+                                    _best_doc_score = _proj_hits
+                                    _best_doc_name = "project doc"
+                                    _local_hit = True
+                            if _local_hit:
+                                # Hard rule 2: only suppress when the winning doc's filename
+                                # contains a proper noun from the query. For project-doc
+                                # content matches (no filename), any proper noun suffices.
+                                if _best_doc_name != "project doc":
+                                    _fname_norm = (
+                                        _best_doc_name.lower()
+                                        .replace('_', ' ').replace('-', ' ').replace('.', ' ')
+                                    )
+                                    _proper_in_fname = any(
+                                        _re.search(r'\b' + _re.escape(pk) + r'\b', _fname_norm)
+                                        for pk in _proper_kws
+                                    )
+                                else:
+                                    _proper_in_fname = bool(_proper_kws)
+                                if not _proper_in_fname:
+                                    print(
+                                        f"🌐 Doc match ('{_best_doc_name}') but no proper noun"
+                                        f" in query — not suppressing web search", flush=True,
+                                    )
+                                    _local_hit = False
+                            if _local_hit:
+                                print(
+                                    f"🔒 Web search suppressed — doc score: {_best_doc_score}"
+                                    f" ('{_best_doc_name}', threshold={_doc_threshold},"
+                                    f" keywords={_lk_kws})", flush=True,
+                                )
+                                _should_search = False
+                                _local_doc_hint = True
+                            # 3. Injected memory — stricter threshold to avoid accidental
+                            # suppression when an incidental word (e.g. a medical condition
+                            # in a persona memo) appears in memory but the user wants a web answer.
+                            if _should_search:
+                                _mem_text = (char_context or "") + (user_context or "")
+                                if _mem_text:
+                                    _mem_lower = _mem_text.lower()
+                                    _mem_hits = sum(
+                                        1 for kw in _lk_kws
+                                        if _re.search(r'\b' + _re.escape(kw) + r'\b', _mem_lower)
+                                    )
+                                    _mem_threshold = (
+                                        max(2, int(len(_lk_kws) * 0.75)) if len(_lk_kws) > 1 else 1
+                                    )
+                                    if _mem_hits >= _mem_threshold:
+                                        print(
+                                            f"🧠 Memory covers topic ({_mem_hits}/{len(_lk_kws)} keywords)"
+                                            f" — suppressing web search", flush=True,
+                                        )
+                                        _should_search = False
+
                 if not _should_search:
                     print(f"\U0001f4ac No search trigger — responding from context", flush=True)
-                    yield from stream_model_response(payload)
+                    _run_payload = payload
+                    if _local_doc_hint:
+                        _hint = (
+                            "\n[Local document available — summarise only from the "
+                            "provided document, do not generate or infer additional detail.]"
+                        )
+                        _run_payload = dict(payload)
+                        if "prompt" in _run_payload:
+                            _p = _run_payload["prompt"]
+                            _boundary = "<|im_end|>\n<|im_start|>assistant"
+                            _bi = _p.rfind(_boundary)
+                            if _bi != -1:
+                                _run_payload["prompt"] = _p[:_bi] + _hint + _p[_bi:]
+                            else:
+                                _run_payload["prompt"] = _p.rstrip() + _hint
+                        elif "messages" in _run_payload:
+                            _msgs = [dict(m) for m in _run_payload["messages"]]
+                            for _mi in range(len(_msgs) - 1, -1, -1):
+                                if _msgs[_mi].get("role") == "user":
+                                    _msgs[_mi]["content"] = _msgs[_mi]["content"] + _hint
+                                    break
+                            _run_payload["messages"] = _msgs
+                    yield from stream_model_response(_run_payload)
                     return
 
                 # Clean the query: strip filler and meta-request verbs,
@@ -3423,6 +4021,9 @@ def chat():
                     # Only halt on actual ChatML turn headers (newline + role + newline/colon)
                     # NOT on prose like "The user needs..." or "As an assistant..."
                     _ROLE_LEAK = _re3_inner.compile(r'\n(?:user|assistant|system)(?:\n|:)', _re3_inner.IGNORECASE)
+                    # Cross-chunk REMINDER block suppression state
+                    _reminder_suppress = [False]
+                    _reminder_buf = [""]
 
                     # Stream live, watching for [CHAT SEARCH: ...] tag as secondary fallback
                     _accumulated = []
@@ -3448,6 +4049,27 @@ def chat():
                                     yield safe
                                 _halted[0] = True
                                 _tail = ""
+                                continue
+                            # REMINDER block suppression (cross-chunk)
+                            if _reminder_suppress[0]:
+                                _reminder_buf[0] += chunk
+                                _after = _reminder_buf[0].split('REMINDER:', 1)[1] if 'REMINDER:' in _reminder_buf[0] else _reminder_buf[0]
+                                if _re3_inner.search(r'═{3,}', _after):
+                                    print(f"✂️ [strip_chatml] REMINDER block end found, resuming stream", flush=True)
+                                    _reminder_suppress[0] = False
+                                    _reminder_buf[0] = ""
+                                    _tail = ""
+                                continue
+                            if '⚠️ REMINDER' in combined:
+                                _ridx = combined.index('⚠️ REMINDER')
+                                pre = combined[:_ridx]
+                                pre = _re3_inner.sub(r'═{3,}[^\n]*\n?$', '', pre)
+                                if pre.strip():
+                                    yield pre
+                                _tail = ""
+                                _reminder_buf[0] = combined[_ridx:]
+                                _reminder_suppress[0] = True
+                                print(f"✂️ [strip_chatml] REMINDER block start suppressed", flush=True)
                                 continue
                             if len(combined) > _TAIL_LEN:
                                 yield combined[:-_TAIL_LEN]

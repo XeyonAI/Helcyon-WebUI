@@ -21,20 +21,67 @@ SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settin
 
 
 def get_settings():
+    """Read settings.json. Returns {} on any read error — callers that
+    can't distinguish empty-config from read-failure should use this.
+    `save_settings` does its own read with explicit failure detection."""
     try:
-        with open(SETTINGS_FILE, 'r') as f:
+        with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
-    except:
+    except Exception as e:
+        logging.error(f"⚠️ get_settings read failed: {e}")
         return {}
 
+
 def save_settings(data):
+    """Merge `data` into settings.json and write atomically.
+
+    ⚠️ load-bearing: refuses to write if the read failed transiently and
+    settings.json exists on disk. The previous version silently overwrote
+    the entire file with just `data` whenever the read errored, which
+    would wipe every other key (cache_type, ignore_eos, llama_args, API
+    keys, etc.) on a transient I/O blip. Also writes atomically via
+    tempfile + os.replace so a crash mid-write can't corrupt the file.
+    """
     try:
-        settings = get_settings()
+        # Explicit re-read with failure detection. We can't reuse get_settings()
+        # here because it can't distinguish "file empty" from "read failed".
+        settings = {}
+        read_ok = True
+        if os.path.exists(SETTINGS_FILE):
+            try:
+                with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+            except Exception as re:
+                logging.error(f"⚠️ save_settings pre-read failed: {re}")
+                read_ok = False
+
+        if not read_ok:
+            logging.error(
+                "⚠️ save_settings ABORTED — read of existing settings.json "
+                "failed. Refusing to overwrite to avoid wiping config. "
+                f"Wanted to set: {list(data.keys())}"
+            )
+            return False
+
         settings.update(data)
-        with open(SETTINGS_FILE, 'w') as f:
-            json.dump(settings, f, indent=2)
+
+        import tempfile
+        d = os.path.dirname(SETTINGS_FILE) or '.'
+        fd, tmp_path = tempfile.mkstemp(suffix='.tmp', prefix='.settings_', dir=d, text=True)
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8') as tf:
+                json.dump(settings, tf, indent=2)
+            os.replace(tmp_path, SETTINGS_FILE)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+            raise
+        return True
     except Exception as e:
-        logging.error(f"Failed to save settings: {e}")
+        logging.error(f"❌ Failed to save settings: {e}")
+        return False
 
 def get_engine():
     return get_settings().get('tts_engine', 'f5')
@@ -197,7 +244,7 @@ def tts_status():
             })
         else:
             return jsonify({'status': 'error', 'engine': engine}), 503
-    except:
+    except Exception:
         return jsonify({
             'status': 'offline',
             'engine': engine,
