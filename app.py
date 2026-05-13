@@ -2743,7 +2743,7 @@ def chat():
         prompt_parts.append(f"<|im_start|>{role}\n{content}\n<|im_end|>")
 
     # ───────────────────────────────────────────────────────────────────────
-    # [REPLY INSTRUCTIONS] — depth-0 packet of instruction-following content.
+    # [OOC] — depth-0 packet of instruction-following content.
     # Folded into the last user turn (not a new message) so role alternation
     # stays `S U A U A … U` and the prompt-structure diagnostic below is
     # satisfied. Items are ordered least → most attention, so the field the
@@ -2761,12 +2761,12 @@ def chat():
     _reply_instr_items = []
 
     if project_instructions and project_instructions.strip():
-        _reply_instr_items.append(f"Project context: {project_instructions.strip()}")
+        _reply_instr_items.append(f"[OOC: Reminder — project context: {project_instructions.strip()}]")
 
     if char_data.get("example_dialogue", "").strip():
         _reply_instr_items.append(
-            "Style: match the speaking-style examples shown at the top of context — "
-            "tone, vocabulary, rhythm, formatting. Write fresh content; never paraphrase the examples."
+            "[OOC: Match the speaking-style examples shown earlier in this conversation — "
+            "tone, vocabulary, rhythm, formatting. Write fresh content; never paraphrase the examples.]"
         )
 
     _ph_val = char_data.get("post_history", "").strip()
@@ -2774,32 +2774,32 @@ def chat():
         _ph_val = re.sub(r'<\|im_start\|>\w*', '', _ph_val)
         _ph_val = re.sub(r'<\|im_end\|>', '', _ph_val).strip()
         if _ph_val:
-            _reply_instr_items.append(f"Post-history: {_ph_val}")
+            _reply_instr_items.append(f"[OOC: Post-history reminder — {_ph_val}]")
 
     _an_val = data.get("author_note", "").strip() if isinstance(data, dict) else ""
     if _an_val:
         _an_val = re.sub(r'<\|im_start\|>\w*', '', _an_val)
         _an_val = re.sub(r'<\|im_end\|>', '', _an_val).strip()
         if _an_val:
-            _reply_instr_items.append(f"Author's note: {_an_val}")
+            _reply_instr_items.append(f"[OOC: Scene state — {_an_val}]")
 
     _cn_val = char_data.get("character_note", "").strip()
     if _cn_val:
         _cn_val = re.sub(r'<\|im_start\|>\w*', '', _cn_val)
         _cn_val = re.sub(r'<\|im_end\|>', '', _cn_val).strip()
         if _cn_val:
-            _reply_instr_items.append(f"Character note: {_cn_val}")
+            _reply_instr_items.append(f"[OOC: Stay in character. Reminder — {_cn_val}]")
 
     if _reply_instr_items and prompt_parts:
-        _packet = "\n\n[REPLY INSTRUCTIONS]\n\n" + "\n\n".join(_reply_instr_items)
+        _packet = "\n\n" + "\n\n".join(_reply_instr_items)
         # Fold into the existing last user turn rather than appending a second
         # user message — keeps strict S U A U A … U alternation intact.
         if prompt_parts[-1].startswith("<|im_start|>user\n") and prompt_parts[-1].endswith("\n<|im_end|>"):
             prompt_parts[-1] = prompt_parts[-1][:-len("\n<|im_end|>")] + _packet + "\n<|im_end|>"
-            print(f"📌 [REPLY INSTRUCTIONS] depth-0 packet folded into last user turn "
+            print(f"📌 [OOC] depth-0 packet folded into last user turn "
                   f"({len(_packet)} chars, {len(_reply_instr_items)} item(s))")
         else:
-            print(f"⚠️ Last prompt_part is not a user turn — [REPLY INSTRUCTIONS] skipped "
+            print(f"⚠️ Last prompt_part is not a user turn — [OOC] skipped "
                   f"({len(_reply_instr_items)} item(s) would have been added)")
 
     # Add the assistant start tag. This is the structural ChatML role marker

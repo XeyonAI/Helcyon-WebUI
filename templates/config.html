@@ -1507,6 +1507,35 @@ document.getElementById('rename-char-btn').addEventListener('click', async funct
 // ==================== TOKEN COUNTER (DEBUG VERSION) ====================
 let tokenCountTimeout = null;
 
+// Per-field colour thresholds. Identity fields (description, main_prompt,
+// scenario) absorb passively — higher caps. Instruction fields
+// (character_note, post_history) ride in the depth-0 OOC packet and get
+// performed by the model if too long — lower caps. Example dialogue is
+// expected to be larger — soft cap only.
+const FIELD_THRESHOLDS = {
+  'tokens-description':       { amber: 500,  red: 800 },
+  'tokens-main-prompt':       { amber: 400,  red: 700 },
+  'tokens-scenario':          { amber: 300,  red: 500 },
+  'tokens-post-history':      { amber: 200,  red: 350 },
+  'tokens-character-note':    { amber: 200,  red: 350 },
+  'tokens-example-dialogue':  { amber: 1500, red: 2500 }
+};
+
+function applyFieldColour(elementId, count) {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  el.textContent = count;
+  const t = FIELD_THRESHOLDS[elementId];
+  if (!t) return;
+  if (count >= t.red) {
+    el.style.color = '#dc3545';   // Red
+  } else if (count >= t.amber) {
+    el.style.color = '#ffc107';   // Amber
+  } else {
+    el.style.color = '#28a745';   // Green
+  }
+}
+
 function updateTokenCount() {
   console.log('🔵 updateTokenCount() called');
   
@@ -1550,12 +1579,12 @@ function updateTokenCount() {
       }
       
       // Update displays
-      document.getElementById('tokens-description').textContent = counts.description;
-      document.getElementById('tokens-main-prompt').textContent = counts.main_prompt;
-      document.getElementById('tokens-scenario').textContent = counts.scenario;
-      document.getElementById('tokens-post-history').textContent = counts.post_history;
-      document.getElementById('tokens-character-note').textContent = counts.character_note;
-      document.getElementById('tokens-example-dialogue').textContent = counts.example_dialogue;
+      applyFieldColour('tokens-description', counts.description);
+      applyFieldColour('tokens-main-prompt', counts.main_prompt);
+      applyFieldColour('tokens-scenario', counts.scenario);
+      applyFieldColour('tokens-post-history', counts.post_history);
+      applyFieldColour('tokens-character-note', counts.character_note);
+      applyFieldColour('tokens-example-dialogue', counts.example_dialogue);
       document.getElementById('tokens-total').textContent = counts.total;
       
       console.log('✅ Display updated successfully');
@@ -1572,11 +1601,11 @@ function updateTokenCount() {
         statusEl.style.color = '#28a745';
       } else if (counts.total < 2000) {
         totalEl.style.color = '#ffc107';  // Amber
-        statusEl.textContent = 'âš  High';
+        statusEl.textContent = '⚠ High';
         statusEl.style.color = '#ffc107';
       } else {
         totalEl.style.color = '#dc3545';  // Red
-        statusEl.textContent = 'âš  Very High';
+        statusEl.textContent = '⚠ Very High';
         statusEl.style.color = '#dc3545';
       }
       

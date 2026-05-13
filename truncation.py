@@ -71,6 +71,26 @@ def trim_chat_history(messages, token_budget: int = None, extra_system_overhead:
     print(f"📊 Kept {len(trimmed)} conversation messages (~{total} tokens)")
     print(f"📊 Estimated total context: ~{system_tokens + total} / {CONTEXT_WINDOW} tokens")
 
+    # Alternation guard: if the trim stopped mid-pair (first body message is
+    # an assistant turn), drop it so the conversation starts with a user
+    # turn. Helcyon (Mistral Nemo ChatML) requires strict `S U A U A … U`
+    # alternation — a leading assistant after `S` tells the model the user
+    # side has already been answered, and it emits EOS as the first token
+    # (tokens_predicted 1-25, stop reason "stopped_word: <|im_start|>").
+    # ⚠️ DO NOT remove — this is the post-trim equivalent of the
+    # leading-assistant strip in app.py's chat() route, which only runs
+    # pre-trim on active_chat and cannot catch budget-driven malformation.
+    print(f"🔍 GUARD CHECK: trimmed has {len(trimmed)} msgs, first role = {repr(trimmed[0].get('role')) if trimmed else 'EMPTY'}", flush=True)
+    _dropped_for_alternation = 0
+    while trimmed and trimmed[0].get("role") == "assistant":
+        _dropped = trimmed.pop(0)
+        _dropped_for_alternation += 1
+        _clen = len(_dropped.get("content", "")) if isinstance(_dropped.get("content", ""), str) else 0
+        print(f"🗑️ Trim alternation guard: dropped leading assistant message ({_clen} chars) "
+              f"to preserve S U A U A … U sequence")
+    if _dropped_for_alternation:
+        print(f"🗑️ Trim alternation guard: stripped {_dropped_for_alternation} leading assistant message(s)")
+
     if system_msg:
         trimmed.insert(0, system_msg)
 
