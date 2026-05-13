@@ -4548,19 +4548,7 @@ function setMemoryTab(tab) {
   loadCharacterMemory();
 }
 
-function openMemoryModal() {
-  const dropdown = document.getElementById('character-select');
-  if (!dropdown || !dropdown.value) {
-    alert('Please select a character first.');
-    return;
-  }
-  window._memoryTab = 'character';
-  document.getElementById('memory-modal-title').textContent = 'Character Memory';
-  document.getElementById('memory-tab-character').className = 'save-btn';
-  document.getElementById('memory-tab-global').className = 'cancel-btn';
-  document.getElementById('memory-modal').style.display = 'block';
-  loadCharacterMemory();
-}
+function openMemoryModal() { showUpgradeModal('memory'); }
 
 function closeMemoryModal() {
   document.getElementById('memory-modal').style.display = 'none';

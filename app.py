@@ -2705,6 +2705,29 @@ def chat():
                 messages[0]["content"] += _anchor
                 print(f"🔒 Injected {len(_restriction_lines)} restriction(s) as end-of-system anchor")
 
+            # ✅ Character Note + Author's Note — injected LAST in system block,
+            # after example dialogue and restriction anchor, so they're closest
+            # to the conversation history and have maximum authority without
+            # costing tokens on every turn (unlike the OOC packet approach).
+            # ⚠️ DO NOT move earlier in system block — proximity to generation
+            # is what gives them authority. DO NOT move to OOC packet — that
+            # adds ~539 tokens per turn and burns context budget faster.
+            _cn_sys = char_data.get("character_note", "").strip()
+            if _cn_sys:
+                _cn_sys = re.sub(r'<\|im_start\|>\w*', '', _cn_sys)
+                _cn_sys = re.sub(r'<\|im_end\|>', '', _cn_sys).strip()
+                if _cn_sys:
+                    messages[0]["content"] += f"\n\n{_cn_sys}"
+                    print(f"✅ Character Note appended to end of system block ({len(_cn_sys)} chars)")
+
+            _an_sys = data.get("author_note", "").strip() if isinstance(data, dict) else ""
+            if _an_sys:
+                _an_sys = re.sub(r'<\|im_start\|>\w*', '', _an_sys)
+                _an_sys = re.sub(r'<\|im_end\|>', '', _an_sys).strip()
+                if _an_sys:
+                    messages[0]["content"] += f"\n\n{_an_sys}"
+                    print(f"✅ Author's Note appended to end of system block ({len(_an_sys)} chars)")
+
             # 🔥 DEBUG: Check if example dialogue made it through
             print("\n" + "="*80)
             print("🎭 SYSTEM MESSAGE AFTER ADDING EXAMPLE DIALOGUE:")
@@ -2776,27 +2799,20 @@ def chat():
         if _ph_val:
             _reply_instr_items.append(f"[OOC: Post-history reminder — {_ph_val}]")
 
-    _an_val = data.get("author_note", "").strip() if isinstance(data, dict) else ""
-    if _an_val:
-        _an_val = re.sub(r'<\|im_start\|>\w*', '', _an_val)
-        _an_val = re.sub(r'<\|im_end\|>', '', _an_val).strip()
-        if _an_val:
-            _reply_instr_items.append(f"[OOC: Scene state — {_an_val}]")
-
-    _cn_val = char_data.get("character_note", "").strip()
-    if _cn_val:
-        _cn_val = re.sub(r'<\|im_start\|>\w*', '', _cn_val)
-        _cn_val = re.sub(r'<\|im_end\|>', '', _cn_val).strip()
-        if _cn_val:
-            _reply_instr_items.append(f"[OOC: Stay in character. Reminder — {_cn_val}]")
-
     if _reply_instr_items and prompt_parts:
-        _packet = "\n\n" + "\n\n".join(_reply_instr_items)
-        # Fold into the existing last user turn rather than appending a second
-        # user message — keeps strict S U A U A … U alternation intact.
+        _packet = "\n\n".join(_reply_instr_items) + "\n\n"
+        # Prepend packet BEFORE the user message so the user's actual words
+        # are the last thing the model sees before generating — not the
+        # instructions. Appending after the user message caused the model to
+        # read the character note as the thing it should respond to and
+        # narrate it back instead of following it silently.
+        # ⚠️ DO NOT move back to append — prepend is correct here.
         if prompt_parts[-1].startswith("<|im_start|>user\n") and prompt_parts[-1].endswith("\n<|im_end|>"):
-            prompt_parts[-1] = prompt_parts[-1][:-len("\n<|im_end|>")] + _packet + "\n<|im_end|>"
-            print(f"📌 [OOC] depth-0 packet folded into last user turn "
+            # Insert packet after <|im_start|>user\n but before the user message
+            prefix = "<|im_start|>user\n"
+            rest = prompt_parts[-1][len(prefix):]  # user message + \n<|im_end|>
+            prompt_parts[-1] = prefix + _packet + rest
+            print(f"📌 [OOC] depth-0 packet prepended to last user turn "
                   f"({len(_packet)} chars, {len(_reply_instr_items)} item(s))")
         else:
             print(f"⚠️ Last prompt_part is not a user turn — [OOC] skipped "

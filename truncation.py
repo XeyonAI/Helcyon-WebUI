@@ -12,6 +12,12 @@ def _read_ctx_size() -> int:
 CONTEXT_WINDOW     = _read_ctx_size()  # read live from settings.json at import time
 GENERATION_RESERVE = 2048   # tokens reserved for the model response
 SYSTEM_BUFFER      = 200    # small safety margin for ChatML overhead tokens
+# ⚠️ Hard cap: Helcyon (Mistral Nemo) exhibits EOS cliff at ~10,000-10,500
+# tokens evaluated regardless of ctx_size setting. Keeping total prompt under
+# this threshold eliminates the cutoff. llama.cpp still runs with full ctx_size
+# for KV cache headroom — this only governs how much history HWUI sends.
+# DO NOT raise above 8500 without retesting long conversations first.
+MAX_PROMPT_TOKENS  = 12000
 TOKEN_FUDGE        = 1.4    # rough_token_count undercounts BPE by ~35-40% on
                             # emoji/separator/ChatML-heavy prompts (measured:
                             # 35516-char prompt → rough=7245, real=~10000 →
@@ -50,6 +56,17 @@ def trim_chat_history(messages, token_budget: int = None, extra_system_overhead:
     prompt_budget = int((CONTEXT_WINDOW - GENERATION_RESERVE - SYSTEM_BUFFER) / TOKEN_FUDGE)
     conversation_budget = max(prompt_budget - system_tokens - extra_system_overhead, 1024)  # never go below 1024
 
+    # Hard cap: clamp total prompt to MAX_PROMPT_TOKENS to stay under the
+    # Helcyon EOS cliff at ~10,000-10,500 tokens. The cap is in REAL tokens
+    # but conversation_budget is in rough tokens, so we convert the cap to
+    # rough-token space before comparing (divide by TOKEN_FUDGE).
+    # Without this, rough undercounting means the cap fires too late.
+    max_prompt_rough = int(MAX_PROMPT_TOKENS / TOKEN_FUDGE)
+    max_convo_from_cap = max(max_prompt_rough - system_tokens - extra_system_overhead, 1024)
+    if conversation_budget > max_convo_from_cap:
+        print(f"📊 Conversation budget clamped by MAX_PROMPT_TOKENS: {conversation_budget} → {max_convo_from_cap} (rough tokens, cap={MAX_PROMPT_TOKENS} real)")
+        conversation_budget = max_convo_from_cap
+
     # Allow caller to override if needed
     if token_budget is not None:
         conversation_budget = token_budget
@@ -75,11 +92,9 @@ def trim_chat_history(messages, token_budget: int = None, extra_system_overhead:
     # an assistant turn), drop it so the conversation starts with a user
     # turn. Helcyon (Mistral Nemo ChatML) requires strict `S U A U A … U`
     # alternation — a leading assistant after `S` tells the model the user
-    # side has already been answered, and it emits EOS as the first token
-    # (tokens_predicted 1-25, stop reason "stopped_word: <|im_start|>").
+    # side has already been answered, and it emits EOS as the first token.
     # ⚠️ DO NOT remove — this is the post-trim equivalent of the
-    # leading-assistant strip in app.py's chat() route, which only runs
-    # pre-trim on active_chat and cannot catch budget-driven malformation.
+    # leading-assistant strip in app.py's chat() route.
     print(f"🔍 GUARD CHECK: trimmed has {len(trimmed)} msgs, first role = {repr(trimmed[0].get('role')) if trimmed else 'EMPTY'}", flush=True)
     _dropped_for_alternation = 0
     while trimmed and trimmed[0].get("role") == "assistant":
