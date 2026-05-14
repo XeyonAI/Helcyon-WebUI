@@ -2203,14 +2203,6 @@ def chat():
             len(assistant_msgs) == 0 or
             (len(assistant_msgs) == 1 and _is_opening_line_msg(assistant_msgs[0]))
         )
-
-        # character_note and author_note are no longer added here — both ride
-        # in the [REPLY INSTRUCTIONS] depth-0 packet (folded into the last
-        # user turn). Author's Note is used SillyTavern-style for short scene-
-        # state instructions ("alarm going off", "you feel drunk"), so it
-        # needs the same recency pull as character_note rather than being
-        # buried at position 0.
-
         char_context = "\n\n".join(parts)
 
         # 🔥 INJECT USER PERSONA CONTEXT
@@ -2466,11 +2458,13 @@ def chat():
     # dialogue instead. ⚠️ DO NOT re-add `messages.insert(1, …)` here for any
     # role/content combination.
     
-    # character_note, author_note, post_history, and project_instructions
-    # ride in the [REPLY INSTRUCTIONS] depth-0 packet — appended to the last
-    # user turn's content during prompt assembly below. ⚠️ DO NOT re-add a
-    # messages.insert() here for any of those fields. Folding into the
-    # existing last user turn preserves `S U A U A … U` alternation; a new
+    # post_history and project_instructions ride in the [REPLY INSTRUCTIONS]
+    # depth-0 packet — appended to the last user turn's content during prompt
+    # assembly below. character_note and author_note do NOT — they are
+    # appended to the system block (wrapped in [OOC: …] labels), since moving
+    # them into the depth-0 packet cost ~539 tokens per turn. ⚠️ DO NOT
+    # re-add a messages.insert() here for any of those fields. Folding into
+    # the existing last user turn preserves `S U A U A … U` alternation; a new
     # message (system or otherwise) would break it.
 
     # Trim if needed (secondary safety net)
@@ -2500,17 +2494,21 @@ def chat():
             except Exception:
                 pass
     if _char_ex_pre:
-        # Include the ex_block wrapper text (═══ headers, style rules, reminder lines)
-        # which adds ~400 rough tokens on top of the raw dialogue. Without this, the
-        # trim budget under-estimates system overhead and allows too large a context.
+        # Conservative wrapper overhead estimate. The actual wrapper is a
+        # short one-line header (~40 tokens) plus optional emoji/xxx style
+        # notes; 400 tokens is intentionally generous to leave headroom
+        # against trim under-estimates and ctx_size overflow at runtime.
         _EX_WRAPPER_OVERHEAD = 400
         _ex_overhead = rough_token_count(_char_ex_pre) + _EX_WRAPPER_OVERHEAD
         print(f"📐 Example dialogue overhead: ~{_ex_overhead} tokens (dialogue + {_EX_WRAPPER_OVERHEAD} wrapper, pre-accounted in trim)")
 
-    # Pre-account for the [REPLY INSTRUCTIONS] depth-0 packet, which is folded
-    # into the last user turn AFTER trimming. Without this the trimmer
-    # under-estimates the final prompt size and a fat packet (long project
-    # instructions + character note) could push past ctx_size at runtime.
+    # Pre-account for content that is appended AFTER trimming:
+    #   • [REPLY INSTRUCTIONS] depth-0 packet (project_instructions, style
+    #     reminder, post_history) folded into the last user turn
+    #   • character_note + author_note appended to the system block (wrapped
+    #     in [OOC: …] labels)
+    # Without this the trimmer under-estimates the final prompt size and a
+    # fat packet could push past ctx_size at runtime.
     _reply_packet_overhead = 0
     if project_instructions and project_instructions.strip():
         _reply_packet_overhead += rough_token_count(project_instructions) + 10
@@ -2521,14 +2519,14 @@ def chat():
         _reply_packet_overhead += rough_token_count(_ph_pre) + 10
     _an_pre = data.get("author_note", "").strip() if isinstance(data, dict) else ""
     if _an_pre:
-        _reply_packet_overhead += rough_token_count(_an_pre) + 10
+        _reply_packet_overhead += rough_token_count(_an_pre) + 20  # +20 for [OOC: Author note — …] wrapper
     _cn_pre = char_data.get("character_note", "").strip()
     if _cn_pre:
-        _reply_packet_overhead += rough_token_count(_cn_pre) + 10
+        _reply_packet_overhead += rough_token_count(_cn_pre) + 20  # +20 for [OOC: Character note — …] wrapper
     if _reply_packet_overhead:
         _reply_packet_overhead += 20   # [REPLY INSTRUCTIONS] header + separators
         _ex_overhead += _reply_packet_overhead
-        print(f"📐 Reply-instructions packet overhead: ~{_reply_packet_overhead} tokens (pre-accounted in trim)")
+        print(f"📐 Post-trim overhead (OOC packet + system-block OOC notes): ~{_reply_packet_overhead} tokens (pre-accounted in trim)")
 
     messages = trim_chat_history(messages, extra_system_overhead=_ex_overhead)
 
@@ -2691,20 +2689,26 @@ def chat():
                 messages[0]["content"] += _anchor
                 print(f"🔒 Injected {len(_restriction_lines)} restriction(s) as end-of-system anchor")
 
-            # ✅ Character Note + Author's Note — appended above example
-            # dialogue. They still cost zero per-turn tokens (vs the OOC
-            # packet approach which adds ~539/turn) but no longer sit in the
-            # final position where they were outweighing the style examples.
+            # ✅ Character Note + Author's Note — appended to the system block
+            # ABOVE the current time injection and ex_block (which both come
+            # later, with ex_block being the absolute LAST item). They cost
+            # zero per-turn tokens (vs the OOC packet approach which added
+            # ~539/turn) but no longer sit in the final position where they
+            # were outweighing the style examples.
             # ⚠️ DO NOT move below ex_block — example dialogue must be the
             # LAST system-block item so its style cues are closest to the
-            # generation point. DO NOT move to OOC packet — that adds
-            # ~539 tokens per turn and burns context budget faster.
+            # generation point. ⚠️ DO NOT move to the OOC depth-0 packet —
+            # that adds ~539 tokens per turn and burns context budget faster.
+            # Wrapped in [OOC: …] labels so the model treats them as silent
+            # instructions rather than content to echo. Without the label, raw
+            # text like "Keep a light friendly tone…" was leaking into visible
+            # responses.
             _cn_sys = char_data.get("character_note", "").strip()
             if _cn_sys:
                 _cn_sys = re.sub(r'<\|im_start\|>\w*', '', _cn_sys)
                 _cn_sys = re.sub(r'<\|im_end\|>', '', _cn_sys).strip()
                 if _cn_sys:
-                    messages[0]["content"] += f"\n\n{_cn_sys}"
+                    messages[0]["content"] += f"\n\n[OOC: Character note — {_cn_sys}]"
                     print(f"✅ Character Note appended to system block ({len(_cn_sys)} chars)")
 
             _an_sys = data.get("author_note", "").strip() if isinstance(data, dict) else ""
@@ -2712,44 +2716,30 @@ def chat():
                 _an_sys = re.sub(r'<\|im_start\|>\w*', '', _an_sys)
                 _an_sys = re.sub(r'<\|im_end\|>', '', _an_sys).strip()
                 if _an_sys:
-                    messages[0]["content"] += f"\n\n{_an_sys}"
+                    messages[0]["content"] += f"\n\n[OOC: Author note — {_an_sys}]"
                     print(f"✅ Author's Note appended to system block ({len(_an_sys)} chars)")
 
-            # 🎯 Example dialogue — appended LAST in the system block so it
-            # sits closest to the conversation turns and the generation point.
-            # Previously ex_block sat ABOVE restriction anchor + char_note +
-            # author_note, which buried it mid-system-block — any style/tone
-            # language in those notes was closer to generation and won
-            # attention, leading to example dialogue being silently ignored.
-            # ⚠️ DO NOT move earlier in system block. (changes.md May 14 2026.)
-            messages[0]["content"] += ex_block
-            print(f"🎯 Example dialogue appended LAST in system block ({len(ex_block)} chars wrapper+content)")
+            # ex_block is no longer appended here — it has moved to the
+            # absolute LAST position in the system block (after the current
+            # time injection below) so its style cues sit closest to the
+            # generation point. Previously char_note + author_note + time
+            # injection all sat after ex_block, burying the style examples.
+            # ⚠️ DO NOT re-append ex_block here. ⚠️ DO NOT move ex_block
+            # earlier in the system block.
 
-            # 🔥 DEBUG: Check if example dialogue made it through
-            print("\n" + "="*80)
-            print("🎭 SYSTEM MESSAGE AFTER ADDING EXAMPLE DIALOGUE:")
-            print("="*80)
-            system_content = messages[0]["content"]
-            print(f"Length: {len(system_content)} chars")
-            print(f"Last 500 chars:\n{system_content[-500:]}")
-            print("="*80 + "\n")
-
-    # 🕐 CURRENT LOCAL TIME — injected as the LAST item in the system block
-    # so the time-of-day signal sits right next to the conversation turns and
-    # the model's generation point. Date-only at the top of system_prompt
-    # (utils/session_handler.py) is the stable cache anchor; this is the
-    # per-turn anchor that gives the model hour-of-day awareness so it stops
-    # saying "give them a call this morning" at 7pm.
+    # 🕐 CURRENT LOCAL TIME — injected near the end of the system block so the
+    # time-of-day signal sits close to the conversation turns. Date-only at the
+    # top of system_prompt (utils/session_handler.py) is the stable cache
+    # anchor; this is the per-turn anchor that gives the model hour-of-day
+    # awareness so it stops saying "give them a call this morning" at 7pm.
     #
     # Precision: rounded down to the hour. This keeps the KV cache prefix
     # valid for the entire hour — invalidates once per hour rather than once
     # per minute (the original reason this was stripped from position 0).
-    # Conversation turns appended after this point are re-evaluated on each
-    # hour rollover, which is an acceptable trade-off for accurate time-of-day
-    # awareness.
     # ⚠️ DO NOT add minute-precision here — that brings back the every-minute
-    # cache invalidation problem. ⚠️ DO NOT move earlier in the system block —
-    # the whole point is proximity to the generation point.
+    # cache invalidation problem.
+    # ex_block follows immediately after this so the style examples are the
+    # absolute last thing in the system block, closest to the generation point.
     if messages and messages[0].get("role") == "system":
         # Local import: earlier in this function `import datetime` rebinds the
         # name `datetime` to the *module* in the function's local scope,
@@ -2775,8 +2765,30 @@ def chat():
             f"{_hour_12} {_ampm} ({_tod})."
         )
         messages[0]["content"] += _time_str
-        print(f"🕐 Current time appended LAST in system block: "
+        print(f"🕐 Current time appended to system block: "
               f"{_hour_12} {_ampm} ({_tod})")
+
+        # 🎯 Example dialogue — appended as the ABSOLUTE LAST item in the
+        # system block (after restriction anchor, character_note, author_note,
+        # AND the current time injection) so its style cues sit closest to the
+        # generation point. Previously char_note/author_note/time all sat after
+        # ex_block, burying the style examples mid-block — model silently
+        # ignored them in favour of whatever tone language was closer to the
+        # generation point.
+        # ⚠️ DO NOT move earlier in system block. (changes.md May 14 2026.)
+        if ex_block:
+            messages[0]["content"] += ex_block
+            print(f"🎯 Example dialogue appended LAST in system block "
+                  f"({len(ex_block)} chars wrapper+content)")
+
+            # 🔥 DEBUG: Check if example dialogue made it through
+            print("\n" + "="*80)
+            print("🎭 SYSTEM MESSAGE AFTER ADDING EXAMPLE DIALOGUE:")
+            print("="*80)
+            system_content = messages[0]["content"]
+            print(f"Length: {len(system_content)} chars")
+            print(f"Last 500 chars:\n{system_content[-500:]}")
+            print("="*80 + "\n")
 
     # ⚠️ DO NOT inject any mid-conversation system messages here. A second
     # system message anywhere after position 0 breaks ChatML alternation and
@@ -2814,13 +2826,14 @@ def chat():
     # model needs to obey most strongly lands closest to its generation point:
     #   1. project_instructions  (broad context, lowest urgency)
     #   2. style reminder        (points back to example_dialogue at the top)
-    #   3. post_history          (secondary behavioural tier)
-    #   4. author_note           (per-turn scene state — "alarm going off")
-    #   5. character_note        (top behavioural priority — placed last)
+    #   3. post_history          (top behavioural priority — placed last)
     # Empty fields are skipped; if none are set the packet isn't built.
     # The style reminder is a pointer, not a re-injection — example_dialogue
     # samples themselves stay in the system block (~25 tokens here vs.
     # hundreds for re-injecting the samples every turn).
+    # NOTE: character_note and author_note are NOT in this packet — they are
+    # appended to the system block wrapped in [OOC: …] labels. Moving them
+    # here cost ~539 tokens per turn and was reverted.
     # ───────────────────────────────────────────────────────────────────────
     _reply_instr_items = []
 

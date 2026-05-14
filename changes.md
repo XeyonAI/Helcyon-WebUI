@@ -1,3 +1,33 @@
+## Session: May 14 2026 — Prompt-Stack Fixes (OOC Wrapping + ex_block Ordering)
+
+### `app.py`
+**Bug fix: character_note / author_note leaking into visible response**
+- Raw text from character_note and author_note (e.g. "Tone note: Keep a light friendly tone…") was surfacing in model output as if it were content to reply to
+- Both were injected as bare text into the system block — model treated them as message content rather than silent directives
+- Fix: wrap each in `[OOC: Character note — …]` / `[OOC: Author note — …]` labels at the injection sites (around the former lines 2725 and 2733). Model now reads them as out-of-character instructions and follows them silently.
+- ⚠️ DO NOT remove the `[OOC: …]` wrappers — the leakage returns immediately without them
+
+**Bug fix: ex_block being silently ignored (style examples buried mid-system-block)**
+- ex_block was appended in the system block but character_note, author_note, AND the per-turn time injection all sat AFTER it
+- Result: any tone/style language in those notes was closer to the generation point and won attention over the actual style examples
+- Fix: ex_block moved to be the ABSOLUTE LAST item appended to the system block — after restriction anchor, character_note, author_note, AND the current time injection
+- New order in system block: system_prompt → char_context → user_context → instruction → tone_primer → project_documents → restriction anchor → character_note (OOC) → author_note (OOC) → current time → ex_block
+- The time injection comment block (`"injected as the LAST item"`, `"DO NOT move earlier"`) updated to reflect that ex_block is now LAST; time injection sits just before it
+- ⚠️ DO NOT move ex_block earlier in the system block — it must remain absolute last so style cues sit closest to the generation point
+- ⚠️ DO NOT add a second system message — would break `S U A U A … U` role alternation (see May 11 2026 Helcyon EOS diagnostic)
+
+**Note: ex_block wrapper boilerplate was already stripped**
+- The heavy ═══/⚠️/⛔/🎯 metadata wrapper around ex_block was already removed in a previous session (~400 tokens of boilerplate down to a one-line header). No further wrapper stripping was needed; the existing `Speaking-style examples — mirror the tone…` header is already terse.
+- The conservative `_EX_WRAPPER_OVERHEAD = 400` constant kept as a trim-budget safety margin — actual wrapper is ~40 tokens but the over-estimate protects against ctx_size overflow.
+
+**Stale comments updated**
+- The "character_note and author_note ride in the [REPLY INSTRUCTIONS] depth-0 packet" comments were updated in TWO locations (former lines ~2225 and ~2487) — both correctly reflect that those fields now live in the system block (wrapped in OOC labels), not the depth-0 packet
+- The OOC packet docstring (former ~2828-2842) updated: items 4 (author_note) and 5 (character_note) removed from the list — packet now contains only project_instructions, style reminder, and post_history
+- The pre-account block (former ~2528) updated: comment now correctly describes coverage for both the OOC depth-0 packet AND the system-block OOC notes (character_note/author_note). The character_note/author_note overhead now also includes +20 tokens each for the `[OOC: …]` wrapper itself.
+- Note on user-flagged lines 2272-2274: that comment is about `project_instructions`, which IS still in the OOC packet, so the comment is accurate and was left unchanged. The stale-comment fix landed at lines ~2487 instead (also a "character_note/author_note ride in OOC packet" claim — definitely stale, now updated).
+
+---
+
 ## Session: May 14 2026 — Config Page Tab Redesign
 
 ### `config.html`
