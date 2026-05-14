@@ -1,3 +1,27 @@
+## Session: May 14 2026 — Most Recent Sort Option Restored
+
+### `index.html`
+**Bug fix: "Most Recent" sort option missing from chat sidebar dropdown**
+- Option had been lost from the `<select>` HTML — only Newest/Oldest/A-Z remained
+- `sortChatList()` was also missing the `most_recent` branch entirely
+- Fix 1: Added `<option value="most_recent">Most Recent</option>` back to dropdown (between Oldest and A-Z)
+- Fix 2: Added `most_recent` sort case — sorts purely by `b.modified - a.modified` (last-active chats first, distinct from Newest which uses filename date)
+- Fix 3: Added dropdown restore at top of `sortChatList()` — syncs `<select>` to saved `chatSortMode` in localStorage on every load
+- ⚠️ Root cause of repeated disappearance: dropdown had no matching option for the saved localStorage value, so it silently fell back to first option visually — appeared broken each reload. Restore logic prevents this recurring.
+
+---
+
+## Session: May 14 2026 — Config Tab CSS Fix
+
+### `config.html`
+**Bug fix: Tab panels all visible simultaneously — tabs appeared broken**
+- Root cause: tab CSS (`display:none` / `display:block` on `.config-tab-panel`) only existed in style.css
+- style.css had not been updated on the server yet, so no hide/show rules applied — all panels rendered at once
+- Fix: tab CSS now embedded directly in a `<style>` block in config.html `<head>` — self-contained, can never get out of sync with style.css again
+- style.css copy of the tab CSS can remain as-is (harmless duplication)
+
+---
+
 ## Session: May 14 2026 — Project Modal Tweaks
 
 ### `index.html` + `style.css`

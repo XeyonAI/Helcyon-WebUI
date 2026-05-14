@@ -130,6 +130,7 @@
             <select id="chat-sort-select" onchange="sortChats()">
               <option value="newest">Newest First</option>
               <option value="oldest">Oldest First</option>
+              <option value="most_recent">Most Recent</option>
               <option value="alphabetical">A-Z</option>
             </select>
             <button id="new-chat-btn">＋ New</button>
@@ -1869,6 +1870,10 @@ function persistChatState() {
   function sortChatList(chats) {
     const sortMode = localStorage.getItem('chatSortMode') || 'newest';
 
+    // Restore dropdown to saved preference
+    const sel = document.getElementById('chat-sort-select');
+    if (sel && sel.value !== sortMode) sel.value = sortMode;
+
     if (sortMode === 'newest') {
       chats.sort((a, b) => {
         const da = parseDateFromFilename(a.filename) ?? (a.modified * 1000);
@@ -1884,6 +1889,9 @@ function persistChatState() {
         if (da !== db) return da - db;
         return a.created - b.created;
       });
+    } else if (sortMode === 'most_recent') {
+      // Sort by last-modified time — most recently active chats first
+      chats.sort((a, b) => b.modified - a.modified);
     } else if (sortMode === 'alphabetical') {
       chats.sort((a, b) => a.title.localeCompare(b.title));
     }
