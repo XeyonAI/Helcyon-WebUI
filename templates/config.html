@@ -206,20 +206,22 @@
       <div id="openai-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
       <button onclick="saveOpenAISettings()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">💾 Save OpenAI Settings</button>
 
-      <hr style="margin: 20px 0; border-color: #333;">
-
-      <h3>Appearance</h3>
-
-      <input type="file" id="bg-image-input" accept="image/*" style="display:none;" onchange="handleBgImageChange(this)">
-      <button onclick="document.getElementById('bg-image-input').click()" style="background-color: #3a2a5a; border-color: #6a4a9a; color: white; width:100%; margin-bottom:8px;">🖼️ Change Background</button>
-      <button onclick="clearBackground()" style="background-color: #3a3b3f; border-color: #555; color: #aaa; width:100%; font-size:12px; margin-bottom:14px;">✕ Clear Background</button>
-
-      <button onclick="openThemeModal()" style="background:#1e3a4a; border:1px solid #2a5068; color:#a0c8d8; width:100%; font-size:12px; padding:6px 0; border-radius:4px; cursor:pointer; margin-bottom:14px;">🎨 Theme Editor</button>
-
     </div>
 
     <!-- Main Center Column -->
     <div id="container">
+
+      <!-- ===== TAB BAR ===== -->
+      <div id="config-tab-bar">
+        <button class="config-tab active" onclick="switchConfigTab('system-prompt', this)">📝 System Prompt</button>
+        <button class="config-tab" onclick="switchConfigTab('character', this)">🧑 Character</button>
+        <button class="config-tab" onclick="switchConfigTab('create-char', this)">✨ New Character</button>
+        <button class="config-tab" onclick="switchConfigTab('user-persona', this)">👤 User Persona</button>
+        <button class="config-tab" onclick="switchConfigTab('appearance', this)">🎨 Appearance</button>
+      </div>
+
+      <!-- ===== TAB: SYSTEM PROMPT ===== -->
+      <div id="tab-system-prompt" class="config-tab-panel active">
       <h3>Global System Prompt</h3>
 
       <!-- Template selector row -->
@@ -259,8 +261,10 @@
       </p>
       <textarea id="global-current-situation" placeholder="e.g. Bob is staying at his parents' house for a few days." style="min-height:80px;"></textarea>
       <button onclick="saveCurrentSituation()" style="background-color:#1f5a3a; border-color:#248050; color:white; margin-top:6px;">💾 Save Situation</button>
-      <hr />
+      </div><!-- end tab-system-prompt -->
 
+      <!-- ===== TAB: CHARACTER ===== -->
+      <div id="tab-character" class="config-tab-panel">
 	  <div id="character-select-bar">
 		<h3>Select Character <span id="char-bind-indicator" style="display:none; font-size:13px; color:#6a9; margin-left:6px;" title="System prompt bound">🔗 Bound</span></h3>
 	    <select id="character-select"></select>
@@ -410,13 +414,12 @@
         <small style="color: #aaa; display: block; margin-top: 10px;">
           PNG cards contain both the image and all character data. Compatible with SillyTavern and other UIs.
         </small>
-      </div>
+      </div><!-- end export-import-section -->
 
-      <hr />
-      
-      <hr />
+      </div><!-- end tab-character -->
 
-<!-- NEW CHARACTER CREATION SECTION -->
+      <!-- ===== TAB: CREATE CHARACTER ===== -->
+      <div id="tab-create-char" class="config-tab-panel">
         <h3>Create New Character</h3>
         <div id="create-character">
           <label>Character Name:</label>
@@ -435,9 +438,10 @@
 
           <button onclick="createCharacter()" style="background-color: #1f5a3a; border-color: #248050; color: white;">✨ Create Character</button>
         </div>
+      </div><!-- end tab-create-char -->
 
-        <hr />
-
+      <!-- ===== TAB: USER PERSONA ===== -->
+      <div id="tab-user-persona" class="config-tab-panel">
 <!-- User Persona Section -->
       <label for="userSelect" style="font-size: 20px; font-weight: bold; color: #fff; display: block; margin-bottom: 0.5rem;">User Persona:</label>
       <select id="userSelect"></select>
@@ -496,13 +500,43 @@
         </p>
         <button id="delete-user-btn" class="clear-btn" onclick="deleteUserPersona()">🗑️ Delete Selected User</button>
       </div>
-    </div>
+      </div><!-- end tab-user-persona -->
+
+      <!-- ===== TAB: APPEARANCE ===== -->
+      <div id="tab-appearance" class="config-tab-panel">
+        <h3>🎨 Appearance</h3>
+
+        <h4 style="color:#aaa; font-size:12px; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px; margin-top:0;">Background Image</h4>
+        <input type="file" id="bg-image-input" accept="image/*" style="display:none;" onchange="handleBgImageChange(this)">
+        <button onclick="document.getElementById('bg-image-input').click()" style="background-color: #3a2a5a; border-color: #6a4a9a; color: white; width:100%; margin-bottom:8px;">🖼️ Change Background</button>
+        <button onclick="clearBackground()" style="background-color: #3a3b3f; border-color: #555; color: #aaa; width:100%; font-size:12px; margin-bottom:20px;">✕ Clear Background</button>
+
+        <h4 style="color:#aaa; font-size:12px; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px;">Theme Editor</h4>
+        <p style="font-size:12px; color:#888; margin-top:-6px; margin-bottom:14px;">Customise colours, fonts, and UI variables for any theme. Changes apply live.</p>
+        <button onclick="openThemeModal()" style="background:#1e3a4a; border:1px solid #2a5068; color:#a0c8d8; width:100%; font-size:13px; padding:10px 0; border-radius:6px; cursor:pointer;">🎨 Open Theme Editor</button>
+      </div><!-- end tab-appearance -->
+
+    </div><!-- end #container -->
+
+  </div><!-- end #main -->
 
   <!-- JavaScript will go here (next step) -->
-
-
-
-  <!-- JavaScript will go here (next step) -->
+<script>
+  function switchConfigTab(tabId, btn) {
+    // Hide all panels
+    document.querySelectorAll('.config-tab-panel').forEach(p => p.classList.remove('active'));
+    // Deactivate all tab buttons
+    document.querySelectorAll('.config-tab').forEach(b => b.classList.remove('active'));
+    // Show target panel
+    const panel = document.getElementById('tab-' + tabId);
+    if (panel) panel.classList.add('active');
+    // Activate button
+    if (btn) btn.classList.add('active');
+    // Scroll centre column to top
+    const container = document.getElementById('container');
+    if (container) container.scrollTop = 0;
+  }
+</script>
 </body>
 </html>
 

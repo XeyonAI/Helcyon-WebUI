@@ -2637,37 +2637,27 @@ def chat():
         has_emojis = any(emoji in ex for emoji in ['❤️', '😍', '😘', '💕', '😊', '😉', '🔥', '💯', '✨', '🎯'])
         has_xxx = 'xxx' in ex.lower()
 
-        # Build conditional style instructions
-        style_rules = []
+        # Conditional style notes — only added when the examples actually use
+        # the cue. Kept terse on purpose: the examples themselves are the
+        # primary signal, so the rules-to-content ratio should favour content.
+        # ⚠️ DO NOT re-inflate the wrapper with ═══/⚠️/⛔/🎯 boilerplate —
+        # ~400 tokens of metadata around the examples drowned out the actual
+        # style content and was a contributing factor to example dialogue
+        # being ignored. (See changes.md May 14 2026.)
+        _extra_rules = []
         if has_emojis:
-            style_rules.append("- Use emojis EXACTLY like the examples show")
+            _extra_rules.append("Use emojis exactly like the examples show.")
         if has_xxx:
-            style_rules.append("- End messages with 'xxx' or 'xxxx' like the character does")
-        
-        # Add generic style rules that apply to everyone
-        style_rules.insert(0, "- Copy the EXACT tone, energy, and emotional warmth")
-        style_rules.append("- Match their vocabulary, sentence structure, and rhythm")
-        style_rules.append("- Mirror the formatting structure of the examples precisely — headers, bullets, separators, paragraphs — whatever the example uses, use it")
-        style_rules.append("- DO NOT copy the topics or situations from examples")
-        style_rules.append("- Generate NEW content in this character's style")
-        
+            _extra_rules.append("End messages with 'xxx' or 'xxxx' like the character does.")
+        _extra = (" " + " ".join(_extra_rules)) if _extra_rules else ""
+
         ex_block = (
             "\n\n"
-            "═══════════════════════════════════════════════════════════\n"
-            "⚠️ CRITICAL STYLE INSTRUCTION - READ CAREFULLY\n"
-            "═══════════════════════════════════════════════════════════\n\n"
-            "Below are example messages showing this character's speaking style.\n"
-            "⛔ THESE ARE STYLE TEMPLATES ONLY — NOT CONVERSATION HISTORY.\n"
-            "⛔ DO NOT repeat, paraphrase, or echo any wording from these examples in your reply.\n"
-            "⛔ If the user's topic is similar to an example, write COMPLETELY FRESH content — same style, brand new words.\n\n"
-            "🎯 YOUR TASK:\n"
-            + "\n".join(style_rules) + "\n\n"
-            + ex +
-            "\n\n"
-            "═══════════════════════════════════════════════════════════\n"
-            "⚠️ REMINDER: Use the style above — but every word of your reply must be original.\n"
-            "⚠️ Repeating or paraphrasing example content is a failure. Write fresh every time.\n"
-            "═══════════════════════════════════════════════════════════\n\n"
+            "Speaking-style examples — mirror the tone, vocabulary, rhythm, and "
+            "formatting (headers, bullets, separators, paragraphs). Write fresh "
+            "content; do not copy or paraphrase the wording or topics of the "
+            "examples themselves." + _extra + "\n\n"
+            + ex + "\n"
         )
         print(f"🧩 Added example_dialogue to system block ({len(ex)} chars)")
         if has_emojis:
@@ -2677,12 +2667,8 @@ def chat():
         
         # Add example dialogue to system message
         if messages and messages[0].get("role") == "system":
-            messages[0]["content"] += ex_block
-
-            # 🔒 SYSTEM PROMPT ANCHOR — injected last, closest to generation
-            # Extracts hard rules from system_prompt and repeats them here
-            # so they aren't buried under char card and example dialogue
-            import re as _re
+            # 🔒 SYSTEM PROMPT ANCHOR — extracts hard rules from system_prompt
+            # and repeats them so they aren't buried under char card.
             _restriction_lines = []
             for _line in system_prompt.splitlines():
                 _l = _line.strip()
@@ -2705,20 +2691,21 @@ def chat():
                 messages[0]["content"] += _anchor
                 print(f"🔒 Injected {len(_restriction_lines)} restriction(s) as end-of-system anchor")
 
-            # ✅ Character Note + Author's Note — injected LAST in system block,
-            # after example dialogue and restriction anchor, so they're closest
-            # to the conversation history and have maximum authority without
-            # costing tokens on every turn (unlike the OOC packet approach).
-            # ⚠️ DO NOT move earlier in system block — proximity to generation
-            # is what gives them authority. DO NOT move to OOC packet — that
-            # adds ~539 tokens per turn and burns context budget faster.
+            # ✅ Character Note + Author's Note — appended above example
+            # dialogue. They still cost zero per-turn tokens (vs the OOC
+            # packet approach which adds ~539/turn) but no longer sit in the
+            # final position where they were outweighing the style examples.
+            # ⚠️ DO NOT move below ex_block — example dialogue must be the
+            # LAST system-block item so its style cues are closest to the
+            # generation point. DO NOT move to OOC packet — that adds
+            # ~539 tokens per turn and burns context budget faster.
             _cn_sys = char_data.get("character_note", "").strip()
             if _cn_sys:
                 _cn_sys = re.sub(r'<\|im_start\|>\w*', '', _cn_sys)
                 _cn_sys = re.sub(r'<\|im_end\|>', '', _cn_sys).strip()
                 if _cn_sys:
                     messages[0]["content"] += f"\n\n{_cn_sys}"
-                    print(f"✅ Character Note appended to end of system block ({len(_cn_sys)} chars)")
+                    print(f"✅ Character Note appended to system block ({len(_cn_sys)} chars)")
 
             _an_sys = data.get("author_note", "").strip() if isinstance(data, dict) else ""
             if _an_sys:
@@ -2726,7 +2713,17 @@ def chat():
                 _an_sys = re.sub(r'<\|im_end\|>', '', _an_sys).strip()
                 if _an_sys:
                     messages[0]["content"] += f"\n\n{_an_sys}"
-                    print(f"✅ Author's Note appended to end of system block ({len(_an_sys)} chars)")
+                    print(f"✅ Author's Note appended to system block ({len(_an_sys)} chars)")
+
+            # 🎯 Example dialogue — appended LAST in the system block so it
+            # sits closest to the conversation turns and the generation point.
+            # Previously ex_block sat ABOVE restriction anchor + char_note +
+            # author_note, which buried it mid-system-block — any style/tone
+            # language in those notes was closer to generation and won
+            # attention, leading to example dialogue being silently ignored.
+            # ⚠️ DO NOT move earlier in system block. (changes.md May 14 2026.)
+            messages[0]["content"] += ex_block
+            print(f"🎯 Example dialogue appended LAST in system block ({len(ex_block)} chars wrapper+content)")
 
             # 🔥 DEBUG: Check if example dialogue made it through
             print("\n" + "="*80)
@@ -2736,6 +2733,50 @@ def chat():
             print(f"Length: {len(system_content)} chars")
             print(f"Last 500 chars:\n{system_content[-500:]}")
             print("="*80 + "\n")
+
+    # 🕐 CURRENT LOCAL TIME — injected as the LAST item in the system block
+    # so the time-of-day signal sits right next to the conversation turns and
+    # the model's generation point. Date-only at the top of system_prompt
+    # (utils/session_handler.py) is the stable cache anchor; this is the
+    # per-turn anchor that gives the model hour-of-day awareness so it stops
+    # saying "give them a call this morning" at 7pm.
+    #
+    # Precision: rounded down to the hour. This keeps the KV cache prefix
+    # valid for the entire hour — invalidates once per hour rather than once
+    # per minute (the original reason this was stripped from position 0).
+    # Conversation turns appended after this point are re-evaluated on each
+    # hour rollover, which is an acceptable trade-off for accurate time-of-day
+    # awareness.
+    # ⚠️ DO NOT add minute-precision here — that brings back the every-minute
+    # cache invalidation problem. ⚠️ DO NOT move earlier in the system block —
+    # the whole point is proximity to the generation point.
+    if messages and messages[0].get("role") == "system":
+        # Local import: earlier in this function `import datetime` rebinds the
+        # name `datetime` to the *module* in the function's local scope,
+        # shadowing the top-of-file `from datetime import datetime`. Calling
+        # `datetime.now()` here would hit the module and AttributeError.
+        # Use a unique alias to stay independent of which earlier branch ran.
+        import datetime as _dt_now
+        _now_local = _dt_now.datetime.now()
+        _hour_24 = _now_local.hour
+        if 5 <= _hour_24 < 12:
+            _tod = "morning"
+        elif 12 <= _hour_24 < 17:
+            _tod = "afternoon"
+        elif 17 <= _hour_24 < 21:
+            _tod = "evening"
+        else:
+            _tod = "night"
+        _hour_12 = _hour_24 % 12 or 12
+        _ampm = "AM" if _hour_24 < 12 else "PM"
+        _time_str = (
+            f"\n\nCurrent local time: "
+            f"{_now_local.strftime('%A %d %B %Y')}, "
+            f"{_hour_12} {_ampm} ({_tod})."
+        )
+        messages[0]["content"] += _time_str
+        print(f"🕐 Current time appended LAST in system block: "
+              f"{_hour_12} {_ampm} ({_tod})")
 
     # ⚠️ DO NOT inject any mid-conversation system messages here. A second
     # system message anywhere after position 0 breaks ChatML alternation and

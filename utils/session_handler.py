@@ -30,14 +30,19 @@ def get_system_prompt():
     Returns:
         tuple: (system_prompt, current_time)
     """
-    # Generate time context — date only (no time of day). Minute-precision
-    # timestamps invalidated the entire KV cache on every minute boundary
-    # (the timestamp sits at position 0 of every prompt and llama.cpp does
-    # strict prefix-match caching). Day-precision means the cache only
-    # invalidates once per day. If the model needs to know the time of day,
-    # we can re-introduce it at the END of the system block, after stable
-    # content, so the cache prefix stays large.
-    current_time = datetime.datetime.now(datetime.timezone.utc).strftime("%A, %d %B %Y")
+    # Generate time context — date only (no time of day) in LOCAL time.
+    # Minute-precision timestamps invalidated the entire KV cache on every
+    # minute boundary (the timestamp sits at position 0 of every prompt and
+    # llama.cpp does strict prefix-match caching). Day-precision means the
+    # cache only invalidates once per local day.
+    # Time-of-day awareness is handled separately by an hour-precision
+    # injection at the END of the system block (see app.py near ex_block) —
+    # that placement keeps a large stable prefix for cache reuse while still
+    # giving the model the current hour close to its generation point.
+    # ⚠️ Local time, not UTC — was UTC previously, which produced wrong-date
+    # signals near midnight local time and made the bottom-of-block hour
+    # string disagree with the top date.
+    current_time = datetime.datetime.now().strftime("%A, %d %B %Y")
     time_context = f"Current date: {current_time}\n\n"
 
     # Load active system prompt from system_prompts/ folder

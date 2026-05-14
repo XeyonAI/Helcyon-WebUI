@@ -1,37 +1,64 @@
-### `truncation.py`
-**Bug fix: Hard prompt token cap to prevent EOS cliff**
-- Added `MAX_PROMPT_TOKENS = 8500` constant — clamps conversation history budget so total prompt never exceeds ~8500 tokens
-- Helcyon (Mistral Nemo) has a hard EOS cliff at ~10,000-10,500 tokens evaluated — responses cut off mid-word beyond this regardless of ctx_size
-- Truncation now fires earlier to keep prompt under the cliff; llama.cpp still runs with full ctx_size for KV cache headroom
-- ⚠️ DO NOT raise MAX_PROMPT_TOKENS above 8500 without retesting long conversations — the cliff is consistent and reproducible
-- Also restored missing alternation guard (was stripped from this version of the file)
+## Session: May 14 2026 — Config Page Tab Redesign
 
-## Session: May 13 2026 — Meta-response bug fix + EOS cutoff investigation
+### `config.html`
+**Feature: Centre column redesigned with tab navigation**
+- Replaced the single long scrolling centre column with a 5-tab layout: System Prompt | Character | New Character | User Persona | Appearance
+- Tab bar sits at the top of `#container`; active tab highlighted in green, inactive tabs subtle/dark
+- Each section is wrapped in a `config-tab-panel` div — hidden by default, shown when active
+- `switchConfigTab(tabId, btn)` function handles show/hide and active button state; scrolls container to top on switch
+- System Prompt tab is active by default on page load
+- Appearance tab added to centre: contains Background controls + Open Theme Editor button (replaces sidebar Appearance section)
+- Sidebar loses the Appearance section entirely — keeps Sampling, TTS, Llama.cpp, Web Search, OpenAI only
+- All existing JS/functionality completely unchanged — purely structural HTML reorganisation
 
-### `app.py`
-**Bug fix: Model narrating instructions instead of following them silently**
-- Symptom: model would respond with "Got it. This run-through is for... Let's go." instead of just answering
-- Root cause 1: character_note and author_note were wrapped in `[OOC: Stay in character. Reminder — ...]` labels — fixed by removing wrappers
-- Root cause 2 (deeper): OOC packet was appended AFTER the user message, making instructions the last thing before generation — model read them as the prompt to respond to
-- Fix: packet now PREPENDED before the user message so user's words land closest to generation point
-- Structure is now: `<|im_start|>user\n[OOC packet]\n\n[user message]\n<|im_end|>`
-- Fix 3: Moved character_note and author_note OUT of OOC packet entirely — now injected as last items in system block (after example dialogue + restriction anchor), giving them proximity authority without adding ~539 tokens per user turn
-- ⚠️ DO NOT move character_note/author_note back to OOC packet — it burned 539 tokens per turn and caused earlier context cutoffs
-- ⚠️ DO NOT move them earlier in the system block — they must be LAST in the system block to have authority by proximity
+### `style.css`
+**Feature: Tab bar styling added**
+- `#config-tab-bar`: flex row, wraps on small screens, sits above content with bottom border
+- `.config-tab`: dark border, muted text, hover lightens, smooth transition
+- `.config-tab.active`: green tint matching HWUI button style
+- `.config-tab-panel`: display:none by default; .active -> display:block
 
-- ⚠️ DO NOT move packet back to append position — prepend is correct. Last thing before assistant tag must be the user's actual message.
+---
 
-### EOS mid-response cutoff investigation (unresolved — DPO LoRA in progress)
-- Confirmed via direct llama.cpp browser UI test: cutoff reproduces without HWUI (rules out HWUI as sole cause)
-- Token analysis: cutoff occurs at ~9800 tokens (~60% of 16384 ctx) — rules out context pressure
-- Root cause hypothesis: model has never seen conversation context beyond ~1024 tokens in training (shard cap), so EOS probability rises at long context depth
-- New helcyon-x5 base trained (4 epochs, 4e-5 LR — reduced from x2's 6 epochs at 5e-5 to reduce collateral damage)
-- 15 DPO shards created targeting long-context continuation (chosen=complete response, rejected=mid-sentence cutoff)
-- DPO LoRA merged into 4o variant on x5 base — testing in progress
+## Session: May 14 2026 — Modal Centering + List Spacing Fix
+
+### `style.css`
+- Fixed `.modal` `padding-left: 120px` → `250px` — modals now centre relative to the content pane (right of sidebar), matching the input bar and chat column alignment. Standard layout matching ChatGPT/Grok/Gemini.
+- Fixed duplicate list rules at line ~2439: `.model-text ul/ol` and `.model-text li` had lower-specificity overrides declared later in the file that were winning over earlier fixes — bumped to match paragraph rhythm (`margin: 0.8em 0 1.1em`, `li margin-bottom: 0.8em`, `line-height: 1.6`)
+- Fixed `#container` `flex: 1` → `flex: 0 1 770px` to prevent container stretching past max-width
+- Fixed `.chat-page #center-column` `margin-left: 0` → `margin: auto` for proper centering in content pane
+
+---
+
+## Session: May 08 2026 — Paragraph & List Spacing Polish
+
+### `style.css`
+- Bumped `.model-text p` and `.model-text-cont p` margin from `0.4em` to `0.8em` — paragraphs were too cramped
+- Fixed list spacing to match paragraph rhythm: `line-height` raised from `1.3` to `1.6`, `li` margin from `0.15em` to `0.4em`, ul/ol block margin from `0.3em 0 0.5em` to `0.6em 0 0.8em`
+- Affects `.model-text-cont`, `.model-text`, `.user-text`, and `.message` list rules
 
 ---
 
 ## Session: May 07 2026 — Section Divider Colour in Theme Editor
+
+## Session: May 14 2026 — Modal Centering + List Spacing Fix
+
+### `style.css`
+- Fixed `.modal` `padding-left: 120px` → `250px` — modals now centre relative to the content pane (right of sidebar), matching the input bar and chat column alignment. Standard layout matching ChatGPT/Grok/Gemini.
+- Fixed duplicate list rules at line ~2439: `.model-text ul/ol` and `.model-text li` had lower-specificity overrides declared later in the file that were winning over earlier fixes — bumped to match paragraph rhythm (`margin: 0.8em 0 1.1em`, `li margin-bottom: 0.8em`, `line-height: 1.6`)
+- Fixed `#container` `flex: 1` → `flex: 0 1 770px` to prevent container stretching past max-width
+- Fixed `.chat-page #center-column` `margin-left: 0` → `margin: auto` for proper centering in content pane
+
+---
+
+## Session: May 08 2026 — Paragraph & List Spacing Polish
+
+### `style.css`
+- Bumped `.model-text p` and `.model-text-cont p` margin from `0.4em` to `0.8em` — paragraphs were too cramped
+- Fixed list spacing to match paragraph rhythm: `line-height` raised from `1.3` to `1.6`, `li` margin from `0.15em` to `0.4em`, ul/ol block margin from `0.3em 0 0.5em` to `0.6em 0 0.8em`
+- Affects `.model-text-cont`, `.model-text`, `.user-text`, and `.message` list rules
+
+---
 
 ## Session: May 07 2026 — HR Separator Visibility + Live Theme Update Fix
 
@@ -70,6 +97,25 @@
 
 ---
 
+## Session: May 14 2026 — Modal Centering + List Spacing Fix
+
+### `style.css`
+- Fixed `.modal` `padding-left: 120px` → `250px` — modals now centre relative to the content pane (right of sidebar), matching the input bar and chat column alignment. Standard layout matching ChatGPT/Grok/Gemini.
+- Fixed duplicate list rules at line ~2439: `.model-text ul/ol` and `.model-text li` had lower-specificity overrides declared later in the file that were winning over earlier fixes — bumped to match paragraph rhythm (`margin: 0.8em 0 1.1em`, `li margin-bottom: 0.8em`, `line-height: 1.6`)
+- Fixed `#container` `flex: 1` → `flex: 0 1 770px` to prevent container stretching past max-width
+- Fixed `.chat-page #center-column` `margin-left: 0` → `margin: auto` for proper centering in content pane
+
+---
+
+## Session: May 08 2026 — Paragraph & List Spacing Polish
+
+### `style.css`
+- Bumped `.model-text p` and `.model-text-cont p` margin from `0.4em` to `0.8em` — paragraphs were too cramped
+- Fixed list spacing to match paragraph rhythm: `line-height` raised from `1.3` to `1.6`, `li` margin from `0.15em` to `0.4em`, ul/ol block margin from `0.3em 0 0.5em` to `0.6em 0 0.8em`
+- Affects `.model-text-cont`, `.model-text`, `.user-text`, and `.message` list rules
+
+---
+
 ## Session: May 07 2026 — HR Visibility + Equal Spacing
 
 ### `style.css`
@@ -81,6 +127,25 @@
 
 ---
 
+## Session: May 14 2026 — Modal Centering + List Spacing Fix
+
+### `style.css`
+- Fixed `.modal` `padding-left: 120px` → `250px` — modals now centre relative to the content pane (right of sidebar), matching the input bar and chat column alignment. Standard layout matching ChatGPT/Grok/Gemini.
+- Fixed duplicate list rules at line ~2439: `.model-text ul/ol` and `.model-text li` had lower-specificity overrides declared later in the file that were winning over earlier fixes — bumped to match paragraph rhythm (`margin: 0.8em 0 1.1em`, `li margin-bottom: 0.8em`, `line-height: 1.6`)
+- Fixed `#container` `flex: 1` → `flex: 0 1 770px` to prevent container stretching past max-width
+- Fixed `.chat-page #center-column` `margin-left: 0` → `margin: auto` for proper centering in content pane
+
+---
+
+## Session: May 08 2026 — Paragraph & List Spacing Polish
+
+### `style.css`
+- Bumped `.model-text p` and `.model-text-cont p` margin from `0.4em` to `0.8em` — paragraphs were too cramped
+- Fixed list spacing to match paragraph rhythm: `line-height` raised from `1.3` to `1.6`, `li` margin from `0.15em` to `0.4em`, ul/ol block margin from `0.3em 0 0.5em` to `0.6em 0 0.8em`
+- Affects `.model-text-cont`, `.model-text`, `.user-text`, and `.message` list rules
+
+---
+
 ## Session: May 07 2026 — HR Section Spacing Balanced
 
 ### `style.css`
@@ -89,6 +154,25 @@
 - New approach: `hr` itself owns the gap (`margin: 12px 0`) — single source of truth, no stacking
 - All adjacent element margins (`p`, `ul`, `ol` before/after hr) zeroed so only the hr value counts
 - Also merged the duplicate `.model-text-cont hr` rule into the unified top-level rule
+
+---
+
+## Session: May 14 2026 — Modal Centering + List Spacing Fix
+
+### `style.css`
+- Fixed `.modal` `padding-left: 120px` → `250px` — modals now centre relative to the content pane (right of sidebar), matching the input bar and chat column alignment. Standard layout matching ChatGPT/Grok/Gemini.
+- Fixed duplicate list rules at line ~2439: `.model-text ul/ol` and `.model-text li` had lower-specificity overrides declared later in the file that were winning over earlier fixes — bumped to match paragraph rhythm (`margin: 0.8em 0 1.1em`, `li margin-bottom: 0.8em`, `line-height: 1.6`)
+- Fixed `#container` `flex: 1` → `flex: 0 1 770px` to prevent container stretching past max-width
+- Fixed `.chat-page #center-column` `margin-left: 0` → `margin: auto` for proper centering in content pane
+
+---
+
+## Session: May 08 2026 — Paragraph & List Spacing Polish
+
+### `style.css`
+- Bumped `.model-text p` and `.model-text-cont p` margin from `0.4em` to `0.8em` — paragraphs were too cramped
+- Fixed list spacing to match paragraph rhythm: `line-height` raised from `1.3` to `1.6`, `li` margin from `0.15em` to `0.4em`, ul/ol block margin from `0.3em 0 0.5em` to `0.6em 0 0.8em`
+- Affects `.model-text-cont`, `.model-text`, `.user-text`, and `.message` list rules
 
 ---
 
@@ -315,6 +399,25 @@ Root cause: memory confirmation handler calling `fetchAndDisplayResponse()` with
 - This rule was added during the old overflow battle and is now redundant (overflow fixed at DOM level)
 - Changed to `white-space: pre-wrap !important; word-break: break-word !important; overflow-wrap: break-word !important`
 - Code now wraps correctly inside the block width
+
+---
+
+## Session: May 14 2026 — Modal Centering + List Spacing Fix
+
+### `style.css`
+- Fixed `.modal` `padding-left: 120px` → `250px` — modals now centre relative to the content pane (right of sidebar), matching the input bar and chat column alignment. Standard layout matching ChatGPT/Grok/Gemini.
+- Fixed duplicate list rules at line ~2439: `.model-text ul/ol` and `.model-text li` had lower-specificity overrides declared later in the file that were winning over earlier fixes — bumped to match paragraph rhythm (`margin: 0.8em 0 1.1em`, `li margin-bottom: 0.8em`, `line-height: 1.6`)
+- Fixed `#container` `flex: 1` → `flex: 0 1 770px` to prevent container stretching past max-width
+- Fixed `.chat-page #center-column` `margin-left: 0` → `margin: auto` for proper centering in content pane
+
+---
+
+## Session: May 08 2026 — Paragraph & List Spacing Polish
+
+### `style.css`
+- Bumped `.model-text p` and `.model-text-cont p` margin from `0.4em` to `0.8em` — paragraphs were too cramped
+- Fixed list spacing to match paragraph rhythm: `line-height` raised from `1.3` to `1.6`, `li` margin from `0.15em` to `0.4em`, ul/ol block margin from `0.3em 0 0.5em` to `0.6em 0 0.8em`
+- Affects `.model-text-cont`, `.model-text`, `.user-text`, and `.message` list rules
 
 ---
 
