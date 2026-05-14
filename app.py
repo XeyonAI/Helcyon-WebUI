@@ -2575,8 +2575,13 @@ def chat():
     
     # (project instructions are already in the system message above - no need to repeat)
 
-    # ✅ Re-attach example_dialogue INSIDE system block with clear fencing
-    ex_block = ""
+    # 🎭 Example dialogue is no longer attached to the system block. It is
+    # parsed into fake user/assistant message pairs and injected at the START
+    # of the conversation history (immediately after messages[0]) so the model
+    # sees the style as "this is how we've been talking" rather than buried
+    # system-block content. ⚠️ DO NOT revert to system-block injection —
+    # buried style examples were silently ignored. (changes.md May 14 2026.)
+    _fake_turns = []
     has_paragraph_style = False  # used by example dialogue style rules block below
 
     # Resolve example dialogue: character-level overrides global; global is fallback
@@ -2630,40 +2635,73 @@ def chat():
         ex = re.sub(r'(?m)^([^\n:]{1,40}):\s*\n+', lambda m: m.group(1) + ': ', ex)
         ex = ex.strip()
         print(f"🧹 Example dialogue speaker line breaks normalised")
-        
-        # 🔍 Check if character uses emojis or xxx in their examples
-        has_emojis = any(emoji in ex for emoji in ['❤️', '😍', '😘', '💕', '😊', '😉', '🔥', '💯', '✨', '🎯'])
-        has_xxx = 'xxx' in ex.lower()
 
-        # Conditional style notes — only added when the examples actually use
-        # the cue. Kept terse on purpose: the examples themselves are the
-        # primary signal, so the rules-to-content ratio should favour content.
-        # ⚠️ DO NOT re-inflate the wrapper with ═══/⚠️/⛔/🎯 boilerplate —
-        # ~400 tokens of metadata around the examples drowned out the actual
-        # style content and was a contributing factor to example dialogue
-        # being ignored. (See changes.md May 14 2026.)
-        _extra_rules = []
-        if has_emojis:
-            _extra_rules.append("Use emojis exactly like the examples show.")
-        if has_xxx:
-            _extra_rules.append("End messages with 'xxx' or 'xxxx' like the character does.")
-        _extra = (" " + " ".join(_extra_rules)) if _extra_rules else ""
-
-        ex_block = (
-            "\n\n"
-            "Speaking-style examples — mirror the tone, vocabulary, rhythm, and "
-            "formatting (headers, bullets, separators, paragraphs). Write fresh "
-            "content; do not copy or paraphrase the wording or topics of the "
-            "examples themselves." + _extra + "\n\n"
-            + ex + "\n"
+        # 🎭 PARSE EXAMPLE DIALOGUE INTO FAKE CONVERSATION TURNS
+        # Models follow conversation patterns far more strongly than buried
+        # system-block instructions. Parse the raw example_dialogue into
+        # {role, content} pairs and inject them at the START of the
+        # conversation history (after messages[0]) so the style reads as
+        # "this is how we've been talking", not "here is an instruction".
+        # Handles both: "{{user}}:" / "{{char}}:" alternating lines AND
+        # "<START>" block separators (case-insensitive).
+        # ⚠️ DO NOT revert to ex_block in the system block. (changes.md.)
+        _user_label = user_display_name or user_name
+        _char_label = char_data.get("name", character_name)
+        _ex_subst = (
+            ex.replace("{{user}}", _user_label)
+              .replace("{{char}}", _char_label)
         )
-        print(f"🧩 Added example_dialogue to system block ({len(ex)} chars)")
-        if has_emojis:
-            print("   📱 Emojis detected in examples")
-        if has_xxx:
-            print("   💋 xxx kisses detected in examples")
-        
-        # Add example dialogue to system message
+        _blocks = re.split(r'(?i)<\s*START\s*>', _ex_subst)
+        for _blk in _blocks:
+            _blk = _blk.strip()
+            if not _blk:
+                continue
+            _cur_role = None
+            _cur_lines = []
+            for _ln in _blk.splitlines():
+                _stripped = _ln.strip()
+                if not _stripped:
+                    if _cur_lines:
+                        _cur_lines.append("")
+                    continue
+                _m = re.match(r'^([^:\n]{1,80}):\s*(.*)$', _stripped)
+                _matched_role = None
+                if _m:
+                    _speaker = _m.group(1).strip()
+                    _rest = _m.group(2)
+                    if _speaker.lower() == _user_label.lower():
+                        _matched_role = "user"
+                    elif _speaker.lower() == _char_label.lower():
+                        _matched_role = "assistant"
+                if _matched_role:
+                    if _cur_role is not None and _cur_lines:
+                        _text = "\n".join(_cur_lines).strip()
+                        if _text:
+                            _fake_turns.append({"role": _cur_role, "content": _text})
+                    _cur_role = _matched_role
+                    _cur_lines = [_rest] if _rest else []
+                else:
+                    if _cur_role is not None:
+                        _cur_lines.append(_stripped)
+            if _cur_role is not None and _cur_lines:
+                _text = "\n".join(_cur_lines).strip()
+                if _text:
+                    _fake_turns.append({"role": _cur_role, "content": _text})
+
+        # Enforce alternation: start with user, end with assistant — so the
+        # real conversation (which starts with user) interleaves correctly.
+        while _fake_turns and _fake_turns[0]["role"] != "user":
+            _dropped_ft = _fake_turns.pop(0)
+            print(f"⚠️ Dropped leading {_dropped_ft['role']} fake turn for alternation")
+        while _fake_turns and _fake_turns[-1]["role"] != "assistant":
+            _dropped_ft = _fake_turns.pop()
+            print(f"⚠️ Dropped trailing {_dropped_ft['role']} fake turn for alternation")
+
+        print(f"🎭 Parsed example_dialogue → {len(_fake_turns)} fake turn(s) "
+              f"({sum(1 for t in _fake_turns if t['role']=='user')} user, "
+              f"{sum(1 for t in _fake_turns if t['role']=='assistant')} assistant)")
+
+        # System-block extras (restriction anchor + OOC notes) still belong here
         if messages and messages[0].get("role") == "system":
             # 🔒 SYSTEM PROMPT ANCHOR — extracts hard rules from system_prompt
             # and repeats them so they aren't buried under char card.
@@ -2690,19 +2728,13 @@ def chat():
                 print(f"🔒 Injected {len(_restriction_lines)} restriction(s) as end-of-system anchor")
 
             # ✅ Character Note + Author's Note — appended to the system block
-            # ABOVE the current time injection and ex_block (which both come
-            # later, with ex_block being the absolute LAST item). They cost
-            # zero per-turn tokens (vs the OOC packet approach which added
-            # ~539/turn) but no longer sit in the final position where they
-            # were outweighing the style examples.
-            # ⚠️ DO NOT move below ex_block — example dialogue must be the
-            # LAST system-block item so its style cues are closest to the
-            # generation point. ⚠️ DO NOT move to the OOC depth-0 packet —
-            # that adds ~539 tokens per turn and burns context budget faster.
-            # Wrapped in [OOC: …] labels so the model treats them as silent
-            # instructions rather than content to echo. Without the label, raw
-            # text like "Keep a light friendly tone…" was leaking into visible
-            # responses.
+            # ABOVE the current time injection. They cost zero per-turn tokens
+            # (vs the OOC packet approach which added ~539/turn).
+            # ⚠️ DO NOT move to the OOC depth-0 packet — that adds ~539 tokens
+            # per turn and burns context budget faster. Wrapped in [OOC: …]
+            # labels so the model treats them as silent instructions rather
+            # than content to echo. Without the label, raw text like "Keep a
+            # light friendly tone…" was leaking into visible responses.
             _cn_sys = char_data.get("character_note", "").strip()
             if _cn_sys:
                 _cn_sys = re.sub(r'<\|im_start\|>\w*', '', _cn_sys)
@@ -2719,13 +2751,11 @@ def chat():
                     messages[0]["content"] += f"\n\n[OOC: Author note — {_an_sys}]"
                     print(f"✅ Author's Note appended to system block ({len(_an_sys)} chars)")
 
-            # ex_block is no longer appended here — it has moved to the
-            # absolute LAST position in the system block (after the current
-            # time injection below) so its style cues sit closest to the
-            # generation point. Previously char_note + author_note + time
-            # injection all sat after ex_block, burying the style examples.
-            # ⚠️ DO NOT re-append ex_block here. ⚠️ DO NOT move ex_block
-            # earlier in the system block.
+            # Example dialogue is NOT appended here. It is parsed into fake
+            # user/assistant turns and injected into messages[] immediately
+            # after the time injection below. ⚠️ DO NOT re-append example
+            # dialogue text to the system block — buried style examples were
+            # silently ignored. (changes.md May 14 2026.)
 
     # 🕐 CURRENT LOCAL TIME — injected near the end of the system block so the
     # time-of-day signal sits close to the conversation turns. Date-only at the
@@ -2738,8 +2768,8 @@ def chat():
     # per minute (the original reason this was stripped from position 0).
     # ⚠️ DO NOT add minute-precision here — that brings back the every-minute
     # cache invalidation problem.
-    # ex_block follows immediately after this so the style examples are the
-    # absolute last thing in the system block, closest to the generation point.
+    # Fake example-dialogue turns are inserted into messages[] right after
+    # this block (NOT appended to the system message).
     if messages and messages[0].get("role") == "system":
         # Local import: earlier in this function `import datetime` rebinds the
         # name `datetime` to the *module* in the function's local scope,
@@ -2768,27 +2798,21 @@ def chat():
         print(f"🕐 Current time appended to system block: "
               f"{_hour_12} {_ampm} ({_tod})")
 
-        # 🎯 Example dialogue — appended as the ABSOLUTE LAST item in the
-        # system block (after restriction anchor, character_note, author_note,
-        # AND the current time injection) so its style cues sit closest to the
-        # generation point. Previously char_note/author_note/time all sat after
-        # ex_block, burying the style examples mid-block — model silently
-        # ignored them in favour of whatever tone language was closer to the
-        # generation point.
-        # ⚠️ DO NOT move earlier in system block. (changes.md May 14 2026.)
-        if ex_block:
-            messages[0]["content"] += ex_block
-            print(f"🎯 Example dialogue appended LAST in system block "
-                  f"({len(ex_block)} chars wrapper+content)")
-
-            # 🔥 DEBUG: Check if example dialogue made it through
-            print("\n" + "="*80)
-            print("🎭 SYSTEM MESSAGE AFTER ADDING EXAMPLE DIALOGUE:")
-            print("="*80)
-            system_content = messages[0]["content"]
-            print(f"Length: {len(system_content)} chars")
-            print(f"Last 500 chars:\n{system_content[-500:]}")
-            print("="*80 + "\n")
+    # 🎭 INJECT FAKE EXAMPLE-DIALOGUE TURNS — inserted at the START of the
+    # conversation history (immediately after messages[0], before any real
+    # turns) so the model treats the style as established conversation
+    # history rather than buried system-block instructions. Fake turns are
+    # already alternation-safe (start: user, end: assistant), so the real
+    # conversation (which starts with user) interleaves cleanly.
+    # ⚠️ DO NOT append example dialogue back to the system block.
+    # ⚠️ DO NOT skip the alternation trim above — back-to-back same-role
+    # turns break ChatML prompt assembly.
+    if _fake_turns and messages and messages[0].get("role") == "system":
+        for _i, _ft in enumerate(_fake_turns):
+            messages.insert(1 + _i, _ft)
+        print(f"🎭 Injected {len(_fake_turns)} fake conversation turn(s) from "
+              f"example_dialogue at positions 1..{len(_fake_turns)} "
+              f"(before any real turns)")
 
     # ⚠️ DO NOT inject any mid-conversation system messages here. A second
     # system message anywhere after position 0 breaks ChatML alternation and
@@ -2825,12 +2849,13 @@ def chat():
     # satisfied. Items are ordered least → most attention, so the field the
     # model needs to obey most strongly lands closest to its generation point:
     #   1. project_instructions  (broad context, lowest urgency)
-    #   2. style reminder        (points back to example_dialogue at the top)
+    #   2. style reminder        (points back to the fake example-dialogue turns at the start of history)
     #   3. post_history          (top behavioural priority — placed last)
     # Empty fields are skipped; if none are set the packet isn't built.
-    # The style reminder is a pointer, not a re-injection — example_dialogue
-    # samples themselves stay in the system block (~25 tokens here vs.
-    # hundreds for re-injecting the samples every turn).
+    # The style reminder is a pointer, not a re-injection — the example
+    # dialogue samples themselves live as fake conversation turns inserted
+    # right after messages[0] (~25 tokens here vs. hundreds for re-injecting
+    # the samples every turn).
     # NOTE: character_note and author_note are NOT in this packet — they are
     # appended to the system block wrapped in [OOC: …] labels. Moving them
     # here cost ~539 tokens per turn and was reverted.

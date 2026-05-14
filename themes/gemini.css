@@ -6,7 +6,7 @@
    ============================================================ */
 
 :root {
-  --topbar-bg: #1e1f20;
+  --topbar-bg: #1a1a1b;
   --container-bg: #1e1f20;
   --chat-bg: #131314;
   --project-header-bg: #062b46;
@@ -15,7 +15,7 @@
   --sidebar-button-hover: #143257;
   --new-chat-btn-bg: #00335a;
   --new-chat-btn-text: #c8c8c8;
-  --char-dropdown-bg: #202020;
+  --char-dropdown-bg: #121212;
   --char-dropdown-border: #303030;
   --sidebar-footer-btn-bg: #1e1f20;
   --sidebar-footer-btn-border: #25497f;

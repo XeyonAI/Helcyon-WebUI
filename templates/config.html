@@ -4,6 +4,45 @@
   <meta charset="UTF-8" />
   <title>Helcyon Config</title>
   <link rel="stylesheet" href="/style.css" />
+  <style>
+    /* ---- Config Tab System (self-contained — do not rely on style.css for this) ---- */
+    #config-tab-bar {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+      padding: 0 0 14px 0;
+      border-bottom: 1px solid #2a2a2a;
+      margin-bottom: 20px;
+    }
+    .config-tab {
+      background: transparent;
+      border: 1px solid #2a2a2a;
+      color: #888;
+      border-radius: 6px;
+      padding: 6px 14px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+      white-space: nowrap;
+    }
+    .config-tab:hover {
+      background: rgba(255,255,255,0.05);
+      color: #ccc;
+      border-color: #444;
+    }
+    .config-tab.active {
+      background: #1a3a2a;
+      border-color: #2a6a4a;
+      color: #6f6;
+      font-weight: 600;
+    }
+    .config-tab-panel {
+      display: none;
+    }
+    .config-tab-panel.active {
+      display: block;
+    }
+  </style>
   <link rel="stylesheet" href="/theme-files/midnight.css" id="active-theme-link" />
   <script>
     // Swap to actual active theme if different from default

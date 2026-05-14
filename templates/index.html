@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -128,7 +128,6 @@
         <h2>Chats</h2>
           <div class="sidebar-controls">
             <select id="chat-sort-select" onchange="sortChats()">
-              <option value="most-recent">Most Recent</option>
               <option value="newest">Newest First</option>
               <option value="oldest">Oldest First</option>
               <option value="alphabetical">A-Z</option>
@@ -194,15 +193,11 @@
         <!-- Input -->
         <div id="input-area" style="position:fixed;bottom:20px;left:250px;right:0;z-index:9999;display:flex;flex-direction:column;align-items:center;pointer-events:none;background:transparent;padding:0;border:none;">
 
-          <!-- Document Preview Strip -->
-          <div id="doc-preview-strip" style="display:none;padding:4px 0;gap:8px;flex-wrap:wrap;max-width:760px;width:100%;pointer-events:all;"></div>
-
           <!-- Image Preview Strip -->
           <div id="image-preview-strip" style="display:none;padding:6px 0;gap:8px;flex-wrap:wrap;max-width:760px;width:100%;pointer-events:all;"></div>
 
-          <!-- Hidden file inputs -->
+          <!-- Hidden file input -->
           <input type="file" id="chat-image-input" accept="image/*" multiple style="display:none;" onchange="handleImageAttach(this)" />
-          <input type="file" id="chat-doc-input" accept=".txt,.md,.pdf,.docx,.odt" multiple style="display:none;" onchange="handleDocumentAttach(this)" />
 
           <!-- Floating pill -->
           <div id="input-row" style="pointer-events:all;display:flex;flex-direction:row;align-items:center;gap:6px;background:var(--container-bg,#131922);border:1px solid var(--sidebar-border,#2a2a2a);border-radius:16px;padding:8px 10px;box-shadow:0 4px 24px rgba(0,0,0,0.5);width:100%;max-width:760px;box-sizing:border-box;overflow:visible;">
@@ -217,10 +212,9 @@
               </button>
               <div id="input-menu" class="input-dropup">
                 <button onclick="document.getElementById('chat-image-input').click(); closeInputMenu()" title="Attach Image">📎 Attach Image</button>
-                <button onclick="document.getElementById('chat-doc-input').click(); closeInputMenu()" title="Attach Document">📄 Attach Document</button>
                 <div class="input-menu-divider"></div>
                 <button onclick="manualSaveChat(); closeInputMenu()" id="save-chat-btn">💾 Save Chat</button>
-                <button onclick="showUpgradeModal('memory'); closeInputMenu()" title="Upgrade to HWUI Pro">⭐ Go Pro</button>
+                <button onclick="showUpgradeModal('memory'); closeInputMenu()" title="Upgrade to HWUI Pro">Memory ⭐Go Pro</button>
                 <div class="input-menu-divider"></div>
                 <button onclick="regenerate(); closeInputMenu()">🔄 Regenerate</button>
                 <div class="input-menu-divider"></div>
@@ -394,35 +388,25 @@ Examples:
         <h3>Project Management</h3>
         <span class="close" onclick="closeProjectModal()">&times;</span>
       </div>
-      
-      <div class="modal-body">
-        <!-- Current Project Display -->
-        <div class="current-project-display">
-          <strong>Active Project:</strong> 
-          <span id="current-project-display">None</span>
-        </div>
-        
-        <hr style="margin: 20px 0; border-color: #333;">
-        
-        <!-- Create New Project -->
-        <div class="project-section">
-          <h4>Create New Project</h4>
-          <input type="text" id="new-project-name" placeholder="Project name (e.g., Health Journey)">
-          <textarea id="new-project-instructions" placeholder="Project instructions (optional)
 
-Example: You're helping Bob track his gym progress. Keep detailed logs with dates, times, weight, diet, and observations." rows="6"></textarea>
-          <button onclick="createProject()" class="save-btn">Create Project</button>
+      <div class="modal-body">
+        <!-- Top strip: active project + quick create -->
+        <div id="project-modal-top">
+          <div id="project-modal-active">
+            Active: <span id="current-project-display">None</span>
+          </div>
+          <div id="project-modal-create">
+            <input type="text" id="new-project-name" placeholder="New project name…">
+            <button onclick="createProject()">＋ Create Project</button>
+          </div>
         </div>
-        
-        <hr style="margin: 20px 0; border-color: #333;">
-        
-        <!-- Switch/Manage Projects -->
-        <div class="project-section">
-          <h4>Your Projects</h4>
+
+        <!-- Scrollable grid area -->
+        <div id="project-modal-grid-wrap">
           <div id="projects-list"></div>
         </div>
       </div>
-      
+
       <div class="modal-footer">
         <button onclick="closeProjectModal()" class="cancel-btn">Close</button>
       </div>
@@ -636,78 +620,10 @@ function renderImagePreviews() {
   });
 }
 
-// ================================================
-// DOCUMENT ATTACH SYSTEM
-// ================================================
-window.attachedDocuments = []; // array of {filename, content}
-
-async function handleDocumentAttach(input) {
-  const files = Array.from(input.files);
-  input.value = '';
-  if (!files.length) return;
-
-  for (const file of files) {
-    const formData = new FormData();
-    formData.append('file', file);
-    try {
-      const res = await fetch('/parse_document', { method: 'POST', body: formData });
-      const data = await res.json();
-      if (data.error) { alert('Error reading document: ' + data.error); continue; }
-      window.attachedDocuments.push({ filename: data.filename, content: data.content });
-      renderDocumentPreviews();
-    } catch (err) {
-      alert('Failed to upload document: ' + err.message);
-    }
-  }
-}
-
-function renderDocumentPreviews() {
-  const strip = document.getElementById('doc-preview-strip');
-  strip.innerHTML = '';
-
-  if (!window.attachedDocuments || window.attachedDocuments.length === 0) {
-    strip.style.display = 'none';
-    return;
-  }
-
-  strip.style.display = 'flex';
-  window.attachedDocuments.forEach((doc, idx) => {
-    const wrapper = document.createElement('div');
-    wrapper.style.cssText = 'position:relative;display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,0.08);border:1px solid #555;border-radius:8px;padding:5px 10px;max-width:220px;box-sizing:border-box;';
-
-    const icon = document.createElement('span');
-    icon.textContent = '📄';
-    icon.style.cssText = 'font-size:15px;flex-shrink:0;';
-
-    const name = document.createElement('span');
-    name.textContent = doc.filename;
-    name.style.cssText = 'font-size:12px;color:#ccc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:140px;';
-
-    const removeBtn = document.createElement('button');
-    removeBtn.textContent = '✕';
-    removeBtn.style.cssText = 'position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;background:#a00;color:#fff;border:none;cursor:pointer;font-size:11px;padding:0;line-height:18px;text-align:center;';
-    removeBtn.onclick = function() {
-      window.attachedDocuments.splice(idx, 1);
-      renderDocumentPreviews();
-    };
-
-    wrapper.appendChild(icon);
-    wrapper.appendChild(name);
-    wrapper.appendChild(removeBtn);
-    strip.appendChild(wrapper);
-  });
-}
-
 // sanitizeMarkdown: strip setext headings and box-drawing HR patterns.
 // Allows genuine --- separators through so marked.js renders them as <hr>.
 function sanitizeMarkdown(text) {
   if (!text) return text;
-  // Normalize non-breaking spaces (U+00A0) to regular spaces throughout.
-  // The model emits   after ALL list numbers (1. , 2. , …).
-  // Without this, the inline-list splitter below can't match "2. " because it
-  // sees   instead of a regular space, so the whole list stays on one line.
-  text = text.replace(/ /g, ' ');
-  console.log('[sanitize] after U+00A0 norm (first 300):', JSON.stringify(text.substring(0, 300)));
   // Guarantee --- separators always have blank lines around them BEFORE any other processing.
   // Without this, marked.js (with breaks:true) can interpret the line above a --- as a setext h2,
   // turning it into a heading and silently swallowing the separator — dropping everything after it.
@@ -731,18 +647,12 @@ function sanitizeMarkdown(text) {
   // pulls that content into the heading block — it never renders as a separate element.
   text = text.replace(/(#{1,6}[^\n]+)\n([^\n#])/g, "$1\n\n$2");
 
-  // Fix: inline numbered lists — model sometimes writes '1. text. 2. text. 3. text' all on one line.
-  // Split on sentence-ending punctuation + space + digit + period + space + Capital/Bold.
-  // Anchoring to punctuation prevents false splits on 'version 2.' or 'point 2.' references.
-  text = text.replace(/([.!?)\]]) (\d+\. )(?=\*\*|[A-Z])/g, '$1\n\n$2');
-  console.log('[sanitize] after inline-list split (first 300):', JSON.stringify(text.substring(0, 300)));
   // Fix: no blank line between heading/intro and numbered list item 1
   // Marked.js requires a blank line before a list — insert one before "1. " when preceded by text
   text = text.replace(/([^\n])\n(1\.\s)/g, "$1\n\n$2");
   // Fix: blank lines between numbered list items cause each item to become its own block
   // Collapse blank lines between consecutive numbered items so they stay in one block
   text = text.replace(/^(\d+\..+)\n\n(\d+\.\s)/gm, "$1\n$2");
-  console.log('[sanitize] FINAL (first 300):', JSON.stringify(text.substring(0, 300)));
   // Same fix for bullet lists — ensure blank line before - or * list items after any text line
   text = text.replace(/([^\n])\n([-*]\s)/g, "$1\n\n$2");
   return text;
@@ -1959,12 +1869,7 @@ function persistChatState() {
   function sortChatList(chats) {
     const sortMode = localStorage.getItem('chatSortMode') || 'newest';
 
-    if (sortMode === 'most-recent') {
-      // Pure mtime-based — the chat most recently edited goes on top,
-      // regardless of when it was originally created. Distinct from
-      // "Newest First" which prefers the filename date suffix (creation).
-      chats.sort((a, b) => b.modified - a.modified);
-    } else if (sortMode === 'newest') {
+    if (sortMode === 'newest') {
       chats.sort((a, b) => {
         const da = parseDateFromFilename(a.filename) ?? (a.modified * 1000);
         const db = parseDateFromFilename(b.filename) ?? (b.modified * 1000);
@@ -2775,9 +2680,8 @@ async function openChat(filename) {
     const input = box.value.trim();
     const chat = document.getElementById('chat');
     const hasImages = window.attachedImages && window.attachedImages.length > 0;
-    const hasDocuments = window.attachedDocuments && window.attachedDocuments.length > 0;
 
-    if (!input && !hasImages && !hasDocuments) return;
+    if (!input && !hasImages) return;
     
     lastPrompt = input;
     localStorage.setItem('lastPrompt', input);
@@ -2833,31 +2737,10 @@ async function openChat(filename) {
       window.loadedChat = [];
     }
 
-    // Build document text prefix (prepended to user message for model context)
-    let docPrefix = '';
-    if (hasDocuments) {
-      window.attachedDocuments.forEach(doc => {
-        docPrefix += `[Attached document: ${doc.filename}]\n${doc.content}\n---\n`;
-      });
-
-      // Show document chips in the user message bubble (before the text)
-      window.attachedDocuments.forEach(doc => {
-        const chip = document.createElement('div');
-        chip.style.cssText = 'display:inline-flex;align-items:center;gap:5px;background:rgba(255,255,255,0.1);border:1px solid #555;border-radius:6px;padding:4px 8px;margin-bottom:4px;font-size:12px;color:#ccc;max-width:240px;';
-        chip.innerHTML = `<span style="font-size:15px;">📄</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:180px;">${doc.filename}</span>`;
-        userDiv.insertBefore(chip, userStrong);
-      });
-
-      window.attachedDocuments = [];
-      renderDocumentPreviews();
-    }
-
-    const fullText = docPrefix ? (docPrefix + input) : input;
-
     // Build user message — multimodal if images attached, plain text otherwise
     if (hasImages) {
       const contentParts = [];
-      if (fullText) contentParts.push({ type: "text", text: fullText });
+      if (input) contentParts.push({ type: "text", text: input });
       window.attachedImages.forEach(img => {
         contentParts.push({
           type: "image_url",
@@ -2866,7 +2749,7 @@ async function openChat(filename) {
       });
       const _previewUrls = window.attachedImages.map(img => img.previewUrl);
       window.loadedChat.push({ role: "user", content: contentParts, speaker: activeUserName, timestamp: new Date().toISOString(), hasImage: true, previewUrls: _previewUrls });
-
+      
       // Show thumbnails in the user message bubble
       window.attachedImages.forEach(img => {
         const thumb = document.createElement('img');
@@ -2879,15 +2762,15 @@ async function openChat(filename) {
       window.attachedImages = [];
       renderImagePreviews();
     } else {
-      window.loadedChat.push({ role: "user", content: fullText, speaker: activeUserName, timestamp: new Date().toISOString() });
+      window.loadedChat.push({ role: "user", content: input, speaker: activeUserName, timestamp: new Date().toISOString() });
     }
 
     let contextMessages = window.loadedChat;
-
+    
     box.value = '';
     box.style.height = 'auto';
     try {
-      await fetchAndDisplayResponse(fullText, chat);
+      await fetchAndDisplayResponse(input, chat);
     } catch (err) {
       console.error("⚠️ sendPrompt error:", err);
       chat.innerHTML += '<div class="message error-msg">⚠️ Error sending message.</div>';
@@ -3175,10 +3058,7 @@ async function openChat(filename) {
       }
       // Final render to ensure last chunks are displayed
       {
-        const _sanitized = sanitizeMarkdown(cleanedMessage);
-        console.log('[pipeline] sanitizeMarkdown output (first 300):', JSON.stringify(_sanitized.substring(0, 300)));
-        let html = marked.parse(_sanitized);
-        console.log('[pipeline] marked.parse output (first 500):', html.substring(0, 500));
+        let html = marked.parse(sanitizeMarkdown(cleanedMessage));
         html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
         renderModelHTML(streamEl, html);
         addCodeCopyButtons(streamEl.parentNode || streamEl);
@@ -3516,47 +3396,13 @@ async function openChat(filename) {
       return;
     }
 
-    // Build continue prefix.
-    // If the last response is short/truncated (<200 chars), it ends mid-word and causes
-    // instant EOS. Use the second-to-last assistant message as prefix instead — it's complete.
-    // If the last response is long, take the last paragraph or sentence boundary.
+    // Only use the last ~200 chars of the previous response as the continue prefix.
+    // Sending the full message makes the model think the response is nearly done
+    // and it fires EOS after just a few tokens ("isn" etc).
     const fullPrevContent = window.loadedChat[lastAssistantIdx].content || '';
-    let continuePrefix = fullPrevContent;
-    if (fullPrevContent.length < 200) {
-      // Response is truncated — find the previous complete assistant message
-      let prevAssistantContent = '';
-      for (let i = lastAssistantIdx - 1; i >= 0; i--) {
-        if (window.loadedChat[i].role === 'assistant' && (window.loadedChat[i].content || '').length > 200) {
-          prevAssistantContent = window.loadedChat[i].content;
-          break;
-        }
-      }
-      if (prevAssistantContent) {
-        // Use last paragraph of the previous complete response
-        const tail = prevAssistantContent.slice(-600);
-        const lastParaBreak = tail.lastIndexOf('\n\n');
-        continuePrefix = lastParaBreak !== -1 ? tail.slice(lastParaBreak).trimStart() : tail.trimStart();
-        console.log('▶️ Using prev assistant message as prefix — truncated response was too short');
-      }
-      // else: no previous complete response, use what we have
-    } else {
-      // Response is long — take last paragraph or sentence boundary
-      const tail = fullPrevContent.slice(-600);
-      const lastParaBreak = tail.lastIndexOf('\n\n');
-      if (lastParaBreak !== -1 && lastParaBreak < tail.length - 20) {
-        continuePrefix = tail.slice(lastParaBreak).trimStart();
-      } else {
-        const lastSentenceEnd = tail.search(/[.!?][^.!?]{20,}$/);
-        if (lastSentenceEnd !== -1) {
-          continuePrefix = tail.slice(lastSentenceEnd + 1).trimStart();
-        } else {
-          const raw = fullPrevContent.slice(-200);
-          const lastSpace = raw.lastIndexOf(' ');
-          continuePrefix = lastSpace > 0 ? raw.slice(0, lastSpace) : raw;
-        }
-      }
-    }
-    console.log('▶️ Continue prefix (' + continuePrefix.length + ' chars):', JSON.stringify(continuePrefix.slice(0, 80)));
+    const continuePrefix = fullPrevContent.length > 200
+      ? fullPrevContent.slice(-200)
+      : fullPrevContent;
     window.loadedChat.splice(lastAssistantIdx, 1);
 
     // Keep existing bubble — stream directly into it
@@ -3635,12 +3481,8 @@ async function openChat(filename) {
       }
       chat.scrollTop = chat.scrollHeight;
 
-      // Stream raw chunks — same format as main parser.
-      // rawFull starts as the FULL original message (not just the 200-char prefix sent to the
-      // backend). The stream contains only tokens generated after that prefix, so appending
-      // stream chunks to fullPrevContent correctly builds original + continuation without
-      // losing any of the front of the message.
-      let rawFull = fullPrevContent;
+      // Stream raw chunks — same format as main parser
+      let rawFull = continuePrefix;
       const userName = activeUserName || 'User';
       streamEl.innerHTML = typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(rawFull)) : rawFull;
 
@@ -5033,7 +4875,12 @@ async function loadProjects() {
 
     function buildProjectItem(project) {
       const item = document.createElement('div');
-      item.className = 'project-item';
+      item.className = 'project-item' + (project.name === data.active ? ' is-active' : '');
+
+      // Click card body to switch (not if already active)
+      if (project.name !== data.active) {
+        item.onclick = () => switchProject(project.name);
+      }
 
       const nameDiv = document.createElement('div');
       nameDiv.className = 'project-name-section';
@@ -5062,24 +4909,17 @@ async function loadProjects() {
       assignBtn.onclick = (e) => { e.stopPropagation(); showGroupPicker(assignBtn, project.name); };
       buttons.appendChild(assignBtn);
 
-      if (project.name !== data.active) {
-        const switchBtn = document.createElement('button');
-        switchBtn.textContent = '↻';
-        switchBtn.title = 'Switch to this project';
-        switchBtn.className = 'project-switch-btn';
-        switchBtn.onclick = () => switchProject(project.name);
-        buttons.appendChild(switchBtn);
-      }
+      // Switch button removed — click card instead
 
       const editBtn = document.createElement('button');
       editBtn.textContent = '✏️';
       editBtn.title = 'Edit instructions';
-      editBtn.onclick = () => openEditProject(project.name);
+      editBtn.onclick = (e) => { e.stopPropagation(); openEditProject(project.name); };
 
       const deleteBtn = document.createElement('button');
       deleteBtn.textContent = '❌';
       deleteBtn.title = 'Delete project';
-      deleteBtn.onclick = () => deleteProject(project.name);
+      deleteBtn.onclick = (e) => { e.stopPropagation(); deleteProject(project.name); };
 
       buttons.appendChild(editBtn);
       buttons.appendChild(deleteBtn);
@@ -5210,7 +5050,8 @@ async function deleteGroup(groupName) {
 
 async function createProject() {
   const name = document.getElementById('new-project-name').value.trim();
-  const instructions = document.getElementById('new-project-instructions').value.trim();
+  const instructionsEl = document.getElementById('new-project-instructions');
+  const instructions = instructionsEl ? instructionsEl.value.trim() : '';
   
   if (!name) {
     alert('Please enter a project name');
@@ -5235,7 +5076,7 @@ async function createProject() {
     
     // Clear inputs
     document.getElementById('new-project-name').value = '';
-    document.getElementById('new-project-instructions').value = '';
+    if (instructionsEl) instructionsEl.value = '';
     
     // Reload everything
     await loadProjects();
