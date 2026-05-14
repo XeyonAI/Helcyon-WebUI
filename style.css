@@ -208,7 +208,7 @@ body {
 }
 #container,
 #center-column {
-  flex: 1;
+  flex: 0 1 770px;
   max-width: 770px;
   min-width: 600px;
   background-color: var(--container-bg);
@@ -217,10 +217,11 @@ body {
   box-shadow: 0 0 30px rgba(0, 0, 0, 0.6);
   overflow-x: hidden;
 }
-/* CHAT PAGE: PUSH CONTENT RIGHT FOR SIDEBAR */
+/* CHAT PAGE: CENTRE CONTENT IN SPACE RIGHT OF SIDEBAR */
 .chat-page #center-column,
 .chat-page #container {
-  margin-left: 0;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 /* Config page: push #main content right to clear fixed sampling sidebar */
@@ -849,7 +850,7 @@ button {
   line-height: 1.6 !important;
 }
 .model-text-cont li {
-  margin: 0 0 0.4em 0 !important;
+  margin: 0 0 0.8em 0 !important;
   padding: 0 !important;
   line-height: 1.6 !important;
 }
@@ -1546,7 +1547,7 @@ hr.msg-separator {
   backdrop-filter: blur(4px);
   align-items: center;
   justify-content: center;
-  padding-left: 120px;
+  padding-left: 250px;
   padding-top: 0;
   box-sizing: border-box;
 }
@@ -1708,7 +1709,7 @@ hr.msg-separator {
 .model-text ol li,
 .user-text ul li,
 .user-text ol li {
-  margin: 0 0 0.4em 0 !important;
+  margin: 0 0 0.8em 0 !important;
   padding: 0 !important;
   line-height: 1.6 !important;
 }
@@ -2438,12 +2439,12 @@ button#stop-btn {
 /* Space out lists */
 .model-text ul,
 .model-text ol {
-  margin: 0.6em 0;
-  line-height: 1.5;
+  margin: 0.8em 0 1.1em 0;
+  line-height: 1.6;
 }
 
 .model-text li {
-  margin-bottom: 0.3em;
+  margin-bottom: 0.8em;
 }
 
 /* Put names on their own line with space below */
