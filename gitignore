@@ -1,0 +1,24 @@
+# Strip/dev tools — not for public repo
+strip_for_free.py
+STRIP_INSTRUCTIONS.md
+PUSH_TO_GITHUB.bat
+Start Claude Code.bat
+*.bak
+
+# Dev/personal files
+settings.json
+session_summaries/
+memories/
+chats/
+logs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.env
+
+# OS
+.DS_Store
+Thumbs.db
