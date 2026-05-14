@@ -1,5 +1,24 @@
 ## Session: May 14 2026 — Most Recent Sort Option Restored
 
+## ⚠️ SPACING VALUES — DO NOT REVERT
+
+The following CSS values in `style.css` were carefully tuned over multiple sessions.
+Another Claude session MUST NOT reset these back to old values.
+
+```
+.model-text p              { margin: 0 0 1.1em 0 }
+.model-text-cont p         { margin: 0 0 1.1em 0 }
+.model-text ul/ol          { margin: 0.8em 0 1.1em 0; line-height: 1.6 }
+.model-text-cont ul/ol     { margin: 0.8em 0 1.1em 0; line-height: 1.6 }
+.model-text li             { margin-bottom: 0.8em; line-height: 1.6 }
+.model-text-cont li        { margin: 0 0 0.8em 0; line-height: 1.6 }
+```
+
+⚠️ DO NOT revert these to 0.4em / 0.3em / 0.15em / 1.3 — those are the OLD values and produce cramped output.
+
+---
+
+
 ### `index.html`
 **Bug fix: "Most Recent" sort option missing from chat sidebar dropdown**
 - Option had been lost from the `<select>` HTML — only Newest/Oldest/A-Z remained
