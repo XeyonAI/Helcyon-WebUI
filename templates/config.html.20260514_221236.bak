@@ -1,0 +1,3385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Helcyon Config</title>
+  <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/theme-files/midnight.css" id="active-theme-link" />
+  <script>
+    // Swap to actual active theme if different from default
+    fetch('/themes/list').then(r=>r.json()).then(d=>{
+      const name = d.active || 'midnight';
+      const link = document.getElementById('active-theme-link');
+      if (link && name !== 'midnight') link.href = '/theme-files/' + name + '.css';
+    }).catch(()=>{}); // silent fail — default midnight.css already loaded above
+  </script>
+</head>
+<body id="config-page">
+  <div id="top-bar">
+    <div><strong>Character Settings</strong></div>
+    <a id="settings-link" href="/">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+        <polyline points="9 22 9 12 15 12 15 22"></polyline>
+      </svg>
+    </a>
+  </div>
+
+  <div id="main">
+    <!-- Left Sidebar: Sampling Settings -->
+    <div id="sampling-sidebar">
+      <h3>Sampling Settings</h3>
+
+      <label>Temperature:</label>
+      <input type="number" id="temperature" step="0.05" min="0" max="2" />
+
+      <label>Max Tokens:</label>
+      <input type="number" id="max_tokens" step="50" min="50" max="8192" />
+
+      <label>Top P:</label>
+      <input type="number" id="top_p" step="0.05" min="0" max="1" />
+
+      <div id="local-only-params">
+        <label>Min P:</label>
+        <input type="number" id="min_p" step="0.01" min="0" max="1" />
+
+        <label>Top K:</label>
+        <input type="number" id="top_k" step="1" min="0" max="100" />
+
+        <label>Repeat Penalty:</label>
+        <input type="number" id="repeat_penalty" step="0.01" min="0.8" max="2" />
+      </div>
+      <div id="local-only-note" style="display:none; font-size:11px; color:#666; margin-bottom:10px; padding:5px 8px; background:rgba(255,255,255,0.03); border-radius:4px; border:1px solid #2a2a2a;">
+        ⚠️ Min P, Top K and Repeat Penalty are not used by OpenAI
+      </div>
+
+      <label>Frequency Penalty:</label>
+      <input type="number" id="frequency_penalty" step="0.01" min="0" max="2" />
+
+      <label>Presence Penalty:</label>
+      <input type="number" id="presence_penalty" step="0.01" min="0" max="2" />
+
+      <!-- Sampling Presets -->
+      <div style="border-top:1px solid #2a2a2a; padding-top:8px; margin-top:4px;">
+        <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:#666; margin-bottom:6px;">Sampling Presets</div>
+        <div style="display:flex; gap:4px; margin-bottom:6px;">
+          <select id="sampling-preset-select" onchange="onSamplingPresetSelect()" style="flex:1; background:#1a1a2a; border:1px solid #444; color:#ccc; border-radius:3px; font-size:12px; padding:3px 4px;">
+            <option value="">— select preset —</option>
+          </select>
+          <button onclick="loadSamplingPreset()" style="background:#1f3a5a; border:1px solid #245080; color:white; border-radius:3px; padding:3px 7px; font-size:12px; cursor:pointer; align-self:stretch;">Load</button>
+          <button onclick="deleteSamplingPreset()" style="background:#5a1f1f; border:1px solid #8a2424; color:white; border-radius:3px; padding:3px 7px; font-size:12px; cursor:pointer; align-self:stretch;">🗑️</button>
+        </div>
+        <input id="sampling-preset-name" type="text" placeholder="Preset name..." style="background:#111; border:1px solid #333; color:#ccc; border-radius:3px; font-size:12px; padding:3px 6px; width:100%; box-sizing:border-box; margin-bottom:4px;">
+        <button id="update-sampling-preset-btn" onclick="updateSamplingPreset()" style="display:none; background:#2a3a1a; border:1px solid #4a6a2a; color:#afa; border-radius:3px; padding:4px 7px; font-size:12px; cursor:pointer; width:100%; margin-bottom:4px;">🔄 Update Preset</button>
+        <button onclick="saveSamplingPreset()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; border-radius:3px; padding:4px 7px; font-size:12px; cursor:pointer; width:100%; margin-bottom:4px;">💾 Save Preset</button>
+        <div id="sampling-preset-status" style="font-size:11px; color:#aaa; min-height:14px;"></div>
+      </div>
+
+      <button id="saveSettingsBtn" style="background-color: #1f5a3a; border-color: #248050; color: white;">💾 Save & Apply</button>
+
+      <hr style="margin: 20px 0; border-color: #333;">
+
+      <h3>TTS Engine</h3>
+
+      <label>Engine:</label>
+      <select id="tts-engine-select" style="width:100%; margin-bottom:8px;">
+        <option value="f5">F5-TTS</option>
+        <option value="xtts">XTTS v2</option>
+        <option value="chatterbox">Chatterbox</option>
+        <option value="kokoro">Kokoro</option>
+        <option value="none">None (Disabled)</option>
+      </select>
+
+      <div id="tts-engine-status" style="font-size:12px; color:#aaa; margin-bottom:10px;"></div>
+
+      <button id="saveTTSEngineBtn" style="background-color: #1f3a5a; border-color: #245080; color: white; width:100%;">💾 Save TTS Engine</button>
+
+      <hr style="margin: 20px 0; border-color: #333;">
+
+      <h3>Llama.cpp</h3>
+
+      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Server Executable Path</label>
+      <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">
+        <input id="llama-exe" type="text" placeholder="C:\path\to\llama-server.exe" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
+        <button onclick="browseFile('llama-exe')" title="Browse for file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">📁</button>
+      </div>
+
+      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Models Folder</label>
+      <div style="display:flex; align-items:center; gap:6px; margin-bottom:12px;">
+        <input id="llama-models-dir" type="text" placeholder="C:\path\to\models" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
+        <button onclick="browseFolder('llama-models-dir')" title="Browse for folder" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">📁</button>
+      </div>
+
+      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:6px; font-weight:600;">Launch Arguments</label>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px 10px; margin-bottom:10px;">
+        <div>
+          <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">GPU Layers</label>
+          <input id="llama-gpu-layers" type="number" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
+        </div>
+        <div>
+          <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Context Size</label>
+          <input id="llama-ctx-size" type="number" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
+        </div>
+        <div>
+          <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Chat Template</label>
+          <input id="llama-chat-template" type="text" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
+        </div>
+      </div>
+      <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:#aaa; margin-bottom:10px; cursor:pointer;">
+        <input type="checkbox" id="llama-show-console" style="width:14px; height:14px; cursor:pointer;">
+        Show llama.cpp console window
+      </label>
+      <div id="llama-config-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:16px;"></div>
+      <button onclick="saveLlamaConfig()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:6px;">💾 Save Llama Config</button>
+      <button onclick="resetToDefault()" title="Wipe settings.json and restore from settings.default.json" style="background:#3a1a1a; border:1px solid #6a2a2a; color:#e88; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">↺ Reset All Settings to Default</button>
+
+      <!-- Llama Config Presets -->
+      <div style="border-top:1px solid #2a2a2a; padding-top:8px;">
+        <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:#666; margin-bottom:6px;">Config Presets</div>
+        <div style="display:flex; gap:4px; margin-bottom:6px;">
+          <select id="llama-preset-select" style="flex:1; background:#1a1a2a; border:1px solid #444; color:#ccc; border-radius:3px; font-size:12px; padding:3px 4px;">
+            <option value="">— select preset —</option>
+          </select>
+          <button onclick="loadLlamaPreset()" style="background:#1f3a5a; border:1px solid #245080; color:white; border-radius:3px; padding:3px 7px; font-size:12px; cursor:pointer; align-self:stretch;">Load</button>
+          <button onclick="deleteLlamaPreset()" style="background:#5a1f1f; border:1px solid #8a2424; color:white; border-radius:3px; padding:3px 7px; font-size:12px; cursor:pointer; align-self:stretch;">🗑️</button>
+        </div>
+        <input id="llama-preset-name" type="text" placeholder="Preset name..." style="background:#111; border:1px solid #333; color:#ccc; border-radius:3px; font-size:12px; padding:3px 6px; width:100%; box-sizing:border-box; margin-bottom:4px;">
+        <button onclick="saveLlamaPreset()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; border-radius:3px; padding:4px 7px; font-size:12px; cursor:pointer; width:100%; margin-bottom:4px;">💾 Save Preset</button>
+        <div id="llama-preset-status" style="font-size:11px; color:#aaa; min-height:14px;"></div>
+      </div>
+
+
+      <hr style="margin: 20px 0; border-color: #333;">
+
+      <h3>🔍 Web Search</h3>
+      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">
+        Brave Search API Key
+        <span style="color:#666; font-weight:normal;">
+          — <a href="https://api.search.brave.com" target="_blank" style="color:#7ab4f5;">get free key</a> (2000/month)
+        </span>
+      </label>
+      <input id="brave-api-key" type="password" placeholder="BSA..." style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:6px;">
+      <div id="brave-key-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
+      <button onclick="saveBraveKey()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:4px;">💾 Save Search Key</button>
+      <button onclick="clearBraveKey()" style="background:#3a1a1a; border:1px solid #6a2a2a; color:#e88; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">✕ Clear Key (use DDG fallback)</button>
+
+      <hr style="margin: 20px 0; border-color: #333;">
+
+      <h3>☁️ OpenAI Backend</h3>
+      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:6px;">Backend Mode</label>
+      <div style="display:flex; gap:0; margin-bottom:10px; border:1px solid #333; border-radius:4px; overflow:hidden;">
+        <button id="mode-local-btn" onclick="setBackendMode('local')"
+          style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#1a3a2a; color:#6f6; font-weight:bold;">
+          🖥️ Local
+        </button>
+        <button id="mode-openai-btn" onclick="confirmOpenAISwitch()"
+          style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#111; color:#888;">
+          ☁️ OpenAI
+        </button>
+      </div>
+
+      <!-- OpenAI switch confirmation modal -->
+      <div id="openai-confirm-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:9999; align-items:center; justify-content:center;">
+        <div style="background:#1a1f2a; border:1px solid #3a5a7a; border-radius:10px; padding:24px 20px; max-width:300px; width:90%; box-shadow:0 8px 32px rgba(0,0,0,0.6);">
+          <div style="font-size:22px; text-align:center; margin-bottom:10px;">⚠️</div>
+          <div style="font-size:14px; color:#ddd; text-align:center; margin-bottom:8px; font-weight:bold;">Switch to OpenAI?</div>
+          <div style="font-size:12px; color:#999; text-align:center; margin-bottom:20px; line-height:1.5;">Your conversations will be sent to <span style="color:#7ab4f5;">OpenAI's servers</span>. Make sure you're comfortable with that before continuing.</div>
+          <div style="display:flex; gap:8px;">
+            <button onclick="cancelOpenAISwitch()" style="flex:1; padding:8px 0; background:#2a1a1a; border:1px solid #6a2a2a; color:#e88; border-radius:6px; font-size:13px; cursor:pointer;">✕ Cancel</button>
+            <button onclick="confirmOpenAISwitchOK()" style="flex:1; padding:8px 0; background:#1a2a4a; border:1px solid #2a4a8a; color:#7ab4f5; border-radius:6px; font-size:13px; cursor:pointer; font-weight:bold;">☁️ Connect</button>
+          </div>
+        </div>
+      </div>
+
+      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">OpenAI API Key</label>
+      <input id="openai-api-key" type="password" placeholder="sk-..." style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:6px;">
+
+      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Model</label>
+      <div style="display:flex; gap:6px; align-items:center; margin-bottom:4px;">
+        <select id="openai-model" style="flex:1; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; height:28px;">
+          <option value="gpt-4o">gpt-4o</option>
+        </select>
+        <button onclick="fetchOpenAIModels()" title="Fetch models from OpenAI" style="background:#1a2a3a; border:1px solid #2a4a6a; color:#7ab4f5; border-radius:4px; padding:0 8px; font-size:12px; cursor:pointer; height:28px; white-space:nowrap; flex-shrink:0;">🔄 Fetch</button>
+      </div>
+      <div style="font-size:10px; color:#555; margin-bottom:8px;">Click 🔄 Fetch to load your available models</div>
+
+      <div id="openai-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
+      <button onclick="saveOpenAISettings()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">💾 Save OpenAI Settings</button>
+
+    </div>
+
+    <!-- Main Center Column -->
+    <div id="container">
+
+      <!-- ===== TAB BAR ===== -->
+      <div id="config-tab-bar">
+        <button class="config-tab active" onclick="switchConfigTab('system-prompt', this)">📝 System Prompt</button>
+        <button class="config-tab" onclick="switchConfigTab('character', this)">🧑 Character</button>
+        <button class="config-tab" onclick="switchConfigTab('create-char', this)">✨ New Character</button>
+        <button class="config-tab" onclick="switchConfigTab('user-persona', this)">👤 User Persona</button>
+        <button class="config-tab" onclick="switchConfigTab('appearance', this)">🎨 Appearance</button>
+      </div>
+
+      <!-- ===== TAB: SYSTEM PROMPT ===== -->
+      <div id="tab-system-prompt" class="config-tab-panel active">
+      <h3>Global System Prompt</h3>
+
+      <!-- Template selector row -->
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+        <select id="system-prompt-file-select" style="flex:1;">
+          <option value="">-- Select Template --</option>
+        </select>
+        <button onclick="saveGlobalSystemPrompt()" title="Save changes to the currently selected template" style="background-color:#2a4a2a; border-color:#3a6a3a; color:white; white-space:nowrap;">💾 Update</button>
+        <button onclick="activateSystemPrompt()" title="Set as active (used by the model)" style="background-color:#1f5a3a; border-color:#248050; color:white; white-space:nowrap;">✅ Activate</button>
+        <button onclick="deleteSystemPrompt()" title="Delete this template" style="background-color:#5a1f1f; border-color:#8a2424; color:white; white-space:nowrap;">🗑️</button>
+      </div>
+
+      <!-- Active indicator -->
+      <div id="active-prompt-indicator" style="font-size:12px; color:#6a9; margin-bottom:10px;"></div>
+
+      <!-- Save as row -->
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
+        <button onclick="saveSystemPromptAs()" style="background-color:#1f3a5a; border-color:#245080; color:white; white-space:nowrap;">💾 Save As New Template</button>
+      </div>
+
+      <label>System Prompt:</label>
+      <textarea id="global-system-prompt"
+                placeholder="Type a system prompt, then Save As a new template..."></textarea>
+
+      <label style="margin-top:14px; display:block;">Global Example Dialog: <span style="font-size:11px; color:#888; font-weight:normal;">Used when a character has no example dialogue of its own.</span></label>
+      <textarea id="global-example-dialog"
+                placeholder="User: Hey, how are you?&#10;Assistant: I'm doing great, thanks for asking!&#10;&#10;User: Tell me something interesting.&#10;Assistant: Sure — did you know..."
+                style="min-height:120px;"></textarea>
+      <button onclick="saveGlobalExampleDialog()" style="background-color:#1f3a5a; border-color:#245080; color:white; margin-top:6px; margin-bottom:4px;">💾 Save Global Example Dialog</button>
+      <div id="global-example-dialog-status" style="font-size:12px; color:#6a9; margin-bottom:6px; min-height:16px;"></div>
+      <hr />
+
+      <!-- 📍 CURRENT SITUATION (semi-global) -->
+      <h3>📍 Current Situation</h3>
+      <p style="font-size:12px; color:#888; margin-top:-8px; margin-bottom:10px;">
+        A shared context injected into any character that has "Use Current Situation" enabled. Update this whenever your real-world situation changes.
+      </p>
+      <textarea id="global-current-situation" placeholder="e.g. Bob is staying at his parents' house for a few days." style="min-height:80px;"></textarea>
+      <button onclick="saveCurrentSituation()" style="background-color:#1f5a3a; border-color:#248050; color:white; margin-top:6px;">💾 Save Situation</button>
+      </div><!-- end tab-system-prompt -->
+
+      <!-- ===== TAB: CHARACTER ===== -->
+      <div id="tab-character" class="config-tab-panel">
+	  <div id="character-select-bar">
+		<h3>Select Character <span id="char-bind-indicator" style="display:none; font-size:13px; color:#6a9; margin-left:6px;" title="System prompt bound">🔗 Bound</span></h3>
+	    <select id="character-select"></select>
+	  </div>
+
+      <label>Name:</label>
+      <input type="text" id="character-name" />
+
+      <label>Main Prompt:</label>
+      <textarea id="main-prompt"></textarea>
+
+      <label>Description:</label>
+      <textarea id="description"></textarea>
+
+      <label>Tagline:</label>
+      <input type="text" id="tagline" />
+
+      <label>Scenario:</label>
+      <textarea id="scenario"></textarea>
+
+      <div style="margin: 8px 0 12px 0; display:flex; align-items:center; gap:8px;">
+        <input type="checkbox" id="use-current-situation" style="width:16px; height:16px; cursor:pointer;" />
+        <label for="use-current-situation" style="margin:0; cursor:pointer; font-size:13px; color:#ccc;">
+          📍 Include Current Situation <span style="color:#888; font-size:11px;">(inject global situation into this character's context)</span>
+        </label>
+      </div>
+
+      <!-- Memory checkboxes hidden in free version — kept for JS compatibility -->
+      <input type="checkbox" id="use-personal-memory" style="display:none;" />
+      <input type="checkbox" id="use-global-memory" style="display:none;" />
+
+      <div style="margin: 8px 0 12px 0; padding: 10px 14px; background: rgba(102,126,234,0.08); border: 1px solid rgba(102,126,234,0.25); border-radius: 8px; display:flex; align-items:center; justify-content:space-between; gap:12px;">
+        <div>
+          <div style="font-size:13px; color:#ccc;">🧠 <strong style="color:#fff;">Character Memory</strong></div>
+          <div style="font-size:11px; color:#888; margin-top:2px;">Characters that remember you — Pro feature</div>
+        </div>
+        <button onclick="window.open('https://xeyonai.gumroad.com/l/bsmupk','_blank')" style="background:linear-gradient(135deg,#667eea,#764ba2); border:none; color:#fff; font-size:12px; font-weight:600; padding:6px 14px; border-radius:6px; cursor:pointer; white-space:nowrap;">⭐ Go Pro</button>
+      </div>
+
+      <div style="margin: 4px 0 12px 0; display:flex; align-items:center; gap:8px;">
+        <input type="checkbox" id="use-web-search" style="width:16px; height:16px; cursor:pointer;" />
+        <label for="use-web-search" style="margin:0; cursor:pointer; font-size:13px; color:#ccc;">
+          🔍 Enable web search <span style="color:#888; font-size:11px;">(character can search the web when needed)</span>
+        </label>
+      </div>
+
+      <label>Post History Instructions:</label>
+      <textarea id="post-history"></textarea>
+
+      <label>Character Note:</label>
+      <textarea id="character-note"></textarea>
+
+      <label>Example Dialogue:</label>
+      <textarea id="example-dialog"></textarea>
+
+      <!-- 🔥 TOKEN COUNTER PANEL - INSERTED HERE -->
+      <div id="token-counter-panel" style="
+        background: var(--token-panel-bg, #1D262E);
+        border: 1px solid var(--token-panel-border, #333);
+        border-radius: 8px;
+        padding: 15px;
+        margin-top: 20px;
+        margin-bottom: 20px;
+      ">
+        <h3 style="margin-top: 0; font-size: 16px; color: #fff;">Token Usage</h3>
+        
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px;">
+          <div>
+            <span style="color: #aaa;">Description:</span>
+            <span id="tokens-description" class="token-count">0</span>
+          </div>
+          <div>
+            <span style="color: #aaa;">Main Prompt:</span>
+            <span id="tokens-main-prompt" class="token-count">0</span>
+          </div>
+          <div>
+            <span style="color: #aaa;">Scenario:</span>
+            <span id="tokens-scenario" class="token-count">0</span>
+          </div>
+          <div>
+            <span style="color: #aaa;">Post-History:</span>
+            <span id="tokens-post-history" class="token-count">0</span>
+          </div>
+          <div>
+            <span style="color: #aaa;">Character Note:</span>
+            <span id="tokens-character-note" class="token-count">0</span>
+          </div>
+          <div>
+            <span style="color: #aaa;">Example Dialogue:</span>
+            <span id="tokens-example-dialogue" class="token-count">0</span>
+          </div>
+        </div>
+        
+        <div style="
+          margin-top: 15px;
+          padding-top: 15px;
+          border-top: 1px solid #333;
+          font-size: 15px;
+          font-weight: 600;
+        ">
+          <span style="color: #aaa;">Total Tokens:</span>
+          <span id="tokens-total" class="token-count" style="font-size: 18px;">0</span>
+          <span id="token-status" style="margin-left: 10px; font-size: 12px;"></span>
+        </div>
+      </div>
+      <!-- 🔥 END TOKEN COUNTER -->
+
+      <label>Image Filename (in /static/images):</label>
+      <input type="text" id="image" oninput="updateImagePreview()" />
+      <br />
+      <img id="preview-img" src="" alt="Preview"
+        style="width:64px;height:64px;border-radius:8px;display:none;margin-top:0.5rem;" />
+
+      <input type="file" id="char-img-replace-input" accept="image/*" style="display:none;" onchange="replaceCharacterImage(this)">
+      <button onclick="document.getElementById('char-img-replace-input').click()" style="background-color: #2a4a6a; border-color: #3a6a9a; color: white; margin-top: 6px; margin-bottom: 10px;">🖼️ Upload New Image</button>
+
+      <!-- Extra Images / Slideshow -->
+      <div id="extra-images-section" style="margin: 10px 0 14px; padding: 10px 12px; background: rgba(255,255,255,0.04); border: 1px solid #2a3a4a; border-radius: 6px;">
+        <div style="font-size: 13px; color: #aaa; margin-bottom: 8px; font-weight: 600;">🎞️ Slideshow Images <span style="font-weight:400; color:#666;">(optional — add extras for the character bar slideshow)</span></div>
+        <div id="extra-images-strip" style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:8px;"></div>
+        <input type="file" id="extra-img-input" accept="image/*" style="display:none;" onchange="addExtraImage(this)">
+        <button onclick="document.getElementById('extra-img-input').click()" style="background:#1a3a5a; border:1px solid #2a5a8a; color:#8ab4d4; padding:5px 12px; border-radius:4px; font-size:12px; cursor:pointer;">➕ Add Image</button>
+      </div>
+
+      <button onclick="saveCharacter()" style="background-color: #1f5a3a; border-color: #248050; color: white; margin-right: 10px;">💾 Save Character</button>
+      <button id="duplicate-char-btn" style="background-color: #3a4a5a; border-color: #4a5a6a; color: white; margin-left: 10px;">📋 Duplicate</button>
+      <button id="rename-char-btn" style="background-color: #5a4a1f; border-color: #806024; color: white; margin-left: 10px;">✏️ Rename</button>
+      <button id="delete-char-btn" class="clear-btn" style="margin-left: 10px;">🗑️ Delete Character</button>
+      <hr />
+
+      <!-- CHARACTER EXPORT/IMPORT SECTION -->
+      <h3>📦 Import/Export Characters</h3>
+      <div class="export-import-section">
+        <!-- Export Button -->
+        <div class="export-group">
+          <label>Export Current Character as PNG Card</label>
+          <button id="export-char-btn" style="background-color: #1f3a5a; border-color: #245080; color: white;">⬇️ Export Character</button>
+        </div>
+        
+        <!-- Import Button -->
+        <div class="import-group">
+          <label>Import Character from PNG Card</label>
+          <input type="file" id="import-char-input" accept=".png" style="display: none;">
+          <button id="import-char-btn" style="background-color: #3a4a5a; border-color: #4a5a6a; color: white;">⬆️ Import Character</button>
+        </div>
+        
+        <small style="color: #aaa; display: block; margin-top: 10px;">
+          PNG cards contain both the image and all character data. Compatible with SillyTavern and other UIs.
+        </small>
+      </div><!-- end export-import-section -->
+
+      </div><!-- end tab-character -->
+
+      <!-- ===== TAB: CREATE CHARACTER ===== -->
+      <div id="tab-create-char" class="config-tab-panel">
+        <h3>Create New Character</h3>
+        <div id="create-character">
+          <label>Character Name:</label>
+          <input type="text" id="new-char-name" placeholder="e.g. Luna" />
+
+          <label>Description:</label>
+          <textarea id="new-char-description" placeholder="Short bio or purpose"></textarea>
+
+          <label>Main Prompt:</label>
+          <textarea id="new-char-mainprompt" placeholder="Core personality or style instructions"></textarea>
+
+          <label>Character Image:</label>
+          <input type="file" id="new-char-image-upload" accept="image/*" />
+          <img id="new-char-preview" src="" alt="Preview"
+            style="width:64px;height:64px;border-radius:8px;display:none;margin-top:0.5rem;" />
+
+          <button onclick="createCharacter()" style="background-color: #1f5a3a; border-color: #248050; color: white;">✨ Create Character</button>
+        </div>
+      </div><!-- end tab-create-char -->
+
+      <!-- ===== TAB: USER PERSONA ===== -->
+      <div id="tab-user-persona" class="config-tab-panel">
+<!-- User Persona Section -->
+      <label for="userSelect" style="font-size: 20px; font-weight: bold; color: #fff; display: block; margin-bottom: 0.5rem;">User Persona:</label>
+      <select id="userSelect"></select>
+      <button id="saveUserBtn" style="background-color: #1f3a5a; border-color: #245080; color: white;">Set Active User</button>
+
+      <hr />
+
+      <!-- User Persona Editor -->
+      <div id="user-editor">
+        <h3>User Persona Details</h3>
+
+        <label for="user-display">Display Name:</label>
+        <input type="text" id="user-display" placeholder="Your name here" />
+
+        <label for="user-bio">Bio / Description:</label>
+        <textarea id="user-bio" placeholder="Write something about yourself..."></textarea>
+
+        <label for="user-image-upload">Profile Image:</label>
+        <input type="file" id="user-image-upload" accept="image/*" onchange="previewUserImage(this)" />
+        <img id="user-image-preview" src="" alt="Preview"
+          style="width:64px;height:64px;border-radius:50%;display:none;margin-top:0.5rem;" />
+
+        <button id="saveUserDetailsBtn" style="background-color: #1f5a3a; border-color: #248050; color: white;">💾 Save Details</button>
+      </div>
+
+      <hr />
+
+      <!-- CREATE NEW USER PERSONA -->
+      <div id="create-user-section">
+        <h3>Create New User Persona</h3>
+
+        <label for="new-user-name">User Name:</label>
+        <input type="text" id="new-user-name" placeholder="e.g. Chris, Alex, Sam" />
+
+        <label for="new-user-display">Display Name:</label>
+        <input type="text" id="new-user-display" placeholder="Full name or nickname" />
+
+        <label for="new-user-bio">Bio / Description:</label>
+        <textarea id="new-user-bio" placeholder="Write something about this user..." rows="6"></textarea>
+
+        <label for="new-user-image-upload">Profile Image:</label>
+        <input type="file" id="new-user-image-upload" accept="image/*" onchange="previewNewUserImage(this)" />
+        <img id="new-user-image-preview" src="" alt="Preview"
+          style="width:64px;height:64px;border-radius:50%;display:none;margin-top:0.5rem;" />
+
+        <button onclick="createNewUser()" style="background-color: #1f5a3a; border-color: #248050; color: white;">✨ Create User Persona</button>
+      </div>
+
+      <hr />
+
+      <!-- DELETE USER PERSONA -->
+      <div id="delete-user-section">
+        <h3>Delete User Persona</h3>
+        <p style="color: #aaa; font-size: 13px;">
+          ⚠️ Warning: This will permanently delete the selected user persona.
+        </p>
+        <button id="delete-user-btn" class="clear-btn" onclick="deleteUserPersona()">🗑️ Delete Selected User</button>
+      </div>
+      </div><!-- end tab-user-persona -->
+
+      <!-- ===== TAB: APPEARANCE ===== -->
+      <div id="tab-appearance" class="config-tab-panel">
+        <h3>🎨 Appearance</h3>
+
+        <h4 style="color:#aaa; font-size:12px; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px; margin-top:0;">Background Image</h4>
+        <input type="file" id="bg-image-input" accept="image/*" style="display:none;" onchange="handleBgImageChange(this)">
+        <button onclick="document.getElementById('bg-image-input').click()" style="background-color: #3a2a5a; border-color: #6a4a9a; color: white; width:100%; margin-bottom:8px;">🖼️ Change Background</button>
+        <button onclick="clearBackground()" style="background-color: #3a3b3f; border-color: #555; color: #aaa; width:100%; font-size:12px; margin-bottom:20px;">✕ Clear Background</button>
+
+        <h4 style="color:#aaa; font-size:12px; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px;">Theme Editor</h4>
+        <p style="font-size:12px; color:#888; margin-top:-6px; margin-bottom:14px;">Customise colours, fonts, and UI variables for any theme. Changes apply live.</p>
+        <button onclick="openThemeModal()" style="background:#1e3a4a; border:1px solid #2a5068; color:#a0c8d8; width:100%; font-size:13px; padding:10px 0; border-radius:6px; cursor:pointer;">🎨 Open Theme Editor</button>
+      </div><!-- end tab-appearance -->
+
+    </div><!-- end #container -->
+
+  </div><!-- end #main -->
+
+  <!-- JavaScript will go here (next step) -->
+<script>
+  function switchConfigTab(tabId, btn) {
+    // Hide all panels
+    document.querySelectorAll('.config-tab-panel').forEach(p => p.classList.remove('active'));
+    // Deactivate all tab buttons
+    document.querySelectorAll('.config-tab').forEach(b => b.classList.remove('active'));
+    // Show target panel
+    const panel = document.getElementById('tab-' + tabId);
+    if (panel) panel.classList.add('active');
+    // Activate button
+    if (btn) btn.classList.add('active');
+    // Scroll centre column to top
+    const container = document.getElementById('container');
+    if (container) container.scrollTop = 0;
+  }
+</script>
+</body>
+</html>
+
+<script>
+  let currentCharacter = {};
+
+  // --- GLOBAL SYSTEM PROMPT MANAGEMENT ---
+  // --- SYSTEM PROMPT TEMPLATE MANAGER ---
+
+  async function loadSystemPromptList() {
+    try {
+      const res = await fetch('/system_prompts/list');
+      const data = await res.json();
+      const select = document.getElementById('system-prompt-file-select');
+      select.innerHTML = '<option value="">-- Select Template --</option>';
+      for (const f of data.files) {
+        const opt = document.createElement('option');
+        opt.value = f;
+        opt.textContent = f;
+        if (f === data.active) opt.textContent += ' ✅';
+        select.appendChild(opt);
+      }
+      // Auto-select and load active
+      if (data.active) {
+        select.value = data.active;
+        updateActiveIndicator(data.active);
+        await loadSelectedSystemPrompt(data.active);
+      }
+    } catch (err) {
+      console.error('Error loading system prompt list:', err);
+    }
+  }
+
+  function updateActiveIndicator(filename) {
+    const el = document.getElementById('active-prompt-indicator');
+    if (el) el.textContent = filename ? '🟢 Active: ' + filename : '';
+  }
+
+  async function loadSelectedSystemPrompt(filename) {
+    if (!filename) return;
+    try {
+      const res = await fetch('/system_prompts/load/' + encodeURIComponent(filename));
+      if (!res.ok) return;
+      const raw = await res.text();
+      const text = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+      document.getElementById('global-system-prompt').value = text;
+    } catch (err) {
+      console.error('Error loading system prompt file:', err);
+    }
+    // Load paired example dialog
+    try {
+      const exRes = await fetch('/system_prompts/load_example/' + encodeURIComponent(filename));
+      const exRaw = exRes.ok ? await exRes.text() : '';
+      const exText = exRaw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+      document.getElementById('global-example-dialog').value = exText;
+    } catch (err) {
+      console.warn('Could not load paired example dialog:', err);
+    }
+  }
+
+  async function saveSystemPromptAs() {
+    const suggested = document.getElementById('system-prompt-file-select').value || '';
+    let filename = prompt('Save as template name:', suggested.replace('.txt', '') || '');
+    if (filename === null) return; // cancelled
+    filename = filename.trim();
+    if (!filename) { alert('Please enter a name.'); return; }
+    if (!filename.endsWith('.txt')) filename += '.txt';
+    const text = document.getElementById('global-system-prompt').value;
+    const exText = document.getElementById('global-example-dialog').value;
+    try {
+      const res = await fetch('/system_prompts/save/' + encodeURIComponent(filename), {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        body: text
+      });
+      const data = await res.json();
+      await fetch('/system_prompts/save_example/' + encodeURIComponent(filename), {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        body: exText
+      });
+      if (data.status === 'saved') {
+        // Reload list but DON'T let it auto-switch to the active prompt
+        await loadSystemPromptListNoAutoLoad();
+        // Explicitly select and show the newly saved file
+        document.getElementById('system-prompt-file-select').value = filename;
+        document.getElementById('system-prompt-filename') && (document.getElementById('system-prompt-filename').value = filename);
+        alert('✅ Saved as: ' + filename);
+      } else {
+        alert('❌ Save failed');
+      }
+    } catch (err) {
+      alert('❌ Save error: ' + err);
+    }
+  }
+
+  // Like loadSystemPromptList but skips the auto-load of the active prompt
+  async function loadSystemPromptListNoAutoLoad() {
+    try {
+      const res = await fetch('/system_prompts/list');
+      const data = await res.json();
+      const select = document.getElementById('system-prompt-file-select');
+      const currentVal = select.value; // preserve current selection
+      select.innerHTML = '<option value="">-- Select Template --</option>';
+      for (const f of data.files) {
+        const opt = document.createElement('option');
+        opt.value = f;
+        opt.textContent = f;
+        if (f === data.active) opt.textContent += ' ✅';
+        select.appendChild(opt);
+      }
+      // Restore whatever was selected before, don't switch to active
+      if (currentVal) select.value = currentVal;
+      if (data.active) updateActiveIndicator(data.active);
+    } catch (err) {
+      console.error('Error loading system prompt list:', err);
+    }
+  }
+
+  function updateBindIndicator(isBound) {
+    const el = document.getElementById('char-bind-indicator');
+    if (el) el.style.display = isBound ? 'inline' : 'none';
+  }
+
+  async function activateSystemPrompt() {
+    const select = document.getElementById('system-prompt-file-select');
+    const filename = select.value;
+    if (!filename) { alert('Select a template first'); return; }
+    try {
+      const res = await fetch('/system_prompts/activate/' + encodeURIComponent(filename), { method: 'POST' });
+      const data = await res.json();
+      if (data.status === 'ok') {
+        updateActiveIndicator(filename);
+        await loadSystemPromptList();
+        // Bind this template to the current character card
+        const charName = document.getElementById('character-select').value;
+        if (charName) {
+          await fetch(`/character_system_prompt/${encodeURIComponent(charName)}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ system_prompt: filename })
+          });
+          updateBindIndicator(true);
+          alert('✅ Active prompt set to: ' + filename + '\n💾 Bound to character: ' + charName);
+        } else {
+          alert('✅ Active prompt set to: ' + filename);
+        }
+      } else {
+        alert('❌ Failed: ' + (data.error || 'Unknown'));
+      }
+    } catch (err) {
+      alert('❌ Error: ' + err);
+    }
+  }
+
+  async function deleteSystemPrompt() {
+    const select = document.getElementById('system-prompt-file-select');
+    const filename = select.value;
+    if (!filename) { alert('Select a template to delete'); return; }
+    if (!confirm('Delete "' + filename + '"? This cannot be undone.')) return;
+    try {
+      const res = await fetch('/system_prompts/delete/' + encodeURIComponent(filename), { method: 'POST' });
+      const data = await res.json();
+      if (data.status === 'deleted') {
+        await loadSystemPromptList();
+      } else {
+        alert('❌ Delete failed: ' + (data.error || 'Unknown'));
+      }
+    } catch (err) {
+      alert('❌ Error: ' + err);
+    }
+  }
+
+  // Overwrite the currently selected file
+  async function saveGlobalSystemPrompt() {
+    const select = document.getElementById('system-prompt-file-select');
+    const filename = select.value;
+    if (!filename) { alert('No template selected. Use Save As to create a new one.'); return; }
+    const text = document.getElementById('global-system-prompt').value;
+    const exText = document.getElementById('global-example-dialog').value;
+    try {
+      const res = await fetch('/system_prompts/save/' + encodeURIComponent(filename), {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        body: text
+      });
+      const data = await res.json();
+      // Also save paired example dialog
+      await fetch('/system_prompts/save_example/' + encodeURIComponent(filename), {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        body: exText
+      });
+      if (data.status === 'saved') alert('✅ Saved: ' + filename);
+      else alert('❌ Save failed');
+    } catch (err) {
+      alert('❌ Error: ' + err);
+    }
+  }
+
+  // Legacy alias
+  async function loadGlobalSystemPrompt() {
+    await loadSystemPromptList();
+  }
+
+  // --- CHARACTER MANAGEMENT ---
+  async function loadCharacterList() {
+    const select = document.getElementById("character-select");
+    try {
+      const response = await fetch("/list_characters");
+      if (!response.ok) throw new Error("Failed to fetch character list");
+      const characters = await response.json();
+      select.innerHTML = "";
+      characters.forEach((name) => {
+        const option = document.createElement("option");
+        option.value = name;
+        option.textContent = name;
+        select.appendChild(option);
+      });
+      
+      if (characters.length) {
+        const lastChar = localStorage.getItem('lastCharacter');
+        const defaultChar = (lastChar && characters.includes(lastChar)) ? lastChar : characters[0];
+        
+        console.log('📂 Config page loading character:', defaultChar);
+        
+        await loadCharacter(defaultChar);
+        document.getElementById("character-select").value = defaultChar;
+        loadCharacterMemory();
+      } else {
+        console.warn("No characters found in /characters/");
+      }
+    } catch (err) {
+      console.error("Failed to load character list:", err);
+    }
+  }
+
+  async function loadCharacterMemory() {
+    // Memory display is handled in the main chat UI (index.html)
+    // This stub prevents ReferenceError when called from character list/switch events
+  }
+
+  async function loadCharacter(name) {
+    const select = document.getElementById("character-select");
+    select.value = name;
+    
+    localStorage.setItem('lastCharacter', name);
+    
+    currentCharacter = {};
+    try {
+      const response = await fetch(`/characters/${name}.json?cacheBust=${Date.now()}`);
+      if (!response.ok) throw new Error("Character file not found");
+      const data = await response.json();
+      currentCharacter = data;
+      document.getElementById("character-name").value = data.name || "";
+      document.getElementById("main-prompt").value = data.main_prompt || "";
+      document.getElementById("description").value = data.description || "";
+      document.getElementById("tagline").value = data.tagline || "";
+      document.getElementById("scenario").value = data.scenario || "";
+      document.getElementById("use-current-situation").checked = data.use_current_situation || false;
+      document.getElementById("use-personal-memory").checked = data.use_personal_memory !== undefined ? data.use_personal_memory : true;
+      document.getElementById("use-global-memory").checked = data.use_global_memory || false;
+      document.getElementById("use-web-search").checked = data.use_web_search || false;
+      document.getElementById("post-history").value = data.post_history || "";
+      document.getElementById("character-note").value = data.character_note || "";
+      document.getElementById("example-dialog").value = data.example_dialogue || "";
+      document.getElementById("image").value = data.image || "";
+      updateImagePreview();
+      renderExtraImages(data.images || [], data.image || "");
+
+      // Auto-load character's paired system prompt + example dialog if set
+      if (data.system_prompt) {
+        const spSelect = document.getElementById('system-prompt-file-select');
+        if (spSelect) spSelect.value = data.system_prompt;
+        updateActiveIndicator(data.system_prompt);
+        await loadSelectedSystemPrompt(data.system_prompt);
+        updateBindIndicator(true);
+        console.log(`🎭 Auto-loaded system prompt for ${name}: ${data.system_prompt}`);
+      } else {
+        updateBindIndicator(false);
+      }
+    } catch (err) {
+      console.error("Error loading character:", err);
+    }
+  }
+
+  function updateImagePreview() {
+    const img = document.getElementById("preview-img");
+    const filename = document.getElementById("image").value.trim();
+    if (filename) {
+      img.src = `/static/images/${filename}`;
+      img.style.display = "block";
+    } else {
+      img.style.display = "none";
+    }
+  }
+
+  async function replaceCharacterImage(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const charName = document.getElementById("character-select").value;
+    if (!charName) { alert("Select a character first."); return; }
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const res = await fetch(`/replace_character_image/${encodeURIComponent(charName)}`, {
+        method: "POST",
+        body: formData
+      });
+      const data = await res.json();
+      if (data.status === "ok" && data.image) {
+        document.getElementById("image").value = data.image;
+        const img = document.getElementById("preview-img");
+        img.src = `/static/images/${data.image}?v=${Date.now()}`;
+        img.style.display = "block";
+      } else {
+        alert("Upload failed: " + (data.error || "Unknown error"));
+      }
+    } catch(e) {
+      alert("Upload failed: " + e);
+    }
+    input.value = '';
+  }
+
+  // ── Extra Images (Slideshow) ──────────────────────────
+  function renderExtraImages(images, primary) {
+    const strip = document.getElementById('extra-images-strip');
+    if (!strip) return;
+    strip.innerHTML = '';
+
+    // Always ensure primary is in the list
+    let list = images && images.length > 0 ? [...images] : [];
+    if (primary && !list.includes(primary)) list.unshift(primary);
+    if (list.length === 0) return;
+
+    list.forEach(filename => {
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'position:relative; display:inline-flex;';
+
+      const img = document.createElement('img');
+      img.src = `/static/images/${filename}?v=${Date.now()}`;
+      img.title = filename;
+      img.style.cssText = 'width:54px; height:70px; object-fit:cover; border-radius:5px; border:2px solid ' + (filename === primary ? '#4a9a6a' : '#2a3a4a') + ';';
+
+      if (filename === primary) {
+        const badge = document.createElement('span');
+        badge.textContent = '★';
+        badge.title = 'Primary image';
+        badge.style.cssText = 'position:absolute; top:2px; left:3px; font-size:10px; color:#6dbf8a; line-height:1; pointer-events:none;';
+        wrap.appendChild(badge);
+      }
+
+      const del = document.createElement('button');
+      del.textContent = '✕';
+      del.title = filename === primary ? 'Primary image (use Upload New Image to replace)' : 'Remove from slideshow';
+      del.style.cssText = 'position:absolute; top:-6px; right:-6px; background:#3a1a1a; border:1px solid #6a2a2a; color:#e88; border-radius:50%; width:16px; height:16px; font-size:9px; line-height:1; cursor:pointer; padding:0; display:flex; align-items:center; justify-content:center;';
+      if (filename === primary) {
+        del.style.opacity = '0.3';
+        del.style.cursor = 'not-allowed';
+      } else {
+        del.onclick = () => removeExtraImage(filename);
+      }
+
+      wrap.appendChild(img);
+      wrap.appendChild(del);
+      strip.appendChild(wrap);
+    });
+  }
+
+  async function addExtraImage(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const charName = document.getElementById("character-select").value;
+    if (!charName) { alert("Select a character first."); return; }
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      const res = await fetch(`/add_character_image/${encodeURIComponent(charName)}`, {
+        method: "POST", body: formData
+      });
+      const data = await res.json();
+      if (data.status === "ok") {
+        if (!currentCharacter) currentCharacter = {};
+        currentCharacter.images = data.images;
+        renderExtraImages(data.images, document.getElementById("image").value);
+      } else {
+        alert("Failed: " + (data.error || "Unknown error"));
+      }
+    } catch(e) { alert("Upload failed: " + e); }
+    input.value = '';
+  }
+
+  async function removeExtraImage(filename) {
+    const charName = document.getElementById("character-select").value;
+    if (!charName) return;
+    if (!confirm(`Remove "${filename}" from slideshow?`)) return;
+    try {
+      const res = await fetch(`/remove_character_image/${encodeURIComponent(charName)}/${encodeURIComponent(filename)}`, {
+        method: "DELETE"
+      });
+      const data = await res.json();
+      if (data.status === "ok") {
+        if (!currentCharacter) currentCharacter = {};
+        currentCharacter.images = data.images;
+        renderExtraImages(data.images, document.getElementById("image").value);
+      } else {
+        alert("Failed: " + (data.error || "Unknown error"));
+      }
+    } catch(e) { alert("Remove failed: " + e); }
+  }
+
+  async function saveCharacter() {
+    const name = document.getElementById("character-select").value;
+    if (!name) return alert("Select a character first.");
+    const updated = {
+      name: document.getElementById("character-name").value,
+      main_prompt: document.getElementById("main-prompt").value,
+      description: document.getElementById("description").value,
+      tagline: document.getElementById("tagline").value,
+      scenario: document.getElementById("scenario").value,
+      use_current_situation: document.getElementById("use-current-situation").checked,
+      use_personal_memory: document.getElementById("use-personal-memory").checked,
+      use_global_memory: document.getElementById("use-global-memory").checked,
+        use_web_search: document.getElementById("use-web-search").checked,
+      post_history: document.getElementById("post-history").value,
+      character_note: document.getElementById("character-note").value,
+      example_dialogue: document.getElementById("example-dialog").value,
+      image: document.getElementById("image").value,
+      images: (currentCharacter && currentCharacter.images) ? currentCharacter.images : undefined,
+      system_prompt: (currentCharacter && currentCharacter.system_prompt) ? currentCharacter.system_prompt : undefined,
+    };
+    try {
+      const res = await fetch(`/characters/${name}.json`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updated),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      alert("Character saved successfully.");
+    } catch (err) {
+      console.error(err);
+      alert("Failed to save character.");
+    }
+  }
+
+  // --- IMAGE UPLOAD HELPER ---
+  async function uploadCharacterImage(file) {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const res = await fetch("/upload_image", { method: "POST", body: formData });
+      const result = await res.json();
+      if (result.status === "ok") {
+        console.log("Image uploaded:", result.filename);
+        return result.filename;
+      } else {
+        alert("Image upload failed: " + (result.error || "unknown error"));
+        return "";
+      }
+    } catch (err) {
+      console.error("Upload failed:", err);
+      alert("Failed to upload image.");
+      return "";
+    }
+  }
+
+  // --- CREATE CHARACTER ---
+  async function createCharacter() {
+    const name = document.getElementById("new-char-name").value.trim();
+    const description = document.getElementById("new-char-description").value.trim();
+    const main_prompt = document.getElementById("new-char-mainprompt").value.trim();
+    const fileInput = document.getElementById("new-char-image-upload");
+    let image = "";
+
+    if (!name) {
+      alert("Character name is required.");
+      return;
+    }
+
+    if (fileInput && fileInput.files.length > 0) {
+      image = await uploadCharacterImage(fileInput.files[0]);
+    }
+
+    try {
+      const res = await fetch("/create_character", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, description, main_prompt, image }),
+      });
+      const result = await res.json();
+
+      if (result.status === "ok") {
+        alert(`Character "${name}" created successfully!`);
+        document.getElementById("new-char-name").value = "";
+        document.getElementById("new-char-description").value = "";
+        document.getElementById("new-char-mainprompt").value = "";
+        if (fileInput) fileInput.value = "";
+        await loadCharacterList();
+      } else {
+        alert("Error creating character: " + (result.error || "Unknown error"));
+      }
+    } catch (err) {
+      console.error("Failed to create character:", err);
+      alert("Error creating character.");
+    }
+  }
+
+// ============================================================
+// CHARACTER EXPORT/IMPORT
+// ============================================================
+
+// Export current character as PNG card
+document.getElementById('export-char-btn').addEventListener('click', async function() {
+  const dropdown = document.getElementById('character-select');
+  const charName = dropdown.value;
+  
+  if (!charName) {
+    alert('Please select a character first.');
+    return;
+  }
+  
+  try {
+    // Trigger download
+    window.location.href = `/export_character/${charName}`;
+    console.log(`✅ Exporting character: ${charName}`);
+  } catch (err) {
+    console.error('Export error:', err);
+    alert('Failed to export character: ' + err.message);
+  }
+});
+
+// Import character from PNG card
+document.getElementById('import-char-btn').addEventListener('click', function() {
+  document.getElementById('import-char-input').click();
+});
+
+document.getElementById('import-char-input').addEventListener('change', async function(e) {
+  const file = e.target.files[0];
+  
+  if (!file) return;
+  
+  if (!file.name.toLowerCase().endsWith('.png')) {
+    alert('Please select a PNG file.');
+    return;
+  }
+  
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    
+    const res = await fetch('/import_character', {
+      method: 'POST',
+      body: formData
+    });
+    
+    const result = await res.json();
+    
+    if (result.error) {
+      alert('Import failed: ' + result.error);
+      return;
+    }
+    
+    console.log(`✅ Imported character: ${result.name}`);
+    alert(`Character "${result.name}" imported successfully!`);
+    
+    // Reload character list and select the new character
+    await loadCharacterList();
+    document.getElementById('character-select').value = result.name;
+    await loadCharacter(result.name);
+    
+  } catch (err) {
+    console.error('Import error:', err);
+    alert('Failed to import character: ' + err.message);
+  }
+  
+  // Reset file input
+  e.target.value = '';
+});
+
+// ============================================================
+// DELETE CHARACTRER
+// ============================================================
+
+// Delete Character
+document.getElementById('delete-char-btn').addEventListener('click', async function() {
+  const dropdown = document.getElementById('character-select');
+  const charName = dropdown.value;
+  
+  if (!charName) {
+    alert('Please select a character first.');
+    return;
+  }
+  
+  // Confirm deletion
+  if (!confirm(`Are you sure you want to permanently delete "${charName}"?\n\nThis will delete:\n- Character data\n- Character image\n- All associated files\n\nThis cannot be undone.`)) {
+    return;
+  }
+  
+  try {
+    const res = await fetch(`/delete_character/${charName}`, {
+      method: 'DELETE'
+    });
+    
+    const result = await res.json();
+    
+    if (result.error) {
+      alert('Delete failed: ' + result.error);
+      return;
+    }
+    
+    console.log(`✅ Deleted character: ${charName}`);
+    alert(`Character "${charName}" deleted successfully.`);
+    
+    // Reload character list and clear the form
+    await loadCharacterList();
+    
+    // Clear all input fields
+    document.getElementById('character-name').value = '';
+    document.getElementById('main-prompt').value = '';
+    document.getElementById('description').value = '';
+    document.getElementById('tagline').value = '';
+    document.getElementById('scenario').value = '';
+    document.getElementById('use-current-situation').checked = false;
+    document.getElementById('use-personal-memory').checked = true;
+    document.getElementById('use-global-memory').checked = false;
+      document.getElementById('use-web-search').checked = false;
+    document.getElementById('post-history').value = '';
+    document.getElementById('character-note').value = '';
+    document.getElementById('example-dialog').value = '';
+    document.getElementById('image').value = '';
+    document.getElementById('preview-img').style.display = 'none';
+    
+  } catch (err) {
+    console.error('Delete error:', err);
+    alert('Failed to delete character: ' + err.message);
+  }
+});
+
+
+
+  // --- USER PERSONA MANAGEMENT ---
+  async function loadUserList() {
+    const userSelect = document.getElementById("userSelect");
+    try {
+      const res = await fetch("/users/index.json");
+      const users = await res.json();
+      userSelect.innerHTML = "";
+      users.forEach((u) => {
+        const opt = document.createElement("option");
+        opt.value = u;
+        opt.textContent = u;
+        userSelect.appendChild(opt);
+      });
+
+      if (users.length > 0) {
+        const activeUser = await getActiveUser();
+        if (activeUser && users.includes(activeUser)) {
+          userSelect.value = activeUser;
+        } else {
+          userSelect.value = users[0];
+        }
+        loadUserDetails(userSelect.value);
+      }
+    } catch (err) {
+      console.error("Failed to load user list:", err);
+    }
+  }
+
+  async function getActiveUser() {
+    try {
+      const res = await fetch("/get_active_user");
+      const data = await res.json();
+      return data.active_user || null;
+    } catch (err) {
+      console.error("Failed to get active user:", err);
+      return null;
+    }
+  }
+
+  // ✅ PREVIEW USER IMAGE
+  function previewUserImage(input) {
+    const preview = document.getElementById('user-image-preview');
+    if (input.files && input.files[0]) {
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        preview.src = e.target.result;
+        preview.style.display = 'block';
+      };
+      reader.readAsDataURL(input.files[0]);
+    }
+  }
+
+  async function loadUserDetails(name) {
+    try {
+      const res = await fetch(`/get_user/${name}`);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      document.getElementById("user-display").value = data.display_name || name;
+      document.getElementById("user-bio").value = data.bio || "";
+      
+      // ✅ Load user image preview
+      const preview = document.getElementById("user-image-preview");
+      if (data.image) {
+        preview.src = `/static/images/${data.image}`;
+        preview.style.display = "block";
+      } else {
+        preview.style.display = "none";
+      }
+    } catch (err) {
+      console.error("Failed to load user details:", err);
+      document.getElementById("user-display").value = "";
+      document.getElementById("user-bio").value = "";
+    }
+  }
+
+  async function saveUserDetails() {
+    const name = document.getElementById("userSelect").value;
+    const display_name = document.getElementById("user-display").value.trim();
+    const bio = document.getElementById("user-bio").value.trim();
+    
+    // ✅ Handle image upload
+    const fileInput = document.getElementById("user-image-upload");
+    let image = "";
+    
+    if (fileInput && fileInput.files.length > 0) {
+      const formData = new FormData();
+      formData.append("file", fileInput.files[0]);
+      formData.append("character_name", name);
+      formData.append("is_user", "true"); // ⚠️ Prevents collision with character images
+      
+      try {
+        const uploadRes = await fetch("/upload_image", { method: "POST", body: formData });
+        const uploadResult = await uploadRes.json();
+        if (uploadResult.status === "ok") {
+          image = uploadResult.filename;
+        }
+      } catch (err) {
+        console.error("Image upload failed:", err);
+      }
+    }
+    
+    try {
+      const payload = { display_name, bio };
+      if (image) payload.image = image;
+      
+      const res = await fetch(`/save_user/${name}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const result = await res.json();
+      if (result.status === "ok") {
+        alert(`User "${name}" updated successfully!`);
+      } else {
+        alert("Error saving user: " + (result.error || "Unknown error"));
+      }
+    } catch (err) {
+      console.error("Failed to save user:", err);
+      alert("Error saving user details: " + err.message);
+    }
+  }
+
+  async function setActiveUser() {
+    const name = document.getElementById("userSelect").value;
+    try {
+      const res = await fetch("/set_active_user", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user: name }),
+      });
+      const result = await res.json();
+      
+      if (result.success) {
+        // ✅ ADD THIS LINE - Update localStorage so chat page knows
+        localStorage.setItem('activeUserName', name);
+        
+        alert(`Active user set to "${name}"`);
+      } else {
+        alert("Error setting active user: " + (result.error || "Unknown error"));
+      }
+    } catch (err) {
+      console.error("Failed to set active user:", err);
+      alert("Error setting active user.");
+    }
+  }
+
+ 
+  
+  // --- SETTINGS MANAGEMENT (FIXED) ---
+  async function loadSettings() {
+    try {
+      const res = await fetch("/get_sampling_settings");
+      const settings = await res.json();
+      
+      // Use ?? so that 0 values display correctly (|| would treat 0 as falsy)
+      document.getElementById('temperature').value    = settings.temperature       ?? 0.8;
+      document.getElementById('max_tokens').value     = settings.max_tokens        ?? 4096;
+      document.getElementById('top_p').value          = settings.top_p             ?? 0.95;
+      document.getElementById('min_p').value          = settings.min_p             ?? 0.05;
+      document.getElementById('top_k').value          = settings.top_k             ?? 40;
+      document.getElementById('repeat_penalty').value    = settings.repeat_penalty    ?? 1.1;
+      document.getElementById('frequency_penalty').value = settings.frequency_penalty ?? 0.0;
+      document.getElementById('presence_penalty').value  = settings.presence_penalty  ?? 0.0;
+      
+      console.log('✅ Loaded sampling settings:', settings);
+    } catch (err) {
+      console.error("Failed to load settings:", err);
+    }
+  }
+
+  async function saveSettings() {
+    try {
+      const settings = {
+        temperature: parseFloat(document.getElementById('temperature').value) || 0.8,
+        max_tokens: parseInt(document.getElementById('max_tokens').value) || 4096,
+        top_p: parseFloat(document.getElementById('top_p').value) || 0.95,
+        min_p: parseFloat(document.getElementById('min_p').value) || 0.05,
+        top_k: parseInt(document.getElementById('top_k').value) || 40,
+        repeat_penalty: parseFloat(document.getElementById('repeat_penalty').value) || 1.1,
+        frequency_penalty: parseFloat(document.getElementById('frequency_penalty').value) || 0.0,
+        presence_penalty: parseFloat(document.getElementById('presence_penalty').value) || 0.0,
+      };
+      
+      const res = await fetch("/save_sampling_settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings)
+      });
+      
+      if (res.ok) {
+        alert("✅ Settings saved successfully!");
+      } else {
+        alert("⚠️ Error saving settings.");
+      }
+    } catch (err) {
+      console.error("Failed to save settings:", err);
+      alert("Error saving settings.");
+    }
+  }
+
+  // --- INITIALIZATION ---
+  document.addEventListener("DOMContentLoaded", () => {
+    loadCharacterList();
+    loadUserList();
+    loadSettings();
+    loadGlobalSystemPrompt();
+    loadCurrentSituation();
+    loadGlobalExampleDialog();
+    loadTTSEngine();
+    loadLlamaConfig();
+
+    const refreshBtn = document.getElementById("refresh-memory");
+    if (refreshBtn) refreshBtn.addEventListener("click", loadCharacterMemory);
+
+
+    const spFileSelect = document.getElementById('system-prompt-file-select');
+    if (spFileSelect) {
+      spFileSelect.addEventListener('change', async () => {
+        const filename = spFileSelect.value;
+        if (filename) await loadSelectedSystemPrompt(filename);
+      });
+    }
+
+    const select = document.getElementById("character-select");
+    if (select) {
+      select.addEventListener("change", () => {
+        const value = select.value;
+        if (value) {
+          loadCharacter(value);
+          loadCharacterMemory();
+        }
+      });
+    }
+
+    const saveUserBtn = document.getElementById("saveUserBtn");
+    if (saveUserBtn) saveUserBtn.addEventListener("click", setActiveUser);
+
+    const saveUserDetailsBtn = document.getElementById("saveUserDetailsBtn");
+    if (saveUserDetailsBtn) saveUserDetailsBtn.addEventListener("click", saveUserDetails);
+
+    const saveSettingsBtn = document.getElementById("saveSettingsBtn");
+    if (saveSettingsBtn) saveSettingsBtn.addEventListener("click", saveSettings);
+
+    const saveTTSEngineBtn = document.getElementById("saveTTSEngineBtn");
+    if (saveTTSEngineBtn) saveTTSEngineBtn.addEventListener("click", saveTTSEngine);
+
+    const userSelect = document.getElementById("userSelect");
+    if (userSelect) {
+      userSelect.addEventListener("change", () => {
+        const selected = userSelect.value;
+        if (selected) loadUserDetails(selected);
+      });
+    }
+  });
+  
+
+  // ==================== DUPLICATE CHARACTER ====================
+  document.addEventListener('DOMContentLoaded', function() {
+    const duplicateBtn = document.getElementById('duplicate-char-btn');
+    
+    if (duplicateBtn) {
+      duplicateBtn.addEventListener('click', async function() {
+        const select = document.getElementById('character-select');
+        const currentChar = select.value;
+        
+        if (!currentChar) {
+          alert('Please select a character to duplicate.');
+          return;
+        }
+        
+        if (!confirm(`Duplicate "${currentChar}"?`)) {
+          return;
+        }
+        
+        try {
+          const res = await fetch(`/duplicate_character/${currentChar}`, {
+            method: 'POST'
+          });
+          
+          const data = await res.json();
+          
+          if (data.error) {
+            alert('Error: ' + data.error);
+            return;
+          }
+          
+          console.log('✅ Character duplicated:', data.new_name);
+          
+          // Reload character list
+          await loadCharacterList();
+          
+          // Switch to the new duplicate
+          select.value = data.new_name;
+          
+          // Trigger change event to load the character
+          select.dispatchEvent(new Event('change'));
+          
+          alert(`Character duplicated as "${data.new_name}"`);
+          
+        } catch (err) {
+          console.error('❌ Duplicate failed:', err);
+          alert('Failed to duplicate character.');
+        }
+      });
+    }
+  });  
+    
+  // ==================== RENAME CHARACTER ====================
+document.getElementById('rename-char-btn').addEventListener('click', async function() {
+  const dropdown = document.getElementById('character-select');
+  const oldName = dropdown.value;
+  
+  if (!oldName) {
+    alert('Please select a character first.');
+    return;
+  }
+  
+  const newName = prompt(`Rename "${oldName}" to:`, oldName);
+  
+  if (!newName || newName.trim() === '') {
+    return;
+  }
+  
+  if (newName.trim() === oldName) {
+    alert('Name unchanged.');
+    return;
+  }
+  
+  try {
+    const res = await fetch('/rename_character', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        old_name: oldName,
+        new_name: newName.trim()
+      })
+    });
+    
+    const data = await res.json();
+    
+    if (data.error) {
+      alert('Error: ' + data.error);
+      return;
+    }
+    
+    console.log('✅ Character renamed:', data.new_name);
+    alert(`Character renamed to "${data.new_name}"`);
+    
+    // Reload character list and select the renamed one
+    await loadCharacterList();
+    dropdown.value = data.new_name;
+    await loadCharacter(data.new_name);
+    
+  } catch (err) {
+    console.error('❌ Rename failed:', err);
+    alert('Failed to rename character.');
+  }
+});
+  
+  
+// ==================== TOKEN COUNTER (DEBUG VERSION) ====================
+let tokenCountTimeout = null;
+
+// Per-field colour thresholds. Identity fields (description, main_prompt,
+// scenario) absorb passively — higher caps. Instruction fields
+// (character_note, post_history) ride in the depth-0 OOC packet and get
+// performed by the model if too long — lower caps. Example dialogue is
+// expected to be larger — soft cap only.
+const FIELD_THRESHOLDS = {
+  'tokens-description':       { amber: 500,  red: 800 },
+  'tokens-main-prompt':       { amber: 400,  red: 700 },
+  'tokens-scenario':          { amber: 300,  red: 500 },
+  'tokens-post-history':      { amber: 200,  red: 350 },
+  'tokens-character-note':    { amber: 200,  red: 350 },
+  'tokens-example-dialogue':  { amber: 1500, red: 2500 }
+};
+
+function applyFieldColour(elementId, count) {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  el.textContent = count;
+  const t = FIELD_THRESHOLDS[elementId];
+  if (!t) return;
+  if (count >= t.red) {
+    el.style.color = '#dc3545';   // Red
+  } else if (count >= t.amber) {
+    el.style.color = '#ffc107';   // Amber
+  } else {
+    el.style.color = '#28a745';   // Green
+  }
+}
+
+function updateTokenCount() {
+  console.log('🔵 updateTokenCount() called');
+  
+  // Clear existing timeout
+  if (tokenCountTimeout) {
+    clearTimeout(tokenCountTimeout);
+  }
+  
+  // Debounce - wait 300ms after user stops typing
+  tokenCountTimeout = setTimeout(async () => {
+    console.log('🔵 Making API call to /count_tokens');
+    
+    try {
+      // Gather all character field values
+      const data = {
+        description: document.getElementById('description')?.value || '',
+        main_prompt: document.getElementById('main-prompt')?.value || '',
+        scenario: document.getElementById('scenario')?.value || '',
+        example_dialogue: document.getElementById('example-dialog')?.value || '',
+        post_history: document.getElementById('post-history')?.value || '',
+        character_note: document.getElementById('character-note')?.value || ''
+      };
+      
+      console.log('📦 Data being sent:', data);
+      
+      // Call backend
+      const res = await fetch('/count_tokens', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      
+      console.log('📡 Response status:', res.status);
+      
+      const counts = await res.json();
+      console.log('📊 Token counts received:', counts);
+      
+      if (counts.error) {
+        console.error('❌ Token count error:', counts.error);
+        return;
+      }
+      
+      // Update displays
+      applyFieldColour('tokens-description', counts.description);
+      applyFieldColour('tokens-main-prompt', counts.main_prompt);
+      applyFieldColour('tokens-scenario', counts.scenario);
+      applyFieldColour('tokens-post-history', counts.post_history);
+      applyFieldColour('tokens-character-note', counts.character_note);
+      applyFieldColour('tokens-example-dialogue', counts.example_dialogue);
+      document.getElementById('tokens-total').textContent = counts.total;
+      
+      console.log('✅ Display updated successfully');
+      
+      // Color coding for total
+      const totalEl = document.getElementById('tokens-total');
+      const statusEl = document.getElementById('token-status');
+      
+      totalEl.className = 'token-count';
+      
+      if (counts.total < 1000) {
+        totalEl.style.color = '#28a745';  // Green
+        statusEl.textContent = '✔ Optimal';
+        statusEl.style.color = '#28a745';
+      } else if (counts.total < 2000) {
+        totalEl.style.color = '#ffc107';  // Amber
+        statusEl.textContent = '⚠ High';
+        statusEl.style.color = '#ffc107';
+      } else {
+        totalEl.style.color = '#dc3545';  // Red
+        statusEl.textContent = '⚠ Very High';
+        statusEl.style.color = '#dc3545';
+      }
+      
+    } catch (err) {
+      console.error('❌ Token count failed:', err);
+    }
+  }, 300);  // 300ms debounce
+}
+
+// Attach event listeners when config page loads
+document.addEventListener('DOMContentLoaded', function() {
+  console.log('🟢 DOMContentLoaded - Setting up token counter');
+  
+  // Get all the character editor fields
+  const fields = [
+    'description',
+    'main-prompt',
+    'scenario',
+    'example-dialog',
+    'post-history',
+    'character-note'
+  ];
+  
+  // Attach listeners to all fields
+  fields.forEach(fieldId => {
+    const field = document.getElementById(fieldId);
+    if (field) {
+      field.addEventListener('input', updateTokenCount);
+      console.log('✅ Attached token counter to:', fieldId);
+    } else {
+      console.warn('⚠️ Field not found:', fieldId);
+    }
+  });
+  
+  // Initial count on load
+  console.log('🔵 Running initial token count');
+  updateTokenCount();
+  console.log('✅ Token counter initialized');
+});
+
+// ==================================================
+// CREATE NEW USER PERSONA
+// ==================================================
+async function createNewUser() {
+  const name = document.getElementById('new-user-name').value.trim();
+  const displayName = document.getElementById('new-user-display').value.trim();
+  const bio = document.getElementById('new-user-bio').value.trim();
+  const fileInput = document.getElementById('new-user-image-upload');
+  
+  if (!name) {
+    alert('User name is required.');
+    return;
+  }
+  
+  let image = "";
+  
+  // Upload image if provided
+  if (fileInput && fileInput.files.length > 0) {
+    const formData = new FormData();
+    formData.append("file", fileInput.files[0]);
+    formData.append("character_name", name); // Use user name for filename
+    
+    try {
+      const uploadRes = await fetch("/upload_image", { method: "POST", body: formData });
+      const uploadResult = await uploadRes.json();
+      if (uploadResult.status === "ok") {
+        image = uploadResult.filename;
+      }
+    } catch (err) {
+      console.error("Image upload failed:", err);
+    }
+  }
+  
+  try {
+    const res = await fetch('/create_user', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: name,
+        display_name: displayName || name,
+        bio: bio,
+        image: image
+      })
+    });
+    
+    const result = await res.json();
+    
+    if (result.error) {
+      alert('Error creating user: ' + result.error);
+      return;
+    }
+    
+    console.log('✅ User created:', name);
+    alert(`User persona "${name}" created successfully!`);
+    
+    // Clear the form
+    document.getElementById('new-user-name').value = '';
+    document.getElementById('new-user-display').value = '';
+    document.getElementById('new-user-bio').value = '';
+    if (fileInput) fileInput.value = '';
+    document.getElementById('new-user-image-preview').style.display = 'none';
+    
+    // Reload user list and select the new user
+    await loadUserList();
+    document.getElementById('userSelect').value = name;
+    await loadUserDetails(name);
+    
+  } catch (err) {
+    console.error('Failed to create user:', err);
+    alert('Failed to create user.');
+  }
+}
+
+// ==================================================
+// PREVIEW NEW USER IMAGE
+// ==================================================
+function previewNewUserImage(input) {
+  const preview = document.getElementById('new-user-image-preview');
+  if (input.files && input.files[0]) {
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      preview.src = e.target.result;
+      preview.style.display = 'block';
+    };
+    reader.readAsDataURL(input.files[0]);
+  }
+}
+
+// ==================================================
+// DELETE USER PERSONA
+// ==================================================
+async function deleteUserPersona() {
+  const userSelect = document.getElementById('userSelect');
+  const userName = userSelect.value;
+  
+  if (!userName) {
+    alert('Please select a user to delete.');
+    return;
+  }
+  
+  // Confirm deletion
+  if (!confirm(`Are you sure you want to permanently delete user persona "${userName}"?\n\nThis cannot be undone.`)) {
+    return;
+  }
+  
+  try {
+    const res = await fetch(`/delete_user/${userName}`, {
+      method: 'DELETE'
+    });
+    
+    const result = await res.json();
+    
+    if (result.error) {
+      alert('Delete failed: ' + result.error);
+      return;
+    }
+    
+    console.log('✅ Deleted user:', userName);
+    alert(`User persona "${userName}" deleted successfully.`);
+    
+    // Clear the form
+    document.getElementById('user-display').value = '';
+    document.getElementById('user-bio').value = '';
+    document.getElementById('user-image-preview').style.display = 'none';
+    
+    // Reload user list
+    await loadUserList();
+    
+  } catch (err) {
+    console.error('Delete error:', err);
+    alert('Failed to delete user.');
+  }
+}
+
+
+
+// ==================================================
+// TTS ENGINE SELECTOR
+// ==================================================
+async function loadTTSEngine() {
+  try {
+    const res = await fetch('/api/tts/engine');
+    const data = await res.json();
+    const select = document.getElementById('tts-engine-select');
+    if (select && data.engine) {
+      select.value = data.engine;
+    }
+    updateTTSEngineStatus(data.engine);
+  } catch (err) {
+    console.error('Failed to load TTS engine:', err);
+  }
+}
+
+function updateTTSEngineStatus(engine) {
+  const statusEl = document.getElementById('tts-engine-status');
+  if (!statusEl) return;
+  const labels = {
+    f5: '🟢 F5-TTS — fast, good quality',
+    xtts: '🟢 XTTS v2 — voice cloning',
+    chatterbox: '🟢 Chatterbox — voice cloning, expressive',
+    kokoro: '🟢 Kokoro — lightweight, natural',
+    none: '🔴 TTS disabled'
+  };
+  statusEl.textContent = labels[engine] || engine;
+}
+
+async function saveTTSEngine() {
+  const select = document.getElementById('tts-engine-select');
+  const engine = select.value;
+  try {
+    const res = await fetch('/api/tts/engine', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ engine })
+    });
+    const data = await res.json();
+    if (data.engine) {
+      updateTTSEngineStatus(data.engine);
+      alert('✅ TTS engine set to: ' + data.engine.toUpperCase());
+    }
+  } catch (err) {
+    console.error('Failed to save TTS engine:', err);
+    alert('❌ Failed to save TTS engine');
+  }
+}
+
+// --- BACKGROUND IMAGE ---
+function handleBgImageChange(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const dataUrl = e.target.result;
+    localStorage.setItem('hwui_bg_image', dataUrl);
+    applyBackground(dataUrl);
+  };
+  reader.readAsDataURL(file);
+  input.value = ''; // reset so same file can be picked again
+}
+
+function applyBackground(dataUrl) {
+  if (dataUrl) {
+    document.body.style.backgroundImage = `url(${dataUrl})`;
+    document.body.style.backgroundSize = 'cover';
+    document.body.style.backgroundPosition = 'center';
+    document.body.style.backgroundAttachment = 'fixed';
+  } else {
+    document.body.style.backgroundImage = '';
+  }
+}
+
+function clearBackground() {
+  localStorage.removeItem('hwui_bg_image');
+  applyBackground(null);
+}
+
+// Apply on load
+(function() {
+  const saved = localStorage.getItem('hwui_bg_image');
+  if (saved) applyBackground(saved);
+})();
+
+// --- THEME EDITOR ---
+
+const THEME_VARS = [
+  { group: 'Top Bar', vars: [
+    { key: '--topbar-bg', label: 'Top Bar BG' },
+  ]},
+  { group: 'Background & Container', vars: [
+    { key: '--container-bg',      label: 'Main Area BG' },
+    { key: '--chat-bg',           label: 'Chat Panel BG' },
+    { key: '--project-header-bg', label: 'Project Bar (top of chat)' },
+  ]},
+  { group: 'Sidebar', vars: [
+    { key: '--sidebar-bg',                label: 'Sidebar BG' },
+    { key: '--sidebar-border',            label: 'Sidebar Border' },
+    { key: '--chat-item-bg',              label: 'Chat Item BG' },
+    { key: '--sidebar-button-hover',      label: 'Chat Item Hover' },
+    { key: '--new-chat-btn-bg',           label: 'New Chat Btn BG' },
+    { key: '--new-chat-btn-text',         label: 'New Chat Btn Text' },
+    { key: '--char-dropdown-bg',          label: 'Character Dropdown BG' },
+    { key: '--char-dropdown-border',      label: 'Character Dropdown Border' },
+    { key: '--sidebar-footer-btn-bg',     label: 'Footer Btn BG' },
+    { key: '--sidebar-footer-btn-border', label: 'Footer Btn Border' },
+  ]},
+  { group: 'Messages', vars: [
+    { key: '--user-msg-bg',    label: 'Your Msg BG' },
+    { key: '--user-msg-text',  label: 'Your Msg Text' },
+    { key: '--model-msg-bg',   label: 'AI Reply BG' },
+    { key: '--model-msg-text', label: 'AI Reply Text' },
+    { key: '--msg-border',     label: 'Message Border' },
+    { key: '--hr-color',        label: 'Section Divider' },
+  ], preview: 'messages' },
+  { group: 'Input Box', vars: [
+    { key: '--input-bg',     label: 'Input BG' },
+    { key: '--input-border', label: 'Input Border' },
+  ]},
+  { group: 'Modals (popups)', vars: [
+    { key: '--modal-bg',               label: 'Modal Background' },
+    { key: '--modal-bg-hover',         label: 'Modal Row Hover' },
+    { key: '--modal-border',           label: 'Modal Border' },
+    { key: '--modal-text',             label: 'Modal Title Text' },
+    { key: '--memory-tab-active-bg',   label: 'Memory Active Tab' },
+    { key: '--memory-entry-bg',        label: 'Memory Card BG' },
+    { key: '--memory-entry-text',      label: 'Memory Card Text' },
+  ], preview: 'modal' },
+  { group: 'Modal Buttons', vars: [
+    { key: '--button-border-light', label: 'Save Btn Border' },
+    { key: '--button-border-dark',  label: 'Cancel Btn Border' },
+  ]},
+  { group: 'Project List (inside modal)', vars: [
+    { key: '--project-item-bg',     label: 'Project Row BG' },
+    { key: '--project-item-hover',  label: 'Project Row Hover' },
+    { key: '--project-item-border', label: 'Project Row Border' },
+  ], preview: 'project' },
+  { group: 'Icon Buttons (Edit / Delete)', vars: [
+    { key: '--icon-button-bg',    label: 'Icon Btn BG' },
+    { key: '--icon-button-hover', label: 'Icon Btn Hover' },
+  ]},
+];
+
+let originalTheme = {};
+let themePresets = {};
+
+async function loadTheme() {
+  try {
+    const res = await fetch('/get_theme');
+    const data = await res.json();
+    originalTheme = { ...data };
+    renderThemeEditor(data);
+  } catch(e) {
+    console.error('Failed to load theme:', e);
+  }
+  // Also load presets
+  try {
+    const res = await fetch('/theme_presets');
+    themePresets = await res.json();
+    refreshPresetDropdown();
+  } catch(e) {
+    console.error('Failed to load presets:', e);
+  }
+}
+
+function refreshPresetDropdown() {
+  const sel = document.getElementById('theme-preset-select');
+  if (!sel) return;
+  const current = sel.value || localStorage.getItem('hwui_last_preset') || '';
+  sel.innerHTML = '<option value="">— Presets —</option>';
+  Object.keys(themePresets).sort().forEach(name => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+  if (current && themePresets[current]) sel.value = current;
+}
+
+async function loadPreset() {
+  const name = document.getElementById('theme-preset-select').value;
+  if (!name || !themePresets[name]) { alert('Pick a preset first.'); return; }
+  const colours = themePresets[name];
+  renderThemeEditor({ ...originalTheme, ...colours });
+  // Live preview
+  Object.entries(colours).forEach(([k, v]) => {
+    document.documentElement.style.setProperty(k, v);
+  });
+  // Persist selection and write to style.css
+  localStorage.setItem('hwui_last_preset', name);
+  try {
+    const res = await fetch('/save_theme', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(colours)
+    });
+    const data = await res.json();
+    if (data.status !== 'ok') {
+      alert('Preset loaded but failed to save to CSS: ' + (data.error || 'Unknown error'));
+    }
+  } catch(e) {
+    alert('Preset loaded but failed to save to CSS: ' + e);
+  }
+}
+
+async function updatePreset() {
+  const name = document.getElementById('theme-preset-select').value;
+  if (!name) { alert('Pick a preset first.'); return; }
+  const inputs = document.querySelectorAll('.cp-swatch-btn');
+  const colours = {};
+  inputs.forEach(inp => { colours[inp.dataset.var] = inp.dataset.hex; });
+  try {
+    const res = await fetch('/theme_presets/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, colours })
+    });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      themePresets[name] = colours;
+      // Also write to style.css
+      await fetch('/save_theme', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(colours)
+      });
+      const btn = document.querySelector('button[onclick="updatePreset()"]');
+      if (btn) { btn.textContent = '✓ Saved'; setTimeout(() => btn.textContent = 'Update', 1500); }
+    } else {
+      alert('Failed: ' + (data.error || 'Unknown error'));
+    }
+  } catch(e) { alert('Failed: ' + e); }
+}
+
+async function saveAsPreset() {
+  const name = prompt('Preset name:');
+  if (!name || !name.trim()) return;
+  const inputs = document.querySelectorAll('.cp-swatch-btn');
+  const colours = {};
+  inputs.forEach(inp => { colours[inp.dataset.var] = inp.dataset.hex; });
+  try {
+    const res = await fetch('/theme_presets/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim(), colours })
+    });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      themePresets[name.trim()] = colours;
+      refreshPresetDropdown();
+      document.getElementById('theme-preset-select').value = name.trim();
+      localStorage.setItem('hwui_last_preset', name.trim());
+    } else {
+      alert('Failed: ' + (data.error || 'Unknown error'));
+    }
+  } catch(e) { alert('Failed: ' + e); }
+}
+
+async function deletePreset() {
+  const name = document.getElementById('theme-preset-select').value;
+  if (!name) { alert('Pick a preset first.'); return; }
+  if (!confirm(`Delete preset "${name}"?`)) return;
+  try {
+    await fetch('/theme_presets/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    delete themePresets[name];
+    refreshPresetDropdown();
+  } catch(e) { alert('Failed: ' + e); }
+}
+
+function renderThemeEditor(data) {
+  renderThemeModal(data);
+}
+
+function toHex(value) {
+  // Already a hex
+  if (/^#[0-9a-fA-F]{3,8}$/.test(value)) return value.slice(0,7);
+  // Named color fallback
+  const ctx = document.createElement('canvas').getContext('2d');
+  ctx.fillStyle = value;
+  return ctx.fillStyle;
+}
+
+function _applyThemeVar(varName, value) {
+  document.documentElement.style.setProperty(varName, value);
+}
+
+async function saveTheme() {
+  // Read from live CSS vars — authoritative source, never stale
+  const updates = {};
+  for (const section of THEME_SECTIONS) {
+    for (const v of section.vars) {
+      const val = getComputedStyle(document.documentElement).getPropertyValue(v.key).trim();
+      if (val) updates[v.key] = val;
+    }
+  }
+  // Fallback: also pick up any swatch values not in THEME_SECTIONS
+  document.querySelectorAll('.cp-swatch-btn').forEach(inp => {
+    if (!updates[inp.dataset.var]) updates[inp.dataset.var] = inp.dataset.hex;
+  });
+  try {
+    const res = await fetch('/save_theme', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates)
+    });
+    const result = await res.json();
+    if (result.status === 'ok') {
+      alert('✅ Theme saved! Refresh the chat page to see changes.');
+    } else {
+      alert('❌ Save failed: ' + (result.error || 'Unknown error'));
+    }
+  } catch(e) {
+    alert('❌ Save failed: ' + e);
+  }
+}
+
+function resetTheme() {
+  if (!confirm('Reset all colours to the last saved values?')) return;
+  renderThemeEditor(originalTheme);
+  // Revert live preview
+  for (const group of THEME_VARS) {
+    for (const v of group.vars) {
+      if (originalTheme[v.key]) {
+        document.documentElement.style.setProperty(v.key, originalTheme[v.key]);
+      }
+    }
+  }
+}
+
+// Load theme on page init
+loadTheme();
+
+async function loadLlamaConfig() {
+  try {
+    const res = await fetch('/get_llama_config');
+    const data = await res.json();
+    if (data.error) return;
+    document.getElementById('llama-exe').value = data.exe || '';
+    document.getElementById('llama-models-dir').value = data.models_dir || '';
+    document.getElementById('llama-show-console').checked = data.show_console || false;
+    const a = data.args || {};
+    document.getElementById('llama-gpu-layers').value = a.n_gpu_layers ?? 44;
+    document.getElementById('llama-ctx-size').value = a.ctx_size ?? 16384;
+    document.getElementById('llama-chat-template').value = a.chat_template ?? 'chatml';
+    populateLlamaPresetDropdown();
+    populateSamplingPresetDropdown();
+  } catch(e) {
+    console.error('Failed to load llama config:', e);
+  }
+}
+
+async function saveLlamaConfig() {
+  const status = document.getElementById('llama-config-status');
+  const payload = {
+    exe: document.getElementById('llama-exe').value.trim(),
+    models_dir: document.getElementById('llama-models-dir').value.trim(),
+    show_console: document.getElementById('llama-show-console').checked,
+    args: {
+      port: 5000,
+      n_gpu_layers: parseInt(document.getElementById('llama-gpu-layers').value) || 44,
+      ctx_size: parseInt(document.getElementById('llama-ctx-size').value) || 16384,
+      cache_type_k: 'q8_0',
+      cache_type_v: 'q8_0',
+      timeout: 0,
+      chat_template: document.getElementById('llama-chat-template').value.trim() || 'chatml',
+      parallel: 1,
+    }
+  };
+  try {
+    const res = await fetch('/save_llama_config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    status.style.color = data.status === 'ok' ? '#6dbf8a' : '#e88';
+    status.textContent = data.status === 'ok' ? '✅ Saved' : '❌ ' + data.error;
+    setTimeout(() => status.textContent = '', 3000);
+  } catch(e) {
+    status.style.color = '#e88';
+    status.textContent = '❌ Failed: ' + e;
+  }
+}
+
+// ==================================================
+// BROWSE FILE / FOLDER DIALOGS
+// ==================================================
+async function browseFile(targetId) {
+  try {
+    const res = await fetch('/browse_file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+    const data = await res.json();
+    if (data.path) document.getElementById(targetId).value = data.path;
+  } catch(e) { alert('Browse failed: ' + e); }
+}
+
+async function browseFolder(targetId) {
+  try {
+    const res = await fetch('/browse_folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+    const data = await res.json();
+    if (data.path) document.getElementById(targetId).value = data.path;
+  } catch(e) { alert('Browse failed: ' + e); }
+}
+
+// ==================================================
+// RESET ALL SETTINGS TO DEFAULT
+// ==================================================
+async function resetToDefault() {
+  if (!confirm('⚠️ This will reset ALL settings back to defaults. Your current settings.json will be overwritten. Continue?')) return;
+  try {
+    const res = await fetch('/reset_settings_to_default', { method: 'POST' });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      alert('✅ Settings reset to default. Reloading config...');
+      location.reload();
+    } else {
+      alert('❌ Reset failed: ' + (data.error || 'Unknown error'));
+    }
+  } catch(e) { alert('❌ Reset failed: ' + e); }
+}
+
+// ==================================================
+// LLAMA CONFIG PRESETS
+// ==================================================
+// Sampling Presets
+// ==================================================
+function getSamplingPresets() {
+  try { return JSON.parse(localStorage.getItem('hwui_sampling_presets') || '{}'); }
+  catch(e) { return {}; }
+}
+
+function saveSamplingPresetsToStorage(presets) {
+  localStorage.setItem('hwui_sampling_presets', JSON.stringify(presets));
+}
+
+function populateSamplingPresetDropdown() {
+  const sel = document.getElementById('sampling-preset-select');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">— select preset —</option>';
+  const presets = getSamplingPresets();
+  Object.keys(presets).sort().forEach(name => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+  if (current && presets[current]) sel.value = current;
+}
+
+function onSamplingPresetSelect() {
+  const name = document.getElementById('sampling-preset-select').value;
+  const nameInput = document.getElementById('sampling-preset-name');
+  const updateBtn = document.getElementById('update-sampling-preset-btn');
+  if (name) {
+    nameInput.value = name;
+    if (updateBtn) updateBtn.style.display = 'block';
+  } else {
+    nameInput.value = '';
+    if (updateBtn) updateBtn.style.display = 'none';
+  }
+}
+
+function updateSamplingPreset() {
+  const name = document.getElementById('sampling-preset-select').value;
+  const status = document.getElementById('sampling-preset-status');
+  if (!name) { status.style.color = '#e88'; status.textContent = '❌ Select a preset first'; setTimeout(() => status.textContent = '', 2000); return; }
+  const preset = {
+    temperature:       parseFloat(document.getElementById('temperature').value) || 0.8,
+    max_tokens:        parseInt(document.getElementById('max_tokens').value) || 4096,
+    top_p:             parseFloat(document.getElementById('top_p').value) || 0.95,
+    min_p:             parseFloat(document.getElementById('min_p').value) || 0.05,
+    top_k:             parseInt(document.getElementById('top_k').value) || 40,
+    repeat_penalty:    parseFloat(document.getElementById('repeat_penalty').value) || 1.1,
+    frequency_penalty: parseFloat(document.getElementById('frequency_penalty').value) || 0.0,
+    presence_penalty:  parseFloat(document.getElementById('presence_penalty').value) || 0.0,
+  };
+  const presets = getSamplingPresets();
+  presets[name] = preset;
+  saveSamplingPresetsToStorage(presets);
+  populateSamplingPresetDropdown();
+  document.getElementById('sampling-preset-select').value = name;
+  status.style.color = '#6dbf8a';
+  status.textContent = `✅ Preset "${name}" updated`;
+  setTimeout(() => status.textContent = '', 2500);
+}
+
+function saveSamplingPreset() {
+  const name = document.getElementById('sampling-preset-name').value.trim();
+  const status = document.getElementById('sampling-preset-status');
+  if (!name) { status.style.color = '#e88'; status.textContent = '❌ Enter a preset name first'; setTimeout(() => status.textContent = '', 2000); return; }
+  const preset = {
+    temperature:       parseFloat(document.getElementById('temperature').value) || 0.8,
+    max_tokens:        parseInt(document.getElementById('max_tokens').value) || 4096,
+    top_p:             parseFloat(document.getElementById('top_p').value) || 0.95,
+    min_p:             parseFloat(document.getElementById('min_p').value) || 0.05,
+    top_k:             parseInt(document.getElementById('top_k').value) || 40,
+    repeat_penalty:    parseFloat(document.getElementById('repeat_penalty').value) || 1.1,
+    frequency_penalty: parseFloat(document.getElementById('frequency_penalty').value) || 0.0,
+    presence_penalty:  parseFloat(document.getElementById('presence_penalty').value) || 0.0,
+  };
+  const presets = getSamplingPresets();
+  presets[name] = preset;
+  saveSamplingPresetsToStorage(presets);
+  populateSamplingPresetDropdown();
+  document.getElementById('sampling-preset-select').value = name;
+  document.getElementById('sampling-preset-name').value = '';
+  const updateBtn = document.getElementById('update-sampling-preset-btn');
+  if (updateBtn) updateBtn.style.display = 'none';
+  status.style.color = '#6dbf8a';
+  status.textContent = `✅ Preset "${name}" saved`;
+  setTimeout(() => status.textContent = '', 2500);
+}
+
+function loadSamplingPreset() {
+  const name = document.getElementById('sampling-preset-select').value;
+  const status = document.getElementById('sampling-preset-status');
+  if (!name) { status.style.color = '#e88'; status.textContent = '❌ Select a preset first'; setTimeout(() => status.textContent = '', 2000); return; }
+  const presets = getSamplingPresets();
+  const p = presets[name];
+  if (!p) return;
+  document.getElementById('temperature').value        = p.temperature       ?? 0.8;
+  document.getElementById('max_tokens').value         = p.max_tokens        ?? 4096;
+  document.getElementById('top_p').value              = p.top_p             ?? 0.95;
+  document.getElementById('min_p').value              = p.min_p             ?? 0.05;
+  document.getElementById('top_k').value              = p.top_k             ?? 40;
+  document.getElementById('repeat_penalty').value     = p.repeat_penalty    ?? 1.1;
+  document.getElementById('frequency_penalty').value  = p.frequency_penalty ?? 0.0;
+  document.getElementById('presence_penalty').value   = p.presence_penalty  ?? 0.0;
+  status.style.color = '#6dbf8a';
+  status.textContent = `✅ Loaded "${name}" — hit Save & Apply to use`;
+  setTimeout(() => status.textContent = '', 3000);
+}
+
+function deleteSamplingPreset() {
+  const name = document.getElementById('sampling-preset-select').value;
+  const status = document.getElementById('sampling-preset-status');
+  if (!name) { status.style.color = '#e88'; status.textContent = '❌ Select a preset first'; setTimeout(() => status.textContent = '', 2000); return; }
+  if (!confirm(`Delete preset "${name}"?`)) return;
+  const presets = getSamplingPresets();
+  delete presets[name];
+  saveSamplingPresetsToStorage(presets);
+  populateSamplingPresetDropdown();
+  status.style.color = '#aaa';
+  status.textContent = `🗑 Preset "${name}" deleted`;
+  setTimeout(() => status.textContent = '', 2000);
+}
+
+// ==================================================
+function getLlamaPresets() {
+  try { return JSON.parse(localStorage.getItem('hwui_llama_presets') || '{}'); }
+  catch(e) { return {}; }
+}
+
+function saveLlamaPresetsToStorage(presets) {
+  localStorage.setItem('hwui_llama_presets', JSON.stringify(presets));
+}
+
+function populateLlamaPresetDropdown() {
+  const sel = document.getElementById('llama-preset-select');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">— select preset —</option>';
+  const presets = getLlamaPresets();
+  Object.keys(presets).sort().forEach(name => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+  if (current && presets[current]) sel.value = current;
+}
+
+function saveLlamaPreset() {
+  const name = document.getElementById('llama-preset-name').value.trim();
+  const status = document.getElementById('llama-preset-status');
+  if (!name) { status.style.color = '#e88'; status.textContent = '❌ Enter a preset name first'; setTimeout(() => status.textContent = '', 2000); return; }
+  const preset = {
+    exe: document.getElementById('llama-exe').value.trim(),
+    models_dir: document.getElementById('llama-models-dir').value.trim(),
+    show_console: document.getElementById('llama-show-console').checked,
+    gpu_layers: document.getElementById('llama-gpu-layers').value,
+    ctx_size: document.getElementById('llama-ctx-size').value,
+    chat_template: document.getElementById('llama-chat-template').value.trim()
+  };
+  const presets = getLlamaPresets();
+  presets[name] = preset;
+  saveLlamaPresetsToStorage(presets);
+  populateLlamaPresetDropdown();
+  document.getElementById('llama-preset-select').value = name;
+  document.getElementById('llama-preset-name').value = '';
+  status.style.color = '#6dbf8a';
+  status.textContent = `✅ Preset "${name}" saved`;
+  setTimeout(() => status.textContent = '', 2500);
+}
+
+function loadLlamaPreset() {
+  const name = document.getElementById('llama-preset-select').value;
+  const status = document.getElementById('llama-preset-status');
+  if (!name) { status.style.color = '#e88'; status.textContent = '❌ Select a preset first'; setTimeout(() => status.textContent = '', 2000); return; }
+  const presets = getLlamaPresets();
+  const p = presets[name];
+  if (!p) return;
+  document.getElementById('llama-exe').value = p.exe || '';
+  document.getElementById('llama-models-dir').value = p.models_dir || '';
+  document.getElementById('llama-show-console').checked = p.show_console || false;
+  document.getElementById('llama-gpu-layers').value = p.gpu_layers || 44;
+  document.getElementById('llama-ctx-size').value = p.ctx_size || 16384;
+  document.getElementById('llama-chat-template').value = p.chat_template || 'chatml';
+  status.style.color = '#6dbf8a';
+  status.textContent = `✅ Loaded "${name}" — hit Save Llama Config to apply`;
+  setTimeout(() => status.textContent = '', 3000);
+}
+
+function deleteLlamaPreset() {
+  const name = document.getElementById('llama-preset-select').value;
+  const status = document.getElementById('llama-preset-status');
+  if (!name) { status.style.color = '#e88'; status.textContent = '❌ Select a preset first'; setTimeout(() => status.textContent = '', 2000); return; }
+  if (!confirm(`Delete preset "${name}"?`)) return;
+  const presets = getLlamaPresets();
+  delete presets[name];
+  saveLlamaPresetsToStorage(presets);
+  populateLlamaPresetDropdown();
+  status.style.color = '#aaa';
+  status.textContent = `🗑 Preset "${name}" deleted`;
+  setTimeout(() => status.textContent = '', 2000);
+}
+// --------------------------------------------------
+// Current Situation (semi-global)
+// --------------------------------------------------
+async function loadCurrentSituation() {
+  try {
+    const res = await fetch('/get_current_situation');
+    const data = await res.json();
+    document.getElementById('global-current-situation').value = data.current_situation || '';
+  } catch (e) {
+    console.warn('Could not load current situation:', e);
+  }
+}
+
+async function saveCurrentSituation() {
+  const text = document.getElementById('global-current-situation').value.trim();
+  try {
+    const res = await fetch('/save_current_situation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_situation: text })
+    });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      const btn = document.querySelector('button[onclick="saveCurrentSituation()"]');
+      if (btn) {
+        const orig = btn.textContent;
+        btn.textContent = '✅ Saved!';
+        setTimeout(() => btn.textContent = orig, 1500);
+      }
+    }
+  } catch (e) {
+    console.error('Failed to save current situation:', e);
+  }
+}
+
+async function loadGlobalExampleDialog() {
+  // Example dialog is now loaded as part of loadSelectedSystemPrompt.
+  // This function is kept for init — it loads the active template's paired example.
+  try {
+    const res = await fetch('/system_prompts/list');
+    const data = await res.json();
+    if (data.active) {
+      const exRes = await fetch('/system_prompts/load_example/' + encodeURIComponent(data.active));
+      const exText = exRes.ok ? await exRes.text() : '';
+      document.getElementById('global-example-dialog').value = exText.trim();
+    }
+  } catch (e) {
+    console.warn('Could not load global example dialog on init:', e);
+  }
+}
+
+async function saveGlobalExampleDialog() {
+  const text = document.getElementById('global-example-dialog').value.trim();
+  const statusEl = document.getElementById('global-example-dialog-status');
+  const select = document.getElementById('system-prompt-file-select');
+  const filename = select ? select.value : '';
+  if (!filename) {
+    if (statusEl) { statusEl.textContent = '⚠️ Select a system prompt template first'; statusEl.style.color = '#fa8'; }
+    setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 3000);
+    return;
+  }
+  try {
+    const res = await fetch('/system_prompts/save_example/' + encodeURIComponent(filename), {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      body: text
+    });
+    const data = await res.json();
+    if (data.status === 'saved') {
+      if (statusEl) { statusEl.textContent = '✅ Saved with ' + filename; statusEl.style.color = '#6a9'; setTimeout(() => statusEl.textContent = '', 2500); }
+    } else {
+      if (statusEl) { statusEl.textContent = '❌ Save failed'; statusEl.style.color = '#e66'; }
+    }
+  } catch (e) {
+    console.error('Failed to save global example dialog:', e);
+    if (statusEl) { statusEl.textContent = '❌ Error saving'; statusEl.style.color = '#e66'; }
+  }
+}
+
+
+</script>
+
+<!-- ===== CUSTOM COLOUR PICKER ===== -->
+<div id="cp-popup" style="
+  display:none; position:fixed; z-index:99999;
+  background:#1e2128; border:1px solid #444; border-radius:8px;
+  box-shadow:0 8px 32px rgba(0,0,0,0.7); padding:10px; width:220px;
+  user-select:none;">
+
+  <!-- SV canvas -->
+  <canvas id="cp-sv" width="200" height="150" style="display:block; border-radius:4px; cursor:crosshair; margin-bottom:8px;"></canvas>
+
+  <!-- Hue strip -->
+  <canvas id="cp-hue" width="200" height="14" style="display:block; border-radius:3px; cursor:crosshair; margin-bottom:8px;"></canvas>
+
+  <!-- Alpha strip -->
+  <canvas id="cp-alpha" width="200" height="14" style="display:block; border-radius:3px; cursor:crosshair; margin-bottom:8px;"></canvas>
+
+  <!-- Hex input + preview swatch -->
+  <div style="display:flex; gap:6px; align-items:center;">
+    <div id="cp-swatch" style="width:28px; height:28px; border-radius:4px; border:1px solid #555; flex-shrink:0;"></div>
+    <input id="cp-hex" type="text" maxlength="9" style="
+      flex:1; background:#111; border:1px solid #444; color:#eee;
+      border-radius:4px; padding:4px 7px; font-size:12px; font-family:monospace;"/>
+    <button id="cp-close" style="
+      background:#333; border:1px solid #555; color:#aaa;
+      border-radius:4px; padding:3px 8px; font-size:11px; cursor:pointer;">✕</button>
+  </div>
+</div>
+
+<script>
+(function() {
+  // ---- state ----
+  let cpH = 0, cpS = 1, cpV = 1, cpA = 1;
+  let cpTarget = null;   // the hidden <input type=color> or data-var element
+  let cpVarName = '';
+  let dragging = null;
+
+  const popup   = document.getElementById('cp-popup');
+  const svCanvas= document.getElementById('cp-sv');
+  const hueCanvas=document.getElementById('cp-hue');
+  const alphaCanvas=document.getElementById('cp-alpha');
+  const hexInput= document.getElementById('cp-hex');
+  const swatch  = document.getElementById('cp-swatch');
+  const closeBtn= document.getElementById('cp-close');
+
+  // ---- draw helpers ----
+  function drawSV() {
+    const ctx = svCanvas.getContext('2d');
+    const w = svCanvas.width, h = svCanvas.height;
+    // hue base
+    const hueColor = hsvToRgb(cpH, 1, 1);
+    const gr1 = ctx.createLinearGradient(0,0,w,0);
+    gr1.addColorStop(0,'#fff');
+    gr1.addColorStop(1,`rgb(${hueColor.r},${hueColor.g},${hueColor.b})`);
+    ctx.fillStyle = gr1; ctx.fillRect(0,0,w,h);
+    const gr2 = ctx.createLinearGradient(0,0,0,h);
+    gr2.addColorStop(0,'rgba(0,0,0,0)');
+    gr2.addColorStop(1,'#000');
+    ctx.fillStyle = gr2; ctx.fillRect(0,0,w,h);
+    // crosshair
+    const cx = cpS * w, cy = (1-cpV) * h;
+    ctx.beginPath(); ctx.arc(cx,cy,6,0,Math.PI*2);
+    ctx.strokeStyle='#fff'; ctx.lineWidth=2; ctx.stroke();
+  }
+
+  function drawHue() {
+    const ctx = hueCanvas.getContext('2d');
+    const w = hueCanvas.width, h = hueCanvas.height;
+    const gr = ctx.createLinearGradient(0,0,w,0);
+    for(let i=0;i<=360;i+=30) gr.addColorStop(i/360,`hsl(${i},100%,50%)`);
+    ctx.fillStyle=gr; ctx.fillRect(0,0,w,h);
+    // marker
+    const x = (cpH/360)*w;
+    ctx.fillStyle='#fff'; ctx.fillRect(x-2,0,4,h);
+  }
+
+  function drawAlpha() {
+    const ctx = alphaCanvas.getContext('2d');
+    const w = alphaCanvas.width, h = alphaCanvas.height;
+    // checkerboard
+    for(let i=0;i<w;i+=8) for(let j=0;j<h;j+=8) {
+      ctx.fillStyle = ((i+j)/8%2<1) ? '#aaa' : '#eee';
+      ctx.fillRect(i,j,8,8);
+    }
+    const {r,g,b} = hsvToRgb(cpH,cpS,cpV);
+    const gr = ctx.createLinearGradient(0,0,w,0);
+    gr.addColorStop(0,`rgba(${r},${g},${b},0)`);
+    gr.addColorStop(1,`rgba(${r},${g},${b},1)`);
+    ctx.fillStyle=gr; ctx.fillRect(0,0,w,h);
+    // marker
+    const x = cpA * w;
+    ctx.fillStyle='#fff'; ctx.fillRect(x-2,0,4,h);
+  }
+
+  function redraw() { drawSV(); drawHue(); drawAlpha(); updateSwatch(); }
+
+  function updateSwatch() {
+    const {r,g,b} = hsvToRgb(cpH,cpS,cpV);
+    const hex = rgbaToHex(r,g,b,cpA);
+    swatch.style.background = `rgba(${r},${g},${b},${cpA})`;
+    hexInput.value = hex;
+    if (cpVarName) {
+      document.documentElement.style.setProperty(cpVarName, hex);
+      // Update the trigger swatch div so save/preset capture the new value
+      const triggerEl = document.querySelector(`.cp-swatch-btn[data-var="${cpVarName}"]`);
+      if (triggerEl) {
+        triggerEl.style.background = hex;
+        triggerEl.dataset.hex = hex;
+      }
+    }
+  }
+
+  function rgbaToHex(r,g,b,a) {
+    const h = v => v.toString(16).padStart(2,'0');
+    if (a >= 1) return `#${h(r)}${h(g)}${h(b)}`;
+    return `#${h(r)}${h(g)}${h(b)}${h(Math.round(a*255))}`;
+  }
+
+  function hsvToRgb(h,s,v) {
+    let r,g,b;
+    const i=Math.floor(h/60)%6, f=h/60-Math.floor(h/60);
+    const p=v*(1-s),q=v*(1-f*s),t=v*(1-(1-f)*s);
+    [r,g,b]=[[v,t,p],[q,v,p],[p,v,t],[p,q,v],[t,p,v],[v,p,q]][i];
+    return {r:Math.round(r*255),g:Math.round(g*255),b:Math.round(b*255)};
+  }
+
+  function hexToHsv(hex) {
+    hex = hex.replace('#','');
+    if(hex.length===3) hex=hex.split('').map(c=>c+c).join('');
+    const r=parseInt(hex.slice(0,2),16)/255;
+    const g=parseInt(hex.slice(2,4),16)/255;
+    const b=parseInt(hex.slice(4,6),16)/255;
+    const a=hex.length===8?parseInt(hex.slice(6,8),16)/255:1;
+    const max=Math.max(r,g,b),min=Math.min(r,g,b),d=max-min;
+    let h=0,s=max===0?0:d/max,v=max;
+    if(d!==0){
+      if(max===r) h=((g-b)/d+6)%6;
+      else if(max===g) h=(b-r)/d+2;
+      else h=(r-g)/d+4;
+      h*=60;
+    }
+    return {h,s,v,a};
+  }
+
+  // ---- open / close ----
+  window.openColorPicker = function(varName, currentHex, anchorEl) {
+    cpVarName = varName;
+    const parsed = hexToHsv(currentHex || '#000000');
+    cpH=parsed.h; cpS=parsed.s; cpV=parsed.v; cpA=parsed.a;
+
+    popup.style.display = 'block';
+
+    // Position to the right of the anchor, but clamp to viewport
+    const rect = anchorEl.getBoundingClientRect();
+    const pw = 240, ph = 260;
+    let left = rect.right + 8;
+    let top  = rect.top;
+    if (left + pw > window.innerWidth)  left = rect.left - pw - 8;
+    if (top  + ph > window.innerHeight) top  = window.innerHeight - ph - 8;
+    if (top < 4) top = 4;
+    popup.style.left = left + 'px';
+    popup.style.top  = top  + 'px';
+
+    redraw();
+  };
+
+  closeBtn.addEventListener('click', () => { popup.style.display='none'; });
+  document.addEventListener('mousedown', e => {
+    if (!popup.contains(e.target) && !e.target.classList.contains('cp-swatch-btn')) {
+      popup.style.display='none';
+    }
+  });
+
+  // ---- canvas interactions ----
+  function svPos(e) {
+    const r = svCanvas.getBoundingClientRect();
+    cpS = Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
+    cpV = Math.max(0,Math.min(1,1-(e.clientY-r.top)/r.height));
+    redraw();
+  }
+  function huePos(e) {
+    const r = hueCanvas.getBoundingClientRect();
+    cpH = Math.max(0,Math.min(360,((e.clientX-r.left)/r.width)*360));
+    redraw();
+  }
+  function alphaPos(e) {
+    const r = alphaCanvas.getBoundingClientRect();
+    cpA = Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
+    redraw();
+  }
+
+  svCanvas.addEventListener('mousedown',  e=>{dragging='sv';  svPos(e);});
+  hueCanvas.addEventListener('mousedown', e=>{dragging='hue'; huePos(e);});
+  alphaCanvas.addEventListener('mousedown',e=>{dragging='alpha';alphaPos(e);});
+
+  document.addEventListener('mousemove', e=>{
+    if(dragging==='sv')    svPos(e);
+    else if(dragging==='hue')   huePos(e);
+    else if(dragging==='alpha') alphaPos(e);
+  });
+  document.addEventListener('mouseup', ()=>{ dragging=null; });
+
+  // ---- hex input ----
+  hexInput.addEventListener('input', () => {
+    const v = hexInput.value.trim();
+    if(/^#[0-9a-fA-F]{6,8}$/.test(v)) {
+      const p=hexToHsv(v); cpH=p.h;cpS=p.s;cpV=p.v;cpA=p.a;
+      redraw();
+    }
+  });
+  hexInput.addEventListener('blur', () => {
+    if (cpVarName) {
+      // fire the same save signal that previewThemeVar uses
+    }
+  });
+})();
+</script>
+
+<!-- ============================================================
+     THEME EDITOR MODAL
+============================================================ -->
+<div id="theme-modal-overlay" style="
+  display:none; position:fixed; inset:0; z-index:10000;
+  background:rgba(0,0,0,0.75); backdrop-filter:blur(3px);
+  overflow-y:auto; padding:30px 20px;">
+
+  <div style="
+    max-width:780px; margin:0 auto;
+    background:var(--modal-bg); border:1px solid var(--modal-border); border-radius:12px;
+    box-shadow:0 20px 60px rgba(0,0,0,0.8); overflow:hidden;">
+
+    <!-- Header: single row -->
+    <div style="padding:12px 20px; border-bottom:1px solid var(--modal-border); background:var(--modal-bg); display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+      <span style="font-size:16px; font-weight:700; color:#fff; white-space:nowrap;">🎨 Theme Editor</span>
+      <div style="width:1px; height:20px; background:#333; flex-shrink:0;"></div>
+      <select id="theme-file-select"
+        style="background:var(--field-bg); border:1px solid var(--field-border); color:#fff; border-radius:4px; font-size:13px; padding:3px 8px; font-weight:600; min-width:80px; max-width:160px;">
+      </select>
+      <button onclick="switchThemeFile(document.getElementById('theme-file-select').value)" style="background:#1f3a5a; border:1px solid #245080; color:white; border-radius:4px; padding:3px 9px; font-size:12px; cursor:pointer;">Load</button>
+      <button onclick="newThemeFile()" style="background:#2a2a4a; border:1px solid #4a4a8a; color:#aaf; border-radius:4px; padding:3px 9px; font-size:12px; cursor:pointer; white-space:nowrap;">＋ New</button>
+      <button onclick="deleteThemeFile()" style="background:#3a1a1a; border:1px solid #6a2a2a; color:#f88; border-radius:4px; padding:3px 7px; font-size:12px; cursor:pointer;">🗑️</button>
+      <div style="flex:1;"></div>
+      <button onclick="saveTheme()" style="background:#1f5a3a; border:1px solid #248050; color:white; border-radius:4px; padding:3px 16px; font-size:13px; font-weight:600; cursor:pointer;">💾 Save</button>
+      <button onclick="resetTheme()" style="background:#2a2b2f; border:1px solid #444; color:#aaa; border-radius:4px; padding:3px 10px; font-size:12px; cursor:pointer;">↺ Reset</button>
+      <button onclick="closeThemeModal()" style="background:#2a2b2f; border:1px solid #444; color:#aaa; border-radius:4px; padding:3px 10px; font-size:12px; cursor:pointer;">✕ Close</button>
+    </div>
+
+    <!-- Body: sections stacked -->
+    <div id="theme-modal-body" style="padding:24px; display:flex; flex-direction:column; gap:32px;">
+      <!-- populated by renderThemeModal() -->
+    </div>
+  </div>
+</div>
+
+<script>
+// ---- Theme Modal open/close ----
+// ---- Theme file management ----
+let _activeThemeName = 'midnight';
+
+async function loadThemeFileList() {
+  try {
+    const res = await fetch('/themes/list');
+    const data = await res.json();
+    _activeThemeName = data.active || 'midnight';
+    const sel = document.getElementById('theme-file-select');
+    if (!sel) return;
+    sel.innerHTML = '';
+    (data.themes || []).forEach(name => {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      if (name === _activeThemeName) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  } catch(e) { console.error('loadThemeFileList failed:', e); }
+}
+
+// Themes that use a flat solid background (no wallpaper).
+// Add any future flat-bg theme names here.
+const FLAT_BG_THEMES = ['openai-layout'];
+
+async function switchThemeFile(name) {
+  if (!name) return;
+  try {
+    await fetch('/themes/switch', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ name })
+    });
+    _activeThemeName = name;
+    // Swap the loaded stylesheet
+    const existing = document.getElementById('active-theme-link');
+    if (existing) existing.href = '/theme-files/' + name + '.css';
+    // Flag whether this theme uses a flat background (no wallpaper)
+    if (FLAT_BG_THEMES.includes(name)) {
+      localStorage.setItem('hwui_flat_bg_theme', '1');
+    } else {
+      localStorage.removeItem('hwui_flat_bg_theme');
+    }
+    // Reload theme vars and re-render
+    const res = await fetch('/get_theme');
+    const data = await res.json();
+    originalTheme = { ...data };
+    renderThemeModal(data);
+  } catch(e) { alert('Failed to switch theme: ' + e); }
+}
+
+async function newThemeFile() {
+  const name = prompt('New theme name (e.g. "dark-blue"):');
+  if (!name || !name.trim()) return;
+  try {
+    const res = await fetch('/themes/create', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ name: name.trim() })
+    });
+    const data = await res.json();
+    if (data.error) { alert('Error: ' + data.error); return; }
+    await loadThemeFileList();
+    await switchThemeFile(name.trim());
+  } catch(e) { alert('Failed to create theme: ' + e); }
+}
+
+async function deleteThemeFile() {
+  const name = _activeThemeName;
+  if (!confirm(`Delete theme "${name}"? This cannot be undone.`)) return;
+  try {
+    const res = await fetch('/themes/delete', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ name })
+    });
+    const data = await res.json();
+    if (data.error) { alert('Error: ' + data.error); return; }
+    await loadThemeFileList();
+    // Switch to whatever is now active
+    const listRes = await fetch('/themes/list');
+    const listData = await listRes.json();
+    await switchThemeFile(listData.active);
+  } catch(e) { alert('Failed to delete theme: ' + e); }
+}
+
+function openThemeModal() {
+  loadThemeFileList();
+  // Build current state from live CSS vars so editor always shows what's on screen
+  const liveTheme = {};
+  for (const section of THEME_SECTIONS) {
+    for (const v of section.vars) {
+      const val = getComputedStyle(document.documentElement).getPropertyValue(v.key).trim();
+      liveTheme[v.key] = val || originalTheme[v.key] || '#000000';
+    }
+  }
+  renderThemeModal(liveTheme);
+  document.getElementById('theme-modal-overlay').style.display = 'block';
+}
+function closeThemeModal() {
+  document.getElementById('theme-modal-overlay').style.display = 'none';
+}
+// Close on overlay click
+document.getElementById('theme-modal-overlay').addEventListener('mousedown', function(e) {
+  if (e.target === this) closeThemeModal();
+});
+
+// ---- Section definitions: each has a label, vars, and a preview renderer ----
+const THEME_SECTIONS = [
+
+  {
+    title: 'Top Bar',
+    vars: [
+      { key: '--topbar-bg', label: 'Background' },
+    ],
+    preview: (el) => {
+      el.innerHTML = `
+        <div style="border-radius:6px; overflow:hidden; border:1px solid #222;">
+          <div style="background:var(--topbar-bg); padding:10px 16px; display:flex; justify-content:space-between; align-items:center;">
+            <span style="font-weight:700; font-size:14px; color:#fff;">Helcyon-WebUI</span>
+            <span style="color:#aaa; font-size:12px;">Model: helcyon-4o ⟳ ⚙</span>
+          </div>
+        </div>`;
+    }
+  },
+
+  {
+    title: 'Background & Chat Container',
+    vars: [
+      { key: '--container-bg',      label: 'Main Area BG' },
+      { key: '--chat-bg',           label: 'Chat Panel BG' },
+      { key: '--project-header-bg', label: 'Project Bar' },
+    ],
+    preview: (el) => {
+      el.innerHTML = `
+        <div style="border-radius:6px; overflow:hidden; border:1px solid #222; background:var(--container-bg); padding:10px;">
+          <div style="background:var(--project-header-bg); border-radius:6px 6px 0 0; padding:8px 14px; font-size:13px; color:#ccc; display:flex; align-items:center; gap:8px;">
+            <span>📁</span><span style="font-weight:600;">General</span>
+          </div>
+          <div style="background:var(--chat-bg); border-radius:0 0 6px 6px; padding:12px; min-height:48px;">
+            <span style="font-size:11px; color:#555;">← Chat messages appear here</span>
+          </div>
+        </div>`;
+    }
+  },
+
+  {
+    title: 'Sidebar',
+    vars: [
+      { key: '--sidebar-bg',                label: 'Sidebar BG' },
+      { key: '--chat-item-bg',              label: 'Chat Item BG' },
+      { key: '--sidebar-button-hover',      label: 'Chat Item Hover' },
+      { key: '--new-chat-btn-bg',           label: '+ New Button BG' },
+      { key: '--new-chat-btn-text',         label: '+ New Button Text' },
+      { key: '--char-dropdown-bg',          label: 'Character Dropdown BG' },
+      { key: '--char-dropdown-border',      label: 'Character Dropdown Border' },
+      { key: '--sidebar-footer-btn-bg',     label: 'Footer Btn BG' },
+      { key: '--sidebar-footer-btn-border', label: 'Footer Btn Border' },
+    ],
+    preview: (el) => {
+      el.innerHTML = `
+        <div style="border-radius:6px; overflow:hidden; border:1px solid var(--sidebar-border); background:var(--sidebar-bg); padding:10px; display:flex; flex-direction:column; gap:6px;">
+          <div style="display:flex; gap:6px; align-items:center; margin-bottom:2px;">
+            <span style="font-size:13px; font-weight:700; color:#fff; flex:1;">Chats</span>
+            <div style="background:var(--new-chat-btn-bg); color:var(--new-chat-btn-text); padding:3px 10px; border-radius:4px; font-size:11px; font-weight:600;">＋ New</div>
+          </div>
+          <div style="background:var(--sidebar-button-hover); border-radius:4px; padding:7px 10px; font-size:12px; color:#fff; font-weight:600;">Nebula - New Chat ← active</div>
+          <div style="background:var(--chat-item-bg); border-radius:4px; padding:7px 10px; font-size:12px; color:#aaa;">Jarvis - New Chat ← default</div>
+          <div style="border-top:1px solid #333; margin-top:4px; padding-top:8px; display:flex; flex-direction:column; gap:4px;">
+            <div style="background:var(--sidebar-footer-btn-bg); border:1px solid var(--sidebar-footer-btn-border); border-radius:4px; padding:5px 10px; font-size:11px; color:#ccc; text-align:center;">📁 Projects</div>
+            <div style="background:var(--sidebar-footer-btn-bg); border:1px solid var(--sidebar-footer-btn-border); border-radius:4px; padding:5px 10px; font-size:11px; color:#ccc; text-align:center;">🧠 Memory</div>
+          </div>
+          <div style="background:var(--char-dropdown-bg); border:1px solid var(--char-dropdown-border,#333); border-radius:4px; padding:5px 8px; font-size:11px; color:#ccc; margin-top:2px;">Nebula ▾ &nbsp;&nbsp;← Character dropdown</div>
+        </div>`;
+    }
+  },
+
+  {
+    title: 'Messages',
+    vars: [
+      { key: '--user-msg-bg',    label: 'Your Message BG' },
+      { key: '--user-msg-text',  label: 'Your Message Text' },
+      { key: '--model-msg-bg',   label: 'AI Reply BG' },
+      { key: '--model-msg-text', label: 'AI Reply Text' },
+      { key: '--msg-border',     label: 'Message Border' },
+      { key: '--hr-color',        label: 'Section Divider' },
+    ],
+    preview: (el) => {
+      el.innerHTML = `
+        <div style="display:flex; flex-direction:column; gap:8px; background:#0a0d10; border-radius:6px; padding:12px; border:1px solid #222;">
+          <div style="display:flex; gap:8px; align-items:flex-start;">
+            <div style="width:36px; height:44px; border-radius:5px; background:#223; flex-shrink:0; border:1px solid rgba(100,200,255,0.2); display:flex; align-items:center; justify-content:center; font-size:9px; color:rgba(100,200,255,0.5); text-align:center; line-height:1.2;">user<br>img</div>
+            <div style="background:var(--user-msg-bg); color:var(--user-msg-text); border:1px solid var(--msg-border); border-radius:6px; padding:10px 14px; font-size:13px; flex:1;">
+              <strong>User:</strong><br>Hey, what's the capital of France?
+            </div>
+          </div>
+          <div style="display:flex; gap:8px; align-items:flex-start;">
+            <div style="width:36px; height:44px; border-radius:5px; background:#322; flex-shrink:0; border:1px solid rgba(255,100,200,0.2); display:flex; align-items:center; justify-content:center; font-size:9px; color:rgba(255,100,200,0.5); text-align:center; line-height:1.2;">char<br>img</div>
+            <div style="background:var(--model-msg-bg); color:var(--model-msg-text); border:1px solid var(--msg-border); border-radius:6px; padding:10px 14px; font-size:13px; flex:1;">
+              <strong>Assistant:</strong><br>Paris is the capital of France.
+            </div>
+          </div>
+        </div>`;
+    }
+  },
+
+  {
+    title: 'Input Box',
+    vars: [
+      { key: '--input-bg',           label: 'Input Box BG' },
+      { key: '--input-border',       label: 'Input Box Border' },
+      { key: '--field-bg',           label: 'Form Field BG' },
+      { key: '--field-border',       label: 'Form Field Border' },
+      { key: '--field-border-focus', label: 'Form Field Focus Border' },
+      { key: '--token-panel-bg',     label: 'Token Panel BG' },
+      { key: '--token-panel-border', label: 'Token Panel Border' },
+    ],
+    preview: (el) => {
+      el.innerHTML = `
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <div style="background:var(--input-bg); border:1px solid var(--input-border); border-radius:8px; padding:10px 14px; font-size:13px; color:#666; min-height:42px;">
+            Type a message... &nbsp;<span style="opacity:0.4">← Chat input box</span>
+          </div>
+          <div style="background:var(--container-bg); border-radius:6px; padding:10px; display:flex; flex-direction:column; gap:6px;">
+            <div style="font-size:10px; color:#555; text-transform:uppercase; letter-spacing:0.6px; margin-bottom:2px;">Config page form fields</div>
+            <input type="text" disabled placeholder="e.g. Character name..." style="background:var(--field-bg); border:1px solid var(--field-border); border-radius:4px; padding:6px 10px; font-size:13px; color:#666; width:100%; box-sizing:border-box;">
+            <textarea disabled placeholder="Short bio or purpose..." style="background:var(--field-bg); border:1px solid var(--field-border); border-radius:4px; padding:6px 10px; font-size:13px; color:#666; width:100%; box-sizing:border-box; resize:none; height:52px;"></textarea>
+            <div style="font-size:10px; color:#555; margin-top:2px;">Focus border: <span style="color:var(--field-border-focus);">■</span> var(--field-border-focus)</div>
+          </div>
+        </div>`;
+    }
+  },
+
+  {
+    title: 'Modals & Popups',
+    vars: [
+      { key: '--modal-bg',             label: 'Modal Background' },
+      { key: '--modal-bg-hover',       label: 'Modal Row Hover' },
+      { key: '--modal-border',         label: 'Modal Border' },
+      { key: '--modal-text',           label: 'Modal Title Text' },
+      { key: '--memory-tab-active-bg', label: 'Active Tab (Character/Global)' },
+      { key: '--memory-entry-bg',      label: 'Memory Card BG' },
+      { key: '--memory-entry-text',    label: 'Memory Card Text' },
+    ],
+    preview: (el) => {
+      el.innerHTML = `
+        <div style="background:var(--modal-bg); border:1px solid var(--modal-border); border-radius:8px; overflow:hidden; max-width:420px;">
+          <div style="padding:14px 18px; border-bottom:1px solid var(--modal-border); display:flex; justify-content:space-between;">
+            <span style="font-size:15px; font-weight:700; color:var(--modal-text);">Character Memory</span>
+            <span style="color:#666;">✕</span>
+          </div>
+          <div style="padding:10px 14px; display:flex; gap:8px; border-bottom:1px solid var(--modal-border);">
+            <div style="flex:1; padding:6px; border-radius:4px; text-align:center; font-size:12px; background:var(--memory-tab-active-bg); color:#fff; font-weight:600;">👤 Character</div>
+            <div style="flex:1; padding:6px; border-radius:4px; text-align:center; font-size:12px; background:var(--modal-bg-hover); color:#aaa; border:1px solid var(--modal-border);">🌐 Global</div>
+          </div>
+          <div style="padding:10px 14px; display:flex; flex-direction:column; gap:6px;">
+            <div style="background:var(--memory-entry-bg); border:1px solid var(--modal-border); border-radius:5px; padding:8px 12px;">
+              <div style="font-weight:600; font-size:13px; color:var(--memory-entry-text);">Portal 2</div>
+              <div style="font-size:10px; color:#7a9abf; margin:2px 0 4px;">Portal 2, game, walkthrough</div>
+              <div style="font-size:12px; color:var(--memory-entry-text); opacity:0.85;">We discussed Portal 2, walking through the old Aperture...</div>
+            </div>
+            <div style="background:var(--modal-bg-hover); border:1px solid var(--modal-border); border-radius:5px; padding:8px 12px;">
+              <div style="font-weight:600; font-size:13px; color:var(--memory-entry-text);">GPT-4o Retirement ← hover state</div>
+            </div>
+          </div>
+        </div>`;
+    }
+  },
+
+  {
+    title: 'Project List',
+    vars: [
+      { key: '--project-header-bg',  label: 'Header BG' },
+      { key: '--project-item-bg',    label: 'Project Row BG' },
+      { key: '--project-item-hover', label: 'Project Row Hover' },
+      { key: '--icon-button-bg',     label: 'Icon Btn BG' },
+      { key: '--icon-button-hover',  label: 'Icon Btn Hover' },
+    ],
+    preview: (el) => {
+      el.innerHTML = `
+        <div style="background:var(--modal-bg); border:1px solid var(--modal-border); border-radius:8px; overflow:hidden; max-width:420px;">
+          <div style="padding:14px 18px; border-bottom:1px solid var(--modal-border);">
+            <span style="font-size:15px; font-weight:700; color:var(--modal-text);">Project Management</span>
+          </div>
+          <div style="padding:10px 14px; display:flex; flex-direction:column; gap:6px;">
+            <div style="background:var(--project-header-bg); border-radius:4px; padding:5px 10px; font-size:10px; color:#888; text-transform:uppercase; letter-spacing:0.6px;">Your Projects</div>
+            <div style="background:var(--project-item-bg); border:1px solid var(--project-item-border); border-radius:5px; padding:8px 12px; display:flex; justify-content:space-between; align-items:center;">
+              <span style="font-size:13px; color:#ddd;">Admin and Shard Creation</span>
+              <div style="display:flex; gap:4px;">
+                <div style="width:22px; height:22px; background:var(--icon-button-bg); border-radius:3px;"></div>
+                <div style="width:22px; height:22px; background:var(--icon-button-bg); border-radius:3px;"></div>
+              </div>
+            </div>
+            <div style="background:var(--project-item-hover); border:1px solid var(--project-item-border); border-radius:5px; padding:8px 12px; display:flex; justify-content:space-between; align-items:center;">
+              <span style="font-size:13px; color:#ddd;">Health ← hover state</span>
+              <div style="display:flex; gap:4px;">
+                <div style="width:22px; height:22px; background:var(--icon-button-hover); border-radius:3px;"></div>
+                <div style="width:22px; height:22px; background:var(--icon-button-hover); border-radius:3px;"></div>
+              </div>
+            </div>
+          </div>
+        </div>`;
+    }
+  },
+
+  {
+    title: 'Modal Buttons',
+    vars: [
+      { key: '--button-border-light', label: 'Save Btn Border' },
+      { key: '--button-border-dark',  label: 'Cancel Btn Border' },
+    ],
+    preview: (el) => {
+      el.innerHTML = `
+        <div style="display:flex; gap:10px; padding:10px 0;">
+          <div style="padding:8px 20px; border-radius:6px; background:#161a1f; border:1px solid var(--button-border-light); color:#eee; font-size:13px; font-weight:600;">Save</div>
+          <div style="padding:8px 20px; border-radius:6px; background:#161a1f; border:1px solid var(--button-border-dark); color:#aaa; font-size:13px; font-weight:600;">Cancel</div>
+        </div>`;
+    }
+  },
+
+];
+
+function renderThemeModal(data) {
+  const body = document.getElementById('theme-modal-body');
+  if (!body) return;
+  body.innerHTML = '';
+
+  for (const section of THEME_SECTIONS) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex; gap:28px; align-items:flex-start;';
+
+    // Left: pickers
+    const left = document.createElement('div');
+    left.style.cssText = 'flex:0 0 260px; min-width:0;';
+
+    const title = document.createElement('div');
+    title.style.cssText = 'font-size:11px; text-transform:uppercase; letter-spacing:1px; color:#666; margin-bottom:10px; padding-bottom:5px; border-bottom:1px solid #2a2a2a;';
+    title.textContent = section.title;
+    left.appendChild(title);
+
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:flex; flex-direction:column; gap:7px;';
+
+    const seen = new Set();
+    for (const v of section.vars) {
+      if (seen.has(v.key)) continue;
+      seen.add(v.key);
+      const raw = data[v.key] || '#000000';
+      const hex = toHex(raw);
+
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex; align-items:center; gap:9px;';
+
+      const swatch = document.createElement('div');
+      swatch.className = 'cp-swatch-btn';
+      swatch.dataset.var = v.key;
+      swatch.dataset.hex = hex;
+      swatch.style.cssText = `width:26px; height:26px; border-radius:4px; border:1px solid #555; background:${hex}; cursor:pointer; flex-shrink:0;`;
+      swatch.onclick = function() { openColorPicker(v.key, this.dataset.hex, this); };
+
+      const label = document.createElement('label');
+      label.style.cssText = 'font-size:12px; color:#ccc; margin:0;';
+      label.textContent = v.label;
+
+      row.appendChild(swatch);
+      row.appendChild(label);
+      grid.appendChild(row);
+    }
+    left.appendChild(grid);
+
+    // Right: preview panel
+    const right = document.createElement('div');
+    right.style.cssText = 'flex:1; min-width:0;';
+    const previewLabel = document.createElement('div');
+    previewLabel.style.cssText = 'font-size:10px; color:#555; text-transform:uppercase; letter-spacing:0.6px; margin-bottom:8px;';
+    previewLabel.textContent = 'Preview';
+    right.appendChild(previewLabel);
+    const previewWrap = document.createElement('div');
+    right.appendChild(previewWrap);
+    section.preview(previewWrap);
+
+    wrap.appendChild(left);
+    wrap.appendChild(right);
+    body.appendChild(wrap);
+
+    // Divider
+    const hr = document.createElement('div');
+    hr.style.cssText = 'border-top:1px solid #232323;';
+    body.appendChild(hr);
+  }
+}
+
+function previewThemeVar(varName, value) {
+  _applyThemeVar(varName, value);
+  // Re-render preview panels live
+  const body = document.getElementById('theme-modal-body');
+  if (!body || body.children.length === 0) return;
+  let sectionIdx = 0;
+  for (let i = 0; i < body.children.length; i++) {
+    const child = body.children[i];
+    if (child.style.display === 'flex') {
+      if (sectionIdx < THEME_SECTIONS.length) {
+        const previewWrap = child.children[1]?.children[1];
+        if (previewWrap) THEME_SECTIONS[sectionIdx].preview(previewWrap);
+      }
+      sectionIdx++;
+    }
+  }
+}
+
+  // ── Brave Search Key (config page) ──────────────────────────────
+  async function loadBraveKey() {
+    try {
+      const res = await fetch('/get_brave_api_key');
+      const data = await res.json();
+      const input = document.getElementById('brave-api-key');
+      if (input) {
+        input.value = data.brave_api_key || '';
+        const status = document.getElementById('brave-key-status');
+        if (data.brave_api_key) {
+          status.textContent = '✅ Brave Search active';
+          status.style.color = '#6f6';
+        } else {
+          status.textContent = 'No key — using DDG fallback';
+          status.style.color = '#888';
+        }
+      }
+    } catch(e) { console.warn('Could not load Brave key:', e); }
+  }
+
+  async function saveBraveKey() {
+    const key = document.getElementById('brave-api-key').value.trim();
+    try {
+      await fetch('/save_brave_api_key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brave_api_key: key })
+      });
+      const status = document.getElementById('brave-key-status');
+      if (key) {
+        status.textContent = '✅ Brave Search active';
+        status.style.color = '#6f6';
+      } else {
+        status.textContent = 'No key — using DDG fallback';
+        status.style.color = '#888';
+      }
+    } catch(e) { console.error('Failed to save Brave key:', e); }
+  }
+
+  async function clearBraveKey() {
+    document.getElementById('brave-api-key').value = '';
+    await saveBraveKey();
+  }
+
+  // ── OpenAI Backend Settings ──────────────────────────────────────
+  let _currentBackendMode = 'local';
+
+  function confirmOpenAISwitch() {
+    // Only show confirmation if not already in OpenAI mode
+    if (_currentBackendMode === 'openai') return;
+    const modal = document.getElementById('openai-confirm-modal');
+    if (modal) { modal.style.display = 'flex'; }
+  }
+
+  function cancelOpenAISwitch() {
+    const modal = document.getElementById('openai-confirm-modal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  function confirmOpenAISwitchOK() {
+    const modal = document.getElementById('openai-confirm-modal');
+    if (modal) modal.style.display = 'none';
+    setBackendMode('openai');
+  }
+
+  function setBackendMode(mode) {
+    _currentBackendMode = mode;
+    const localBtn    = document.getElementById('mode-local-btn');
+    const openaiBtn   = document.getElementById('mode-openai-btn');
+    const localParams = document.getElementById('local-only-params');
+    const localNote   = document.getElementById('local-only-note');
+    if (mode === 'openai') {
+      localBtn.style.background  = '#111'; localBtn.style.color  = '#888'; localBtn.style.fontWeight = 'normal';
+      openaiBtn.style.background = '#1a2a4a'; openaiBtn.style.color = '#7ab4f5'; openaiBtn.style.fontWeight = 'bold';
+      if (localParams) { localParams.style.opacity = '0.3'; localParams.style.pointerEvents = 'none'; }
+      if (localNote)   { localNote.style.display = 'block'; }
+    } else {
+      localBtn.style.background  = '#1a3a2a'; localBtn.style.color  = '#6f6'; localBtn.style.fontWeight = 'bold';
+      openaiBtn.style.background = '#111'; openaiBtn.style.color = '#888'; openaiBtn.style.fontWeight = 'normal';
+      if (localParams) { localParams.style.opacity = '1'; localParams.style.pointerEvents = 'auto'; }
+      if (localNote)   { localNote.style.display = 'none'; }
+    }
+  }
+
+  function _setOpenAIModelSelect(savedModel) {
+    const sel = document.getElementById('openai-model');
+    if (!sel) return;
+    // If the saved model is already an option, select it
+    for (let i = 0; i < sel.options.length; i++) {
+      if (sel.options[i].value === savedModel) {
+        sel.value = savedModel;
+        return;
+      }
+    }
+    // Not in list yet — add it and select it
+    if (savedModel) {
+      const opt = document.createElement('option');
+      opt.value = savedModel;
+      opt.textContent = savedModel;
+      sel.insertBefore(opt, sel.firstChild);
+      sel.value = savedModel;
+    }
+  }
+
+  async function fetchOpenAIModels() {
+    const status = document.getElementById('openai-status');
+    if (status) { status.textContent = '⏳ Fetching models…'; status.style.color = '#aaa'; }
+    try {
+      const res  = await fetch('/get_openai_models');
+      const data = await res.json();
+      if (data.status !== 'ok') {
+        if (status) { status.textContent = '❌ ' + (data.error || 'Failed to fetch'); status.style.color = '#f66'; }
+        return;
+      }
+      const sel = document.getElementById('openai-model');
+      const current = sel ? sel.value : '';
+      if (sel) {
+        sel.innerHTML = '';
+        data.models.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m; opt.textContent = m;
+          sel.appendChild(opt);
+        });
+        // Re-select previously saved model if it's in the list
+        if (current) _setOpenAIModelSelect(current);
+      }
+      if (status) { status.textContent = `✅ ${data.models.length} models loaded`; status.style.color = '#6f6'; }
+    } catch(e) {
+      if (status) { status.textContent = '❌ Fetch failed: ' + e.message; status.style.color = '#f66'; }
+    }
+  }
+
+  async function loadOpenAISettings() {
+    try {
+      const res  = await fetch('/get_openai_settings');
+      const data = await res.json();
+      setBackendMode(data.backend_mode || 'local');
+      const keyInput = document.getElementById('openai-api-key');
+      if (keyInput) keyInput.value = data.openai_api_key || '';
+      _setOpenAIModelSelect(data.openai_model || 'gpt-4o');
+      const status = document.getElementById('openai-status');
+      if (status) {
+        if (data.backend_mode === 'openai' && data.openai_api_key) {
+          status.textContent = '✅ OpenAI active — ' + (data.openai_model || 'gpt-4o');
+          status.style.color = '#6f6';
+        } else if (data.backend_mode === 'openai') {
+          status.textContent = '⚠️ OpenAI mode set but no API key';
+          status.style.color = '#fa4';
+        } else {
+          status.textContent = 'Using local llama.cpp';
+          status.style.color = '#888';
+        }
+      }
+    } catch(e) { console.warn('Could not load OpenAI settings:', e); }
+  }
+
+  async function saveOpenAISettings() {
+    const key   = (document.getElementById('openai-api-key').value || '').trim();
+    const model = (document.getElementById('openai-model').value   || 'gpt-4o').trim();
+    const status = document.getElementById('openai-status');
+    try {
+      const res = await fetch('/save_openai_settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ backend_mode: _currentBackendMode, openai_api_key: key, openai_model: model })
+      });
+      const data = await res.json();
+      if (data.status === 'ok') {
+        if (_currentBackendMode === 'openai' && key) {
+          status.textContent = '✅ OpenAI active — ' + model;
+          status.style.color = '#6f6';
+        } else if (_currentBackendMode === 'openai') {
+          status.textContent = '⚠️ OpenAI mode set but no API key';
+          status.style.color = '#fa4';
+        } else {
+          status.textContent = 'Saved — using local llama.cpp';
+          status.style.color = '#888';
+        }
+      } else {
+        status.textContent = '❌ Save failed: ' + (data.error || 'unknown');
+        status.style.color = '#f66';
+      }
+    } catch(e) {
+      console.error('Failed to save OpenAI settings:', e);
+      status.textContent = '❌ Save failed';
+      status.style.color = '#f66';
+    }
+  }
+
+  loadOpenAISettings();
+</script>
+</body>
+</html>
