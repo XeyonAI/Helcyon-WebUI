@@ -643,3 +643,123 @@ def copy_chat():
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+
+# --------------------------------------------------
+# Branch Chat — duplicate up to and including a chosen assistant message
+# --------------------------------------------------
+@chat_bp.route('/chats/branch', methods=['POST'])
+def branch_chat():
+    """Create a new chat containing the source truncated to its first
+    `message_index` assistant turns (1-based). Everything after the chosen
+    assistant message is dropped; the source chat is left untouched.
+
+    Truncation is done by walking lines and detecting speaker lines exactly
+    the way /chats/open does — splitting on blank lines would break any
+    assistant message that contains paragraph breaks.
+    """
+    try:
+        data = request.json or {}
+        source_filename = data.get("source_filename")
+        message_index = data.get("message_index")  # 1-based count of assistant turns to keep
+
+        if not source_filename:
+            return jsonify({"error": "No source file"}), 400
+        if message_index is None:
+            return jsonify({"error": "No message_index"}), 400
+        try:
+            message_index = int(message_index)
+        except (TypeError, ValueError):
+            return jsonify({"error": "message_index must be a number"}), 400
+        if message_index < 1:
+            return jsonify({"error": "message_index must be >= 1"}), 400
+
+        chats_dir = get_chats_dir()
+        source_path = os.path.join(chats_dir, source_filename)
+        if not os.path.exists(source_path):
+            return jsonify({"error": "Source not found"}), 404
+
+        with open(source_path, "r", encoding="utf-8") as f:
+            raw_text = f.read()
+
+        # Speaker detection mirrors /chats/open so the branched file is parsed
+        # back into exactly the same turns the source chat renders.
+        available_characters = []
+        try:
+            with open(os.path.join(os.getcwd(), "characters", "index.json"), "r", encoding="utf-8") as f:
+                available_characters = json.load(f)
+        except Exception as e:
+            print(f"⚠️ Branch: could not load character list: {e}")
+        valid_users = []
+        try:
+            with open(os.path.join(os.getcwd(), "users", "index.json"), "r", encoding="utf-8") as f:
+                valid_users = json.load(f)
+        except Exception as e:
+            print(f"⚠️ Branch: could not load user list: {e}")
+
+        def speaker_role(line):
+            """Return 'assistant'/'user' if `line` starts a message, else None."""
+            ts_match = _TS_PREFIX_RE.match(line)
+            if ts_match:
+                line = line[ts_match.end():]
+            stripped = line.strip()
+            if ":" not in stripped or stripped.startswith(" "):
+                return None
+            speaker = stripped.split(":")[0].strip()
+            if len(speaker) >= 30:
+                return None
+            if speaker in available_characters:
+                return "assistant"
+            if speaker in valid_users or speaker.lower() == "user":
+                return "user"
+            return None
+
+        lines = raw_text.split('\n')
+        assistant_seen = 0
+        cut_at = None  # index of the first line to drop
+        for idx, line in enumerate(lines):
+            role = speaker_role(line)
+            if role is None:
+                continue
+            if assistant_seen >= message_index:
+                # The requested assistant turn is already kept in full; this
+                # speaker line starts the next turn — truncate before it.
+                cut_at = idx
+                break
+            if role == "assistant":
+                assistant_seen += 1
+
+        if assistant_seen < message_index:
+            return jsonify({"error": f"Chat only has {assistant_seen} assistant message(s)"}), 400
+
+        truncated = raw_text if cut_at is None else '\n'.join(lines[:cut_at])
+        truncated = truncated.rstrip('\n')
+        if truncated:
+            truncated += '\n\n'  # match the on-disk trailing-blank-line format
+
+        # Build new filename — insert " - Branch" before the trailing date.
+        name_without_ext = source_filename.replace(".txt", "")
+        last_dash_index = name_without_ext.rfind(" - ")
+        if last_dash_index != -1:
+            before_date = name_without_ext[:last_dash_index]
+            date_suffix = name_without_ext[last_dash_index:]
+            base_new = f"{before_date} - Branch{date_suffix}"
+        else:
+            base_new = f"{name_without_ext} - Branch"
+
+        # Avoid clobbering an existing branch of the same chat.
+        new_filename = f"{base_new}.txt"
+        counter = 2
+        while os.path.exists(os.path.join(chats_dir, new_filename)):
+            new_filename = f"{base_new} ({counter}).txt"
+            counter += 1
+
+        _atomic_write_text(os.path.join(chats_dir, new_filename), truncated)
+        print(f"🌿 Branch created: {source_filename} → {new_filename} (kept {message_index} assistant turn(s))")
+        return jsonify({"success": True, "new_filename": new_filename})
+
+    except Exception as e:
+        print(f"❌ Branch failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500

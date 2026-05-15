@@ -1,3 +1,99 @@
+## Session: May 15 2026 — UI Redesign Session
+
+### `config.html`
+- Tab system embedded CSS made self-contained in `<head>` (no longer relies on style.css)
+- Sampling sidebar compact overrides applied
+- Project modal: two-column → swap layout (grid and edit panel are siblings, not side-by-side)
+- Edit panel now replaces grid entirely when open; Back button returns to grid
+- Edit panel centred at max-width 680px with breathing room
+- Top strip (Active/Create) hides when edit panel is open, restores on Back/Cancel
+- Appearance tab: added Theme Colour vs Background Image toggle (setBgMode)
+- Background image now POSTs to /save_bg server route (written into theme CSS directly)
+- Clear background POSTs to /clear_bg
+- `--project-edit-bg` variable registered in theme editor under Project List section
+- `--project-edit-bg` default #0a0d10 used for edit panel body background
+
+### `index.html`
+- Project modal: fullscreen grid, card click = switch project, switch button removed
+- Edit buttons use e.stopPropagation() so card click doesn't also fire
+- Most Recent sort option restored; sortChatList restores dropdown from localStorage on every load
+- JS background injection removed (image now handled server-side via theme CSS)
+
+### `style.css`
+- Sampling sidebar: full compact pass (240px wide, 12px font, 26px input height)
+- Config tab CSS added (display:none/block toggle)
+- Project modal: fullscreen sizing, two-column → swap layout, inline edit panel CSS
+- Modal padding-left: 120px → 250px ⚠️ DO NOT REVERT — keeps modals centred in content pane
+- `--project-edit-bg` added to :root defaults
+- Hardcoded bg.jpg removed from both body rules
+
+### `app.py`
+- `/save_bg` route added: writes base64 image into active theme CSS file between hwui-bg-start/end markers
+- `/clear_bg` route added: removes those markers from theme CSS file
+- ⚠️ Background image feature incomplete — CC to finish (see handoff note below)
+
+### Handoff note for Claude Code
+Background image feature is partially implemented. Routes exist in app.py (`/save_bg`, `/clear_bg`). Config.html calls them correctly. The issue was the active theme CSS file has a `body { background: ... }` rule that overrides JS injection. The server-side approach (writing directly into the theme CSS via `get_active_theme_path()`) is the right fix — CC needs to verify the routes work correctly end-to-end and that the theme CSS file is being written and served properly.
+
+---
+
+## Session: May 15 2026 — F5-TTS Speed + Quality Pass
+
+Investigated reported symptoms: TTS missing words, pausing in the wrong place. Goal — speed up generation (was ~6s) without adding latency; balance speed and quality.
+
+### `f5_server.py`
+- `nfe_step` lowered: first chunk 20→16, later chunks 24→20 (~17% faster generation; quality cost of 20 vs 24 is barely perceptible — this is the main speed knob, tune in `tts_to_audio`)
+- `clean_text`: parentheses now become a plain space, not `. ` — a parenthetical aside no longer turns into its own falling-intonation fragment (a comma was rejected: F5 hesitates/ums on commas)
+
+### `tts_routes.py`
+- `/generate` now forwards `first_chunk` to the F5 server — the fast first-byte path existed but the proxy was dropping the field, so it never fired
+
+### `utils/utils.js`
+- `fetchAudio`: 2→3 retries with backoff; on final failure logs a loud, specific error naming the lost sentence (was failing silently — direct cause of "missing words" on F5 hiccups)
+- `splitAndQueue`: tiny fragments (<25 chars, e.g. "Yes.") are merged onto the previous still-queued chunk instead of sent to F5 alone — F5 garbles/clips very short clips. No latency cost (the previous chunk hasn't been fetched yet) and reading order is preserved
+- Parentheses → space (matches the `clean_text` change) in both the streaming cleaner and `splitAndQueue`
+- ⚠️ Aggressive sentence-batching was considered and skipped — it would delay time-to-first-audio
+
+---
+
+## Session: May 15 2026 — Branch Chat Feature
+
+### `chat_routes.py`
+**Feature: new `/chats/branch` route — duplicate a chat up to a chosen assistant turn**
+- Added directly below `/chats/copy`
+- Accepts `source_filename` + `message_index` (1-based count of assistant turns to keep)
+- ⚠️ Does NOT split on blank lines — assistant messages contain paragraph breaks, so `content.split('\n\n')` pair-counting would silently drop half of any multi-paragraph reply
+- Instead walks lines and detects speaker lines the same way `/chats/open` does (timestamp-prefix strip + check against `characters/index.json` and `users/index.json`), truncating before the turn after the Nth assistant message — byte-exact
+- Writes the truncated copy via `_atomic_write_text`; auto-numbers the filename `(2)`, `(3)`… if a branch already exists
+- Returns `400` with a clear message if the chat has fewer assistant turns than requested
+
+### `index.html`
+**Feature: branch button on every assistant message**
+- New shared `branchFromMessage(btn)` helper (defined above `openChat`) — confirms, reads the 1-based `.model-msg` index from the DOM at click time, POSTs to `/chats/branch`, then `loadChats()` + `openChat(newFilename)`
+- Branch button added to all four assistant-message render paths: `openChat()` action bar, live-streaming bubble, non-streaming bubble, and the continue-generation bubble
+- Uses the git-branch SVG; inherits `.msg-action-bar button` / `.copy-btn` styling — no CSS changes needed
+- ⚠️ Spec originally targeted `loadChatHistory()` (character-level history, no reliable `currentChatFilename`); moved to `openChat()` so the button shows in the actual chat-file viewer and on freshly-branched chats
+
+**Fix: gate the `[MEMORY ADD:` save flow behind an explicit user request**
+- ⚠️ The `[MEMORY ADD:` tag detection lives in `index.html` (response-stream handler, ~line 3205), NOT `app.py` — `app.py` has no memory-tag processing at all
+- New `getLastUserMessageText()` helper — returns the most recent non-hidden user message, flattening multimodal content to text
+- Before surfacing the memory confirm UI, the last user message is checked for explicit phrases: save that / remember this / add that to memory / add to memory / save this / remember that / store that / log that / save this to / save that to / to my memory / to memory / add this to / can you save / can you remember / please save / please remember / commit that / commit this
+- If none present, the tag is silently discarded (already stripped from the displayed text) and `🧠 Memory tag suppressed — not explicitly requested` is logged; confirm UI only appears on an explicit request
+- Implemented as a one-line condition change (`if (memAddMatch && _memExplicitlyRequested)`) so the existing parsing block is untouched
+
+**Feature: strip `[OOC: ...]` blocks from model output**
+- New `stripOOC(text)` helper (next to `sanitizeMarkdown`) — removes `\[OOC:.*?\]` (non-greedy, dotall via `[\s\S]`) plus surrounding whitespace/newlines
+- Applied inside `stripChatMLOutsideCodeBlocks` call in the streaming loop, so both the live streaming display and the saved `finalText` (= `cleanedMessage`) are OOC-free
+- Also applied to the empty-response raw fallback path
+- Logs `🚫 OOC block stripped from response` once per response at finalization (not per-chunk, to avoid console spam)
+- Follow-up: now also applied to the continue-generation stream handler (`cleaned` + `finalText`, with the same once-per-response log)
+- Follow-up: OOC blocks suppressed from TTS too — a per-stream `ttsHoldBuffer` accumulates voice chunks, `stripOOC` drops complete blocks, and a trailing open/partial `[OOC:` marker is withheld until its closing `]` arrives; only OOC-free text reaches the voice. Handles markers/blocks split across chunks.
+- Follow-up: `stripOOC` now replaces a block with a single space instead of nothing, so words either side of an *inline* OOC block aren't joined
+- ⚠️ Only the *horizontal* whitespace touching the block (`[^\S\n]`) is consumed — newlines are preserved. A global `\s{2,}` collapse was rejected: `stripOOC` runs on every message, so it would have flattened all paragraph breaks and code-block indentation app-wide
+- ⚠️ No `.trim()` inside `stripOOC` — it is called incrementally on TTS chunks and an internal trim would join streamed words; the display/continue/fallback call sites already `.trim()` externally
+
+---
+
 ## Session: May 14 2026 — Most Recent Sort Option Restored
 
 ## ⚠️ SPACING VALUES — DO NOT REVERT
@@ -15,6 +111,16 @@ Another Claude session MUST NOT reset these back to old values.
 ```
 
 ⚠️ DO NOT revert these to 0.4em / 0.3em / 0.15em / 1.3 — those are the OLD values and produce cramped output.
+
+The DOMINANT rule (highest specificity, wins over all others) is the combined block at ~line 1696:
+```
+.message ul, .message ol, .model-text ul, .model-text ol, .user-text ul, .user-text ol
+  { margin: 0.8em 0 1.1em 0; line-height: 1.6 }
+
+.message ul li, .message ol li, .model-text ul li, .model-text ol li, .user-text ul li, .user-text ol li
+  { margin: 0 0 0.8em 0; line-height: 1.6 }
+```
+⚠️ DO NOT revert this block — it has higher specificity than the single-class rules below it and will always win. This is the block that actually controls list spacing.
 
 ---
 

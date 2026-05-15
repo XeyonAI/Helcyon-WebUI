@@ -9,7 +9,7 @@
   --topbar-bg: #1a1a1b;
   --container-bg: #1e1f20;
   --chat-bg: #131314;
-  --project-header-bg: #062b46;
+  --project-header-bg: #0c2639;
   --sidebar-bg: #1e1f20;
   --chat-item-bg: #2e2e2e;
   --sidebar-button-hover: #143257;
@@ -32,14 +32,15 @@
   --field-border-focus: #5f5f5f;
   --token-panel-bg: #1f1f1f;
   --token-panel-border: #000000;
-  --modal-bg: #1e1f20;
+  --modal-bg: #222222;
   --modal-bg-hover: #16394e;
   --modal-border: #363636;
   --modal-text: #b2b2b2;
   --memory-tab-active-bg: #3e505b;
-  --memory-entry-bg: #121212;
+  --memory-entry-bg: #151515;
   --memory-entry-text: #929292;
-  --project-item-bg: #101010;
+  --project-item-bg: #161616;
+  --project-edit-bg: #191919;
   --project-item-hover: #0d3248;
   --icon-button-bg: #234468;
   --icon-button-hover: #606060;

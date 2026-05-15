@@ -440,9 +440,12 @@ def clean_text(text):
     text = re.sub(r'\bGPT-4o\b', 'G P T four oh', text, flags=re.IGNORECASE)
     text = re.sub(r'\bGPT-4\b', 'G P T four', text, flags=re.IGNORECASE)
     text = re.sub(r'\s*=\s*', ' equals ', text)
-    # Parentheses — replace with full stop pause (commas cause F5 hesitation/ums)
-    text = re.sub(r'\s*\(\s*', '. ', text)
-    text = re.sub(r'\s*\)\s*', '. ', text)
+    # Parentheses — drop the brackets and let the aside flow inline. A full
+    # stop here turned every parenthetical into its own falling-intonation
+    # fragment (a "pause in the wrong place"); a comma makes F5 hesitate/um.
+    # A plain space reads the aside naturally as part of the sentence.
+    text = re.sub(r'\s*\(\s*', ' ', text)
+    text = re.sub(r'\s*\)\s*', ' ', text)
     text = re.sub(r'\bbreather\b', 'breether', text)
     text = re.sub(r'\bX\b', 'ex', text)  # X → "ex"
     text = re.sub(r'\bID\b', 'I D', text)  # ID → "I D"
@@ -494,11 +497,15 @@ def tts_to_audio():
         ref_text = f.read().strip()
 
     try:
-        # First chunk of a response uses fewer diffusion steps for faster first-byte latency.
-        # Subsequent chunks use full quality. Difference at nfe_step=20 vs 24 is barely
-        # perceptible on a single sentence; saves ~1-1.5s on the opening wait.
+        # nfe_step = diffusion steps. It is the main speed knob — generation
+        # time scales with it. F5 default is 32; we run lower. Quality cost of
+        # 20 vs 24 is barely perceptible (and 16 on the opening word, which is
+        # latency-critical, is fine). Raise these if audio quality suffers;
+        # lower them for more speed.
+        #   first chunk : 16  — fastest first-byte latency
+        #   later chunks: 20  — ~17% faster than the old 24
         first_chunk = data.get('first_chunk', False)
-        nfe = 20 if first_chunk else 24
+        nfe = 16 if first_chunk else 20
 
         t_start = time.time()
         with tts_lock:

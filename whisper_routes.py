@@ -38,6 +38,15 @@ TRANSCRIPT_FIXES = [
     (r'\bGPT 40\b', 'GPT-4o'),
     # Mounjaro — Whisper hears it as two words
     (r'\bmount\s*jaro\b', 'Mounjaro'),
+    # Claire — Whisper almost always hears as "clear" (or clair/clere/klare)
+    # Can't blindly replace all "clear" (real word), so use three targeted patterns:
+    #   1. After verbs/prepositions that take a person object (to, with, saw, told, miss, etc.)
+    #   2. Sentence-start capital Clear + female-context verb following (said, is, was, told, etc.)
+    #   3. Rare non-word variants (clair, clere, klare, klair) that are never real English words
+    # Note: these are applied in correct_transcript() via re.sub with IGNORECASE
+    (r'(?:(?:with|to|saw|miss|told|asked|about|of|texted|called|met|love|loved|knew|know|see|meeting|seeing|thinking\s+about)\s+)(clear|clair|clere|klare|klair)\b', lambda m: m.group(0).replace(m.group(1), 'Claire')),
+    (r'(?:^|(?<=[.!?]\s))(Clear|Clair|Clere|Klare|Klair)\b(?=\s+(?:said|told|asked|is|was|has|had|called|texted|came|went|looks|seems|she|her))', 'Claire'),
+    (r'\b(Clair|Clere|Klare|Klair)\b', 'Claire'),
 ]
 
 def correct_transcript(text):

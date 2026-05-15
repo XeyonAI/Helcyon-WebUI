@@ -402,10 +402,68 @@ Examples:
           </div>
         </div>
 
-        <!-- Scrollable grid area -->
+        <!-- Grid view -->
         <div id="project-modal-grid-wrap">
           <div id="projects-list"></div>
         </div>
+
+        <!-- Edit panel — replaces grid when open -->
+        <div id="project-edit-panel">
+          <div id="project-edit-panel-header">
+            <button id="project-edit-panel-back" onclick="closeInlineEdit()">← Back</button>
+            <span id="project-edit-panel-title">Edit Project</span>
+            <button id="project-edit-panel-close" onclick="closeInlineEdit()" title="Close">✕</button>
+          </div>
+          <div id="project-edit-panel-body">
+            <label>Project Name</label>
+            <input type="text" id="edit-project-name" readonly>
+
+            <label>Instructions</label>
+            <textarea id="edit-project-instructions" rows="6" placeholder="Project instructions..."></textarea>
+
+            <hr>
+
+            <!-- RP Mode Toggle -->
+            <div class="edit-toggle-row">
+              <span style="font-size:16px;">🎭</span>
+              <div style="flex:1;">
+                <div style="color:#ddd;font-size:13px;font-weight:600;">Roleplay Mode</div>
+                <div style="color:#888;font-size:11px;">Inject an opening scene at the start of every new chat</div>
+              </div>
+              <button id="rp-mode-btn" onclick="toggleRpMode()">OFF</button>
+            </div>
+            <div id="rp-opener-section" style="display:none;">
+              <label>Opening Scene</label>
+              <textarea id="edit-project-rp-opener" rows="3" placeholder="*Character walks in...* Hey, how's it going?"></textarea>
+              <small>Sets the scene and formatting style for new chats.</small>
+            </div>
+
+            <hr>
+
+            <!-- Sticky Docs Toggle -->
+            <div class="edit-toggle-row">
+              <span style="font-size:16px;">📌</span>
+              <div style="flex:1;">
+                <div style="color:#ddd;font-size:13px;font-weight:600;">Sticky Documents</div>
+                <div style="color:#888;font-size:11px;">Keep all docs loaded for every message</div>
+              </div>
+              <button id="sticky-docs-btn" onclick="toggleStickyDocs()">OFF</button>
+            </div>
+
+            <hr>
+
+            <label>Project Documents</label>
+            <small style="color:#888;display:block;margin-bottom:10px;">Upload files the model can reference in conversation.</small>
+            <input type="file" id="document-upload" accept=".txt,.md,.pdf,.docx,.odt" style="display:none;">
+            <button onclick="document.getElementById('document-upload').click()" class="upload-doc-btn">📁 Upload Document</button>
+            <div id="documents-list" style="margin-top:12px;"></div>
+          </div>
+          <div id="project-edit-panel-footer">
+            <button onclick="saveProjectEdit()" class="save-btn">💾 Save Changes</button>
+            <button onclick="closeInlineEdit()" class="cancel-btn">Cancel</button>
+          </div>
+        </div><!-- end project-edit-panel -->
+
       </div>
 
       <div class="modal-footer">
@@ -1860,7 +1918,6 @@ function persistChatState() {
         return a.created - b.created;
       });
     } else if (sortMode === 'most_recent') {
-      // Sort by last-modified time — most recently active chats first
       chats.sort((a, b) => b.modified - a.modified);
     } else if (sortMode === 'alphabetical') {
       chats.sort((a, b) => a.title.localeCompare(b.title));
@@ -4840,13 +4897,14 @@ function closeProjectModal() {
 
 function openEditProject(projectName) {
   currentEditingProject = projectName;
-  
+
   fetch(`/projects/get/${projectName}`)
     .then(res => res.json())
     .then(data => {
       document.getElementById('edit-project-name').value = projectName;
       document.getElementById('edit-project-instructions').value = data.instructions || '';
-      
+      document.getElementById('project-edit-panel-title').textContent = projectName;
+
       // Load RP mode state
       const rpMode = data.rp_mode || false;
       const rpBtn = document.getElementById('rp-mode-btn');
@@ -4856,15 +4914,15 @@ function openEditProject(projectName) {
       rpBtn.style.borderColor = rpMode ? '#22aa55' : '#555';
       document.getElementById('rp-opener-section').style.display = rpMode ? 'block' : 'none';
       document.getElementById('edit-project-rp-opener').value = data.rp_opener || '';
-      
-      // Load documents list
+
+      // Load documents and sticky docs
       loadProjectDocuments(projectName);
-      
-      // Load sticky docs state
       loadStickyDocsState(projectName);
-      
-      const modal = document.getElementById('edit-project-modal');
-      modal.style.display = 'block';
+
+      // Swap: hide grid and top strip, show edit panel
+      document.getElementById('project-modal-grid-wrap').style.display = 'none';
+      document.getElementById('project-modal-top').style.display = 'none';
+      document.getElementById('project-edit-panel').style.display = 'flex';
     })
     .catch(err => {
       console.error('Failed to load project:', err);
@@ -4872,10 +4930,18 @@ function openEditProject(projectName) {
     });
 }
 
-function closeEditProjectModal() {
-  const modal = document.getElementById('edit-project-modal');
-  modal.style.display = 'none';
+function closeInlineEdit() {
+  // Swap back: hide edit panel, show grid and top strip
+  document.getElementById('project-edit-panel').style.display = 'none';
+  document.getElementById('project-modal-grid-wrap').style.display = 'block';
+  document.getElementById('project-modal-top').style.display = 'flex';
   currentEditingProject = null;
+}
+
+function closeEditProjectModal() {
+  closeInlineEdit();
+  const modal = document.getElementById('edit-project-modal');
+  if (modal) modal.style.display = 'none';
 }
 
 function toggleRpMode() {
@@ -4912,7 +4978,7 @@ async function saveProjectEdit() {
     
     console.log('✅ Project updated:', currentEditingProject);
     
-    closeEditProjectModal();
+    closeInlineEdit();
     loadProjects();
     
   } catch (err) {

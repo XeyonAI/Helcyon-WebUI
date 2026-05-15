@@ -55,7 +55,7 @@
 </head>
 <body id="config-page">
   <div id="top-bar">
-    <div><strong>Character Settings</strong></div>
+    <div><strong>Settings</strong></div>
     <a id="settings-link" href="/">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
@@ -545,14 +545,26 @@
       <div id="tab-appearance" class="config-tab-panel">
         <h3>🎨 Appearance</h3>
 
-        <h4 style="color:#aaa; font-size:12px; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px; margin-top:0;">Background Image</h4>
-        <input type="file" id="bg-image-input" accept="image/*" style="display:none;" onchange="handleBgImageChange(this)">
-        <button onclick="document.getElementById('bg-image-input').click()" style="background-color: #3a2a5a; border-color: #6a4a9a; color: white; width:100%; margin-bottom:8px;">🖼️ Change Background</button>
-        <button onclick="clearBackground()" style="background-color: #3a3b3f; border-color: #555; color: #aaa; width:100%; font-size:12px; margin-bottom:20px;">✕ Clear Background</button>
+        <!-- Background Mode Toggle -->
+        <h4 style="color:#aaa; font-size:12px; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px; margin-top:0;">Background Mode</h4>
+        <div style="display:flex; gap:8px; margin-bottom:18px;">
+          <button id="bg-mode-colour-btn" onclick="setBgMode('colour')" style="flex:1; padding:7px 0; border-radius:5px; font-size:13px; cursor:pointer; border:1px solid #444; background:#1a3a2a; color:#6f6; font-weight:600;">🎨 Theme Colour</button>
+          <button id="bg-mode-image-btn" onclick="setBgMode('image')" style="flex:1; padding:7px 0; border-radius:5px; font-size:13px; cursor:pointer; border:1px solid #333; background:#2a2a2a; color:#aaa;">🖼️ Background Image</button>
+        </div>
 
-        <h4 style="color:#aaa; font-size:12px; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px;">Theme Editor</h4>
-        <p style="font-size:12px; color:#888; margin-top:-6px; margin-bottom:14px;">Customise colours, fonts, and UI variables for any theme. Changes apply live.</p>
-        <button onclick="openThemeModal()" style="background:#1e3a4a; border:1px solid #2a5068; color:#a0c8d8; width:100%; font-size:13px; padding:10px 0; border-radius:6px; cursor:pointer;">🎨 Open Theme Editor</button>
+        <!-- Colour mode info -->
+        <div id="bg-colour-section">
+          <p style="font-size:12px; color:#888; margin:0 0 10px;">Background colour is controlled by <strong style="color:#aaa;">Chat Panel BG</strong> in the Theme Editor.</p>
+          <button onclick="openThemeModal()" style="background:#1e3a4a; border:1px solid #2a5068; color:#a0c8d8; width:100%; font-size:13px; padding:10px 0; border-radius:6px; cursor:pointer;">🎨 Open Theme Editor</button>
+        </div>
+
+        <!-- Image mode -->
+        <div id="bg-image-section" style="display:none;">
+          <input type="file" id="bg-image-input" accept="image/*" style="display:none;" onchange="handleBgImageChange(this)">
+          <button onclick="document.getElementById('bg-image-input').click()" style="background-color: #3a2a5a; border-color: #6a4a9a; color: white; width:100%; margin-bottom:8px; padding:9px 0; border-radius:5px; font-size:13px; cursor:pointer;">🖼️ Choose Image</button>
+          <button onclick="clearBackground()" style="background-color: #3a3b3f; border-color: #555; color: #aaa; width:100%; font-size:12px; margin-bottom:14px; padding:7px 0; border-radius:5px; cursor:pointer;">✕ Clear Image</button>
+        </div>
+
       </div><!-- end tab-appearance -->
 
     </div><!-- end #container -->
@@ -1913,20 +1925,24 @@ function handleBgImageChange(input) {
   reader.onload = function(e) {
     const dataUrl = e.target.result;
     localStorage.setItem('hwui_bg_image', dataUrl);
+    localStorage.setItem('hwui_bg_mode', 'image'); // ensure mode is set
     applyBackground(dataUrl);
   };
   reader.readAsDataURL(file);
-  input.value = ''; // reset so same file can be picked again
+  input.value = '';
 }
 
 function applyBackground(dataUrl) {
+  let tag = document.getElementById('hwui-bg-style');
+  if (!tag) {
+    tag = document.createElement('style');
+    tag.id = 'hwui-bg-style';
+    document.head.appendChild(tag);
+  }
   if (dataUrl) {
-    document.body.style.backgroundImage = `url(${dataUrl})`;
-    document.body.style.backgroundSize = 'cover';
-    document.body.style.backgroundPosition = 'center';
-    document.body.style.backgroundAttachment = 'fixed';
+    tag.textContent = 'html, body { background-image: url("' + dataUrl + '") !important; background-size: cover !important; background-position: center !important; background-attachment: fixed !important; }';
   } else {
-    document.body.style.backgroundImage = '';
+    tag.textContent = 'html, body { background-image: none !important; }';
   }
 }
 
@@ -1935,10 +1951,36 @@ function clearBackground() {
   applyBackground(null);
 }
 
-// Apply on load
+function setBgMode(mode) {
+  localStorage.setItem('hwui_bg_mode', mode);
+  const colourBtn = document.getElementById('bg-mode-colour-btn');
+  const imageBtn = document.getElementById('bg-mode-image-btn');
+  const colourSection = document.getElementById('bg-colour-section');
+  const imageSection = document.getElementById('bg-image-section');
+
+  if (mode === 'colour') {
+    colourBtn.style.background = '#1a3a2a'; colourBtn.style.color = '#6f6'; colourBtn.style.borderColor = '#444'; colourBtn.style.fontWeight = '600';
+    imageBtn.style.background = '#2a2a2a'; imageBtn.style.color = '#aaa'; imageBtn.style.borderColor = '#333'; imageBtn.style.fontWeight = '';
+    colourSection.style.display = 'block';
+    imageSection.style.display = 'none';
+    applyBackground(null); // clears the !important style tag
+  } else {
+    imageBtn.style.background = '#1a3a2a'; imageBtn.style.color = '#6f6'; imageBtn.style.borderColor = '#444'; imageBtn.style.fontWeight = '600';
+    colourBtn.style.background = '#2a2a2a'; colourBtn.style.color = '#aaa'; colourBtn.style.borderColor = '#333'; colourBtn.style.fontWeight = '';
+    colourSection.style.display = 'none';
+    imageSection.style.display = 'block';
+    const saved = localStorage.getItem('hwui_bg_image');
+    if (saved) applyBackground(saved);
+  }
+}
+
+// Apply on load — respect saved mode
 (function() {
+  const mode = localStorage.getItem('hwui_bg_mode') || 'colour';
   const saved = localStorage.getItem('hwui_bg_image');
-  if (saved) applyBackground(saved);
+  if (mode === 'image' && saved) applyBackground(saved);
+  // Set button states once DOM is ready
+  window.addEventListener('DOMContentLoaded', () => setBgMode(mode));
 })();
 
 // --- THEME EDITOR ---
@@ -1991,6 +2033,7 @@ const THEME_VARS = [
   ]},
   { group: 'Project List (inside modal)', vars: [
     { key: '--project-item-bg',     label: 'Project Row BG' },
+    { key: '--project-edit-bg',     label: 'Project Edit Panel BG' },
     { key: '--project-item-hover',  label: 'Project Row Hover' },
     { key: '--project-item-border', label: 'Project Row Border' },
   ], preview: 'project' },
@@ -3093,6 +3136,7 @@ const THEME_SECTIONS = [
     vars: [
       { key: '--project-header-bg',  label: 'Header BG' },
       { key: '--project-item-bg',    label: 'Project Row BG' },
+      { key: '--project-edit-bg',    label: 'Project Edit Panel BG' },
       { key: '--project-item-hover', label: 'Project Row Hover' },
       { key: '--icon-button-bg',     label: 'Icon Btn BG' },
       { key: '--icon-button-hover',  label: 'Icon Btn Hover' },
