@@ -15,7 +15,7 @@
 
 A clean, powerful web interface designed specifically for [llama.cpp](https://github.com/ggerganov/llama.cpp) servers. Built to get out of the way and let you focus on conversations with your AI — no bloat, no unnecessary complexity.
 
-Optimized for [Helcyon](https://huggingface.co/XeyonAI) models, but works beautifully with any ChatML-compatible local LLM.
+Optimized for [Helcyon](https://huggingface.co/XeyonAI) models for web search, document and memory functionality — but works great with any local LLM.
 
 ---
 
@@ -38,9 +38,9 @@ Optimized for [Helcyon](https://huggingface.co/XeyonAI) models, but works beauti
 - **Custom System Prompts** — Full control via `system_prompt.txt`
 - **Markdown Rendering** — Full support for bold, italic, headers, bullet lists, separators and blockquotes
 - 📁 **Project Folders** — Organise chats by topic and inject documents (PDF, DOCX, MD, TXT, ODT) directly into conversation context
-- 🌐 **Web Search** — Real-time web search built in. Works just like Grok and ChatGPT — Helcyon searches and chats about the results. Compatible with Helcyon models (see [XeyonAI on HuggingFace](https://huggingface.co/XeyonAI))
+- 🌐 **Web Search** — Real-time web search built in. Works just like Grok and ChatGPT — Helcyon searches and chats about the results. Optimized for Helcyon models (see [XeyonAI on HuggingFace](https://huggingface.co/XeyonAI))
 
-### Pro Version (£20)
+### Pro Version (£25)
 
 Everything in Free, plus:
 
@@ -116,12 +116,13 @@ HWUI was built alongside the **Helcyon** model series — conversational local A
 
 Find all Helcyon models at [XeyonAI on HuggingFace](https://huggingface.co/XeyonAI).
 
-HWUI also works great with any ChatML-compatible model:
-- Mistral Nemo
-- Qwen
+HWUI works with any local model served via llama.cpp:
+- Mistral / Mistral Nemo
 - Llama 3
+- Qwen
 - Phi-4
-- Any other instruct-tuned model that supports ChatML format
+- Gemma
+- Any other model supported by llama.cpp
 
 ---
 
@@ -249,7 +250,7 @@ HWUI Pro is available under a separate proprietary license. See [Gumroad](https:
 - Implement features I don't personally need
 - Answer general coding questions
 
-**Want guaranteed support and advanced features?** → [HWUI Pro (£20)](https://xeyonai.gumroad.com/l/bsmupk) includes Memory and priority updates.
+**Want guaranteed support and advanced features?** → [HWUI Pro (£25)](https://xeyonai.gumroad.com/l/bsmupk) includes Memory and priority updates.
 
 **Want to modify it yourself?** → Fork the repo! GPL v3 means you're free to build your own version.
 
