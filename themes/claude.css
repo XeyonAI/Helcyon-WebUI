@@ -81,14 +81,14 @@ body {
   box-shadow: none !important;
   border-radius: 0 !important;
   padding: 0.5rem 1.5rem !important;
-  max-width: 900px !important;
+  max-width: 860px !important;
 }
 
 @media (max-width: 1400px) {
-  .chat-page #container, .chat-page #center-column { max-width: 800px !important; }
+  .chat-page #container, .chat-page #center-column { max-width: 860px !important; }
 }
 @media (max-width: 1024px) {
-  .chat-page #container, .chat-page #center-column { max-width: 680px !important; }
+  .chat-page #container, .chat-page #center-column { max-width: 860px !important; }
 }
 
 #chat {

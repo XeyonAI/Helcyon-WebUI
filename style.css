@@ -243,8 +243,8 @@ body {
 #container,
 #center-column {
   flex: 1;
-  max-width: 770px;
-  min-width: 600px;
+  max-width: 860px;
+  min-width: 480px;
   background-color: var(--container-bg);
   padding: 1.5rem;
   border-radius: 12px;
@@ -260,6 +260,14 @@ body {
 /* Config page: push #main content right to clear fixed sampling sidebar */
 #config-page #main {
   padding-left: 260px;
+}
+
+/* Config page has no inner #chat wrapper, so its content sits 48px wider
+   than the chat page (chat nests messages inside #chat, which adds 1.5rem
+   padding each side). Trim the config #container by that 48px so the
+   visible content width matches the chat page. 860 - 48 = 812. */
+#config-page #container {
+  max-width: 812px;
 }
 
 #center-column h3, #center-column h2, #center-column label {
