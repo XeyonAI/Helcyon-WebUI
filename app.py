@@ -1757,6 +1757,23 @@ def chat():
     # The multimodal content is preserved in active_chat for the vision path
     user_input = user_input_text
 
+    # 📄 An attached document ([ATTACHED DOCUMENT: …] block, folded into the
+    # user turn by the frontend) must NOT pollute user_input — that string
+    # drives doc-intent detection, memory retrieval, global-document retrieval
+    # and chat-search triggers, all of which would otherwise keyword-match
+    # against the document's full text and bleed unrelated docs/memories into
+    # the reply. The full block stays in active_chat untouched, so the model
+    # still reads the document; only the retrieval/intent query is cleaned.
+    # Mirrors the image handling above (text-only copy for processing).
+    _attached_doc_present = "[ATTACHED DOCUMENT:" in user_input
+    if _attached_doc_present:
+        user_input = re.sub(
+            r"\[ATTACHED DOCUMENT:.*?\[END ATTACHED DOCUMENT\]",
+            "", user_input, flags=re.DOTALL
+        ).strip()
+        print(f"📄 Attached document detected — retrieval/intent query cleaned "
+              f"to typed text only: {user_input[:120]!r}")
+
     clean_input = re.sub(r"<\|.*?\|>", "", user_input).strip()
     
     print(f"🔍 DEBUG: clean_input for memory detection: {clean_input[:100] if clean_input else '(empty)'}")
@@ -2074,6 +2091,14 @@ def chat():
     except Exception as e:
         print(f"⚠️ Global document load failed: {e}")
 
+    # 📄 An inline attached document is the user's explicit focus. Discard any
+    # project/global documents the retrieval system auto-loaded above so they
+    # cannot bleed into the reply alongside the attached document.
+    if _attached_doc_present and project_documents:
+        print(f"📄 Inline document attached — discarding {len(project_documents)} "
+              f"chars of auto-loaded project/global documents")
+        project_documents = ""
+
     # --------------------------------------------------
     # Load character card and build system_text
     # --------------------------------------------------
@@ -2333,6 +2358,18 @@ def chat():
     _cn_pre = char_data.get("character_note", "").strip()
     if _cn_pre:
         _reply_packet_overhead += rough_token_count(_cn_pre) + 20  # +20 for [OOC: Character note — …] wrapper
+    _gph_pre = ""
+    try:
+        _gph_sp = char_data.get("system_prompt") or get_active_prompt_filename()
+        _gph_base = _gph_sp.rsplit('.', 1)[0] if '.' in _gph_sp else _gph_sp
+        _gph_path = os.path.join(get_system_prompts_dir(), _gph_base + '.posthistory.txt')
+        if os.path.exists(_gph_path):
+            with open(_gph_path, 'r', encoding='utf-8') as _gphf:
+                _gph_pre = _gphf.read().strip()
+    except Exception:
+        _gph_pre = ""
+    if _gph_pre:
+        _reply_packet_overhead += rough_token_count(_gph_pre) + 30  # +30 for [OOC: System directive …] wrapper
     if _reply_packet_overhead:
         _reply_packet_overhead += 20   # [REPLY INSTRUCTIONS] header + separators
         _ex_overhead += _reply_packet_overhead
@@ -2658,9 +2695,12 @@ def chat():
     # stays `S U A U A … U` and the prompt-structure diagnostic below is
     # satisfied. Items are ordered least → most attention, so the field the
     # model needs to obey most strongly lands closest to its generation point:
-    #   1. project_instructions  (broad context, lowest urgency)
-    #   2. style reminder        (points back to the fake example-dialogue turns at the start of history)
-    #   3. post_history          (top behavioural priority — placed last)
+    #   1. style reminder        (lowest urgency)
+    #   2. post_history          (per-character)
+    #   3. project_instructions
+    #   4. post-history directive (highest urgency — placed last, closest to
+    #                              generation; paired .posthistory.txt file,
+    #                              SillyTavern-style)
     # Empty fields are skipped; if none are set the packet isn't built.
     # The style reminder is a pointer, not a re-injection — the example
     # dialogue samples themselves live as fake conversation turns inserted
@@ -2671,9 +2711,6 @@ def chat():
     # here cost ~539 tokens per turn and was reverted.
     # ───────────────────────────────────────────────────────────────────────
     _reply_instr_items = []
-
-    if project_instructions and project_instructions.strip():
-        _reply_instr_items.append(f"[OOC: Reminder — project context: {project_instructions.strip()}]")
 
     if char_data.get("example_dialogue", "").strip():
         _reply_instr_items.append(
@@ -2687,6 +2724,40 @@ def chat():
         _ph_val = re.sub(r'<\|im_end\|>', '', _ph_val).strip()
         if _ph_val:
             _reply_instr_items.append(f"[OOC: Post-history reminder — {_ph_val}]")
+
+    if project_instructions and project_instructions.strip():
+        _reply_instr_items.append(f"[OOC: Reminder — project context: {project_instructions.strip()}]")
+
+    # Post-history directive — paired with the active system prompt TEMPLATE
+    # via a `<base>.posthistory.txt` file alongside the template (same pattern
+    # as `.example.txt`). Loading the GPT-4o template loads its post-history;
+    # switching templates switches it. SillyTavern-style hard system
+    # instruction. Appended LAST in the packet — the final thing the model
+    # reads before generating, the highest-priority slot in the prompt.
+    # Overrides character and project text. Resolution mirrors the example-
+    # dialogue fallback: character-bound system prompt if set, else the
+    # globally active template.
+    _gph_val = ""
+    try:
+        _ph_sp = char_data.get("system_prompt") or get_active_prompt_filename()
+        _ph_base = _ph_sp.rsplit('.', 1)[0] if '.' in _ph_sp else _ph_sp
+        _ph_path = os.path.join(get_system_prompts_dir(), _ph_base + '.posthistory.txt')
+        if os.path.exists(_ph_path):
+            with open(_ph_path, 'r', encoding='utf-8') as _phf:
+                _gph_val = _phf.read().strip()
+            if _gph_val:
+                print(f"📌 Post-history directive loaded from {_ph_base}.posthistory.txt")
+    except Exception as _phe:
+        print(f"⚠️ Could not load post-history directive: {_phe}")
+        _gph_val = ""
+    if _gph_val:
+        _gph_val = re.sub(r'<\|im_start\|>\w*', '', _gph_val)
+        _gph_val = re.sub(r'<\|im_end\|>', '', _gph_val).strip()
+    if _gph_val:
+        _reply_instr_items.append(
+            f"[OOC: System directive — highest priority. Overrides character "
+            f"and project instructions. {_gph_val}]"
+        )
 
     if _reply_instr_items and prompt_parts:
         _packet = "\n\n".join(_reply_instr_items) + "\n\n"
@@ -4230,7 +4301,12 @@ def set_active_prompt_filename(filename):
 def list_system_prompts():
     folder = get_system_prompts_dir()
     os.makedirs(folder, exist_ok=True)
-    files = sorted([f for f in os.listdir(folder) if f.endswith('.txt') and not f.endswith('.example.txt')])
+    files = sorted([
+        f for f in os.listdir(folder)
+        if f.endswith('.txt')
+        and not f.endswith('.example.txt')
+        and not f.endswith('.posthistory.txt')
+    ])
     active = get_active_prompt_filename()
     return jsonify({'files': files, 'active': active})
 
@@ -4279,6 +4355,12 @@ def delete_system_prompt(filename):
     if not os.path.exists(path):
         return jsonify({'error': 'File not found'}), 404
     os.remove(path)
+    # Clean up the paired post-history file so it doesn't orphan
+    _base = filename.rsplit('.', 1)[0] if '.' in filename else filename
+    _ph_path = os.path.join(folder, _base + '.posthistory.txt')
+    if os.path.exists(_ph_path):
+        os.remove(_ph_path)
+        print(f'🗑️ Deleted paired post-history: {_base}.posthistory.txt')
     # If deleted file was active, fall back to default.txt
     if get_active_prompt_filename() == filename:
         set_active_prompt_filename('default.txt')
@@ -4322,6 +4404,47 @@ def save_system_prompt_example(filename):
         f.write(data)
     print(f'✅ Saved example dialog: {example_filename}')
     return jsonify({'status': 'saved', 'filename': example_filename})
+
+@app.route('/system_prompts/load_posthistory/<filename>', methods=['GET'])
+def load_system_prompt_posthistory(filename):
+    """Load the paired .posthistory.txt for a system prompt template.
+    This is the SillyTavern-style post-history directive — it rides the [OOC]
+    depth-0 packet (last item, closest to generation) rather than the system
+    block, but it is stored alongside its template so switching templates
+    switches the directive."""
+    if '..' in filename or '/' in filename or os.sep in filename:
+        return jsonify({'error': 'Invalid filename'}), 400
+    base = filename.rsplit('.', 1)[0] if '.' in filename else filename
+    ph_filename = base + '.posthistory.txt'
+    folder = get_system_prompts_dir()
+    path = os.path.join(folder, ph_filename)
+    if not os.path.exists(path):
+        return '', 200, {'Content-Type': 'text/plain; charset=utf-8'}  # empty = none yet
+    with open(path, 'r', encoding='utf-8') as f:
+        return f.read(), 200, {'Content-Type': 'text/plain; charset=utf-8'}
+
+@app.route('/system_prompts/save_posthistory/<filename>', methods=['POST'])
+def save_system_prompt_posthistory(filename):
+    """Save the paired .posthistory.txt for a system prompt template.
+    If content is empty, deletes the file rather than writing a blank one."""
+    if '..' in filename or '/' in filename or os.sep in filename:
+        return jsonify({'error': 'Invalid filename'}), 400
+    base = filename.rsplit('.', 1)[0] if '.' in filename else filename
+    ph_filename = base + '.posthistory.txt'
+    folder = get_system_prompts_dir()
+    os.makedirs(folder, exist_ok=True)
+    data = request.get_data(as_text=True).strip()
+    path = os.path.join(folder, ph_filename)
+    if not data:
+        # Empty content — delete the file if it exists, don't create a blank one
+        if os.path.exists(path):
+            os.remove(path)
+            print(f'🗑️ Deleted empty post-history: {ph_filename}')
+        return jsonify({'status': 'saved', 'filename': ph_filename})
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(data)
+    print(f'✅ Saved post-history directive: {ph_filename}')
+    return jsonify({'status': 'saved', 'filename': ph_filename})
 
 # Legacy route - kept for backwards compatibility
 @app.route('/system_prompt.txt', methods=['GET', 'POST'])

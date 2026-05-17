@@ -1,3 +1,221 @@
+## May 17 2026 — Attached Document Polluted Retrieval Query
+
+**File:** app.py
+
+With the inline document-attach feature, the document text is folded into the
+latest user turn. The backend extracts `user_input` from that turn (app.py
+~1815) and uses it as the query for **doc-intent detection, memory retrieval,
+global/project-document retrieval, and chat-search triggers**. So all those
+systems were keyword-matching against the *entire attached document's text*
+instead of the user's typed question — pulling unrelated documents, memories
+and old-chat snippets into the prompt. Symptom: model answers about the
+attached document but bleeds in unrelated injected content.
+
+**Fix (two parts):**
+- `user_input` now has `[ATTACHED DOCUMENT: …] … [END ATTACHED DOCUMENT]`
+  blocks stripped before any string/intent/retrieval processing — so doc
+  intent, memory retrieval and chat-search triggers score against the typed
+  query only. The full block stays in `active_chat`, so the model still reads
+  the document. Mirrors the existing image handling (text-only copy for
+  processing).
+- When an inline document is attached, `project_documents` (project + global
+  auto-loaded docs) is cleared — the attached document is the user's explicit
+  focus, so auto-retrieved documents must not ride alongside it.
+
+`_attached_doc_present` flag drives both. Verbose logging added for each.
+
+---
+
+## May 17 2026 — Trim Bug: Oversized Latest Turn Dropped Whole
+
+**File:** truncation.py
+
+`trim_chat_history` walked messages newest-first and `break`d the moment one
+exceeded `conversation_budget`. If the **latest** user turn alone exceeded the
+budget, the loop broke on iteration 1 — `trimmed` came back empty, only the
+system message survived, and the model received **no user turn at all** (no
+question, no content) → ungrounded hallucination.
+
+This surfaced via the new document-attach feature: an attached document rides
+inside the latest user turn and a real document easily exceeds the ~6–7k-token
+conversation budget, so the whole turn (document + question) was silently
+dropped. The model then replied only "in the ballpark" — riffing on nothing.
+
+**Fix:** the loop now always keeps the latest turn (`body[-1]`) even if it
+alone busts the budget — added an `and trimmed` guard so the budget check only
+applies once at least one message is held. Logs a ⚠️ warning when the latest
+turn is kept oversized. This restores the invariant app.py's final word-clamp
+already enforces ("Always keep at least the final user turn"); the two trim
+layers are now consistent. Also benefits any long single message, not just
+documents.
+
+⚠️ Known limit: a document large enough that the turn overflows the full
+context window (~16k) will still be cut by llama.cpp / hit the EOS cliff —
+very large docs need chunking, out of scope here.
+
+---
+
+## May 17 2026 — Inline Document Attach Restored + Dead Modal Removed
+
+**File:** templates/index.html
+
+### Removed dead `#edit-project-modal`
+The standalone "Edit Project Modal" (`#edit-project-modal`) was orphaned by the
+May 15 project-modal redesign — the live editor is the inline
+`#project-edit-panel`, and nothing opened the old modal. It was removed whole
+(~67 lines), along with its now-unused `closeEditProjectModal()` function.
+This was the sole source of **8 duplicate element ids** (`edit-project-name`,
+`edit-project-instructions`, `rp-mode-btn`, `rp-opener-section`,
+`edit-project-rp-opener`, `sticky-docs-btn`, `document-upload`,
+`documents-list`) — all now unique.
+
+### Restored the inline document-attach feature
+The chat-level document upload (separate from project documents) lost its
+frontend in the UI redesign. The backend `/parse_document` route was always
+intact — only the UI + JS wiring needed rebuilding.
+
+- **"📄 Attach Document"** button added to the input `+` menu, next to
+  Attach Image. Hidden input `#chat-document-input` (.txt/.md/.pdf/.docx/.odt).
+- `handleDocumentAttach` → POSTs each file to `/parse_document`, stores the
+  returned `{filename, content}` in `window.attachedDocuments`, shows a chip
+  in a new `#document-preview-strip` (mirrors the image preview strip).
+- On send, the document text is folded into the user turn's content wrapped in
+  `[ATTACHED DOCUMENT: …] … [END ATTACHED DOCUMENT]` markers — so the model
+  reads it. **One-shot:** it lives in that single message (and the saved chat
+  file) as ordinary history — NOT re-injected per turn like project sticky docs.
+- The document renders as a **clickable card above the user message**;
+  clicking opens `#document-viewer-modal` to read the full text.
+- `renderChatMessages` parses the markers back out (`extractAttachedDocuments`),
+  so the card + reader survive reload — the markers travel in the message text,
+  not a structured field.
+- ⚠️ Editing a user message that has an attached document drops the document
+  (the edit captures only the doc-stripped text). Acceptable edge case.
+
+---
+
+## May 17 2026 — Fictional Sample Data Added to Dev Build
+
+**Files:** settings.json (new), system_prompts/default.txt,
+system_prompts/default.example.txt (new), system_prompts/default.posthistory.txt
+(new), characters/Helcyon.json
+
+The dev build is intentionally data-free structural scaffolding. Populated the
+real files with **fictional** sample content so prompt assembly can be traced
+and tested end-to-end (previously every settings-dependent code path fell to
+its `except` branch, hiding bugs). All content is invented — no personal data.
+
+- **settings.json** — created with the full key set. Machine-specific paths
+  (`llama_last_model`, `llama_server_exe`, `llama_models_dir`, `mmproj_path`)
+  left empty on purpose: auto-launch then skips gracefully. `chat_template`
+  is `chatml`, `ctx_size` 16384, `backend_mode` `local`.
+- **default.txt** — expanded from a 2-line placeholder to a realistic system
+  prompt. Includes several negatively-phrased hard rules ("Never…", "Do not…",
+  "must not…") so the restriction-anchor extraction has something to catch.
+- **default.example.txt** — paired example dialogue, two `<START>` blocks.
+- **default.posthistory.txt** — paired post-history directive exercising the
+  new feature: the vent-first / no-markdown-on-emotional-content rules.
+- **Helcyon.json** — fleshed out to a structurally complete card: every field
+  the prompt builder reads is now populated (`personality`, `scenario`,
+  `post_history`, `character_note`, `use_*` flags, etc.).
+
+⚠️ This sample data propagates into the personal and public builds via the
+zip/extract pipeline — that is expected and approved (fictional, harmless).
+
+---
+
+## May 17 2026 — Post-History Directive (SillyTavern-style, per-template)
+
+**Files:** app.py, templates/config.html
+
+A post-history system directive **paired with each system prompt template** —
+stored as a `<base>.posthistory.txt` file alongside the template, exactly the
+same pattern as the existing `.example.txt` paired example dialogue. Load the
+GPT-4o template → its post-history loads with it; switch templates → the
+directive switches too.
+
+**Where it lands:** it is NOT in the system block. It is appended as the LAST
+item of the [OOC] depth-0 packet (after project_instructions), folded into the
+last user turn — the closest-to-generation slot in the whole prompt, so it
+carries the highest behavioural priority of any field. Wrapped as
+`[OOC: System directive — highest priority. Overrides character and project
+instructions. …]`. ChatML tokens stripped from the value.
+
+**Resolution:** mirrors the example-dialogue priority-3 fallback — uses the
+character-bound system prompt (`char_data["system_prompt"]`) if set, else the
+globally active template.
+
+**app.py**
+- Packet builder: reads `<base>.posthistory.txt` for the active template,
+  appends it last in `_reply_instr_items`. Comment block above the builder
+  shows the 4-item ordering (style → post_history → project → post-history
+  directive).
+- Pre-trim overhead: the directive's token count +30 wrapper is pre-accounted
+  in `_reply_packet_overhead` so the trimmer doesn't under-estimate.
+- `list_system_prompts`: now also excludes `*.posthistory.txt` so paired files
+  don't show up as selectable templates.
+- `delete_system_prompt`: deletes the paired `.posthistory.txt` so it doesn't
+  orphan when its template is removed.
+- New routes `/system_prompts/load_posthistory/<filename>` and
+  `/system_prompts/save_posthistory/<filename>` — direct mirror of the
+  load_example/save_example routes. Empty save deletes the file rather than
+  writing a blank one.
+
+**templates/config.html**
+- New "Post-History Instructions" textarea on the System Prompt tab, below
+  Global Example Dialog, with its own Save button + status line.
+- Loaded by `loadSelectedSystemPrompt()` alongside the template text and
+  example dialogue; saved by `saveGlobalSystemPrompt()` and
+  `saveSystemPromptAs()` alongside them too.
+- `loadGlobalPostHistory()` / `saveGlobalPostHistory()` JS helpers mirror the
+  example-dialogue equivalents (save targets the selected template's paired
+  file); `loadGlobalPostHistory()` added to the init sequence.
+
+**Reason:** character-card behavioural instructions sit at the top of the
+system block — the most attention-starved position — and positive-phrased
+rules (e.g. "vent before pivoting") are not caught by the restriction anchor,
+so they get zero reinforcement. Pairing the directive with the template means
+each model (GPT-4o, etc.) gets its own hard system rules that reliably land
+closest to generation, switching automatically with the template.
+
+**Usage (how to set one up):**
+1. Create the template first — type the system prompt, "Save As New Template",
+   name it (e.g. `gpt-4o`). The `.posthistory.txt` filename is derived from the
+   *selected template's filename*, NOT from the post-history text.
+2. With that template selected in the dropdown, type the post-history and click
+   "💾 Save Post-History" → writes `<base>.posthistory.txt`.
+3. Click "✅ Activate" — saving the file is not the same as activating the
+   template; the model only reads the post-history of the active (or
+   character-bound) template.
+- ⚠️ "💾 Update" and "Save As New Template" save prompt + example dialogue +
+  post-history together in one go, all paired to that template name.
+- ⚠️ An empty post-history box DELETES `<base>.posthistory.txt` rather than
+  writing a blank file.
+- ⚠️ "Paired" (filename ↔ template) is NOT the same as "Bound" (the existing
+  character-to-system-prompt binding, the 🔗 indicator). Saving a post-history
+  file binds nothing to a character.
+
+---
+
+## May 16 2026 — OOC Packet: Project Instructions Priority Bump
+
+**File:** app.py (~line 2898)
+
+Swapped ordering of items in the depth-0 [REPLY INSTRUCTIONS] OOC packet.
+Project instructions moved from first position (lowest urgency) to last (highest urgency, closest to generation point).
+
+New order:
+1. Style reminder (example_dialogue) — lowest urgency
+2. post_history
+3. project_instructions — highest urgency, closest to generation point
+
+**Reason:** Project folder instructions were being ignored (e.g. "log date and time" directive not followed).
+Root cause: first item in packet = furthest from generation = least attended. Moving to last fixes this.
+post_history is now lower priority — acceptable since it's rarely used and chat session summaries cover that role anyway.
+
+Updated comment block above the packet builder to reflect new ordering.
+
+---
+
 ## Session: May 15 2026 — UI Redesign Session
 
 ### `config.html`
@@ -1849,3 +2067,34 @@ Root cause: memory confirmation handler calling `fetchAndDisplayResponse()` with
 - Added detection for missing final closing tag
 - Fixed doubled im_end detection to catch newline-separated doubles
 - Fixed block check to use blocks[1:-1] — final block no longer false-positives
+
+---
+
+## Session: May 16 2026 — Ren'Py LoRA Training + Paste Display Fix
+
+### Helcyon Training — Ren'Py Script Continuation LoRA
+- Community feedback received: user requested Ren'Py 7 script continuation capability (continue .rpy files as drop-in valid script, no commentary)
+- Root cause identified: models defaulting to prose narration or commentary instead of raw script output — behavioural problem from RLHF, not a capability gap
+- Created dedicated Ren'Py training set: 35 ChatML shards + 8 DPO pairs (43 files total)
+- ChatML shards cover: scene continuation, new scene from spec, menu branching, Python variables/conditionals, multi-scene sequences, varied genres (fantasy, sci-fi, horror, drama, comedy, historical, contemporary)
+- DPO pairs target specific failure modes: preamble/commentary, markdown code fences, mid-scene narration, stopping to ask for confirmation, summarising input before continuing, offering multiple options instead of writing
+- LoRA trained: r=16, lora_alpha=32, lr=2e-4, 5 epochs on RunPod A100
+- Merged into Nebula at 0.85 (creative writing LoRA stack position, after RP layer) — partial improvement, prose still bleeding into show statements
+- Remerged at 0.95 — further improvement, structure correct, but show statements still contain prose descriptions as invented syntax
+- Conclusion: base knowledge partially present but not strong enough for LoRA to fully surface — full weight training required for clean consistent output
+- Plan: full weight run to be done regardless; freelance offer made to community user who requested the feature
+- Current Nebula release: meaningful improvement over untrained model, viable for users willing to clean up occasional show statement syntax
+
+**Key learning: LoRA merge scale for narrow task LoRAs**
+- r=16 at 0.95 on a dedicated narrow-task LoRA does not bleed into normal conversation tone
+- Low rank contains the footprint — safe to go to 0.95-1.0 for format-specific tasks
+- General personality LoRAs still need lower scales (0.65-0.75) to avoid tone bleed
+
+### `index.html`
+**Fix: Pasted multiline content (e.g. code, Ren'Py script) displayed collapsed in user bubble**
+- Root cause: user bubble built with `innerHTML` which collapses `\n` to spaces in HTML rendering
+- Fix: newlines converted to `<br>` before setting innerHTML in the user message bubble
+- Change: `input.replace(/\*(.*?)\*/gs, "<em>$1</em>")` → `input.replace(/\n/g, "<br>").replace(/\*(.*?)\*/gs, "<em>$1</em>")`
+- Display only fix — content sent to model was always correct, this was purely visual
+- Quality of life improvement: pasted code, scripts, and multiline prompts now display correctly in chat
+

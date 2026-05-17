@@ -1171,6 +1171,65 @@ small {
   color: #fff;
 }
 
+
+/* Project item colour tinting */
+.project-item.tinted {
+  background: var(--project-tint-color) !important;
+}
+
+/* Project colour picker context menu */
+#project-color-menu {
+  position: fixed;
+  z-index: 9999;
+  background: #1a2a36;
+  border: 1px solid #3a5a6a;
+  border-radius: 8px;
+  padding: 10px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 160px;
+}
+#project-color-menu.visible {
+  display: flex;
+}
+#project-color-menu .color-menu-label {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+#project-color-menu .color-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+#project-color-menu .color-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: transform 0.1s, border-color 0.1s;
+}
+#project-color-menu .color-swatch:hover {
+  transform: scale(1.2);
+  border-color: rgba(255,255,255,0.5);
+}
+#project-color-menu .color-clear {
+  font-size: 12px;
+  color: #aaa;
+  cursor: pointer;
+  padding: 3px 0;
+  text-align: center;
+  border-top: 1px solid #2a3a46;
+  margin-top: 2px;
+}
+#project-color-menu .color-clear:hover {
+  color: #fff;
+}
+
 .chat-item-content {
   display: flex;
   flex-direction: column;
@@ -2196,9 +2255,18 @@ hr.msg-separator {
   border-color: #555;
 }
 .project-item.is-active {
-  border-color: #2a6a4a;
+  border-color: #3a8a6a;
   background: rgba(26,58,42,0.5);
   cursor: default;
+}
+/* Tinted active: brighten the tint instead of overriding with green */
+.project-item.tinted.is-active {
+  filter: brightness(1.6);
+  border-color: rgba(255,255,255,0.25);
+  background: var(--project-tint-color) !important;
+}
+.project-item.tinted:hover {
+  filter: brightness(1.3);
 }
 .project-name-section {
   display: flex;
@@ -2485,9 +2553,18 @@ hr.msg-separator {
   border-color: #555;
 }
 .project-item.is-active {
-  border-color: #2a6a4a;
+  border-color: #3a8a6a;
   background: rgba(26,58,42,0.5);
   cursor: default;
+}
+/* Tinted active: brighten the tint instead of overriding with green */
+.project-item.tinted.is-active {
+  filter: brightness(1.6);
+  border-color: rgba(255,255,255,0.25);
+  background: var(--project-tint-color) !important;
+}
+.project-item.tinted:hover {
+  filter: brightness(1.3);
 }
 
 

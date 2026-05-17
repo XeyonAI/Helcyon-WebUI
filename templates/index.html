@@ -5,6 +5,43 @@
   <title>Helcyon-WebUI</title>
   <link rel="stylesheet" href="/style.css?v=19">
   <link rel="stylesheet" href="/theme-files/midnight.css" id="active-theme-link">
+  <style>
+    /* Cog dropdown menu — converted from the old #settings-link <a>.
+       Declared after style.css so #cog-menu svg overrides #settings-link svg. */
+    #settings-link { position: relative; cursor: pointer; }
+    #cog-menu svg { width: 16px; height: 16px; flex-shrink: 0; }
+    .cog-menu-item {
+      display: flex; align-items: center; gap: 8px;
+      box-sizing: border-box;
+      padding: 7px 9px; border-radius: 6px;
+      font-size: 13px; text-decoration: none;
+      color: var(--text-main, var(--modal-text, #e8e8e8));
+    }
+    .cog-menu-item:hover { background: var(--sidebar-button-hover, #2D3E4F); }
+    .cog-menu-label {
+      padding: 9px 9px 4px 9px;
+      font-size: 10px; font-weight: 700; letter-spacing: 0.6px;
+      text-transform: uppercase;
+      color: var(--text-muted, #8a8a8a);
+    }
+    #cog-theme-list .cog-theme-btn {
+      box-sizing: border-box;
+      width: 100%; text-align: left;
+      padding: 5px 10px !important;
+      font-size: 13px !important;
+      margin: 0 !important;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--modal-border);
+      border-radius: 6px;
+      color: var(--text-main, var(--modal-text, #e8e8e8));
+      cursor: pointer;
+    }
+    #cog-theme-list .cog-theme-btn:hover { background: var(--sidebar-button-hover, #2D3E4F); }
+    #cog-theme-list .cog-theme-btn.active {
+      background: var(--sidebar-button-hover, #2D3E4F);
+      font-weight: bold;
+    }
+  </style>
   <script>
     // Always fetch active theme with cache-bust so saved changes appear immediately
     fetch('/themes/list').then(r=>r.json()).then(d=>{
@@ -113,12 +150,24 @@
         <button onclick="closeModelPicker()" style="background:transparent; border:1px solid var(--modal-border, #2d394b); color:#aaa; border-radius:6px; padding:3px 10px; font-size:11px; cursor:pointer; margin:0;">Close</button>
       </div>
     </div>
-    <a id="settings-link" href="/config">
+    <div id="settings-link" onclick="toggleCogMenu(event)" title="Settings">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
         <circle cx="12" cy="12" r="3"></circle>
       </svg>
-    </a>
+      <!-- Cog dropdown menu -->
+      <div id="cog-menu" style="display:none; position:absolute; top:100%; right:0; margin-top:10px; width:200px; box-sizing:border-box; padding:8px; background:var(--modal-bg); border:1px solid var(--modal-border); border-radius:10px; box-shadow:0 8px 32px rgba(0,0,0,0.5); z-index:2000;">
+        <a href="/config" class="cog-menu-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
+            <circle cx="12" cy="12" r="3"></circle>
+          </svg>
+          <span>Config Page</span>
+        </a>
+        <div class="cog-menu-label">Theme</div>
+        <div id="cog-theme-list" style="display:flex; flex-direction:column; gap:4px;"></div>
+      </div>
+    </div>
   </div>
   <!-- Layout -->
   <div id="app">
@@ -197,8 +246,12 @@
           <!-- Image Preview Strip -->
           <div id="image-preview-strip" style="display:none;padding:6px 0;gap:8px;flex-wrap:wrap;max-width:760px;width:100%;pointer-events:all;"></div>
 
+          <!-- Document Preview Strip -->
+          <div id="document-preview-strip" style="display:none;padding:6px 0;gap:8px;flex-wrap:wrap;max-width:760px;width:100%;pointer-events:all;"></div>
+
           <!-- Hidden file input -->
           <input type="file" id="chat-image-input" accept="image/*" multiple style="display:none;" onchange="handleImageAttach(this)" />
+          <input type="file" id="chat-document-input" accept=".txt,.md,.pdf,.docx,.odt" multiple style="display:none;" onchange="handleDocumentAttach(this)" />
 
           <!-- Floating pill -->
           <div id="input-row" style="pointer-events:all;display:flex;flex-direction:row;align-items:center;gap:6px;background:var(--container-bg,#131922);border:1px solid var(--sidebar-border,#2a2a2a);border-radius:16px;padding:8px 10px;box-shadow:0 4px 24px rgba(0,0,0,0.5);width:100%;max-width:760px;box-sizing:border-box;overflow:visible;">
@@ -213,6 +266,7 @@
               </button>
               <div id="input-menu" class="input-dropup">
                 <button onclick="document.getElementById('chat-image-input').click(); closeInputMenu()" title="Attach Image">📎 Attach Image</button>
+                <button onclick="document.getElementById('chat-document-input').click(); closeInputMenu()" title="Attach a document for the model to read">📄 Attach Document</button>
                 <div class="input-menu-divider"></div>
                 <button onclick="manualSaveChat(); closeInputMenu()" id="save-chat-btn">💾 Save Chat</button>
                 <button onclick="showUpgradeModal('memory'); closeInputMenu()" title="Upgrade to HWUI Pro">Memory ⭐Go Pro</button>
@@ -472,78 +526,26 @@ Examples:
     </div>
   </div>
 
- 
-<!-- Edit Project Modal -->
-  <div id="edit-project-modal" class="modal">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h3>Edit Project</h3>
-        <span class="close" onclick="closeEditProjectModal()">&times;</span>
-      </div>
-      
-      <div class="modal-body">
-        <label>Project Name</label>
-        <input type="text" id="edit-project-name" readonly style="background: #0a0a0a; color: #666;">
-        
-        <label>Instructions</label>
-        <textarea id="edit-project-instructions" rows="10" placeholder="Project instructions..."></textarea>
-        
-        <hr style="margin: 16px 0; border-color: #333;">
-
-        <!-- RP Mode Toggle -->
-        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding: 10px 14px; background: rgba(255,255,255,0.05); border-radius: 6px; border: 1px solid #333;">
-          <span style="font-size: 18px;">🎭</span>
-          <div style="flex: 1;">
-            <div style="color: #ddd; font-size: 14px; font-weight: 600;">Roleplay Mode</div>
-            <div style="color: #888; font-size: 12px;">Inject an opening scene at the start of every new chat</div>
-          </div>
-          <button id="rp-mode-btn" onclick="toggleRpMode()" style="padding: 6px 14px; border-radius: 4px; border: 1px solid #555; background: #3a3b3f; color: #aaa; cursor: pointer; font-size: 13px; transition: all 0.2s;">OFF</button>
-        </div>
-        <div id="rp-opener-section" style="display: none; margin-bottom: 4px;">
-          <label>Opening Scene</label>
-          <textarea id="edit-project-rp-opener" rows="4" placeholder="*Lucy walks into the room and smiles at you* Hey, how's it going? *She pours herself a drink and takes a seat*"></textarea>
-          <small style="color: #888; display: block; margin-top: 4px; margin-bottom: 12px;">Shown in chat as the character's first message — sets the scene and formatting style.</small>
-        </div>
-
-        <hr style="margin: 20px 0; border-color: #333;">
-        
-        <h4 style="margin-bottom: 10px;">Project Documents</h4>
-        <small style="color: #888; display: block; margin-bottom: 15px;">
-          Upload documents that the model can reference during conversations.
-        </small>
-
-        <!-- Sticky Docs Toggle -->
-        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding: 10px 14px; background: rgba(255,255,255,0.05); border-radius: 6px; border: 1px solid #333;">
-          <span style="font-size: 18px;">📌</span>
-          <div style="flex: 1;">
-            <div style="color: #ddd; font-size: 14px; font-weight: 600;">Sticky Document Mode</div>
-            <div style="color: #888; font-size: 12px;">Keep all documents loaded for every message in this project</div>
-          </div>
-          <button id="sticky-docs-btn" onclick="toggleStickyDocs()" style="padding: 6px 14px; border-radius: 4px; border: 1px solid #555; background: #3a3b3f; color: #aaa; cursor: pointer; font-size: 13px; transition: all 0.2s;">
-            OFF
-          </button>
-        </div>
-        
-        <input type="file" id="document-upload" accept=".txt,.md,.pdf,.docx,.odt" style="display: none;">
-        <button onclick="document.getElementById('document-upload').click()" class="upload-doc-btn">
-          📁 Upload Document
-        </button>
-        
-        <div id="documents-list" style="margin-top: 15px;">
-          <!-- Documents will be listed here -->
-        </div>
-      </div>
-      
-      <div class="modal-footer">
-        <button onclick="saveProjectEdit()" class="save-btn">Save Changes</button>
-        <button onclick="closeEditProjectModal()" class="cancel-btn">Cancel</button>
-      </div>
-    </div>
-  </div>
 <!-- Memory Modal -->
 <!-- Avatar Lightbox -->
 <div id="avatar-lightbox">
   <img id="avatar-lightbox-img" src="" alt="Avatar">
+</div>
+
+<!-- Document Viewer Modal — opened by clicking an attached-document card -->
+<div id="document-viewer-modal" class="modal">
+  <div class="modal-content" style="max-width:760px;">
+    <div class="modal-header">
+      <h3 id="document-viewer-title" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📄 Document</h3>
+      <span class="close" onclick="closeDocumentViewer()">&times;</span>
+    </div>
+    <div class="modal-body">
+      <pre id="document-viewer-content" style="white-space:pre-wrap;word-wrap:break-word;max-height:60vh;overflow-y:auto;background:#0a0d10;border:1px solid #2a2a2a;border-radius:6px;padding:14px;font-size:13px;line-height:1.5;color:#ddd;margin:0;"></pre>
+    </div>
+    <div class="modal-footer">
+      <button onclick="closeDocumentViewer()" class="cancel-btn">Close</button>
+    </div>
+  </div>
 </div>
 
 <!-- Upgrade to Pro Modal -->
@@ -647,6 +649,136 @@ function renderImagePreviews() {
     wrapper.appendChild(removeBtn);
     strip.appendChild(wrapper);
   });
+}
+
+// ================================================
+// DOCUMENT ATTACH SYSTEM (one-shot — model reads it once)
+// ================================================
+// Documents are uploaded, parsed server-side (/parse_document), and folded
+// into the next user turn wrapped in [ATTACHED DOCUMENT: …] markers. They
+// render as clickable cards above the user message; clicking opens a reader.
+// "One-shot" — the doc lives in that single turn's content (and the saved
+// chat file), read as normal history thereafter. No sticky re-injection.
+window.attachedDocuments = []; // array of {filename, content}
+
+var DOC_ATTACH_RE = /\[ATTACHED DOCUMENT: ([^\]\n]+)\]\n([\s\S]*?)\n\[END ATTACHED DOCUMENT\]/g;
+
+// Wrap pending attached documents into marker blocks for the model/history.
+function wrapAttachedDocuments(docs) {
+  return docs.map(function(d) {
+    return '[ATTACHED DOCUMENT: ' + d.filename + ']\n' + d.content + '\n[END ATTACHED DOCUMENT]';
+  }).join('\n\n');
+}
+
+// Pull [ATTACHED DOCUMENT: …] blocks out of a message string.
+// Returns { docs: [{filename, content}], text: <remainder, trimmed> }.
+function extractAttachedDocuments(str) {
+  var docs = [];
+  DOC_ATTACH_RE.lastIndex = 0;
+  var m;
+  while ((m = DOC_ATTACH_RE.exec(str)) !== null) {
+    docs.push({ filename: m[1].trim(), content: m[2] });
+  }
+  var text = docs.length ? str.replace(DOC_ATTACH_RE, '').replace(/\n{3,}/g, '\n\n').trim() : str;
+  return { docs: docs, text: text };
+}
+
+async function handleDocumentAttach(input) {
+  var files = Array.from(input.files);
+  if (!files.length) return;
+  for (var i = 0; i < files.length; i++) {
+    var file = files[i];
+    var formData = new FormData();
+    formData.append('file', file);
+    try {
+      var res = await fetch('/parse_document', { method: 'POST', body: formData });
+      var data = await res.json();
+      if (data.error) { alert('Could not read "' + file.name + '": ' + data.error); continue; }
+      window.attachedDocuments.push({ filename: data.filename || file.name, content: data.content || '' });
+    } catch (e) {
+      alert('Failed to read "' + file.name + '": ' + e.message);
+    }
+  }
+  renderDocumentPreviews();
+  input.value = ''; // allow re-attaching the same file
+}
+
+function renderDocumentPreviews() {
+  var strip = document.getElementById('document-preview-strip');
+  if (!strip) return;
+  strip.innerHTML = '';
+  if (window.attachedDocuments.length === 0) { strip.style.display = 'none'; return; }
+  strip.style.display = 'flex';
+  window.attachedDocuments.forEach(function(doc, idx) {
+    var chip = document.createElement('div');
+    chip.style.cssText = 'position:relative;display:inline-flex;align-items:center;gap:6px;padding:6px 26px 6px 10px;background:rgba(255,255,255,0.08);border:1px solid #2a3340;border-radius:6px;font-size:12px;color:#cdd6e0;max-width:240px;';
+
+    var label = document.createElement('span');
+    label.textContent = '📄 ' + doc.filename;
+    label.title = 'Click to preview';
+    label.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;';
+    label.onclick = function() { openDocumentViewer(doc.filename, doc.content); };
+
+    var removeBtn = document.createElement('button');
+    removeBtn.textContent = '✕';
+    removeBtn.style.cssText = 'position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;background:#a00;color:#fff;border:none;cursor:pointer;font-size:11px;padding:0;line-height:18px;text-align:center;';
+    removeBtn.onclick = function() {
+      window.attachedDocuments.splice(idx, 1);
+      renderDocumentPreviews();
+    };
+
+    chip.appendChild(label);
+    chip.appendChild(removeBtn);
+    strip.appendChild(chip);
+  });
+}
+
+// Build a clickable document card (📄 filename — click to read).
+function makeDocumentCard(filename, docContent) {
+  var card = document.createElement('div');
+  card.className = 'chat-document-card';
+  card.title = 'Click to read';
+  card.style.cssText = 'display:inline-flex;align-items:center;gap:8px;max-width:100%;padding:8px 12px;background:rgba(255,255,255,0.06);border:1px solid #2a3340;border-radius:8px;cursor:pointer;font-size:13px;color:#cdd6e0;';
+
+  var icon = document.createElement('span');
+  icon.textContent = '📄';
+  icon.style.fontSize = '16px';
+
+  var name = document.createElement('span');
+  name.textContent = filename;
+  name.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+
+  var hint = document.createElement('span');
+  hint.textContent = 'click to read';
+  hint.style.cssText = 'color:#7d8a99;font-size:11px;flex-shrink:0;';
+
+  card.appendChild(icon);
+  card.appendChild(name);
+  card.appendChild(hint);
+  card.onclick = function() { openDocumentViewer(filename, docContent); };
+  return card;
+}
+
+// Row of document cards, right-aligned to sit above a user message.
+function makeDocumentCardRow(docs) {
+  var row = document.createElement('div');
+  row.className = 'document-card-row';
+  row.style.cssText = 'display:flex;flex-direction:column;align-items:flex-end;gap:4px;max-width:760px;width:100%;margin:0 auto 2px auto;padding:0 52px 0 0;box-sizing:border-box;';
+  docs.forEach(function(d) { row.appendChild(makeDocumentCard(d.filename, d.content)); });
+  return row;
+}
+
+function openDocumentViewer(filename, content) {
+  var modal = document.getElementById('document-viewer-modal');
+  if (!modal) return;
+  document.getElementById('document-viewer-title').textContent = '📄 ' + filename;
+  document.getElementById('document-viewer-content').textContent = content;
+  modal.style.display = 'block';
+}
+
+function closeDocumentViewer() {
+  var modal = document.getElementById('document-viewer-modal');
+  if (modal) modal.style.display = 'none';
 }
 
 // sanitizeMarkdown: strip setext headings and box-drawing HR patterns.
@@ -939,7 +1071,7 @@ if (typeof marked === "undefined") {
           editBtn.onmouseout  = (e) => { e.stopPropagation(); editBtn.style.color='rgba(255,255,255,0.4)'; editBtn.style.background='transparent'; editBtn.style.opacity='0'; };
           editBtn.onclick = (e) => { e.stopPropagation(); startModelRename(row, labelSpan, m, label); };
 
-          row.onmouseover = () => { row.style.background = isActive ? 'rgba(40,80,50,0.35)' : 'rgba(255,255,255,0.06)'; editBtn.style.opacity = '1'; };
+          row.onmouseover = () => { row.style.background = isActive ? 'rgba(40,80,50,0.35)' : 'var(--sidebar-button-hover, #2D3E4F)'; editBtn.style.opacity = '1'; };
           row.onmouseout  = () => { row.style.background = isActive ? 'rgba(40,80,50,0.25)' : 'transparent'; editBtn.style.opacity = '0'; };
 
           const tick = document.createElement('span');
@@ -981,6 +1113,60 @@ if (typeof marked === "undefined") {
     if (picker) picker.style.display = 'none';
     document.removeEventListener('click', outsideModelPickerClick);
   }
+
+  // ── Cog dropdown menu ──────────────────────────────────────────────
+  function toggleCogMenu(e) {
+    if (e) e.stopPropagation();  // don't let the outside-click listener instantly re-close it
+    const menu = document.getElementById('cog-menu');
+    if (!menu) return;
+    const isOpen = menu.style.display === 'block';
+    menu.style.display = isOpen ? 'none' : 'block';
+    if (!isOpen) loadCogThemes();
+  }
+
+  function loadCogThemes() {
+    const list = document.getElementById('cog-theme-list');
+    if (!list || list.dataset.loaded === '1') return;  // fetch once, then cache
+    fetch('/themes/list')
+      .then(r => r.json())
+      .then(d => {
+        const themes = d.themes || [];
+        const active = d.active || '';
+        list.innerHTML = '';
+        themes.forEach(name => {
+          const btn = document.createElement('button');
+          btn.className = 'cog-theme-btn' + (name === active ? ' active' : '');
+          btn.textContent = name;
+          btn.dataset.theme = name;
+          btn.onclick = function(ev) { ev.stopPropagation(); applyThemeFromCog(name); };
+          list.appendChild(btn);
+        });
+        list.dataset.loaded = '1';
+      })
+      .catch(() => {});
+  }
+
+  function applyThemeFromCog(name) {
+    const link = document.getElementById('active-theme-link');
+    if (link) link.href = '/theme-files/' + name + '.css?v=' + Date.now();
+    fetch('/themes/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name })
+    }).catch(() => {});
+    document.querySelectorAll('#cog-theme-list .cog-theme-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.theme === name);
+    });
+  }
+
+  // Close the cog dropdown when clicking anywhere outside it
+  document.addEventListener('click', function(e) {
+    const wrap = document.getElementById('settings-link');
+    const menu = document.getElementById('cog-menu');
+    if (menu && menu.style.display === 'block' && wrap && !wrap.contains(e.target)) {
+      menu.style.display = 'none';
+    }
+  });
 
   function startModelRename(row, labelSpan, filename, currentLabel) {
     // Don't double-up
@@ -2337,7 +2523,8 @@ async function openChat(filename) {
     var successCount = 0;
     var charName = currentCharacter.name || 'Assistant';
     var activeUserNameFallback = localStorage.getItem('activeUserName') || activeUserName;
-    
+
+    let assistantCount = 0;  // 1-based count of assistant turns, used for branching
     messages.forEach(function(msg, index) {
       if (!msg) {
         console.warn('Skipping null message at index ' + index);
@@ -2417,6 +2604,17 @@ async function openChat(filename) {
             showImagePlaceholder = true;
           }
 
+          // Extract attached-document blocks — they render as clickable
+          // cards above the message, not as raw text inside the bubble.
+          var attachedDocsForRender = [];
+          if (typeof displayContent === 'string') {
+            var _docEx = extractAttachedDocuments(displayContent);
+            if (_docEx.docs.length) {
+              attachedDocsForRender = _docEx.docs;
+              displayContent = _docEx.text;
+            }
+          }
+
           // Use Marked.js for consistent formatting
           if (typeof marked !== "undefined") {
             let html = marked.parse(sanitizeMarkdown(displayContent || ''));
@@ -2472,11 +2670,18 @@ async function openChat(filename) {
           div.appendChild(userSpan);
           div.appendChild(userActionBar);
           div.appendChild(makeTimestampEl(msg.timestamp));
-          
+
+          // Attached-document cards — appended to the chat ABOVE this user
+          // message (the wrapper itself is appended just below, after the branch).
+          if (attachedDocsForRender.length) {
+            chat.appendChild(makeDocumentCardRow(attachedDocsForRender));
+          }
+
           wrapper.appendChild(userAvatar);
           wrapper.appendChild(div);
-          
+
         } else if (role === "model" || role === "assistant") {
+          assistantCount++;  // this is the Nth assistant turn (1-based)
           wrapper.classList.add("model-wrapper");
           div.classList.add("model-msg");
           
@@ -2550,12 +2755,20 @@ async function openChat(filename) {
           modelDeleteBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path></svg>';
           modelDeleteBtn.onclick = function() { deleteSpecificMessage(index); };
 
+          var modelBranchBtn = document.createElement("button");
+          modelBranchBtn.title = "Branch from here";
+          modelBranchBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="3" x2="6" y2="15"></line><circle cx="18" cy="6" r="3"></circle><circle cx="6" cy="18" r="3"></circle><path d="M18 9a9 9 0 0 1-9 9"></path></svg>';
+          (function(assistantIdx) {
+            modelBranchBtn.onclick = function() { branchMessage(assistantIdx); };
+          })(assistantCount);
+
           modelActionBar.appendChild(modelCopyBtn);
           modelActionBar.appendChild(modelRegenBtn);
           modelActionBar.appendChild(modelContinueBtn);
           modelActionBar.appendChild(modelReplayBtn);
           modelActionBar.appendChild(modelEditBtn);
           modelActionBar.appendChild(modelDeleteBtn);
+          modelActionBar.appendChild(modelBranchBtn);
 
           div.appendChild(modelStrong);
           div.appendChild(modelSpan);
@@ -2715,9 +2928,16 @@ async function openChat(filename) {
     const input = box.value.trim();
     const chat = document.getElementById('chat');
     const hasImages = window.attachedImages && window.attachedImages.length > 0;
+    const hasDocs = window.attachedDocuments && window.attachedDocuments.length > 0;
 
-    if (!input && !hasImages) return;
-    
+    if (!input && !hasImages && !hasDocs) return;
+
+    // Document text the model will read — folded into this turn's content,
+    // wrapped in [ATTACHED DOCUMENT: …] markers. One-shot: it lives in this
+    // message only, then rides along as ordinary history (no sticky).
+    const _docPrefix = hasDocs ? wrapAttachedDocuments(window.attachedDocuments) : '';
+    const modelText = _docPrefix ? (_docPrefix + (input ? '\n\n' + input : '')) : input;
+
     lastPrompt = input;
     localStorage.setItem('lastPrompt', input);
     const userName = localStorage.getItem('activeUserName') || activeUserName;
@@ -2745,7 +2965,7 @@ async function openChat(filename) {
     
     const userSpan = document.createElement("span");
     userSpan.className = "user-text";
-    const formattedUser = input.replace(/\*(.*?)\*/gs, "<em>$1</em>");
+    const formattedUser = input.replace(/\n/g, "<br>").replace(/\*(.*?)\*/gs, "<em>$1</em>");
     userSpan.innerHTML = formattedUser;
     
     const userCopyBtn = document.createElement("button");
@@ -2761,7 +2981,12 @@ async function openChat(filename) {
     // Assemble wrapper: avatar + message bubble
     userWrapper.appendChild(userAvatar);
     userWrapper.appendChild(userDiv);
-    
+
+    // Document cards render in the chat ABOVE the user message
+    if (hasDocs) {
+      chat.appendChild(makeDocumentCardRow(window.attachedDocuments));
+    }
+
     chat.appendChild(userWrapper);
     void userWrapper.offsetHeight;
     void userDiv.offsetHeight;   
@@ -2772,10 +2997,11 @@ async function openChat(filename) {
       window.loadedChat = [];
     }
 
-    // Build user message — multimodal if images attached, plain text otherwise
+    // Build user message — multimodal if images attached, plain text otherwise.
+    // modelText carries any attached-document text (markered) plus the typed input.
     if (hasImages) {
       const contentParts = [];
-      if (input) contentParts.push({ type: "text", text: input });
+      if (modelText) contentParts.push({ type: "text", text: modelText });
       window.attachedImages.forEach(img => {
         contentParts.push({
           type: "image_url",
@@ -2797,7 +3023,13 @@ async function openChat(filename) {
       window.attachedImages = [];
       renderImagePreviews();
     } else {
-      window.loadedChat.push({ role: "user", content: input, speaker: activeUserName, timestamp: new Date().toISOString() });
+      window.loadedChat.push({ role: "user", content: modelText, speaker: activeUserName, timestamp: new Date().toISOString() });
+    }
+
+    // Clear attached documents after sending — one-shot, now in this turn's content
+    if (hasDocs) {
+      window.attachedDocuments = [];
+      renderDocumentPreviews();
     }
 
     let contextMessages = window.loadedChat;
@@ -4225,6 +4457,31 @@ async function stopGeneration() {
   }
 }
 
+// ==================================================
+// BRANCH CHAT FROM A MESSAGE
+// ==================================================
+async function branchMessage(assistantIndex) {
+  if (!currentChatFilename) {
+    alert('No active chat to branch.');
+    return;
+  }
+  const confirmed = confirm('Branch from here? A new chat will be created up to this point. The original is untouched.');
+  if (!confirmed) return;
+  try {
+    const res = await fetch('/chats/branch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_filename: currentChatFilename, message_index: assistantIndex })
+    });
+    const data = await res.json();
+    if (data.error) { alert('Branch failed: ' + data.error); return; }
+    await loadChats();
+    openChat(data.new_filename);
+  } catch (e) {
+    alert('Branch error: ' + e.message);
+  }
+}
+
   // ==================================================
   // INITIALISE PAGE (UNIFIED)
   // ==================================================
@@ -4614,11 +4871,17 @@ async function loadProjects() {
     function buildProjectItem(project) {
       const item = document.createElement('div');
       item.className = 'project-item' + (project.name === data.active ? ' is-active' : '');
+      item.dataset.projectName = project.name;
 
       // Click card body to switch (not if already active)
       if (project.name !== data.active) {
         item.onclick = () => switchProject(project.name);
       }
+
+      // Right-click to colour code
+      item.addEventListener('contextmenu', (e) => {
+        showProjectColorMenu(e, project.name);
+      });
 
       const nameDiv = document.createElement('div');
       nameDiv.className = 'project-name-section';
@@ -4673,6 +4936,9 @@ async function loadProjects() {
 
     // Render ungrouped first
     ungrouped.forEach(p => listDiv.appendChild(buildProjectItem(p)));
+
+    // Apply saved project colours
+    applyProjectColors();
 
     // Render each group as a collapsible section
     for (const [gName, members] of Object.entries(groups)) {
@@ -4938,12 +5204,6 @@ function closeInlineEdit() {
   currentEditingProject = null;
 }
 
-function closeEditProjectModal() {
-  closeInlineEdit();
-  const modal = document.getElementById('edit-project-modal');
-  if (modal) modal.style.display = 'none';
-}
-
 function toggleRpMode() {
   const btn = document.getElementById('rp-mode-btn');
   const section = document.getElementById('rp-opener-section');
@@ -5023,8 +5283,32 @@ const CHAT_COLORS = [
   { name: 'Dark Red',      value: '#4a1a1a' },
   { name: 'Bright Red',    value: '#6e1f1f' },
   { name: 'Orange',        value: '#5a3010' },
-  { name: 'Amber',         value: '#5a4005' },
-  { name: 'Yellow',        value: '#4a420a' },
+  { name: 'Amber',         value: '#6a5200' },
+  { name: 'Yellow',        value: '#5a5800' },
+  { name: 'Lime',          value: '#253a08' },
+  { name: 'Green',         value: '#0f4a20' },
+  { name: 'Forest',        value: '#0a3018' },
+  { name: 'Teal',          value: '#0a3d3f' },
+  { name: 'Cyan',          value: '#053a45' },
+  { name: 'Blue',          value: '#0f2d5a' },
+  { name: 'Sky',           value: '#0a2a4a' },
+  { name: 'Indigo',        value: '#1e1458' },
+  { name: 'Purple',        value: '#35125a' },
+  { name: 'Violet',        value: '#2a0a4a' },
+  { name: 'Magenta',       value: '#4a0a3a' },
+  { name: 'Pink',          value: '#52103f' },
+  { name: 'Rose',          value: '#4a1028' },
+  { name: 'Brown',         value: '#3a2010' },
+  { name: 'Slate',         value: '#1a2535' },
+];
+
+// Project card tint colours — same values used for both swatch display and applied tint
+const PROJECT_COLORS = [
+  { name: 'Dark Red',      value: '#4a1a1a' },
+  { name: 'Bright Red',    value: '#6e1f1f' },
+  { name: 'Orange',        value: '#5a3010' },
+  { name: 'Amber',         value: '#6a5200' },
+  { name: 'Yellow',        value: '#5a5800' },
   { name: 'Lime',          value: '#253a08' },
   { name: 'Green',         value: '#0f4a20' },
   { name: 'Forest',        value: '#0a3018' },
@@ -5143,6 +5427,7 @@ document.addEventListener('click', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     hideColorMenu();
+    hideProjectColorMenu();
     closeAvatarLightbox();
   }
 });
@@ -5309,6 +5594,100 @@ async function checkOpenAIIndicator() {
     }
   } catch(e) { /* silent — non-critical */ }
 }
+
+
+// =====================================================
+// PROJECT FOLDER COLOUR CODING
+// =====================================================
+function getProjectColors() {
+  try { return JSON.parse(localStorage.getItem('projectColors') || '{}'); } catch { return {}; }
+}
+
+function setProjectColor(name, color) {
+  const colors = getProjectColors();
+  if (color) {
+    colors[name] = color;
+  } else {
+    delete colors[name];
+  }
+  localStorage.setItem('projectColors', JSON.stringify(colors));
+}
+
+function applyProjectColors() {
+  const colors = getProjectColors();
+  document.querySelectorAll('.project-item[data-project-name]').forEach(el => {
+    const color = colors[el.dataset.projectName];
+    if (color) {
+      el.style.setProperty('--project-tint-color', color);
+      el.classList.add('tinted');
+    } else {
+      el.style.removeProperty('--project-tint-color');
+      el.classList.remove('tinted');
+    }
+  });
+}
+
+// Build project colour menu
+(function buildProjectColorMenu() {
+  const menu = document.createElement('div');
+  menu.id = 'project-color-menu';
+
+  const label = document.createElement('div');
+  label.className = 'color-menu-label';
+  label.textContent = 'Project Colour';
+  menu.appendChild(label);
+
+  const swatches = document.createElement('div');
+  swatches.className = 'color-swatches';
+
+  PROJECT_COLORS.forEach(col => {
+    const swatch = document.createElement('div');
+    swatch.className = 'color-swatch';
+    swatch.style.background = col.value;
+    swatch.title = col.name;
+    swatch.addEventListener('click', () => {
+      const name = menu.dataset.projectName;
+      if (name) { setProjectColor(name, col.value); applyProjectColors(); }
+      hideProjectColorMenu();
+    });
+    swatches.appendChild(swatch);
+  });
+  menu.appendChild(swatches);
+
+  const clearBtn = document.createElement('div');
+  clearBtn.className = 'color-clear';
+  clearBtn.textContent = '✕ Clear colour';
+  clearBtn.addEventListener('click', () => {
+    const name = menu.dataset.projectName;
+    if (name) { setProjectColor(name, null); applyProjectColors(); }
+    hideProjectColorMenu();
+  });
+  menu.appendChild(clearBtn);
+
+  document.body.appendChild(menu);
+})();
+
+function showProjectColorMenu(e, projectName) {
+  e.preventDefault();
+  e.stopPropagation();
+  const menu = document.getElementById('project-color-menu');
+  menu.dataset.projectName = projectName;
+  const x = Math.min(e.clientX, window.innerWidth - 180);
+  const y = Math.min(e.clientY, window.innerHeight - 160);
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  menu.classList.add('visible');
+}
+
+function hideProjectColorMenu() {
+  const menu = document.getElementById('project-color-menu');
+  if (menu) menu.classList.remove('visible');
+}
+
+document.addEventListener('click', (e) => {
+  const menu = document.getElementById('project-color-menu');
+  if (menu && !menu.contains(e.target)) hideProjectColorMenu();
+});
 
 </script>
 </body>

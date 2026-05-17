@@ -256,7 +256,7 @@
         <button class="config-tab" onclick="switchConfigTab('character', this)">🧑 Character</button>
         <button class="config-tab" onclick="switchConfigTab('create-char', this)">✨ New Character</button>
         <button class="config-tab" onclick="switchConfigTab('user-persona', this)">👤 User Persona</button>
-        <button class="config-tab" onclick="switchConfigTab('appearance', this)">🎨 Appearance</button>
+        <button class="config-tab" disabled title="Theme customisation — Pro Version" style="opacity:0.4; cursor:not-allowed;">🎨 Appearance ⭐</button>
       </div>
 
       <!-- ===== TAB: SYSTEM PROMPT ===== -->
@@ -291,6 +291,13 @@
                 style="min-height:120px;"></textarea>
       <button onclick="saveGlobalExampleDialog()" style="background-color:#1f3a5a; border-color:#245080; color:white; margin-top:6px; margin-bottom:4px;">💾 Save Global Example Dialog</button>
       <div id="global-example-dialog-status" style="font-size:12px; color:#6a9; margin-bottom:6px; min-height:16px;"></div>
+
+      <label style="margin-top:14px; display:block;">Post-History Instructions: <span style="font-size:11px; color:#888; font-weight:normal;">Saved with this template — loads/switches with it. Injected last (right before the model replies) and overrides character/project text. Use for hard system rules.</span></label>
+      <textarea id="global-post-history"
+                placeholder="e.g. When the user is venting, mirror their emotion first — do not pivot to solutions until they signal they want them. Never use bullet points, numbered lists, or headers in emotional replies."
+                style="min-height:120px;"></textarea>
+      <button onclick="saveGlobalPostHistory()" style="background-color:#1f3a5a; border-color:#245080; color:white; margin-top:6px; margin-bottom:4px;">💾 Save Post-History</button>
+      <div id="global-post-history-status" style="font-size:12px; color:#6a9; margin-bottom:6px; min-height:16px;"></div>
       <hr />
 
       <!-- 📍 CURRENT SITUATION (semi-global) -->
@@ -646,6 +653,15 @@
     } catch (err) {
       console.warn('Could not load paired example dialog:', err);
     }
+    // Load paired post-history directive
+    try {
+      const phRes = await fetch('/system_prompts/load_posthistory/' + encodeURIComponent(filename));
+      const phRaw = phRes.ok ? await phRes.text() : '';
+      const phText = phRaw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+      document.getElementById('global-post-history').value = phText;
+    } catch (err) {
+      console.warn('Could not load paired post-history:', err);
+    }
   }
 
   async function saveSystemPromptAs() {
@@ -657,6 +673,7 @@
     if (!filename.endsWith('.txt')) filename += '.txt';
     const text = document.getElementById('global-system-prompt').value;
     const exText = document.getElementById('global-example-dialog').value;
+    const phText = document.getElementById('global-post-history').value;
     try {
       const res = await fetch('/system_prompts/save/' + encodeURIComponent(filename), {
         method: 'POST',
@@ -668,6 +685,11 @@
         method: 'POST',
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
         body: exText
+      });
+      await fetch('/system_prompts/save_posthistory/' + encodeURIComponent(filename), {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        body: phText
       });
       if (data.status === 'saved') {
         // Reload list but DON'T let it auto-switch to the active prompt
@@ -768,6 +790,7 @@
     if (!filename) { alert('No template selected. Use Save As to create a new one.'); return; }
     const text = document.getElementById('global-system-prompt').value;
     const exText = document.getElementById('global-example-dialog').value;
+    const phText = document.getElementById('global-post-history').value;
     try {
       const res = await fetch('/system_prompts/save/' + encodeURIComponent(filename), {
         method: 'POST',
@@ -780,6 +803,12 @@
         method: 'POST',
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
         body: exText
+      });
+      // Also save paired post-history directive
+      await fetch('/system_prompts/save_posthistory/' + encodeURIComponent(filename), {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        body: phText
       });
       if (data.status === 'saved') alert('✅ Saved: ' + filename);
       else alert('❌ Save failed');
@@ -1437,6 +1466,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     loadGlobalSystemPrompt();
     loadCurrentSituation();
     loadGlobalExampleDialog();
+    loadGlobalPostHistory();
     loadTTSEngine();
     loadLlamaConfig();
 
@@ -2603,6 +2633,51 @@ async function saveGlobalExampleDialog() {
     }
   } catch (e) {
     console.error('Failed to save global example dialog:', e);
+    if (statusEl) { statusEl.textContent = '❌ Error saving'; statusEl.style.color = '#e66'; }
+  }
+}
+
+async function loadGlobalPostHistory() {
+  // Post-history is loaded as part of loadSelectedSystemPrompt.
+  // This function is kept for init — it loads the active template's paired
+  // post-history directive.
+  try {
+    const res = await fetch('/system_prompts/list');
+    const data = await res.json();
+    if (data.active) {
+      const phRes = await fetch('/system_prompts/load_posthistory/' + encodeURIComponent(data.active));
+      const phText = phRes.ok ? await phRes.text() : '';
+      document.getElementById('global-post-history').value = phText.trim();
+    }
+  } catch (e) {
+    console.warn('Could not load global post-history on init:', e);
+  }
+}
+
+async function saveGlobalPostHistory() {
+  const text = document.getElementById('global-post-history').value.trim();
+  const statusEl = document.getElementById('global-post-history-status');
+  const select = document.getElementById('system-prompt-file-select');
+  const filename = select ? select.value : '';
+  if (!filename) {
+    if (statusEl) { statusEl.textContent = '⚠️ Select a system prompt template first'; statusEl.style.color = '#fa8'; }
+    setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 3000);
+    return;
+  }
+  try {
+    const res = await fetch('/system_prompts/save_posthistory/' + encodeURIComponent(filename), {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      body: text
+    });
+    const data = await res.json();
+    if (data.status === 'saved') {
+      if (statusEl) { statusEl.textContent = '✅ Saved with ' + filename; statusEl.style.color = '#6a9'; setTimeout(() => statusEl.textContent = '', 2500); }
+    } else {
+      if (statusEl) { statusEl.textContent = '❌ Save failed'; statusEl.style.color = '#e66'; }
+    }
+  } catch (e) {
+    console.error('Failed to save global post-history:', e);
     if (statusEl) { statusEl.textContent = '❌ Error saving'; statusEl.style.color = '#e66'; }
   }
 }

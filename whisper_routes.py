@@ -22,6 +22,11 @@ TRANSCRIPT_FIXES = [
     (r'\bhelsy\s*and\b', 'Helcyon'),
     (r'\bhealthy\s*and\b', 'Helcyon'),
     (r'\bhealthy\s*on\b', 'Helcyon'),
+    # Helcyon WebUI — combined pattern must come BEFORE the standalone Helcyon pattern
+    # so "helcion web you eye" resolves as one unit rather than "Helcyon web you eye"
+    (r'\bh(?:el|il|eel|ul)[a-z]*?(?:sh?|c|th?)[iy]?(?:on|an|en|in|ion|yan)\s+web[\s\-]*(?:you[\s\-]*(?:eye|[iI])|ewey|ooey|yui|U\.?I\.?|[uU][iI])\b', 'Helcyon WebUI'),
+    # WebUI alone — catches "web UI", "web you eye", "web ewey", "webui" etc.
+    (r'\bweb[\s\-]*(?:you[\s\-]*(?:eye|[iI])|ewey|ooey|yui|U\.?I\.?|[uU][iI])\b', 'WebUI'),
         # Grok — Whisper mishears as similar-sounding words
     (r'\bglock\b', 'Grok'),
     (r'\bgrock\b', 'Grok'),
