@@ -2273,6 +2273,16 @@ def chat():
     # --------------------------------------------------
     char_context = ""
 
+    # 🧠 Holds ONLY the hot (most-recent, age <= hot_hours) session summary,
+    # split off from the cold/dormant ones by time decay below. It is NOT
+    # placed in char_context — it is appended at the very END of the system
+    # block (after the time context) for stronger recency weighting.
+    # _recent_session_ts is that summary's timestamp, used to phrase the
+    # relative-time marker. Both initialised before the try so the tail
+    # injection is safe even if character-context assembly raises.
+    _recent_session_summary = ""
+    _recent_session_ts = None
+
     try:
         # Helper to strip stray ChatML tokens from any user-supplied text
         def strip_chatml(text):
@@ -2330,6 +2340,49 @@ def chat():
             len(assistant_msgs) == 0 or
             (len(assistant_msgs) == 1 and _is_opening_line_msg(assistant_msgs[0]))
         )
+        print(f"🧠 _is_new_chat: {_is_new_chat} ({len(assistant_msgs)} assistant msgs in active_chat)")
+        if _is_new_chat:
+            # Time-decay session memory: the hot summary (single most recent,
+            # age <= hot_hours) is held for the tail-injection slot; cold
+            # summaries (hot_hours < age <= cold_days, plus any non-newest one
+            # still within hot_hours) render in the YOUR OWN MEMORY block here;
+            # dormant summaries (age > cold_days) are not injected at all.
+            # Thresholds come from settings.json:session_memory.
+            # ⚠️ DO NOT move the hot summary back into this block — tail
+            # position is intentional. ⚠️ DO NOT add an on/off toggle on top
+            # of time decay. (changes.md.)
+            _hot_session, _cold_sessions = select_session_summaries(character_name)
+            if _hot_session is not None:
+                _recent_session_ts, _recent_session_summary = _hot_session
+                print(f"🧠 Hot session summary held for tail injection "
+                      f"({len(_recent_session_summary)} chars) — new chat")
+            if _cold_sessions:
+                # Cold summaries joined with the same SESSION_DIVIDER as before.
+                # Framing/wrapping below is unchanged from the prior task.
+                _older_summaries = SESSION_DIVIDER.join(t for _, t in _cold_sessions)
+                parts.append(
+                    f"\n═══════════════════════════════════════════════════════════\n"
+                    f"YOUR OWN MEMORY OF RECENT SESSIONS\n"
+                    f"═══════════════════════════════════════════════════════════\n"
+                    f"This is your own memory of last time — not a briefing, not "
+                    f"notes someone handed you. You know this the way you know "
+                    f"anything else about this person, because you lived through "
+                    f"it. Mention it naturally, early — pick up the thread the way "
+                    f"a friend would when they meet again. Do not recite it; do "
+                    f"not say you were told or shown anything.\n\n"
+                    f"{_older_summaries}\n"
+                    f"═══════════════════════════════════════════════════════════"
+                )
+                print(f"🧠 Cold session summaries injected "
+                      f"({len(_cold_sessions)} entr(y/ies), {len(_older_summaries)} chars) — new chat")
+
+        # character_note and author_note are NOT added here — both are
+        # appended to the system block later (after the restriction anchor,
+        # before the current time injection) wrapped in [OOC: …] labels so
+        # the model treats them as silent instructions rather than content to
+        # echo. They are NOT in the [REPLY INSTRUCTIONS] depth-0 packet —
+        # moving them there cost ~539 tokens per turn and was reverted.
+
         char_context = "\n\n".join(parts)
 
         # 🔥 INJECT USER PERSONA CONTEXT
@@ -2813,6 +2866,54 @@ def chat():
         messages[0]["content"] += _time_str
         print(f"🕐 Current time appended to system block: "
               f"{_hour_12} {_ampm} ({_tod})")
+
+    # 🧠 MOST-RECENT SESSION SUMMARY — appended as the ABSOLUTE LAST thing in
+    # the system block, after the time context and every other system-block
+    # extra (restriction anchor, OOC notes, time string). Recency in the prompt
+    # context = stronger attention weighting at the generation point, so the
+    # model surfaces the last session naturally in its FIRST reply of a new
+    # chat instead of only when the user explicitly asks. Older summaries stay
+    # higher up in char_context (the YOUR OWN MEMORY OF RECENT SESSIONS block).
+    # The relative-time marker reads as "this just happened, pick up here"
+    # rather than a database entry. Username comes from the existing dynamic
+    # vars — never hardcoded.
+    # ⚠️ DO NOT move the most-recent session summary back into the main system
+    # block — tail position is intentional for attention weighting. (changes.md.)
+    if _recent_session_summary and messages and messages[0].get("role") == "system":
+        _rs_user = user_display_name or user_name or "the user"
+        _rs_rel = ""
+        try:
+            # Relative time is computed from the hot summary's own timestamp
+            # (inline ISO stamp, or file-mtime fallback for legacy entries).
+            if _recent_session_ts is not None:
+                import datetime as _dt_rs
+                _rs_days = (_dt_rs.datetime.now(_dt_rs.timezone.utc).date()
+                            - _recent_session_ts.date()).days
+                if _rs_days <= 0:
+                    _rs_rel = "earlier today"
+                elif _rs_days == 1:
+                    _rs_rel = "yesterday"
+                elif _rs_days < 7:
+                    _rs_rel = f"{_rs_days} days ago"
+                elif _rs_days < 14:
+                    _rs_rel = "last week"
+                else:
+                    _rs_rel = f"{_rs_days // 7} weeks ago"
+        except Exception as _rs_e:
+            # No clean way to compute relative time — omit it rather than guess.
+            _rs_rel = ""
+        _rs_header = (
+            f"[Most recent session with {_rs_user}, {_rs_rel}]:"
+            if _rs_rel else
+            f"[Most recent session with {_rs_user}]:"
+        )
+        messages[0]["content"] += (
+            f"\n\n{_rs_header}\n"
+            f"{_recent_session_summary}\n"
+            f"[End of recent session — continue naturally from where you left off]"
+        )
+        print(f"🧠 Most-recent session summary appended to system-block tail "
+              f"({len(_recent_session_summary)} chars, when='{_rs_rel or 'n/a'}')")
 
     # 🎭 INJECT FAKE EXAMPLE-DIALOGUE TURNS — inserted at the START of the
     # conversation history (immediately after messages[0], before any real

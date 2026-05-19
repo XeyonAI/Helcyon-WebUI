@@ -179,11 +179,11 @@ body {
   left: 0;
   top: 60px;
   width: 260px; /* matches main chat sidebar width */
-  height: calc(100vh - 30px);
+  height: calc(100vh - 60px);
   background: var(--sidebar-bg);
   border-right: 1px solid var(--sidebar-border);
   padding: 1rem 0.9rem;
-  padding-bottom: 2rem;
+  padding-bottom: 3rem;
   box-sizing: border-box;
   overflow-y: auto;
   z-index: 90;

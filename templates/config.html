@@ -276,6 +276,18 @@
       <!-- Active indicator -->
       <div id="active-prompt-indicator" style="font-size:12px; color:#6a9; margin-bottom:10px;"></div>
 
+      <!-- Bind selected template to a specific character — explicit choice, no silent default -->
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+        <span style="font-size:13px; color:#bbb; white-space:nowrap;">Bind to character:</span>
+        <select id="sp-bind-character-select" onchange="updateBindButtonState()" style="flex:1;">
+          <option value="">-- Select character --</option>
+        </select>
+        <button id="sp-bind-character-btn" onclick="bindSystemPromptToCharacter()" disabled
+                title="Bind the selected template to the chosen character"
+                style="background-color:#1f3a5a; border-color:#245080; color:white; white-space:nowrap;">🔗 Bind</button>
+      </div>
+      <div id="sp-bind-status" style="font-size:12px; color:#6a9; margin-bottom:10px; min-height:16px;"></div>
+
       <!-- Save as row -->
       <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
         <button onclick="saveSystemPromptAs()" style="background-color:#1f3a5a; border-color:#245080; color:white; white-space:nowrap;">💾 Save As New Template</button>
@@ -762,6 +774,74 @@
       }
     } catch (err) {
       alert('❌ Error: ' + err);
+    }
+  }
+
+  // --- BIND SYSTEM PROMPT TO A SPECIFIC CHARACTER ---
+  // Separate from Activate: Activate sets the global default in settings.json;
+  // Bind writes the selected template into ONE explicitly-chosen character's
+  // JSON. The character is picked here, on this page, with no pre-selected
+  // default — this prevents the old silent-binding bug where Activate quietly
+  // bound the template to whatever character happened to be selected elsewhere.
+  async function loadBindCharacterList() {
+    const select = document.getElementById('sp-bind-character-select');
+    if (!select) return;
+    try {
+      const res = await fetch('/list_characters');
+      if (!res.ok) throw new Error('Failed to fetch character list');
+      const characters = await res.json();
+      select.innerHTML = '<option value="">-- Select character --</option>';
+      characters.forEach((name) => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        select.appendChild(opt);
+      });
+    } catch (err) {
+      console.error('Error loading characters for SP bind:', err);
+    }
+    updateBindButtonState();
+  }
+
+  // Bind is enabled only when BOTH a template and a character are chosen.
+  function updateBindButtonState() {
+    const btn = document.getElementById('sp-bind-character-btn');
+    if (!btn) return;
+    const sp = document.getElementById('system-prompt-file-select');
+    const ch = document.getElementById('sp-bind-character-select');
+    btn.disabled = !((sp && sp.value) && (ch && ch.value));
+  }
+
+  async function bindSystemPromptToCharacter() {
+    const sp = document.getElementById('system-prompt-file-select');
+    const ch = document.getElementById('sp-bind-character-select');
+    const status = document.getElementById('sp-bind-status');
+    const filename = sp ? sp.value : '';
+    const charName = ch ? ch.value : '';
+    if (!filename || !charName) return;
+    try {
+      const res = await fetch('/character_system_prompt/' + encodeURIComponent(charName), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ system_prompt: filename })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        if (status) {
+          status.style.color = '#6a9';
+          status.textContent = "✅ Bound '" + filename + "' to character '" + charName + "'";
+        }
+      } else {
+        if (status) {
+          status.style.color = '#c66';
+          status.textContent = '❌ Bind failed: ' + (data.error || 'Unknown error');
+        }
+      }
+    } catch (err) {
+      if (status) {
+        status.style.color = '#c66';
+        status.textContent = '❌ Bind error: ' + err;
+      }
     }
   }
 
@@ -1469,6 +1549,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     loadGlobalPostHistory();
     loadTTSEngine();
     loadLlamaConfig();
+    loadBindCharacterList();
 
     const refreshBtn = document.getElementById("refresh-memory");
     if (refreshBtn) refreshBtn.addEventListener("click", loadCharacterMemory);
@@ -1478,6 +1559,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     if (spFileSelect) {
       spFileSelect.addEventListener('change', async () => {
         const filename = spFileSelect.value;
+        updateBindButtonState();
         if (filename) await loadSelectedSystemPrompt(filename);
       });
     }

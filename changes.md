@@ -1,3 +1,153 @@
+## May 19 2026 — Time-Decay Session Memory
+
+**Files:** app.py, settings.json
+
+Session-summary surfacing now degrades gracefully with age instead of always
+foregrounding the most recent summary regardless of how stale it is.
+
+**Decay tiers (defaults):**
+- **Hot** — age ≤ 48h → tail-injection slot (system-block position #11, the
+  last thing before chat turns). Only the *single* most-recent summary.
+- **Cold** — 48h < age ≤ 7 days → the `YOUR OWN MEMORY OF RECENT SESSIONS`
+  block (position #2). A summary younger than 48h that is *not* the single
+  most-recent one also lands here.
+- **Dormant** — age > 7 days → not injected anywhere. Still stored on disk.
+
+**Configurable** in `settings.json` under `session_memory.hot_hours` /
+`session_memory.cold_days`. If the section or keys are missing the code uses
+48 / 7 silently — no warning, no crash, no manual setup required. A
+`session_memory` block with the defaults was added to `settings.json`.
+
+**Storage — Option C (hybrid timestamps, graceful legacy fallback):**
+- New summary appends are written with an inline ISO-8601 UTC timestamp on the
+  entry's `---SESSION---` delimiter line (`---SESSION--- 2026-05-19T15:42:00Z`).
+  The file is rewritten in a header-per-entry format; every entry's text is
+  preserved unchanged.
+- Legacy summaries (no inline timestamp) are **not** migrated or backfilled —
+  they are preserved verbatim and fall back to the summary file's mtime as a
+  best-effort age. As they age past the dormant threshold they drop out of
+  injection on their own. No migration, no data mutation of existing files.
+- New helpers: `parse_session_summaries` (→ `[(timestamp, text), …]`, inline
+  ISO or mtime fallback), `select_session_summaries` (→ `(hot, cold)` after
+  decay), `_read_session_memory_settings`, `_parse_iso_utc`.
+
+**Injection logic:** the new-chat branch now calls `select_session_summaries`
+— the hot summary is held for the tail slot, cold summaries render in the
+`YOUR OWN MEMORY` block, dormant ones are skipped. If nothing qualifies for a
+slot, that slot simply doesn't render (empty tail, no fallback framing). The
+wrapping/framing strings of both the tail injection and the cold block are
+**unchanged** from the prior task. The tail marker's relative time
+("yesterday", "earlier today", …) is now computed from the hot summary's own
+timestamp rather than the file mtime. No user name is hardcoded — the marker
+uses the existing `user_display_name` / `user_name` dynamic vars.
+
+Verified: `app.py` parses; `settings.json` valid JSON; parse/select/save logic
+unit-tested — legacy parse (all-mtime), append-to-legacy round-trip (legacy
+entries keep no timestamp, new entry timestamped), hot/cold/dormant tiering,
+non-newest sub-48h → cold, newest-too-old → empty tail, empty file → nothing.
+
+**Pre-existing limitation (inherited, not introduced here):** this applies to
+the ChatML `/completion` path. The vision, OpenAI-cloud, and jinja/Gemma/Qwen
+paths rebuild their system content from `system_text + memory` and bypass the
+`messages[0]` late-appends entirely — so neither this decay logic nor the
+tail/anchor/OOC/time appends reach the model on those paths. Worth a future
+task to unify those paths.
+
+- ⚠️ DO NOT add an on/off toggle on top of time decay — overlapping controls
+  create state confusion about which one suppressed a summary.
+
+---
+
+## May 19 2026 — Most-Recent Session Summary Moved to System-Block Tail
+
+**Files:** app.py
+
+**The bug:** the model did not pick up on the previous session naturally at the
+start of a new chat — it only recalled it when the user explicitly asked
+"what did we talk about last time?". Discovery confirmed why:
+
+- Session summaries are stored in `session_summaries/<character>_summary.txt`,
+  up to **3 per character** (`MAX_SUMMARIES`), joined by
+  `SESSION_DIVIDER` (`---SESSION---`); the **last segment is the most recent**.
+- `load_session_summary` returned the whole file, and the new-chat injection
+  appended **all 3 summaries as one block** into `char_context`, wrapped in the
+  `YOUR OWN MEMORY OF RECENT SESSIONS` banner.
+- That block sat **early** in the system block — everything else came *after*
+  it: user persona context, the instruction layer + tone primer, project
+  documents, the `ACTIVE OPERATOR RESTRICTIONS` anchor, the `[OOC: …]`
+  character/author notes, and finally the `Current local time:` string. The
+  most recent summary was buried mid-block, far from the generation point, and
+  drowned out. (Post-history is no longer in the system block — it rides in the
+  depth-0 `[REPLY INSTRUCTIONS]` packet folded into the last user turn.)
+
+**The fix — split the most recent summary off and move only it to the tail:**
+- The new-chat injection now splits the loaded summaries on `---SESSION---`.
+  The **older** summaries (sessions 2 and 3 going back) stay exactly where they
+  were — same `YOUR OWN MEMORY OF RECENT SESSIONS` block, same wrapping, same
+  position in `char_context`. They are cold context and unchanged.
+- The **most recent** summary is held in `_recent_session_summary` and appended
+  as the **absolute last thing in the system block** — after the character
+  card, user context, instruction layer, project context, restriction anchor,
+  OOC notes, and the time context. It is the last thing the model sees before
+  the chat messages begin.
+- It is wrapped in an attention-grabbing marker that reads as "this just
+  happened, pick up from here", not a database entry:
+  `[Most recent session with <user>, <relative time>]:` … `[End of recent
+  session — continue naturally from where you left off]`. The username uses the
+  existing dynamic vars (`user_display_name` / `user_name`) — no hardcoded name.
+  The relative time ("earlier today", "yesterday", "N days ago", "last week",
+  "N weeks ago") is computed from the summary file's mtime via the new
+  `_resolve_session_summary_path` helper; if it can't be computed cleanly the
+  time portion is omitted rather than invented.
+- If only one summary exists, it is the most recent — it goes to the tail and
+  the older-summaries block simply does not render.
+
+Summary generation and storage are unchanged — only *where* the most recent one
+is injected changed. The `INJECTED MEMORY` instruction-layer text is untouched
+and still applies to the older summaries higher in the block.
+
+**Reason:** recency in the prompt context = stronger attention weighting at
+generation time. The intent is for the model to surface the most recent session
+naturally in its first response of a new chat.
+
+Verified: `app.py` parses clean.
+
+- ⚠️ DO NOT move the most-recent session summary back into the main system
+  block — tail position is intentional for attention weighting.
+
+---
+
+## May 19 2026 — "Bind to Character" Control on the System Prompts Page
+
+**Files:** templates/config.html (frontend only — reuses existing backend routes)
+
+**The bug:** the system-prompts page's **✅ Activate** button silently bound the
+selected template to whatever character happened to be selected elsewhere
+(`character-select` on the Character tab), with no visible indication of which
+character that was. The user repeatedly bound templates to the wrong character.
+
+**The fix — a new, explicit Bind control:** a `Bind to character:` row was
+added below the Activate row, with a character dropdown and a **🔗 Bind**
+button. The dropdown is populated from the existing `/list_characters`
+endpoint and **defaults to "-- Select character --" (no pre-selection)**, so
+the user must make a deliberate choice — this is what prevents the silent-bind
+bug from recurring. The Bind button stays disabled until *both* a template and
+a character are chosen. On click it POSTs to the existing
+`/character_system_prompt/<n>` route with `{system_prompt: <filename>}`, then
+shows a status line naming both items — e.g.
+`✅ Bound 'GPT-4o.txt' to character 'Aria'` — or a red error line on failure.
+
+**Activate is unchanged:** it still sets the global default
+(`active_system_prompt` in settings.json) and keeps its own existing
+current-character bind behaviour. Bind is a *separate, additional* access
+point — no new endpoints, no change to the character-editor binding flow.
+
+- ⚠️ DO NOT consolidate the Bind and Activate buttons — the separation is
+  intentional. Activate = global default; Bind = explicit per-character write.
+  Merging them reintroduces the silent-binding bug this change exists to fix.
+
+---
+
 ## May 19 2026 — "📋 Paste Transcript" Input-Menu Option
 
 **Files:** templates/index.html (frontend only — no backend, mobile.html untouched)
