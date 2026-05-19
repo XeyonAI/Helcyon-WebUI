@@ -172,26 +172,101 @@ def _doc_query_keywords(user_query):
             if t not in _DOC_STOPWORDS and len(t) > 2]
 
 
-def _score_doc(fname, filepath, query_keywords):
-    """Score one document against query keywords.
-    Filename hits: 3×.  Text-content-preview hits (first 1 000 chars): 1×.
-    Uses word-boundary regex so 'doc' never hits 'docker'."""
+# An optional 'Keywords: a, b, c' line at the top of a document — same
+# convention as memory blocks (see _parse_memory_blocks). Lets a doc declare
+# the topics it should be retrieved for, beyond what its filename says.
+_DOC_KEYWORDS_RE = re.compile(r'^keywords\s*:\s*(.*)$', re.IGNORECASE)
+
+
+def _extract_doc_keywords(content):
+    """Pull an optional leading 'Keywords: a, b, c' line out of a document.
+
+    Mirrors the memory-block Keywords convention: case-insensitive, separated
+    by , ; or :, trailing punctuation stripped, lower-cased. Only the first
+    few non-empty lines are scanned so a stray 'Keywords:' deeper in the prose
+    is never mistaken for the tag line.
+
+    Returns (keywords_list, content_with_the_line_removed). When no line is
+    found returns ([], content) unchanged — untagged docs are unaffected.
+    """
+    if not content:
+        return [], content
+    lines = content.split('\n')
+    seen = 0
+    for i, line in enumerate(lines):
+        if not line.strip():
+            continue
+        seen += 1
+        if seen > 4:
+            break
+        m = _DOC_KEYWORDS_RE.match(line.strip())
+        if m:
+            keywords = []
+            for kw in re.split(r'[,;:]+', m.group(1)):
+                kw = re.sub(r'[\.\!\?,;:]+$', '', kw.strip().lower()).strip()
+                if kw:
+                    keywords.append(kw)
+            rest = '\n'.join(lines[:i] + lines[i + 1:]).strip()
+            return keywords, rest
+    return [], content
+
+
+def _doc_scoring_data(filepath):
+    """Read a document's first 1 000 chars once and return
+    (curated_keywords, preview_text_lower) for scoring. The curated Keywords
+    line, if any, is stripped from the preview so content scoring never
+    double-counts it."""
+    raw = _read_doc_content(filepath, max_chars=1000) or ''
+    doc_keywords, body = _extract_doc_keywords(raw)
+    return doc_keywords, body.lower()
+
+
+def _curated_kw_match(doc_keyword, query_lower):
+    """True when a curated doc keyword is present in the user's query.
+
+    Single-word keywords match that word (word-bounded). Multi-word keywords
+    require ALL their words present — so a curated 'weight training' fires on
+    'I do weight training' but NOT on 'training my dog'. This is the lever for
+    disambiguating broad words: pair a vague word with a context word so the
+    doc isn't pulled into unrelated conversations.
+    """
+    words = doc_keyword.split()
+    if not words:
+        return False
+    return all(re.search(r'\b' + re.escape(w) + r'\b', query_lower) for w in words)
+
+
+def _score_doc(fname, filepath, query_keywords, doc_keywords=None,
+               preview_lower=None, query_lower=""):
+    """Score one document against a query.
+
+    Filename hits ×3 and content-preview hits ×1 are matched per query token.
+    Curated Keywords-line hits ×3 are matched per curated keyword via
+    _curated_kw_match — a multi-word curated keyword scores only when ALL its
+    words appear in the query. Word-boundary matching throughout so 'doc'
+    never hits 'docker'.
+
+    doc_keywords / preview_lower are read from disk when not supplied, so a
+    caller that already has them avoids a second read. query_lower defaults to
+    the query keywords joined — callers with the raw query should pass it so
+    multi-word curated keywords can match words the tokeniser drops (e.g.
+    stopwords).
+    """
     fname_norm = fname.lower().replace('_', ' ').replace('-', ' ').replace('.', ' ')
+    if doc_keywords is None or preview_lower is None:
+        doc_keywords, preview_lower = _doc_scoring_data(filepath)
+    if not query_lower:
+        query_lower = ' '.join(query_keywords)
     score = 0
     for kw in query_keywords:
         pat = r'\b' + re.escape(kw) + r'\b'
         if re.search(pat, fname_norm):
             score += 3
-    # Content preview: always runs for short queries (≤2 keywords) across all file types
-    # so a single first-name query can match on filename + content combined, giving it a
-    # higher score than a competing doc that only has one of the two.
-    # For longer queries the old behaviour holds: txt/md only, and only when filename scored 0.
-    _short_query = len(query_keywords) <= 2
-    if _short_query or (fname.lower().endswith(('.txt', '.md')) and score == 0):
-        preview = (_read_doc_content(filepath, max_chars=1000) or '').lower()
-        for kw in query_keywords:
-            if re.search(r'\b' + re.escape(kw) + r'\b', preview):
-                score += 1
+        if re.search(pat, preview_lower):
+            score += 1
+    for dk in doc_keywords:
+        if _curated_kw_match(dk, query_lower):
+            score += 3
     return score
 
 
@@ -251,7 +326,8 @@ def _extract_perspective(content):
 # --------------------------------------------------
 def load_project_documents(project_name, user_query=""):
     """Load the best-matching document from a project's documents folder.
-    Scores filename (3×) and text-file content preview (1×).
+    Scores filename (×3), an optional leading 'Keywords:' line (×3), and
+    content preview (×1).
     Returns empty string when no match or no usable keywords."""
     if not project_name:
         return ""
@@ -276,7 +352,8 @@ def load_project_documents(project_name, user_query=""):
         _fn = fname.lower().replace('_', ' ').replace('-', ' ').replace('.', ' ')
         if not any(re.search(r'\b' + re.escape(kw) + r'\b', _fn) for kw in query_keywords):
             continue
-        s = _score_doc(fname, os.path.join(docs_dir, fname), query_keywords)
+        s = _score_doc(fname, os.path.join(docs_dir, fname), query_keywords,
+                       query_lower=user_query.lower())
         if s > best_score:
             best_score, best_file = s, fname
 
@@ -297,6 +374,10 @@ def load_project_documents(project_name, user_query=""):
     else:
         print(f"📄 Loaded {best_file}: {original_len} chars (~{original_len//4} tokens)")
 
+    # Strip any curated Keywords line before injection (retrieval tag, not
+    # content) — must run before _extract_perspective so a leading Keywords
+    # line can't hide a PERSPECTIVE tag on the line below it.
+    _, content = _extract_doc_keywords(content)
     prefix, suffix, content = _extract_perspective(content)
     return (
         "\n\n"
@@ -314,8 +395,17 @@ def load_project_documents(project_name, user_query=""):
 # --------------------------------------------------
 def load_global_documents(user_query=""):
     """Load the best-matching document from the global_documents folder.
-    Scores filename (3×) and text-file content preview (1×).
-    Drop any .txt/.md/.pdf/.docx file into global_documents/ to add it to the pool."""
+
+    A document is eligible when the query shares a keyword with EITHER its
+    filename OR an optional leading 'Keywords: a, b, c' line (same convention
+    as memory blocks). Scoring: filename ×3, curated keyword ×3, content
+    preview ×1.
+
+    Drop any .txt/.md/.pdf/.docx file into global_documents/ to add it to the
+    pool. Add a 'Keywords:' line as the first line to control what the doc is
+    retrieved for — a single curated keyword hit (score 3) is enough to
+    trigger injection, so curate them deliberately to avoid accidental pulls.
+    """
     global_docs_dir = os.path.join(os.path.dirname(__file__), "global_documents")
 
     if not os.path.exists(global_docs_dir):
@@ -328,35 +418,43 @@ def load_global_documents(user_query=""):
     query_keywords = _doc_query_keywords(user_query)
     if not query_keywords:
         return ""
+    query_lower = user_query.lower()
 
-    # Scale minimum score with query length.
-    # 1 keyword  → 3: must be a clean filename hit (score=3).
-    # 2 keywords → 5: blocks the 3+1 cross-source false positive where one keyword
-    #                  happens to be in the filename and a different keyword appears in
-    #                  the content — those two signals are unrelated and should not combine
-    #                  to trigger injection. Genuine 2-keyword matches need filename×2 (6)
-    #                  or filename + both keywords in content (3+1+1=5).
-    # 3+ keywords → 6: requires at least two filename hits or one filename + solid content.
+    # Threshold: a doc carrying a curated Keywords line has been deliberately
+    # tagged, so a flat low bar is enough — one filename OR curated-keyword hit
+    # (score 3) injects it. An UNtagged doc keeps the original length-scaled
+    # bar, which guards against weak cross-source matches (one keyword in the
+    # filename, an unrelated keyword in the content) combining by accident.
     _n_kws = len(query_keywords)
-    _min_score = 3 if _n_kws == 1 else (5 if _n_kws == 2 else 6)
+    _untagged_min = 3 if _n_kws == 1 else (5 if _n_kws == 2 else 6)
+    _tagged_min = 3
 
     best_file, best_score = None, 0
     for fname in all_files:
-        # Gate: skip any doc whose filename shares no keyword with the query.
-        # Global docs are named reference files about specific people/topics — a filename
-        # hit is a necessary (not just sufficient) signal of genuine relevance.
-        _fn = fname.lower().replace('_', ' ').replace('-', ' ').replace('.', ' ')
-        if not any(re.search(r'\b' + re.escape(kw) + r'\b', _fn) for kw in query_keywords):
+        fpath = os.path.join(global_docs_dir, fname)
+        doc_keywords, preview_lower = _doc_scoring_data(fpath)
+        fname_norm = fname.lower().replace('_', ' ').replace('-', ' ').replace('.', ' ')
+        # Trigger gate: the query must share a keyword with the filename OR the
+        # curated Keywords line. A doc matching neither is never injected.
+        # Multi-word curated keywords need ALL their words present (see
+        # _curated_kw_match) — so a phrase keyword won't fire on one stray word.
+        eligible = any(
+            re.search(r'\b' + re.escape(kw) + r'\b', fname_norm)
+            for kw in query_keywords
+        ) or any(_curated_kw_match(dk, query_lower) for dk in doc_keywords)
+        if not eligible:
             continue
-        s = _score_doc(fname, os.path.join(global_docs_dir, fname), query_keywords)
-        if s > best_score:
+        s = _score_doc(fname, fpath, query_keywords, doc_keywords,
+                       preview_lower, query_lower)
+        _min = _tagged_min if doc_keywords else _untagged_min
+        if s >= _min and s > best_score:
             best_score, best_file = s, fname
 
-    if not best_file or best_score < _min_score:
-        print(f"⭕ Global docs: no strong match (keywords={query_keywords}, min={_min_score})")
+    if not best_file:
+        print(f"⭕ Global docs: no strong match (keywords={query_keywords})")
         return ""
 
-    print(f"🌐 Global doc match: '{best_file}' (score={best_score}, min={_min_score}, keywords={query_keywords})")
+    print(f"🌐 Global doc match: '{best_file}' (score={best_score}, keywords={query_keywords})")
 
     MAX_CHARS_PER_DOC = 12000
     content = _read_doc_content(os.path.join(global_docs_dir, best_file), max_chars=MAX_CHARS_PER_DOC)
@@ -369,6 +467,11 @@ def load_global_documents(user_query=""):
     else:
         print(f"📄 Global doc loaded: {best_file} ({original_len} chars)")
 
+    # Strip the curated Keywords line before injection — it's a retrieval tag,
+    # not content the model should see (same as memory blocks). Must run before
+    # _extract_perspective so a leading Keywords line doesn't hide a PERSPECTIVE
+    # tag on the line below it.
+    _, content = _extract_doc_keywords(content)
     prefix, suffix, content = _extract_perspective(content)
     return (
         "\n\n"
@@ -891,6 +994,72 @@ def _detect_freshness(query):
     if any(k in q for k in _FRESHNESS_KEYWORDS_WEEK):
         return 'pw'  # past week
     return None
+
+
+def _search_intent_gate(user_msg):
+    """Model-judged web-search gate for AMBIGUOUS messages.
+
+    The regex triggers cannot tell a genuine request ("find out where she is")
+    from reminiscing ("I didn't find out where she is") — only meaning can, and
+    regex has no access to meaning. When an ambiguous phrase is seen, this asks
+    the loaded model itself, in one short isolated call, whether a search is
+    actually warranted. This mirrors how frontier assistants decide to search —
+    contextual model judgement — implemented as a cheap pre-pass because the
+    local llama-server backend has no reliable native tool-calling.
+
+    It is a self-contained classifier prompt: it does NOT touch the main chat
+    prompt and does NOT rely on the trained [WEB SEARCH: …] tag format.
+
+    Returns (should_search: bool, query: str). On any error it fails CLOSED —
+    (False, "") — because the problem being solved is false-positive searches,
+    so a missed gate should suppress rather than search.
+    """
+    _instructions = (
+        "You are a routing classifier for a chat assistant. You are shown one "
+        "message the user sent. Decide whether answering it well genuinely "
+        "needs a live web search RIGHT NOW.\n\n"
+        "Answer SEARCH only if the message asks for factual, external, or "
+        "current information — news, prices, dates, statistics, events, "
+        "product/person/place facts, how-to steps — or explicitly asks to "
+        "search the web.\n"
+        "Answer NO_SEARCH for everything else: feelings, personal or emotional "
+        "talk, reminiscing about the past, opinions, roleplay, small talk, or "
+        "anything about the user's own life that the web cannot answer.\n\n"
+        "Reply with EXACTLY one line and nothing else:\n"
+        "NO_SEARCH\n"
+        "or\n"
+        "SEARCH: <query>\n"
+        "where <query> is a concise web query of a few plain keywords — the "
+        "topic only, with no verbs like 'search' or 'find out'."
+    )
+    try:
+        r = requests.post(
+            f"{API_URL}/v1/chat/completions",
+            json={
+                "messages": [
+                    {"role": "system", "content": _instructions},
+                    {"role": "user", "content": (user_msg or "")[:2000]},
+                ],
+                "temperature": 0,
+                "max_tokens": 32,
+                "stream": False,
+            },
+            timeout=20,
+        )
+        verdict = (
+            r.json().get("choices", [{}])[0]
+            .get("message", {}).get("content", "") or ""
+        ).strip()
+    except Exception as e:
+        print(f"⚠️ Search intent gate failed ({e}) — defaulting to NO_SEARCH", flush=True)
+        return False, ""
+    print(f"🤔 Intent gate verdict: {repr(verdict[:120])}", flush=True)
+    _m = re.search(r'(?im)^\s*SEARCH\s*:\s*(.+)$', verdict)
+    if _m:
+        q = _m.group(1).strip().strip('"\'').rstrip('?.!,').strip()
+        if len(q) > 2 and not q.upper().startswith("NO_SEARCH"):
+            return True, q
+    return False, ""
 
 
 def do_web_search(query):
@@ -3475,25 +3644,39 @@ def chat():
                 ).strip()
                 print(f"🔍 Search trigger check on: {repr(_user_msg[:100])}", flush=True)
 
-                # Opt-in search: only fire on unambiguous imperative requests.
-                # The pattern is intentionally tight — bare "find out" / "look up"
-                # without a clear object are the main false-positive sources, so
-                # those branches require structure after the verb.
-                _trigger_pat = (
+                # ── Search-trigger detection — two precision tiers ──────────
+                # EXPLICIT triggers are unambiguous imperatives ("search for X",
+                # "google that", "look it up"). They virtually never occur as
+                # narration, so a match fires the search immediately — the
+                # fast-path, no extra model call.
+                #
+                # AMBIGUOUS triggers recur innocently in ordinary speech ("find
+                # out where she is", "look up his number", "any news on your
+                # sister"). A regex cannot tell a request from reminiscing —
+                # only meaning can — so an ambiguous match is routed to the
+                # intent gate (_search_intent_gate), which has the model judge
+                # with full context. That is what stops emotional/personal
+                # messages triggering nonsense searches.
+                _explicit_pat = (
                     r'\b(?:'
                     r'do (?:a |another )?search(?:\s+(?:for|on|about|up))?|'
                     r'search\s+(?:for|up|online|the (?:web|net|internet))|'
                     r'look\s+(?:it|that|this|them|these|those)\s+up|'
+                    r'google\s+(?:that|it|the\b|\w)|'
+                    r'check\s+online|look\s+online|search\s+online|find\s+(?:it\s+)?online'
+                    r')'
+                )
+                _ambiguous_pat = (
+                    r'\b(?:'
                     r'look\s+up\s+\w+|'
                     r'find out\s+(?:about|what|who|when|where|why|how|if|whether)\s+\w|'
-                    r'google\s+(?:that|it|the\b|\w)|'
-                    r'check\s+online|look\s+online|search\s+online|find\s+(?:it\s+)?online|'
                     r'any (?:news|updates|info|word) (?:on|about)\b|'
                     r'(?:get|give)\s+me\s+(?:the\s+)?(?:latest|current|up[ -]to[ -]date|fresh)\s+'
                     r'(?:info|news|status|updates?)?\s*(?:on|about)\b'
                     r')'
                 )
-                _trigger_matches = list(_re.finditer(_trigger_pat, _user_msg, _re.IGNORECASE))
+                _explicit_matches = list(_re.finditer(_explicit_pat, _user_msg, _re.IGNORECASE))
+                _ambiguous_matches = list(_re.finditer(_ambiguous_pat, _user_msg, _re.IGNORECASE))
 
                 # Clause-scoped self-reference filter. For each trigger match,
                 # walk back to the nearest clause boundary (`,`/`.`/`?`/`!`/`;`
@@ -3540,19 +3723,37 @@ def chat():
 
                 _should_search = False
                 _firing_trigger = None
-                for _m in _trigger_matches:
+                _gate_query = None  # set when the intent gate supplies the query
+
+                # 1. EXPLICIT imperative (not self-referential) → search now.
+                for _m in _explicit_matches:
                     if not _is_self_ref_at(_user_msg, _m.start()):
                         _should_search = True
                         _firing_trigger = _m.group(0)
                         break
-                if _trigger_matches and not _should_search:
-                    print(
-                        f"💬 Self-referential context around all {len(_trigger_matches)} "
-                        f"trigger phrase(s) ({repr(_user_msg[:80])}) — suppressing search",
-                        flush=True,
+                if _should_search:
+                    print(f"🔍 Explicit search request: {repr(_firing_trigger)}", flush=True)
+                else:
+                    # 2. AMBIGUOUS phrase (not self-referential) → ask the gate.
+                    _amb_hit = next(
+                        (_m for _m in _ambiguous_matches
+                         if not _is_self_ref_at(_user_msg, _m.start())),
+                        None,
                     )
-                elif _should_search:
-                    print(f"🔍 Search trigger fired on phrase: {repr(_firing_trigger)}", flush=True)
+                    if _amb_hit is not None:
+                        print(f"🤔 Ambiguous search phrase {repr(_amb_hit.group(0))} "
+                              f"— consulting intent gate", flush=True)
+                        _gate_ok, _gate_q = _search_intent_gate(_user_msg)
+                        if _gate_ok:
+                            _should_search = True
+                            _gate_query = _gate_q
+                            print(f"🔍 Intent gate → SEARCH: {repr(_gate_q)}", flush=True)
+                        else:
+                            print(f"💬 Intent gate → NO_SEARCH "
+                                  f"({repr(_user_msg[:80])})", flush=True)
+                    elif _explicit_matches or _ambiguous_matches:
+                        print(f"💬 Self-referential context around trigger "
+                              f"phrase(s) — suppressing search", flush=True)
 
                 # --- Local knowledge pre-check ---
                 _local_doc_hint = False  # set True when a doc match suppresses the search
@@ -3612,7 +3813,8 @@ def chat():
                                 for _gf in os.listdir(_global_dir):
                                     _gpath = os.path.join(_global_dir, _gf)
                                     if os.path.isfile(_gpath):
-                                        _gs = _score_doc(_gf, _gpath, _lk_kws)
+                                        _gs = _score_doc(_gf, _gpath, _lk_kws,
+                                                          query_lower=_user_msg.lower())
                                         if _gs >= _doc_threshold and _gs > _best_doc_score:
                                             _best_doc_score = _gs
                                             _best_doc_name = _gf
@@ -3707,8 +3909,11 @@ def chat():
                     return
 
                 # Clean the query: strip filler and meta-request verbs,
-                # preserve all content words (subject, topic, context)
-                _q = _user_msg
+                # preserve all content words (subject, topic, context).
+                # When the intent gate supplied a query it is already a clean
+                # topic — start from it instead of the raw message (the cleaning
+                # passes below are harmless no-ops on an already-clean query).
+                _q = _gate_query if _gate_query else _user_msg
                 _q = _re.sub(r'(?i)^(?:(?:hey|hi|okay|ok|yes|yeah|sure|babe|no|oh)[\.,!\s]*)+', '', _q).strip()
                 _q = _re.sub(r'(?i)^(?:grok|helcyon|claude|gemma|samantha|nebula)[,\.]?\s*', '', _q).strip()
                 _q = _re.sub(
@@ -5745,39 +5950,46 @@ def save_theme():
 
 @app.route("/save_bg", methods=["POST"])
 def save_bg():
-    """Write background-image into the active theme CSS file."""
+    """Save an uploaded background image to static/ as a real file and return
+    its URL. Storing the image as a file (not base64) avoids the localStorage
+    ~5MB quota that silently broke large wallpapers."""
     try:
-        data = request.get_json()
-        data_url = data.get("data_url", "")
-        path = get_active_theme_path()
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                css = f.read()
-        else:
-            css = ":root {}\n"
-        # Remove any existing bg block
-        css = re.sub(r'/\* hwui-bg-start \*/.*?/\* hwui-bg-end \*/', '', css, flags=re.DOTALL).strip()
-        if data_url:
-            bg_block = f"\n/* hwui-bg-start */\nbody {{ background-image: url(\"{data_url}\") !important; background-size: cover !important; background-position: center center !important; background-attachment: fixed !important; }}\n/* hwui-bg-end */"
-            css = css + bg_block
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(css)
-        return jsonify({"status": "ok"})
+        if 'file' not in request.files:
+            return jsonify({"error": "No file provided"}), 400
+        file = request.files['file']
+        if not file.filename:
+            return jsonify({"error": "No file selected"}), 400
+        ext = os.path.splitext(file.filename)[1].lower() or '.jpg'
+        if ext not in ('.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'):
+            return jsonify({"error": f"Unsupported image type: {ext}"}), 400
+        import glob as _glob
+        static_dir = os.path.join(os.path.dirname(__file__), "static")
+        os.makedirs(static_dir, exist_ok=True)
+        # Drop any previous background file (any extension) so old ones don't orphan
+        for old in _glob.glob(os.path.join(static_dir, "hwui-bg.*")):
+            try:
+                os.remove(old)
+            except Exception:
+                pass
+        save_name = f"hwui-bg{ext}"
+        file.save(os.path.join(static_dir, save_name))
+        print(f"🖼️ Background image saved: static/{save_name}")
+        return jsonify({"status": "ok", "url": f"/static/{save_name}"})
     except Exception as e:
         print(f"❌ save_bg failed: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route("/clear_bg", methods=["POST"])
 def clear_bg():
-    """Remove background-image from the active theme CSS file."""
+    """Delete the saved background image file(s)."""
     try:
-        path = get_active_theme_path()
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                css = f.read()
-            css = re.sub(r'/\* hwui-bg-start \*/.*?/\* hwui-bg-end \*/', '', css, flags=re.DOTALL).strip()
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(css + "\n")
+        import glob as _glob
+        static_dir = os.path.join(os.path.dirname(__file__), "static")
+        for old in _glob.glob(os.path.join(static_dir, "hwui-bg.*")):
+            try:
+                os.remove(old)
+            except Exception:
+                pass
         return jsonify({"status": "ok"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

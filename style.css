@@ -49,6 +49,12 @@
   --field-bg: #0a0d10;
   --field-border: #1d3349;
   --field-border-focus: #2a3f50;
+
+  /* ── Chat column width — SINGLE SOURCE OF TRUTH ──────────────────────
+     Change this ONE value to resize the chat column on every theme.
+     The chat #container, all theme files, midnight/evening, and the
+     config page (via calc) all reference this. Nothing else to touch. */
+  --chat-width: 860px;
 }
 
 body {
@@ -243,7 +249,7 @@ body {
 #container,
 #center-column {
   flex: 1;
-  max-width: 860px;
+  max-width: var(--chat-width);
   min-width: 480px;
   background-color: var(--container-bg);
   padding: 1.5rem;
@@ -262,12 +268,18 @@ body {
   padding-left: 260px;
 }
 
-/* Config page has no inner #chat wrapper, so its content sits 48px wider
-   than the chat page (chat nests messages inside #chat, which adds 1.5rem
-   padding each side). Trim the config #container by that 48px so the
-   visible content width matches the chat page. 860 - 48 = 812. */
+/* Config page has no inner #chat wrapper, so its content sits wider than
+   the chat page (chat nests messages inside #chat, which adds 1.5rem
+   padding each side = 3rem total). Subtract that 3rem so the visible
+   content width matches the chat page. Tracks --chat-width automatically. */
 #config-page #container {
-  max-width: 812px;
+  max-width: calc(var(--chat-width) - 3rem);
+  /* Extend the config panel up behind the fixed top bar so it meets it with
+     no gap — mirrors the chat page pillar. margin-top cancels #main's
+     padding-top:80px; padding-top re-insets the tab content by the same 80px
+     (plus the panel's own 1.5rem) so nothing shifts. */
+  margin-top: -80px;
+  padding-top: calc(80px + 1.5rem);
 }
 
 #center-column h3, #center-column h2, #center-column label {

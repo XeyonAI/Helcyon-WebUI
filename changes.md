@@ -1,3 +1,292 @@
+## May 19 2026 — "📋 Paste Transcript" Input-Menu Option
+
+**Files:** templates/index.html (frontend only — no backend, mobile.html untouched)
+
+**The bug:** when a user pasted an HWUI chat-file transcript — the
+`[timestamp] Speaker: …` format — directly into the message textarea, the
+model recognised those timestamped turns as conversation history and
+*continued* them, instead of discussing the pasted text as quoted reference
+material.
+
+**The fix:** a new **📋 Paste Transcript** option in the `+` input menu opens a
+modal (a multi-line textarea + optional filename, defaulting to
+`pasted-transcript-{YYYY-MM-DD-HHmm}.txt`). On **Attach**, the pasted text is
+pushed into `window.attachedDocuments` exactly as a file pick would, then
+`renderDocumentPreviews()` is called. From there it flows through the existing
+document-attachment pipeline: `wrapAttachedDocuments` wraps it in
+`[ATTACHED DOCUMENT: …]` markers so the model reads it as quoted reference, not
+as turns to continue. Empty textarea → Attach briefly highlights the field and
+does nothing. Cancel / backdrop click / Escape close the modal. The modal
+reuses the existing `.modal` styling tokens (z-index, backdrop, colours).
+
+- ⚠️ DO NOT revert — this deliberately reuses the `attachedDocuments` system.
+  Do not refactor pasted transcripts into a separate path or parallel state;
+  the whole point is that they go through the same marker-wrapping pipeline as
+  file attachments.
+
+---
+
+## May 18 2026 — Web Search: Intent Gate for Ambiguous Triggers
+
+**Files:** app.py
+
+**The bug:** web search fired on messages with no search intent. Example from
+a transcript — an emotional monologue containing *"…I didn't find out where
+she is…"* triggered a nonsense Urban Dictionary search. Root cause: search
+intent was decided by **regex over the raw message**. The pattern
+`find out (where|what|…) <word>` matched the narration, and the
+self-reference filter that should have caught it didn't recognise
+`I didn't …` / `I did …` / `I had …` as narration openers. Regex
+fundamentally cannot tell a request from reminiscing — that needs meaning.
+
+**The fix — a two-tier trigger with a model-judged gate (option A):**
+- Triggers are split into two precision tiers in `_web_search_stream`:
+  - **EXPLICIT** (`_explicit_pat`) — unambiguous imperatives ("search for X",
+    "google that", "look it up", "check online"). A match fires the search
+    immediately — fast-path, no extra model call.
+  - **AMBIGUOUS** (`_ambiguous_pat`) — phrases that recur innocently in
+    ordinary speech ("find out where…", "look up his number", "any news
+    on…"). A match no longer fires a search directly.
+- New `_search_intent_gate(user_msg)` — when an ambiguous phrase is seen, it
+  asks the loaded model itself, in one short isolated `/v1/chat/completions`
+  call (`temperature 0`, `max_tokens 32`), whether a search is genuinely
+  warranted. Returns `(should_search, query)`. This is the frontier approach —
+  contextual model judgement — done as a cheap pre-pass because the local
+  llama-server has no reliable native tool-calling.
+- The gate **fails closed**: any error → `(False, "")`. The problem is
+  false-positive searches, so a missed gate suppresses rather than searches.
+- The gate is a self-contained classifier prompt — it does NOT modify the main
+  chat prompt and does NOT use the trained `[WEB SEARCH: …]` tag format, so it
+  respects the existing model-trained tag gating.
+- When the gate returns a query it is used directly (`_gate_query`), skipping
+  the brittle regex query-extraction that previously mangled rambling messages
+  into nonsense queries.
+
+Verified: `import` clean; gate fails closed when llama-server is down; the
+transcript message routes to the gate (not an instant search); explicit
+requests still fire instantly; plain conversation triggers nothing. The live
+gate verdict needs testing with the model server running.
+
+- ⚠️ DO NOT move ambiguous phrases (`find out …`, `look up …`, `any news
+  on …`) back into the instant-fire path — regex cannot judge intent on
+  free-form speech, which is the original bug. They must go through the gate.
+
+**Files:** app.py, global_documents/Runpod.txt
+
+**The bug:** global-document injection only fired for the exact bare keyword
+(e.g. `runpod`). Every natural question (`how does runpod work`, `what is
+runpod used for`, …) injected nothing. Two causes in `load_global_documents`
+/ `_score_doc`:
+- `min_score` scaled steeply with query length (1 kw → 3, 2 → 5, 3+ → 6), but
+  a single-topic doc named after one keyword can only earn ~3–4 points, so it
+  could never clear the bar on a multi-word query.
+- Logic flaw in `_score_doc`: for 3+ keyword queries the content preview was
+  scored *only when the filename scored 0* — so a filename hit actively
+  disqualified the doc by capping it at 3 against a min of 6.
+
+**The fix — opt-in curated keywords, same convention as memory blocks:**
+- A document may now carry an optional leading `Keywords: a, b, c` line
+  (case-insensitive, `, ; :` separators — mirrors `_parse_memory_blocks`).
+  New helpers `_extract_doc_keywords()` / `_doc_scoring_data()`.
+- Trigger gate widened: a global doc is eligible when the query shares a
+  keyword with the filename **OR** the curated Keywords line. Curated keywords
+  can trigger a doc on their own (e.g. "what does helcyon use" pulls a doc
+  tagged `helcyon` even with no filename match).
+- Scoring: filename ×3, curated keyword ×3, content preview ×1. `_score_doc`
+  rewritten — content preview now always scored (the score==0 gate removed).
+- **Multi-word curated keywords are AND-matched** (`_curated_kw_match`): a
+  single-word keyword matches that word, but a multi-word keyword scores/
+  triggers only when **all** its words appear in the query. So a curated
+  `full weight training` fires on "explain full weight training" but NOT on
+  "training my dog" or "gym weight training". This is the curation lever for
+  broad words — pair a vague word with a context word instead of listing it
+  bare. (Earlier intra-keyword substring matching is gone: it made phrases
+  no more precise than the loosest word in them.) `_score_doc` /
+  `load_global_documents` take a `query_lower` arg so phrase words a
+  tokeniser would drop (stopwords) can still be matched.
+- Threshold: docs **with** a Keywords line use a flat low bar (score ≥ 3 — one
+  filename or one curated hit). Docs **without** one keep the original
+  length-scaled bar, so untagged docs are unaffected.
+- The `Keywords:` line is stripped before injection (retrieval tag, not
+  content the model should see) — verified no leak. Strip runs before
+  `_extract_perspective` so a leading Keywords line can't hide a PERSPECTIVE
+  tag below it.
+- Same Keywords-line stripping added to `load_project_documents` for
+  consistency (it shares `_score_doc`) — prevents the tag leaking into
+  injected project-doc content. Project docs keep their filename-only trigger.
+
+Verified by running `load_global_documents` directly: all previously failing
+query phrasings now inject; curated-keyword-only queries (`helcyon`, `lora`)
+inject without the word "runpod"; multi-word keywords (`full weight training`,
+`model training`) inject only when all their words are present; off-topic
+queries that merely share one broad word — "training my dog", "gym weight
+training", "weather today" — correctly inject nothing.
+
+`global_documents/Runpod.txt` (dev-build test file) was given an example
+`Keywords:` line — note it deliberately avoids the bare word `training`,
+using `full weight training` / `model training` instead so dog-training and
+gym chatter can't pull it. Review/adjust the wording for the real build.
+
+- ⚠️ DO NOT revert to filename-only triggering or the scaled min_score for
+  tagged docs — that is the original bug. Curate Keywords lines deliberately:
+  a single curated keyword hit is enough to trigger injection.
+
+---
+
+## May 18 2026 — Restored Concrete Memory-Tag Example (Generic Name)
+
+**Files:** utils/session_handler.py
+
+The earlier abstract-placeholder rewrite of the MEMORY TAGS example
+(`'<user_name> told me about...' where <user_name> is...`) broke memory tag
+emission: the angle-bracket / "where X is..." syntax was abstract enough that
+the model stopped emitting the `[MEMORY ADD: ...]` tag and instead
+hallucinated that it had saved.
+
+Fixed: restored a concrete fill-in-the-blank example using the generic name
+"Alex", with an explicit instruction not to copy the example name literally —
+`Example: 'Alex told me about...' — substitute the real user's name, never
+the example name.`
+
+- ⚠️ DO NOT revert — concrete examples are required for tag emission;
+  abstract placeholder syntax suppresses it. The name stays generic ("Alex"),
+  never a real user's name.
+
+---
+
+## May 18 2026 — Removed Hardcoded User Name From Memory-Tag Instruction Layer
+
+**Files:** utils/session_handler.py
+
+`get_instruction_layer()`'s MEMORY TAGS section used a literal hardcoded user
+name in its first-person example: `Example: 'Chris told me about...'`. This
+leaked a real user's name into the prompt, causing the model to write memory
+entries about "Chris" regardless of who the active user actually was —
+cross-user contamination.
+
+Fixed: the example is now a generic placeholder — `'<user_name> told me
+about...' where <user_name> is the user you are speaking with` — and the line
+explicitly instructs the model to refer to the user by their actual name. No
+other changes to the file.
+
+- ⚠️ DO NOT revert — hardcoded user names cause cross-user contamination and
+  violate the project rule against hardcoding any real user name into app
+  code or prompts.
+
+---
+
+## May 17 2026 — Centre Pillar Restored Under Background Image
+
+**Files:** templates/config.html, templates/index.html
+
+The frontier themes strip `#container`'s background (transparent, no shadow,
+no radius), so with a background image the chat text sat directly on the
+wallpaper and was hard to read. Fix: when an image is active, the injected
+`<style id="hwui-bg-style">` now also restores a solid centre pillar —
+`.chat-page #container { background-color: var(--container-bg) !important;
+border-radius: 12px !important; box-shadow: 0 0 30px rgba(0,0,0,0.6)
+!important; }`.
+
+- Uses `var(--chat-bg)` — the theme's own flat backdrop colour — so the chat
+  column matches the normal frontier look, wallpaper showing only in the side
+  margins. The soft box-shadow keeps the pillar edge defined.
+- Pillar lives inside the image-mode style block only — plain colour mode
+  keeps the frontier themes flat/pillarless as designed.
+- Model message bubbles are deliberately NOT restored — they stay transparent,
+  so the frontier look is preserved; only the pillar comes back.
+- The pillar extends up behind the fixed top bar (no gap): `margin-top: -80px`
+  cancels `#main`'s `padding-top: 80px`, and `padding-top: calc(80px + 0.5rem)`
+  re-insets the chat content so it doesn't move.
+- Config page: same extend-up applied to `#config-page #container` in
+  style.css (permanent, not image-mode — the config panel is never stripped).
+  Uses `calc(80px + 1.5rem)` since the config panel's own padding is 1.5rem.
+
+---
+
+## May 17 2026 — Background Image Toggle Fixed (two root causes)
+
+**Files:** app.py, templates/config.html, templates/index.html
+
+The Appearance tab's Theme Colour / Background Image toggle didn't restore a
+wallpaper. TWO separate bugs:
+
+**Bug 1 — storage (the real reason it always failed):** the image was stored
+as a base64 data URL in `localStorage`. A real photo's base64 is several MB;
+`localStorage` has a ~5MB per-origin quota. `setItem` threw `QuotaExceededError`,
+uncaught — so the image silently never saved, and no CSS fix could ever help
+because there was no image data. Fixed by storing the image as a real FILE:
+- `/save_bg` rewritten — accepts a multipart upload, saves it to
+  `static/hwui-bg<ext>` (clears any previous one first), returns its URL.
+- `/clear_bg` rewritten — deletes the saved file.
+- `handleBgImageChange` (config.html) now POSTs the file to `/save_bg` and
+  stores only the short URL in `localStorage` (no quota risk). Loud `alert`
+  on failure instead of silent death. `clearBackground` POSTs `/clear_bg`.
+- ⚠️ DO NOT revert to base64-in-localStorage — that is the original bug.
+
+**Bug 2 — frontier themes hid it even when set:** chatgpt/claude/gemini/grok/
+moonlight kill wallpapers by painting `html`, `body`, AND `#app` opaque with
+`!important`. The injection only set `html, body`, so the opaque `#app` layer
+covered the image. Fixed: `applyBackground()` and index.html's pre-paint
+script now also emit `#app { background: transparent !important; … }`.
+index.html's script also now checks `hwui_bg_mode` so colour mode doesn't show
+a stale cached wallpaper.
+
+Toggle UI (two-button segmented control) and the `hwui_bg_mode` /
+`hwui_bg_image` localStorage keys are unchanged — `hwui_bg_image` just holds a
+URL now instead of a multi-MB base64 blob.
+
+---
+
+## May 17 2026 — Settings Cog Converted to Dropdown Menu
+
+**File:** templates/index.html
+
+The top-bar settings cog (`#settings-link`) changed from `<a href="/config">`
+to a `<div>` that opens a dropdown. The `#settings-link` id is kept so
+style.css's top-bar flex layout is unchanged — top bar height/position
+unaffected.
+- Dropdown (`#cog-menu`) is `position:absolute` below the cog, with parent
+  `#settings-link` set `position:relative`. Uses `var(--modal-bg)` /
+  `var(--modal-border)`.
+- Contents: a "Config Page" link (→ /config) and a live theme switcher —
+  `loadCogThemes()` fetches `/themes/list` once (cached via a data attribute),
+  renders a button per theme; `applyThemeFromCog()` swaps the
+  `#active-theme-link` href, POSTs `/themes/switch`, updates active states.
+- `toggleCogMenu()` + an outside-click close listener. Styling via a `<style>`
+  block in `<head>`; theme buttons use `margin:0 !important` to beat the
+  global button margin.
+- ⚠️ `--text-main` / `--text-muted` are NOT defined in the theme system — used
+  with fallbacks (`var(--text-main, var(--modal-text, #e8e8e8))`, etc.).
+
+---
+
+## May 17 2026 — Chat Width Consolidated to One CSS Variable
+
+**Files:** style.css, themes/{chatgpt,claude,gemini,grok,moonlight}.css
+
+Chat-column width had drifted across 7 places (5 theme files' `.chat-page
+#container` `!important` rules + style.css `#container` + a `#config-page
+#container` override). Every resize meant a multi-file edit, and the config
+page needed a separate magic number (812 = 860 − the `#chat` inner padding).
+
+Consolidated to a single custom property:
+- `style.css :root` → new `--chat-width: 860px;` — the ONLY value to change.
+- `#container, #center-column` → `max-width: var(--chat-width)`.
+- `#config-page #container` → `max-width: calc(var(--chat-width) - 3rem)`
+  (3rem = the chat page's `#chat` 1.5rem×2 padding, which the config page
+  lacks — so the visible content widths stay matched automatically).
+- All 5 theme files → `max-width: var(--chat-width) !important`.
+
+Result: resizing the chat column is now a one-line change to `--chat-width`.
+⚠️ The small-screen responsive breakpoints in style.css (`#container` at
+600px/500px under `@media`) are intentionally left as separate hardcoded
+fallbacks — they are not the desktop width and not meant to track the var.
+⚠️ The `@media (max-width:1400/1024)` blocks in the theme files are now
+redundant (all resolve to `var(--chat-width)`) — harmless, left in place;
+can be deleted in a cosmetic cleanup if wanted.
+
+---
+
 ## May 17 2026 — Attached Document Polluted Retrieval Query
 
 **File:** app.py
@@ -52,6 +341,27 @@ documents.
 ⚠️ Known limit: a document large enough that the turn overflows the full
 context window (~16k) will still be cut by llama.cpp / hit the EOS cliff —
 very large docs need chunking, out of scope here.
+
+---
+
+## May 17 2026 — Branch Button Restored to Assistant Messages
+
+**File:** templates/index.html
+
+The `/chats/branch` backend route was intact, but the frontend branch button
+had been lost in a UI redesign. Restored:
+- New `branchMessage(assistantIndex)` — confirms, POSTs `source_filename` +
+  `message_index` (1-based assistant-turn count) to `/chats/branch`, then
+  `loadChats()` + `openChat(new_filename)`.
+- `renderChatMessages` tracks `assistantCount` (incremented at the top of the
+  assistant-message branch) so each assistant message carries its correct
+  1-based turn number; a git-branch-icon button in the action bar passes it.
+- Deliberately NOT added to the streaming / non-streaming / continue render
+  paths — those are transient; `renderChatMessages` re-renders the full chat
+  with proper buttons once generation completes.
+- ⚠️ `assistantCount` counts rendered (non-hidden) assistant messages — if the
+  backend line-walker ever counts a hidden assistant turn the index could
+  drift by one. Out of scope of the restore; flagged for a future test.
 
 ---
 

@@ -292,7 +292,7 @@
       <button onclick="saveGlobalExampleDialog()" style="background-color:#1f3a5a; border-color:#245080; color:white; margin-top:6px; margin-bottom:4px;">💾 Save Global Example Dialog</button>
       <div id="global-example-dialog-status" style="font-size:12px; color:#6a9; margin-bottom:6px; min-height:16px;"></div>
 
-      <label style="margin-top:14px; display:block;">Post-History Instructions: <span style="font-size:11px; color:#888; font-weight:normal;">Saved with this template — loads/switches with it. Injected last (right before the model replies) and overrides character/project text. Use for hard system rules.</span></label>
+      <label style="margin-top:14px; display:block;">Global Post-History Instructions: <span style="font-size:11px; color:#888; font-weight:normal;">Saved with this template — loads/switches with it. Injected at the bottom of the stack (right before the model replies) and overrides character/project text. Separate from the character card's own post-history field — both are used if set. Use for hard system rules.</span></label>
       <textarea id="global-post-history"
                 placeholder="e.g. When the user is venting, mirror their emotion first — do not pivot to solutions until they signal they want them. Never use bullet points, numbered lists, or headers in emotional replies."
                 style="min-height:120px;"></textarea>
@@ -1948,17 +1948,28 @@ async function saveTTSEngine() {
 }
 
 // --- BACKGROUND IMAGE ---
+// The image is uploaded to the server and saved as a real file; only its
+// short URL is kept in localStorage. ⚠️ DO NOT go back to storing the image
+// as a base64 data URL in localStorage — large images blow the ~5MB quota,
+// setItem throws, and the wallpaper silently fails to save.
 function handleBgImageChange(input) {
   const file = input.files[0];
   if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    const dataUrl = e.target.result;
-    localStorage.setItem('hwui_bg_image', dataUrl);
-    localStorage.setItem('hwui_bg_mode', 'image'); // ensure mode is set
-    applyBackground(dataUrl);
-  };
-  reader.readAsDataURL(file);
+  const formData = new FormData();
+  formData.append('file', file);
+  fetch('/save_bg', { method: 'POST', body: formData })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error || !data.url) {
+        alert('Background upload failed: ' + (data.error || 'unknown error'));
+        return;
+      }
+      const url = data.url + '?v=' + Date.now();  // cache-bust so a replaced image refreshes
+      localStorage.setItem('hwui_bg_image', url);
+      localStorage.setItem('hwui_bg_mode', 'image');
+      applyBackground(url);
+    })
+    .catch(e => alert('Background upload failed: ' + e.message));
   input.value = '';
 }
 
@@ -1970,13 +1981,36 @@ function applyBackground(dataUrl) {
     document.head.appendChild(tag);
   }
   if (dataUrl) {
-    tag.textContent = 'html, body { background-image: url("' + dataUrl + '") !important; background-size: cover !important; background-position: center !important; background-attachment: fixed !important; }';
+    // html+body carry the image. #app MUST be forced transparent too —
+    // the frontier-look themes (chatgpt/claude/gemini/grok/moonlight) paint
+    // #app opaque with !important to kill wallpapers, which otherwise hides
+    // the image even though it's correctly applied to body.
+    tag.textContent =
+      'html, body { background-image: url("' + dataUrl + '") !important;' +
+      ' background-size: cover !important; background-position: center !important;' +
+      ' background-attachment: fixed !important; }' +
+      ' #app { background: transparent !important; background-color: transparent !important;' +
+      ' background-image: none !important; }' +
+      // Restore a solid centre pillar behind the chat so text stays readable
+      // over the wallpaper. The frontier themes strip #container's background;
+      // var(--chat-bg) is the theme's own flat backdrop colour, so the chat
+      // column matches the normal frontier look with the wallpaper showing
+      // only in the side margins. The soft shadow keeps the pillar defined.
+      ' .chat-page #container { background-color: var(--chat-bg) !important;' +
+      ' border-radius: 12px !important; box-shadow: 0 0 30px rgba(0,0,0,0.6) !important;' +
+      // Pull the pillar up behind the fixed top bar — cancels #main's
+      // padding-top:80px — then re-pad inside by the same 80px so the chat
+      // content stays put. The pillar's top edge tucks under the top bar.
+      ' margin-top: -80px !important; padding-top: calc(80px + 0.5rem) !important; }';
   } else {
-    tag.textContent = 'html, body { background-image: none !important; }';
+    // Colour mode — clear all overrides so the active theme fully controls
+    // the background again (including its opaque #app).
+    tag.textContent = '';
   }
 }
 
 function clearBackground() {
+  fetch('/clear_bg', { method: 'POST' }).catch(() => {});
   localStorage.removeItem('hwui_bg_image');
   applyBackground(null);
 }

@@ -53,15 +53,34 @@
   <!-- JS Utils -->
   <script src="/utils/utils.js" defer></script>
   <script>
-    // Apply saved background immediately to avoid flash
+    // Apply saved background image immediately to avoid flash.
+    // Only in image mode — colour mode leaves the theme in control even if
+    // an image is still cached in localStorage.
     (function() {
+      if ((localStorage.getItem('hwui_bg_mode') || 'colour') !== 'image') return;
       var bg = localStorage.getItem('hwui_bg_image');
-      if (bg) {
-        var style = document.createElement('style');
-        style.id = 'hwui-bg-style';
-        style.textContent = 'html, body { background-image: url("' + bg + '") !important; background-size: cover !important; background-position: center !important; background-attachment: fixed !important; }';
-        document.head.appendChild(style);
-      }
+      if (!bg) return;
+      var style = document.createElement('style');
+      style.id = 'hwui-bg-style';
+      // #app is forced transparent so the body image shows on the frontier
+      // themes (chatgpt/claude/gemini/grok/moonlight), which paint #app opaque.
+      style.textContent =
+        'html, body { background-image: url("' + bg + '") !important;' +
+        ' background-size: cover !important; background-position: center !important;' +
+        ' background-attachment: fixed !important; }' +
+        ' #app { background: transparent !important; background-color: transparent !important;' +
+        ' background-image: none !important; }' +
+        // Solid centre pillar so the chat stays readable over the wallpaper —
+        // the frontier themes strip #container's background. var(--chat-bg) is
+        // the theme's own flat backdrop colour, so the chat column matches the
+        // normal frontier look with the wallpaper only in the side margins.
+        ' .chat-page #container { background-color: var(--chat-bg) !important;' +
+        ' border-radius: 12px !important; box-shadow: 0 0 30px rgba(0,0,0,0.6) !important;' +
+        // Pull the pillar up behind the fixed top bar — cancels #main's
+        // padding-top:80px — then re-pad inside by the same 80px so the chat
+        // content stays put. The pillar's top edge tucks under the top bar.
+        ' margin-top: -80px !important; padding-top: calc(80px + 0.5rem) !important; }';
+      document.head.appendChild(style);
     })();
   </script>
 </head>
@@ -254,7 +273,7 @@
           <input type="file" id="chat-document-input" accept=".txt,.md,.pdf,.docx,.odt" multiple style="display:none;" onchange="handleDocumentAttach(this)" />
 
           <!-- Floating pill -->
-          <div id="input-row" style="pointer-events:all;display:flex;flex-direction:row;align-items:center;gap:6px;background:var(--container-bg,#131922);border:1px solid var(--sidebar-border,#2a2a2a);border-radius:16px;padding:8px 10px;box-shadow:0 4px 24px rgba(0,0,0,0.5);width:100%;max-width:760px;box-sizing:border-box;overflow:visible;">
+          <div id="input-row" style="pointer-events:all;display:flex;flex-direction:row;align-items:center;gap:6px;background:var(--container-bg,#131922);border:1px solid var(--sidebar-border,#2a2a2a);border-radius:16px;padding:8px 10px;box-shadow:0 4px 24px rgba(0,0,0,0.5);width:100%;max-width:700px;box-sizing:border-box;overflow:visible;">
 
             <!-- + menu button -->
             <div id="input-menu-wrap" style="position:relative;flex-shrink:0;line-height:0;">
@@ -267,6 +286,7 @@
               <div id="input-menu" class="input-dropup">
                 <button onclick="document.getElementById('chat-image-input').click(); closeInputMenu()" title="Attach Image">📎 Attach Image</button>
                 <button onclick="document.getElementById('chat-document-input').click(); closeInputMenu()" title="Attach a document for the model to read">📄 Attach Document</button>
+                <button onclick="openPasteTranscriptModal(); closeInputMenu()" title="Paste a transcript or text snippet as reference material">📋 Paste Transcript</button>
                 <div class="input-menu-divider"></div>
                 <button onclick="manualSaveChat(); closeInputMenu()" id="save-chat-btn">💾 Save Chat</button>
                 <button onclick="showUpgradeModal('memory'); closeInputMenu()" title="Upgrade to HWUI Pro">Memory ⭐Go Pro</button>
@@ -548,6 +568,29 @@ Examples:
   </div>
 </div>
 
+<!-- Paste Transcript Modal — paste raw text and attach it through the document-attachment pipeline -->
+<style>
+  #paste-transcript-filename, #paste-transcript-content { border: 1px solid #2a2a2a; }
+</style>
+<div id="paste-transcript-modal" class="modal" onclick="if(event.target===this)closePasteTranscriptModal()">
+  <div class="modal-content" style="max-width:760px;">
+    <div class="modal-header">
+      <h3>📋 Paste Transcript</h3>
+      <span class="close" onclick="closePasteTranscriptModal()">&times;</span>
+    </div>
+    <div class="modal-body">
+      <input id="paste-transcript-filename" type="text" placeholder="Filename"
+        style="width:100%;box-sizing:border-box;background:#0a0d10;border-radius:6px;padding:8px 10px;font-size:13px;color:#ddd;font-family:inherit;margin-bottom:10px;" />
+      <textarea id="paste-transcript-content" rows="14" placeholder="Paste a chat transcript or any reference text here — it will be attached as a quoted reference document, not treated as conversation history."
+        style="width:100%;box-sizing:border-box;height:320px;max-height:60vh;resize:vertical;background:#0a0d10;border-radius:6px;padding:10px 12px;font-size:13px;line-height:1.5;color:#ddd;font-family:inherit;"></textarea>
+    </div>
+    <div class="modal-footer">
+      <button onclick="confirmPasteTranscript()" class="save-btn">Attach</button>
+      <button onclick="closePasteTranscriptModal()" class="cancel-btn">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <!-- Upgrade to Pro Modal -->
 <div id="upgrade-modal" class="modal">
   <div class="modal-content">
@@ -779,6 +822,46 @@ function openDocumentViewer(filename, content) {
 function closeDocumentViewer() {
   var modal = document.getElementById('document-viewer-modal');
   if (modal) modal.style.display = 'none';
+}
+
+// ── Paste Transcript ──────────────────────────────────────────
+// Route pasted text (e.g. an HWUI chat-file transcript) through the same
+// attachedDocuments path as a file pick, so it gets wrapped in
+// [ATTACHED DOCUMENT: …] markers and read as quoted reference, not history.
+function openPasteTranscriptModal() {
+  var modal = document.getElementById('paste-transcript-modal');
+  if (!modal) return;
+  // Pre-fill a sensible default filename
+  var now = new Date();
+  var pad = function(n) { return n < 10 ? '0' + n : '' + n; };
+  var defaultName = 'pasted-transcript-' + now.getFullYear() + '-' + pad(now.getMonth()+1) + '-' + pad(now.getDate()) + '-' + pad(now.getHours()) + pad(now.getMinutes()) + '.txt';
+  var nameInput = document.getElementById('paste-transcript-filename');
+  var textInput = document.getElementById('paste-transcript-content');
+  if (nameInput) nameInput.value = defaultName;
+  if (textInput) textInput.value = '';
+  modal.style.display = 'flex';
+  if (textInput) setTimeout(function() { textInput.focus(); }, 50);
+}
+
+function closePasteTranscriptModal() {
+  var modal = document.getElementById('paste-transcript-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+function confirmPasteTranscript() {
+  var nameInput = document.getElementById('paste-transcript-filename');
+  var textInput = document.getElementById('paste-transcript-content');
+  if (!textInput) return;
+  var content = textInput.value.trim();
+  if (!content) {
+    textInput.style.border = '1px solid #a33';
+    setTimeout(function() { textInput.style.border = ''; }, 800);
+    return;
+  }
+  var filename = (nameInput && nameInput.value.trim()) || 'pasted-transcript.txt';
+  window.attachedDocuments.push({ filename: filename, content: content });
+  renderDocumentPreviews();
+  closePasteTranscriptModal();
 }
 
 // sanitizeMarkdown: strip setext headings and box-drawing HR patterns.
@@ -5429,6 +5512,8 @@ document.addEventListener('keydown', (e) => {
     hideColorMenu();
     hideProjectColorMenu();
     closeAvatarLightbox();
+    var pasteModal = document.getElementById('paste-transcript-modal');
+    if (pasteModal && pasteModal.style.display === 'flex') closePasteTranscriptModal();
   }
 });
 
