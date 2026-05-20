@@ -1,3 +1,27 @@
+## May 20 2026 — MEMORY TAGS Instruction Tightened (Single-Tag-Only)
+
+**Files:** utils/session_handler.py
+
+- MEMORY TAGS instruction tightened to mirror WEB SEARCH's structure: "your entire response must be a single tag and nothing else".
+- Added explicit prohibitions against conversational acknowledgement, describing the save, inventing context blocks, or producing any structured output.
+- Clarifies that the system handles the user-facing save confirmation, not the model.
+
+**Reason:** Helcyon-4o was producing elaborate multi-block responses
+(acknowledgement + fake context blocks + invented search results) when asked
+to save to memory. The instruction was strong on format but weak on
+stop-completely / response-shape exclusivity. This mirrors the WEB SEARCH
+instruction's pattern which works reliably for the same reason (stop-after-tag
+directive).
+
+- ⚠️ The "your entire response must be a single tag and nothing else"
+  directive is required. Models will pattern-complete to "respond
+  substantively" by default and produce verbose output instead of a clean tag.
+  Do not soften this directive.
+
+⚠️ Flask restart required (Python edit).
+
+---
+
 ## May 20 2026 — OpenAI Path Now Supports Any OpenAI-Compatible Endpoint
 
 **Files:** app.py, templates/config.html, settings.json
