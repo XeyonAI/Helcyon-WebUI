@@ -1,3 +1,247 @@
+## May 20 2026 — OpenAI Path Now Supports Any OpenAI-Compatible Endpoint
+
+**Files:** app.py, templates/config.html, settings.json
+
+**What this opens up.** The OpenAI cloud path is now a generic OpenAI-
+compatible client. Pointing it at a different `openai_base_url` lets HWUI
+talk to Anthropic (`https://api.anthropic.com/v1`), xAI/Grok
+(`https://api.x.ai/v1`), OpenRouter (`https://openrouter.ai/api/v1`),
+Together, Groq, Mistral, Fireworks, and any local OpenAI-compatible server
+(LM Studio, vLLM, …) without touching any other code. All existing OpenAI-
+path infrastructure — `_web_search_stream_openai`, the look-ahead tag
+buffering, the streaming protocol, the bearer-token auth header — is reused
+unchanged.
+
+**Backend changes (`app.py`):**
+- New helper `get_openai_base_url()` adjacent to `get_brave_api_key()`
+  (app.py:1256 area). Returns the URL up to `/v1`, stripped of trailing
+  slashes. Silently falls back to `https://api.openai.com/v1` when the
+  field is missing, empty, or `settings.json` is unreadable — older
+  settings files round-trip cleanly without intervention.
+- `stream_openai_response` (app.py:1801 site) now calls
+  `f"{get_openai_base_url()}/chat/completions"`. This is the single
+  request site for both phases of `_web_search_stream_openai` (initial
+  generation + search re-prompt), so updating this one place covers the
+  whole web-search flow automatically.
+- `/get_openai_models` (app.py:6478 site) now calls
+  `f"{get_openai_base_url()}/models"`. Most compatible providers expose
+  this; ones that don't return a non-200 which surfaces as a normal error
+  in the UI (users on those providers type the model name into the
+  dropdown directly — `_setOpenAIModelSelect` already adds unknown
+  saved-model names as options on load).
+- `/get_openai_settings` and `/save_openai_settings` carry the
+  `openai_base_url` field. GET resolves missing/empty values through the
+  helper so the UI shows the actual default on first load. POST strips
+  trailing slashes and writes the OpenAI default back to disk when the
+  field is empty, so the second load has it explicit.
+
+**Frontend changes (`templates/config.html`):**
+- New `<input id="openai-base-url">` above the API key field, with
+  placeholder `https://api.openai.com/v1` and a sub-label listing
+  Anthropic / xAI / OpenRouter examples in `<code>` boxes.
+- `loadOpenAISettings()` populates the input from `data.openai_base_url`
+  (falling back to the OpenAI default).
+- `saveOpenAISettings()` reads the input, strips trailing slashes
+  client-side as well (belt-and-braces against doubled slashes), and
+  includes it in the POST body alongside key + model.
+
+**Settings file (`settings.json`):**
+- New `openai_base_url` field inserted after `openai_model`, default
+  `https://api.openai.com/v1`. Existing settings.json files without this
+  field continue to work — `get_openai_base_url()` defaults them silently
+  and the first UI save persists the explicit value.
+
+**Default behaviour is byte-equivalent to before.** With
+`openai_base_url=https://api.openai.com/v1` (the default for fresh installs
+and the fallback for older configs), every OpenAI request goes to exactly
+the same URL as before this change.
+
+**Known limitation — model dropdown is OpenAI-shaped.** The 🔄 Fetch
+button hits `{base_url}/models` and parses the OpenAI-style response
+(`{data: [{id: "..."}, …]}`). Most compatible providers return that
+shape, but not all. The chat-model filter (`gpt-*`, `o1`, `o3`, …) is
+also OpenAI-flavoured — a Fetch on Anthropic/Grok/etc. will return a
+list that the filter then empties. **Workaround:** users on non-OpenAI
+providers should type the model name (`claude-opus-4-7`, `grok-4`,
+`anthropic/claude-opus-4-7`, etc.) into the dropdown manually — the
+existing `_setOpenAIModelSelect()` adds any saved model to the list on
+load, so once saved it sticks. Polishing the fetch to be provider-aware
+is out of scope for this task (post-launch nice-to-have).
+
+**Other things deliberately not touched:**
+- `_web_search_stream` (local function at app.py:4243) — byte-identical.
+- `_web_search_stream_openai` body — unchanged. The two URL sites it
+  ultimately hits both live inside `stream_openai_response`, which now
+  routes through the helper.
+- Vision path, Jinja messages-API path — unchanged (still Phase 2).
+- `mobile.html`, system prompts — untouched.
+
+**Verified:**
+- `app.py` parses cleanly.
+- `grep` for `api.openai.com` in `app.py` returns only: the helper's
+  default-fallback string, the GET-route default, the SAVE-route empty-
+  field default, and three comments. **Zero hardcoded request URLs
+  remain.**
+- Local `_web_search_stream` at app.py:4243 starts identically to before.
+
+- ⚠️ The OpenAI path is now a generic OpenAI-compatible client. Do NOT
+  add hardcoded `api.openai.com` references anywhere — always go through
+  `get_openai_base_url()`. New routes that hit OpenAI-style APIs must use
+  this helper, or non-OpenAI providers will silently break.
+
+⚠️ Flask restart required (Python edit) + the config page must be
+hard-reloaded to pick up the new HTML/JS.
+
+---
+
+## May 20 2026 — Polish: OpenAI Web Search Path No Longer Leaks the Tag
+
+**Files:** app.py
+
+**The polish:** with the new `_web_search_stream_openai()` wrapper in place,
+the `[WEB SEARCH: …]` tag was briefly visible to the user before the wrapper
+halted and re-prompted. The tag prefix (`[WEB `, `[WEB SEARCH`, …) flashed up
+as text before being replaced by the search results.
+
+**Why it happened — and why the local path "doesn't have this issue".** The
+original OpenAI implementation copied the local path's pattern exactly:
+yield each chunk live, then check the rolling buffer for the full tag on the
+next loop iteration. That pattern only works when the entire tag arrives in a
+single chunk — if it's split across deltas (the streaming-API norm), the
+prefix has already been yielded before the closing `]` arrives. The local
+`_web_search_stream` fallback (app.py ~4508-4528) has the **same theoretical
+bug**, but rarely fires in practice: Helcyon doesn't self-emit the tag — the
+upstream explicit/ambiguous regex + intent gate matches user input first and
+the search fires before the model ever runs. GPT-4o on the OpenAI path is the
+opposite — it self-emits the tag every turn, so the leak is visible and the
+bug had to be fixed there.
+
+**The fix — look-ahead buffering (OpenAI path only).** `_web_search_stream_openai`
+now holds back any text after an unclosed `[` in the rolling buffer:
+- A small helper `_safe_yield_end(buf, start)` returns the position of the
+  first unclosed `[` at-or-after the already-yielded watermark, else the
+  buffer length. Anything up to that index is safe to release; anything after
+  is held back because it might be the start of a tag-in-progress.
+- The wrapper tracks `_yielded_chars` so it never re-yields content.
+- When the full `[WEB SEARCH: …]` regex matches, the wrapper yields anything
+  before the tag's `[` (usually nothing — that `[` was the unclosed bracket
+  we were already holding back) and drops everything from `[` onward.
+- When a non-tag bracket closes (e.g. markdown link `[click](url)`), the
+  whole bracketed span releases on the next chunk — perceptible delay is one
+  delta, so a few tens of ms.
+- When the stream ends with no tag, the held-back tail is flushed so partial
+  brackets like a never-closed `[foo` aren't silently dropped.
+
+**Why not a fixed-length tail buffer.** A naive `_TAIL_LEN = 120` would still
+leak the prefix of a long tag (`[WEB SEARCH: <120+ char query>]` is plausible
+when the model writes a verbose query). Tracking unclosed-`[` makes the
+holdback length data-driven and handles tags of unbounded length.
+
+**Edge cases verified by code-trace:**
+- `use_web_search=False`: never enters the wrapper; raw `stream_openai_response`
+  unchanged.
+- `use_web_search=True`, no tag emitted: every bracket eventually closes (or
+  the stream ends → final flush). Full response reaches the client; nothing
+  lost.
+- `use_web_search=True`, tag emitted: tag never reaches the client at any
+  visible point. Search runs; re-prompt streams normally.
+- Partial tag prefix that doesn't complete (`[WEB-RELATED ARTICLES]`): the `]`
+  arrives and the whole bracketed span releases — regex doesn't match
+  (no `:` after `WEB`), so it's treated as ordinary text.
+- Markdown links (`[label](url)`): briefly held back until `]`, then released.
+  Imperceptible delay.
+- Multiple brackets in one response (`Look at [link1] then [WEB SEARCH: x]`):
+  `[link1]` released normally, `[WEB SEARCH: x]` matched and dropped, prior
+  text yielded cleanly.
+
+**Verified:** `app.py` parses cleanly. `_web_search_stream` (local function
+at app.py:4163) is byte-identical to before this polish — only
+`_web_search_stream_openai` was modified. No new imports; no new globals.
+
+- ⚠️ DO NOT remove the look-ahead buffering from
+  `_web_search_stream_openai` thinking the local path "works without it" —
+  the local path only avoids the leak by NOT firing the tag-fallback branch
+  in practice. On the OpenAI path that branch is the hot path; the buffering
+  is load-bearing.
+
+⚠️ Flask restart required (Python edit).
+
+---
+
+## May 20 2026 — OpenAI Cloud Path Now Detects [WEB SEARCH: …] Tags
+
+**Files:** app.py
+
+**The bug:** GPT-4o on the OpenAI API backend emits `[WEB SEARCH: …]` tags as
+trained, but the tags rendered verbatim in chat instead of triggering an actual
+search. Discovery report confirmed: the tag detector and re-prompt logic live
+inside `_web_search_stream()` (nested in `chat()`, near app.py ~4163), which is
+only reachable from the raw ChatML `/completion` path. The OpenAI cloud branch
+returned `stream_openai_response(...)` raw — no wrapper, no detector, no
+follow-up generation. Same gap exists on the vision and Jinja messages-API
+paths (see "Phase 2" note below).
+
+**The fix — parallel implementation, intentional duplication.** Added a new
+top-level function **`_web_search_stream_openai()`** (app.py ~1871, placed
+right after `stream_openai_response()`). It mirrors the structure of
+`_web_search_stream()`'s tag-fallback branch but adapted for OpenAI's
+`/v1/chat/completions` (messages array, not ChatML string):
+- Phase 1: stream initial OpenAI response live, accumulate a rolling buffer,
+  watch for `r"\[WEB SEARCH:\s*(.+?)\]"` (same regex as the local path).
+- On match: flip `abort_generation = True` to close the underlying HTTP stream
+  cleanly inside `stream_openai_response`, then break out.
+- Phase 2: call `do_search(query)` — shared helper (Brave → DDG fallback),
+  unchanged.
+- Phase 3: build `augmented_user_msg` using the **same text template** as the
+  local path (lines 4351-4364 of the old layout) — `[WEB SEARCH RESULTS FOR …]`
+  block, identical IMPORTANT instruction copy. Zero-results fallback message
+  also mirrored verbatim.
+- Phase 4: rebuild messages array, strip stale `WEB SEARCH RESULTS` /
+  `CHAT HISTORY RESULTS` blocks from prior user turns (same hygiene as local),
+  replace last user turn with the augmented version.
+- Phase 5: send follow-up `stream_openai_response` call with augmented
+  messages; stream response; append source-link tail (same `<a href …>🔗
+  Source: …</a>` markup as the local path).
+
+**Wiring at the OpenAI return point** (app.py ~3819): the OpenAI branch now
+reads `char_data.get("use_web_search", False)` into a separate local
+(`_oai_use_web_search`) and routes through `_web_search_stream_openai()` only
+when the flag is True. When False, behaviour is **byte-identical** to before
+— it returns the raw `stream_openai_response(...)` generator just like the
+original code. The local path's own `use_web_search` read (now at app.py
+~3996) is **completely untouched** — the two reads are independent.
+
+**Why duplication, not a shared helper.** The two paths have different prompt
+shapes (raw ChatML string vs. messages array), different re-prompt endpoints
+(`/completion` vs. `/v1/chat/completions`), and different abort mechanisms.
+The local path is load-bearing and battle-tested through dozens of edge cases
+(self-reference filtering, intent gate, local-doc suppression, time-sensitive
+override, query cleaning). Refactoring them into a shared helper risks
+regressing the local path for the sake of code elegance — not worth it.
+
+- ⚠️ Do NOT consolidate `_web_search_stream` and `_web_search_stream_openai`
+  into a shared helper without a full regression test of the local path.
+  Duplication is intentional.
+
+**Verified:** `app.py` parses cleanly. Local `_web_search_stream` and its
+return point (now at app.py ~4719) are byte-identical to before. Local path
+`use_web_search` read at line ~3996 is unchanged. No new imports; no global
+state added beyond the existing `abort_generation` flag.
+
+**Still pending — Phase 2 (NOT done in this task):**
+- Vision path (app.py ~3795 — `stream_vision_response(vision_payload)`) has no
+  tag detector. If a vision model is ever trained to emit `[WEB SEARCH: …]`,
+  the tag will leak verbatim there too.
+- Jinja / Gemma / Qwen messages-API path (app.py ~3918 —
+  `stream_vision_response(payload)`) has the same gap.
+- Both will be addressed in a separate Phase 2 task — same parallel-
+  implementation approach, not a shared refactor.
+
+⚠️ Flask restart required (Python edit). CSS-only changes don't need a
+restart, but this is `app.py` so the dev server must be bounced.
+
+---
+
 ## May 19 2026 — Fixed SP Fields Showing the Wrong Template
 
 **Files:** templates/config.html

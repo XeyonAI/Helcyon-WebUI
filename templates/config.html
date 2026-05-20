@@ -237,6 +237,10 @@
         </div>
       </div>
 
+      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">OpenAI-Compatible Endpoint</label>
+      <input id="openai-base-url" type="text" placeholder="https://api.openai.com/v1" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:2px;">
+      <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Base URL up to <code style="background:#222; padding:0 3px; border-radius:2px;">/v1</code> — leave default for OpenAI. Examples: <code style="background:#222; padding:0 3px; border-radius:2px;">https://api.anthropic.com/v1</code>, <code style="background:#222; padding:0 3px; border-radius:2px;">https://api.x.ai/v1</code>, <code style="background:#222; padding:0 3px; border-radius:2px;">https://openrouter.ai/api/v1</code></div>
+
       <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">OpenAI API Key</label>
       <input id="openai-api-key" type="password" placeholder="sk-..." style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:6px;">
 
@@ -3668,6 +3672,8 @@ function previewThemeVar(varName, value) {
       setBackendMode(data.backend_mode || 'local');
       const keyInput = document.getElementById('openai-api-key');
       if (keyInput) keyInput.value = data.openai_api_key || '';
+      const baseUrlInput = document.getElementById('openai-base-url');
+      if (baseUrlInput) baseUrlInput.value = data.openai_base_url || 'https://api.openai.com/v1';
       _setOpenAIModelSelect(data.openai_model || 'gpt-4o');
       const status = document.getElementById('openai-status');
       if (status) {
@@ -3686,14 +3692,20 @@ function previewThemeVar(varName, value) {
   }
 
   async function saveOpenAISettings() {
-    const key   = (document.getElementById('openai-api-key').value || '').trim();
-    const model = (document.getElementById('openai-model').value   || 'gpt-4o').trim();
+    const key      = (document.getElementById('openai-api-key').value  || '').trim();
+    const model    = (document.getElementById('openai-model').value    || 'gpt-4o').trim();
+    const baseUrl  = (document.getElementById('openai-base-url').value || '').trim().replace(/\/+$/, '');
     const status = document.getElementById('openai-status');
     try {
       const res = await fetch('/save_openai_settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ backend_mode: _currentBackendMode, openai_api_key: key, openai_model: model })
+        body: JSON.stringify({
+          backend_mode:    _currentBackendMode,
+          openai_api_key:  key,
+          openai_model:    model,
+          openai_base_url: baseUrl
+        })
       });
       const data = await res.json();
       if (data.status === 'ok') {

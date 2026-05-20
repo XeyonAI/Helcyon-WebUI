@@ -1253,6 +1253,38 @@ def get_brave_api_key():
         return ""
 
 
+def get_openai_base_url():
+    """Read the OpenAI-compatible base URL from settings.json.
+
+    The OpenAI path is now a generic OpenAI-compatible client — it can hit any
+    provider that speaks /v1/chat/completions (Anthropic, xAI/Grok, OpenRouter,
+    Together, Groq, Mistral, Fireworks, LM Studio, vLLM, …) by setting
+    openai_base_url to e.g. https://api.anthropic.com/v1 or
+    https://openrouter.ai/api/v1.
+
+    Returns the URL up to but NOT including /chat/completions. Falls back to
+    https://api.openai.com/v1 on any of:
+      - field missing from settings.json (older configs)
+      - field present but empty / whitespace
+      - settings.json unreadable / not valid JSON
+
+    Trailing slash is stripped so callers can always append /chat/completions
+    or /models without worrying about doubled slashes.
+
+    ⚠️ Any code that hits an OpenAI-style API MUST go through this helper.
+    Do not reintroduce hardcoded references to api.openai.com — that would
+    silently break every non-OpenAI provider.
+    """
+    _default = "https://api.openai.com/v1"
+    try:
+        with open("settings.json", "r", encoding="utf-8") as f:
+            s = json.load(f)
+        url = (s.get("openai_base_url", "") or "").strip().rstrip("/")
+        return url if url else _default
+    except Exception:
+        return _default
+
+
 def do_search(query):
     """
     Main search dispatcher.
@@ -1747,9 +1779,10 @@ def stream_openai_response(messages, api_key, model, temperature, max_tokens, to
         "presence_penalty": presence_penalty,
         "stream": True,
     }
-    print(f"☁️ OpenAI stream: model={model}, msgs={len(messages)}", flush=True)
+    _base_url = get_openai_base_url()
+    print(f"☁️ OpenAI stream: base={_base_url} model={model}, msgs={len(messages)}", flush=True)
     response = requests.post(
-        "https://api.openai.com/v1/chat/completions",
+        f"{_base_url}/chat/completions",
         headers=headers,
         json=payload,
         stream=True,
@@ -1790,6 +1823,235 @@ def stream_openai_response(messages, api_key, model, temperature, max_tokens, to
             continue
 
     print(f"\n☁️ OpenAI DONE: {total_chunks} chunks, {len(''.join(all_text))} chars total", flush=True)
+
+# --------------------------------------------------
+# OpenAI cloud path — [WEB SEARCH: …] tag wrapper
+# --------------------------------------------------
+# Parallel implementation to _web_search_stream() (nested inside chat() near
+# app.py:3957). The local path operates on a raw ChatML prompt string and
+# re-prompts via stream_model_response (/completion endpoint); this OpenAI
+# variant operates on a messages array and re-prompts via stream_openai_response
+# (/v1/chat/completions endpoint). Both wrap their respective base stream
+# helpers with [WEB SEARCH: …] tag detection and follow-up generation.
+#
+# Behaviour mirror — kept aligned with _web_search_stream's tag-fallback branch
+# (the only branch the OpenAI path needs, because GPT-4o decides when to emit
+# the tag itself; pre-emptive regex/intent-gate query extraction is not
+# repeated here — that's local-path-specific):
+#   1. stream the initial OpenAI response live, yielding chunks as they arrive
+#   2. accumulate a rolling buffer; on [WEB SEARCH: query] match, halt
+#   3. call do_search(query) — shared helper
+#   4. inject [WEB SEARCH RESULTS] block into a new last-user-turn (same
+#      augmented-message template as the local path)
+#   5. send a follow-up OpenAI request with the augmented messages array and
+#      stream that response
+#   6. append source-link tail
+#
+# ⚠️ DO NOT consolidate _web_search_stream and _web_search_stream_openai into
+# a shared helper without a full regression test of the local path. Duplication
+# is intentional — the two paths have different prompt shapes (ChatML string vs.
+# messages array) and different re-prompt endpoints, and the local path is
+# load-bearing and must not be perturbed.
+def _web_search_stream_openai(messages, api_key, model, temperature, max_tokens,
+                              top_p, frequency_penalty, presence_penalty, user_input):
+    global abort_generation
+    import re as _re
+
+    # ── Phase 1: stream OpenAI response live, watch for [WEB SEARCH: …] tag ──
+    # Look-ahead buffering: never yield text after an unclosed '['. Until the
+    # matching ']' arrives we cannot tell whether it's the start of a
+    # [WEB SEARCH: …] tag (drop) or some other bracketed content (release as
+    # normal output). When the full tag matches, drop everything from '['
+    # onward. When a non-tag bracket closes, release it. When the stream ends
+    # with no tag, flush any held-back tail.
+    #
+    # NOTE: the local _web_search_stream fallback (app.py ~4508-4528) yields
+    # chunks live without this look-ahead and therefore *also* leaks the tag
+    # prefix when split across chunks — but that fallback rarely fires locally
+    # (Helcyon's tag is normally pre-emitted via the upstream intent gate, so
+    # the model never self-emits). On the OpenAI path the model self-emits the
+    # tag every time, so the leak is visible and must be suppressed here. The
+    # local function stays byte-identical — see the duplication warning on the
+    # function header.
+    _streamed = []
+    _yielded_chars = 0        # how many chars of the rolling buffer have been yielded
+    _tag_found = False
+    _search_query = None
+
+    def _safe_yield_end(buf, start):
+        """Largest index <= len(buf) such that buf[start:end] contains no
+        unclosed '['. Returns the position of the first unclosed '[' at or
+        after `start`, else len(buf)."""
+        idx = buf.find('[', start)
+        while idx != -1:
+            close = buf.find(']', idx)
+            if close == -1:
+                return idx       # unclosed → hold back from here
+            idx = buf.find('[', close + 1)
+        return len(buf)
+
+    try:
+        for chunk in stream_openai_response(
+            messages          = messages,
+            api_key           = api_key,
+            model             = model,
+            temperature       = temperature,
+            max_tokens        = max_tokens,
+            top_p             = top_p,
+            frequency_penalty = frequency_penalty,
+            presence_penalty  = presence_penalty,
+        ):
+            _streamed.append(chunk)
+            _rolling = "".join(_streamed)
+            _match = _re.search(r"\[WEB SEARCH:\s*(.+?)\]", _rolling, _re.IGNORECASE)
+            if _match:
+                _tag_found = True
+                _search_query = _match.group(1).strip()
+                # Yield anything before the tag start that we haven't already
+                # sent (typically 0 because the tag's '[' is the unclosed
+                # bracket we've been holding back behind).
+                _safe_end = _match.start()
+                if _safe_end > _yielded_chars:
+                    yield _rolling[_yielded_chars:_safe_end]
+                    _yielded_chars = _safe_end
+                # Halt — abort_generation flips inside stream_openai_response,
+                # closing the underlying HTTP stream cleanly on the next chunk.
+                abort_generation = True
+                break
+            # No full tag yet — yield only the prefix that's safely past any
+            # unclosed '[' (which might be a tag-in-progress).
+            _safe_end = _safe_yield_end(_rolling, _yielded_chars)
+            if _safe_end > _yielded_chars:
+                yield _rolling[_yielded_chars:_safe_end]
+                _yielded_chars = _safe_end
+    except Exception as e:
+        yield f"⚠️ OpenAI model error: {e}"
+        return
+    finally:
+        # Re-arm the abort flag so the follow-up call below isn't immediately
+        # cancelled. stream_openai_response resets it on entry anyway, but make
+        # the intent explicit here.
+        abort_generation = False
+
+    if not _tag_found:
+        # Stream ended with no tag — flush any text we were holding back behind
+        # an unclosed '[' (model emitted '[foo' and the stream ended before
+        # ']' arrived). Without this flush that tail would be silently dropped.
+        _rolling_final = "".join(_streamed)
+        if len(_rolling_final) > _yielded_chars:
+            yield _rolling_final[_yielded_chars:]
+        return
+
+    query = _search_query
+    print(f"☁️🔍 [OpenAI] Web search triggered by model tag: {query}", flush=True)
+    yield "\n\n🔍 *Searching...*\n\n"
+
+    # ── Phase 2: do the search ──
+    try:
+        res = do_search(query)
+        results_block = format_search_results(query, res)
+        has_results = bool(res.get("summary") or res.get("top_text") or res.get("pages"))
+        print(f"☁️🔍 [OpenAI] Search done. has_results={has_results}", flush=True)
+    except Exception as e:
+        print(f"❌ [OpenAI] Search failed: {e}", flush=True)
+        yield f"\n⚠️ Search failed: {e}"
+        return
+
+    # ── Phase 3: build augmented user message — same template as local path ──
+    if has_results:
+        import urllib.parse as _urlparse
+        _src = res.get('top_url', '')
+        if not _src:
+            _src = f"https://search.brave.com/search?q={_urlparse.quote_plus(query)}"
+        augmented_user_msg = (
+            f"{user_input.strip()}\n\n"
+            f"[WEB SEARCH RESULTS FOR: {query}]\n"
+            f"{results_block}\n"
+            f"[END WEB SEARCH RESULTS]\n"
+            f"IMPORTANT: Your response MUST be based on the search results above ONLY. "
+            f"Do NOT use your training data or prior knowledge about this topic — "
+            f"the search results are the ground truth. "
+            f"If the results say something that contradicts what you think you know, "
+            f"trust the results. Respond naturally in your own words. "
+            f"Do NOT quote, repeat, echo, or reference the structure of this results block — "
+            f"consume it silently and respond as if you just know this information. "
+            f"Do not include a source link in your response."
+        )
+    else:
+        _src = ""
+        augmented_user_msg = (
+            f"{user_input.strip()}\n\n"
+            f"[Web search returned zero results for '{query}'. "
+            f"Nothing found. No pages, no summary, no data. "
+            f"Tell the user clearly that nothing was found. "
+            f"Do not guess or invent anything.]"
+        )
+
+    # ── Phase 4: rebuild messages array, strip stale search blocks from prior
+    # user turns, replace last user turn with the augmented version ──
+    search_messages = [dict(m) for m in messages]
+
+    _last_user_idx = None
+    for i in range(len(search_messages) - 1, -1, -1):
+        if search_messages[i].get("role") == "user":
+            _last_user_idx = i
+            break
+    for i, m in enumerate(search_messages):
+        if m.get("role") == "user" and i != _last_user_idx:
+            content = m.get("content", "")
+            if isinstance(content, str):
+                if "WEB SEARCH RESULTS" in content:
+                    content = _re.split(r'\[WEB SEARCH RESULTS', content)[0].strip()
+                if "CHAT HISTORY RESULTS" in content:
+                    content = _re.split(r'\[CHAT HISTORY RESULTS', content)[0].strip()
+                search_messages[i] = {"role": "user", "content": content}
+
+    if _last_user_idx is not None:
+        search_messages[_last_user_idx] = {"role": "user", "content": augmented_user_msg}
+    else:
+        search_messages.append({"role": "user", "content": augmented_user_msg})
+
+    # ── Phase 5: follow-up OpenAI call with augmented messages, stream response,
+    # append source-link tail at end (same as local path) ──
+    try:
+        _response_chunks = []
+        for chunk in stream_openai_response(
+            messages          = search_messages,
+            api_key           = api_key,
+            model             = model,
+            temperature       = temperature,
+            max_tokens        = max_tokens,
+            top_p             = top_p,
+            frequency_penalty = frequency_penalty,
+            presence_penalty  = presence_penalty,
+        ):
+            _response_chunks.append(chunk)
+            yield chunk
+
+        if has_results:
+            _full_response = "".join(_response_chunks)
+            _pages = res.get("pages") or []
+            _src_list = []
+            if _pages:
+                for p in _pages[:3]:
+                    u = p.get("url") or ""
+                    t = (p.get("title") or u).strip() or u
+                    if u and u not in _full_response:
+                        _src_list.append((u, t))
+            elif _src and _src not in _full_response:
+                _src_list.append((_src, _src))
+
+            if _src_list:
+                yield "\n\n"
+                for i, (u, t) in enumerate(_src_list):
+                    _label = f"🔗 Source: {t[:90]}" if i == 0 else f"🔗 {t[:90]}"
+                    yield (
+                        f'<a href="{u}" target="_blank" '
+                        f'style="color:#7ab4f5; display:block; margin-top:2px;">'
+                        f'{_label}</a>'
+                    )
+    except Exception as e:
+        yield f"\n⚠️ Search re-prompt error: {e}"
 
 # --------------------------------------------------
 # Global abort flag for stopping generation
@@ -3427,7 +3689,31 @@ def chat():
                 if _content:
                     _oai_messages.append({"role": _role, "content": _content})
 
+            # ── Web-search toggle (OpenAI branch only) ───────────────
+            # Read use_web_search here so the OpenAI path can route through
+            # _web_search_stream_openai when enabled. The local path reads the
+            # same flag separately at app.py ~3790 (unchanged) — these reads are
+            # independent and the local-path read is intentionally left alone.
+            _oai_use_web_search = char_data.get("use_web_search", False)
+
             try:
+                if _oai_use_web_search:
+                    print(f"☁️🔍 OPENAI PATH: web search ENABLED — wrapping stream "
+                          f"with [WEB SEARCH: …] tag detector", flush=True)
+                    return Response(
+                        stream_with_context(_web_search_stream_openai(
+                            messages          = _oai_messages,
+                            api_key           = _oai_key,
+                            model             = _oai_model,
+                            temperature       = sampling["temperature"],
+                            max_tokens        = sampling["max_tokens"],
+                            top_p             = sampling["top_p"],
+                            frequency_penalty = sampling.get("frequency_penalty", 0.0),
+                            presence_penalty  = sampling.get("presence_penalty", 0.0),
+                            user_input        = user_input,
+                        )),
+                        content_type="text/event-stream; charset=utf-8",
+                    )
                 return Response(
                     stream_with_context(stream_openai_response(
                         messages          = _oai_messages,
@@ -5982,13 +6268,23 @@ def get_openai_settings_route():
     try:
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
             s = json.load(f)
+        # openai_base_url: surface the resolved value through the helper so the
+        # UI displays the actual default (https://api.openai.com/v1) on first
+        # load even when the field is missing from older settings.json files.
         return jsonify({
             "backend_mode":    s.get("backend_mode", "local"),
             "openai_api_key":  s.get("openai_api_key", ""),
             "openai_model":    s.get("openai_model", "gpt-4o"),
+            "openai_base_url": (s.get("openai_base_url", "") or "").strip() or get_openai_base_url(),
         })
     except Exception as e:
-        return jsonify({"backend_mode": "local", "openai_api_key": "", "openai_model": "gpt-4o", "error": str(e)})
+        return jsonify({
+            "backend_mode": "local",
+            "openai_api_key": "",
+            "openai_model": "gpt-4o",
+            "openai_base_url": "https://api.openai.com/v1",
+            "error": str(e),
+        })
 
 @app.route("/save_openai_settings", methods=["POST"])
 def save_openai_settings_route():
@@ -5999,13 +6295,18 @@ def save_openai_settings_route():
         s["backend_mode"]   = data.get("backend_mode", "local")
         s["openai_api_key"] = data.get("openai_api_key", "").strip()
         s["openai_model"]   = data.get("openai_model", "gpt-4o").strip()
+        # openai_base_url: strip trailing slash; empty → write OpenAI default
+        # back to disk so the round-trip from a fresh settings.json populates
+        # the field explicitly on the second load.
+        _incoming_base = (data.get("openai_base_url", "") or "").strip().rstrip("/")
+        s["openai_base_url"] = _incoming_base or "https://api.openai.com/v1"
         import tempfile, shutil
         tmp = SETTINGS_FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(s, f, indent=2)
         shutil.move(tmp, SETTINGS_FILE)
         mode = s["backend_mode"]
-        print(f"✅ OpenAI settings saved — backend_mode={mode}, model={s['openai_model']}")
+        print(f"✅ OpenAI settings saved — backend_mode={mode}, model={s['openai_model']}, base_url={s['openai_base_url']}")
         return jsonify({"status": "ok"})
     except Exception as e:
         print(f"❌ save_openai_settings failed: {e}")
@@ -6014,7 +6315,14 @@ def save_openai_settings_route():
 
 @app.route("/get_openai_models", methods=["GET"])
 def get_openai_models_route():
-    """Fetch available chat models from OpenAI using the stored API key."""
+    """Fetch available chat models from the configured OpenAI-compatible endpoint.
+
+    Hits {openai_base_url}/models. Most providers (OpenAI, OpenRouter, Together,
+    Groq, Mistral, Fireworks, Anthropic) support this. Providers that don't
+    will return a non-200 here, which is surfaced as an error — users on those
+    providers should type the model name into the dropdown directly (it
+    persists via _setOpenAIModelSelect).
+    """
     try:
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
             s = json.load(f)
@@ -6022,13 +6330,14 @@ def get_openai_models_route():
         if not api_key:
             return jsonify({"status": "error", "error": "No API key set"}), 400
 
+        _base_url = get_openai_base_url()
         r = requests.get(
-            "https://api.openai.com/v1/models",
+            f"{_base_url}/models",
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=10,
         )
         if r.status_code != 200:
-            return jsonify({"status": "error", "error": f"OpenAI returned {r.status_code}: {r.text[:200]}"}), 502
+            return jsonify({"status": "error", "error": f"Provider returned {r.status_code}: {r.text[:200]}"}), 502
 
         all_models = r.json().get("data", [])
 
