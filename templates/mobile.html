@@ -295,6 +295,14 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden)stopAllAudi
 // Stop audio when page is unloaded (browser close, navigation away)
 window.addEventListener('pagehide',()=>stopAllAudio());
 
+// Persist the active character to shared server-side state so the choice
+// follows the user between the desktop and mobile apps. Fire-and-forget.
+function setActiveCharacterServer(name){
+  if(!name)return;
+  fetch('/active_character',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({active_character:name})}).catch(e=>console.warn('active_character save failed',e));
+}
+
 async function loadCharacterList(){
   try{
     const res=await fetch('/list_characters');
@@ -304,10 +312,18 @@ async function loadCharacterList(){
     const sel=document.getElementById('char-select');
     sel.innerHTML='';
     chars.forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c;sel.appendChild(o);});
+    // Initial character: server-side active character (shared with desktop)
+    // → per-device localStorage → first in list.
+    let activeChar=null;
+    try{const acR=await fetch('/active_character');if(acR.ok)activeChar=(await acR.json()).active_character;}
+    catch(e){console.warn('active_character fetch failed',e);}
     const saved=localStorage.getItem('lastCharacter');
-    if(saved&&chars.includes(saved)){sel.value=saved;characterName=saved;}
-    else if(chars.length>0){characterName=chars[0];sel.value=chars[0];}
+    if(activeChar&&chars.includes(activeChar)){characterName=activeChar;}
+    else if(saved&&chars.includes(saved)){characterName=saved;}
+    else if(chars.length>0){characterName=chars[0];}
+    if(characterName){sel.value=characterName;}
     await loadCharacterInfo(characterName);
+    setActiveCharacterServer(characterName);
   }catch(e){console.warn('char list error',e);}
 }
 
@@ -315,6 +331,7 @@ async function switchCharacter(name){
   if(!name)return;
   characterName=name;
   localStorage.setItem('lastCharacter',name);
+  setActiveCharacterServer(name);
   chatHistory=[];
   mobileChatFilename=null;
   localStorage.removeItem('mobile_chat_filename');

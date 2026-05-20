@@ -149,6 +149,13 @@
         <button onclick="browseFolder('llama-models-dir')" title="Browse for folder" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">📁</button>
       </div>
 
+      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Vision Projector — mmproj <span style="color:#777;">(optional — leave blank for no vision)</span></label>
+      <div style="display:flex; align-items:center; gap:6px; margin-bottom:12px;">
+        <input id="llama-mmproj-path" type="text" placeholder="C:\path\to\model.mmproj.gguf" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
+        <button onclick="browseFile('llama-mmproj-path','gguf')" title="Browse for an mmproj .gguf file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">📁</button>
+        <button onclick="autoDetectMmproj()" title="Scan the Models Folder and its subfolders for a matching mmproj file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">🔍 Auto-Detect</button>
+      </div>
+
       <label style="font-size:11px; color:#aaa; display:block; margin-bottom:6px; font-weight:600;">Launch Arguments</label>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px 10px; margin-bottom:10px;">
         <div>
@@ -632,7 +639,7 @@
       // Auto-select and load active
       if (data.active) {
         select.value = data.active;
-        updateActiveIndicator(data.active);
+        refreshActiveSpIndicator(data.active);
         await loadSelectedSystemPrompt(data.active);
       }
     } catch (err) {
@@ -640,9 +647,47 @@
     }
   }
 
-  function updateActiveIndicator(filename) {
+  // Module-level: the currently-active SP filename (raw, WITH extension).
+  // Stored so the indicator can be re-rendered after a Bind without the
+  // caller having to re-supply it.
+  let activeSpFilename = '';
+
+  // Single shared renderer for the active-SP indicator. Used by every trigger
+  // (page load, Activate, Bind, character select) — do not duplicate this
+  // logic elsewhere. Strips a trailing .txt for DISPLAY ONLY (storage and all
+  // backend calls keep the real filename) and appends the character(s) the
+  // active SP is bound to, found by reverse-lookup over /list_characters +
+  // /character_system_prompt/<n>.
+  async function refreshActiveSpIndicator(filename) {
     const el = document.getElementById('active-prompt-indicator');
-    if (el) el.textContent = filename ? '🟢 Active: ' + filename : '';
+    if (!el) return;
+    if (typeof filename !== 'undefined') activeSpFilename = filename || '';
+    const active = activeSpFilename;
+    if (!active) { el.textContent = ''; return; }
+    // Display name — strip a trailing .txt only (case-insensitive).
+    const displayName = /\.txt$/i.test(active) ? active.slice(0, -4) : active;
+    // Reverse-lookup: which character(s) have this exact SP filename bound.
+    let bound = [];
+    try {
+      const res = await fetch('/list_characters');
+      if (res.ok) {
+        const characters = await res.json();
+        const results = await Promise.all(characters.map(async (name) => {
+          try {
+            const r = await fetch('/character_system_prompt/' + encodeURIComponent(name));
+            if (!r.ok) return null;
+            const d = await r.json();
+            return (d && d.system_prompt === active) ? name : null;
+          } catch (e) { return null; }
+        }));
+        bound = results.filter(function(n) { return n; });
+      }
+    } catch (e) {
+      console.error('Bound-character lookup failed:', e);
+    }
+    el.textContent = bound.length
+      ? '🟢 Active: ' + displayName + ' — Bound to ' + bound.join(', ')
+      : '🟢 Active: ' + displayName;
   }
 
   async function loadSelectedSystemPrompt(filename) {
@@ -735,7 +780,7 @@
       }
       // Restore whatever was selected before, don't switch to active
       if (currentVal) select.value = currentVal;
-      if (data.active) updateActiveIndicator(data.active);
+      if (data.active) refreshActiveSpIndicator(data.active);
     } catch (err) {
       console.error('Error loading system prompt list:', err);
     }
@@ -754,7 +799,7 @@
       const res = await fetch('/system_prompts/activate/' + encodeURIComponent(filename), { method: 'POST' });
       const data = await res.json();
       if (data.status === 'ok') {
-        updateActiveIndicator(filename);
+        refreshActiveSpIndicator(filename);
         await loadSystemPromptList();
         // Bind this template to the current character card
         const charName = document.getElementById('character-select').value;
@@ -831,6 +876,9 @@
           status.style.color = '#6a9';
           status.textContent = "✅ Bound '" + filename + "' to character '" + charName + "'";
         }
+        // Binding for the active SP may have changed — re-render the indicator
+        // (no arg: reuse the stored active filename).
+        refreshActiveSpIndicator();
       } else {
         if (status) {
           status.style.color = '#c66';
@@ -971,7 +1019,7 @@
       if (data.system_prompt) {
         const spSelect = document.getElementById('system-prompt-file-select');
         if (spSelect) spSelect.value = data.system_prompt;
-        updateActiveIndicator(data.system_prompt);
+        refreshActiveSpIndicator(data.system_prompt);
         await loadSelectedSystemPrompt(data.system_prompt);
         updateBindIndicator(true);
         console.log(`🎭 Auto-loaded system prompt for ${name}: ${data.system_prompt}`);
@@ -1545,8 +1593,6 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     loadSettings();
     loadGlobalSystemPrompt();
     loadCurrentSituation();
-    loadGlobalExampleDialog();
-    loadGlobalPostHistory();
     loadTTSEngine();
     loadLlamaConfig();
     loadBindCharacterList();
@@ -2389,6 +2435,7 @@ async function loadLlamaConfig() {
     if (data.error) return;
     document.getElementById('llama-exe').value = data.exe || '';
     document.getElementById('llama-models-dir').value = data.models_dir || '';
+    document.getElementById('llama-mmproj-path').value = data.mmproj_path || '';
     document.getElementById('llama-show-console').checked = data.show_console || false;
     const a = data.args || {};
     document.getElementById('llama-gpu-layers').value = a.n_gpu_layers ?? 44;
@@ -2406,6 +2453,7 @@ async function saveLlamaConfig() {
   const payload = {
     exe: document.getElementById('llama-exe').value.trim(),
     models_dir: document.getElementById('llama-models-dir').value.trim(),
+    mmproj_path: document.getElementById('llama-mmproj-path').value.trim(),
     show_console: document.getElementById('llama-show-console').checked,
     args: {
       port: 5000,
@@ -2437,12 +2485,45 @@ async function saveLlamaConfig() {
 // ==================================================
 // BROWSE FILE / FOLDER DIALOGS
 // ==================================================
-async function browseFile(targetId) {
+async function browseFile(targetId, filter) {
+  // filter: optional file-type filter for the native picker ('gguf', 'exe', …).
+  // Omitted → backend default ('exe'), so existing callers are unaffected.
   try {
-    const res = await fetch('/browse_file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+    const res = await fetch('/browse_file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(filter ? { filter: filter } : {}) });
     const data = await res.json();
     if (data.path) document.getElementById(targetId).value = data.path;
   } catch(e) { alert('Browse failed: ' + e); }
+}
+
+// Scan the configured Models Folder for an mmproj .gguf file via the existing
+// /auto_detect_mmproj endpoint. The endpoint scans the folder containing the
+// path it is given, so a probe path inside the Models Folder is passed.
+async function autoDetectMmproj() {
+  const status = document.getElementById('llama-config-status');
+  const setStatus = (msg, color) => { if (status) { status.style.color = color; status.textContent = msg; } };
+  const modelsDir = document.getElementById('llama-models-dir').value.trim();
+  if (!modelsDir) {
+    setStatus('Set the Models Folder first, then Auto-Detect.', '#c66');
+    return;
+  }
+  setStatus('🔍 Scanning Models Folder and subfolders for an mmproj file…', '#8ab4d4');
+  try {
+    const probe = modelsDir.replace(/[\\/]+$/, '') + '\\probe.gguf';
+    const res = await fetch('/auto_detect_mmproj', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model_path: probe })
+    });
+    const data = await res.json();
+    if (data.mmproj_path) {
+      document.getElementById('llama-mmproj-path').value = data.mmproj_path;
+      setStatus('🖼️ Found mmproj — click Save Llama Config to apply.', '#6a9');
+    } else {
+      setStatus('No mmproj (*mmproj*.gguf) file found in the Models Folder or its subfolders.', '#c66');
+    }
+  } catch(e) {
+    setStatus('Auto-detect failed: ' + e, '#c66');
+  }
 }
 
 async function browseFolder(targetId) {
@@ -2627,6 +2708,7 @@ function saveLlamaPreset() {
   const preset = {
     exe: document.getElementById('llama-exe').value.trim(),
     models_dir: document.getElementById('llama-models-dir').value.trim(),
+    mmproj_path: document.getElementById('llama-mmproj-path').value.trim(),
     show_console: document.getElementById('llama-show-console').checked,
     gpu_layers: document.getElementById('llama-gpu-layers').value,
     ctx_size: document.getElementById('llama-ctx-size').value,
@@ -2652,6 +2734,7 @@ function loadLlamaPreset() {
   if (!p) return;
   document.getElementById('llama-exe').value = p.exe || '';
   document.getElementById('llama-models-dir').value = p.models_dir || '';
+  document.getElementById('llama-mmproj-path').value = p.mmproj_path || '';
   document.getElementById('llama-show-console').checked = p.show_console || false;
   document.getElementById('llama-gpu-layers').value = p.gpu_layers || 44;
   document.getElementById('llama-ctx-size').value = p.ctx_size || 16384;
@@ -2709,21 +2792,14 @@ async function saveCurrentSituation() {
   }
 }
 
-async function loadGlobalExampleDialog() {
-  // Example dialog is now loaded as part of loadSelectedSystemPrompt.
-  // This function is kept for init — it loads the active template's paired example.
-  try {
-    const res = await fetch('/system_prompts/list');
-    const data = await res.json();
-    if (data.active) {
-      const exRes = await fetch('/system_prompts/load_example/' + encodeURIComponent(data.active));
-      const exText = exRes.ok ? await exRes.text() : '';
-      document.getElementById('global-example-dialog').value = exText.trim();
-    }
-  } catch (e) {
-    console.warn('Could not load global example dialog on init:', e);
-  }
-}
+// loadGlobalExampleDialog() was REMOVED — it loaded the ACTIVE template's
+// example dialogue independently of the selected one and, resolving late, raced
+// loadSelectedSystemPrompt() and clobbered the example field with a different
+// SP's content. loadSelectedSystemPrompt() already loads system prompt +
+// example + post-history together for the correct template (init, character
+// load, and dropdown change all route through it).
+// ⚠️ DO NOT re-add a separate per-field loader for example/post-history —
+// that reintroduces the field/dropdown mismatch bug. (changes.md.)
 
 async function saveGlobalExampleDialog() {
   const text = document.getElementById('global-example-dialog').value.trim();
@@ -2753,22 +2829,11 @@ async function saveGlobalExampleDialog() {
   }
 }
 
-async function loadGlobalPostHistory() {
-  // Post-history is loaded as part of loadSelectedSystemPrompt.
-  // This function is kept for init — it loads the active template's paired
-  // post-history directive.
-  try {
-    const res = await fetch('/system_prompts/list');
-    const data = await res.json();
-    if (data.active) {
-      const phRes = await fetch('/system_prompts/load_posthistory/' + encodeURIComponent(data.active));
-      const phText = phRes.ok ? await phRes.text() : '';
-      document.getElementById('global-post-history').value = phText.trim();
-    }
-  } catch (e) {
-    console.warn('Could not load global post-history on init:', e);
-  }
-}
+// loadGlobalPostHistory() was REMOVED for the same reason as
+// loadGlobalExampleDialog() above — it loaded the ACTIVE template's
+// post-history independently and raced loadSelectedSystemPrompt(), clobbering
+// the post-history field. loadSelectedSystemPrompt() is the single loader.
+// ⚠️ DO NOT re-add a separate per-field loader. (changes.md.)
 
 async function saveGlobalPostHistory() {
   const text = document.getElementById('global-post-history').value.trim();

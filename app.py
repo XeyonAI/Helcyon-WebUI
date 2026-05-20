@@ -1657,14 +1657,37 @@ def stream_vision_response(payload):
     global abort_generation
     abort_generation = False
 
-    print("\n🖼️ VISION PAYLOAD SENDING TO MODEL:", flush=True)
-    response = requests.post(
-        f"{API_URL}/v1/chat/completions",
-        json=payload,
-        stream=True,
-        timeout=None
-    )
+    print("\n🖼️ Sending vision request to model server…", flush=True)
+    try:
+        response = requests.post(
+            f"{API_URL}/v1/chat/completions",
+            json=payload,
+            stream=True,
+            timeout=(15, None),
+        )
+    except Exception as e:
+        # Server unreachable / connection refused — surface it instead of
+        # silently yielding nothing.
+        print(f"❌ Vision request failed to reach model server: {e}", flush=True)
+        yield f"⚠️ Could not reach the vision model server: {e}"
+        return
+
     print(f"🔗 Vision response status: {response.status_code}", flush=True)
+    if response.status_code != 200:
+        # Non-200: previously the error body was fed line-by-line into the JSON
+        # parser, every line failed, and the user got a blank reply with no
+        # explanation. Now read the error body and surface a real message.
+        _err_body = ""
+        try:
+            _err_body = response.text[:400].strip()
+        except Exception:
+            pass
+        response.close()
+        print(f"❌ Vision model returned HTTP {response.status_code}: {_err_body}", flush=True)
+        yield (f"⚠️ The vision model returned an error (HTTP {response.status_code}). "
+               f"The loaded model may not support images, or it ran out of memory."
+               + (f"\n\n{_err_body}" if _err_body else ""))
+        return
 
     total_chunks = 0
     all_text = []
@@ -2540,14 +2563,13 @@ def chat():
         if not _char_ex_pre:
             # Priority 3: .example.txt file — must match the path resolution used below
             try:
-                _active_sp_pre = char_data.get("system_prompt") or get_active_prompt_filename()
-                _base_pre = _active_sp_pre.rsplit('.', 1)[0] if '.' in _active_sp_pre else _active_sp_pre
-                _ex_path_pre = os.path.join(get_system_prompts_dir(), _base_pre + '.example.txt')
+                _, _ex_name_pre, _ = resolve_character_prompt_files(char_data)
+                _ex_path_pre = os.path.join(get_system_prompts_dir(), _ex_name_pre)
                 if os.path.exists(_ex_path_pre):
                     with open(_ex_path_pre, 'r', encoding='utf-8') as _ef_pre:
                         _char_ex_pre = _ef_pre.read().strip()
                     if _char_ex_pre:
-                        print(f"📐 Pre-calc: found {_base_pre}.example.txt for overhead measurement")
+                        print(f"📐 Pre-calc: found {_ex_name_pre} for overhead measurement")
             except Exception:
                 pass
     if _char_ex_pre:
@@ -2582,9 +2604,8 @@ def chat():
         _reply_packet_overhead += rough_token_count(_cn_pre) + 20  # +20 for [OOC: Character note — …] wrapper
     _gph_pre = ""
     try:
-        _gph_sp = char_data.get("system_prompt") or get_active_prompt_filename()
-        _gph_base = _gph_sp.rsplit('.', 1)[0] if '.' in _gph_sp else _gph_sp
-        _gph_path = os.path.join(get_system_prompts_dir(), _gph_base + '.posthistory.txt')
+        _, _, _gph_name = resolve_character_prompt_files(char_data)
+        _gph_path = os.path.join(get_system_prompts_dir(), _gph_name)
         if os.path.exists(_gph_path):
             with open(_gph_path, 'r', encoding='utf-8') as _gphf:
                 _gph_pre = _gphf.read().strip()
@@ -2673,14 +2694,13 @@ def chat():
         # ── Priority 3: .example.txt file alongside system prompt ──────────────
         if not _global_ex:
             try:
-                _active_sp = char_data.get("system_prompt") or get_active_prompt_filename()
-                _base = _active_sp.rsplit('.', 1)[0] if '.' in _active_sp else _active_sp
-                _ex_path = os.path.join(get_system_prompts_dir(), _base + '.example.txt')
+                _, _ex_name, _ = resolve_character_prompt_files(char_data)
+                _ex_path = os.path.join(get_system_prompts_dir(), _ex_name)
                 if os.path.exists(_ex_path):
                     with open(_ex_path, 'r', encoding='utf-8') as _ef:
                         _global_ex = _ef.read().strip()
                     if _global_ex:
-                        print(f"🌐 No character example dialogue — using {_base}.example.txt as fallback")
+                        print(f"🌐 No character example dialogue — using {_ex_name} as fallback")
             except Exception:
                 pass
 
@@ -3009,14 +3029,13 @@ def chat():
     # globally active template.
     _gph_val = ""
     try:
-        _ph_sp = char_data.get("system_prompt") or get_active_prompt_filename()
-        _ph_base = _ph_sp.rsplit('.', 1)[0] if '.' in _ph_sp else _ph_sp
-        _ph_path = os.path.join(get_system_prompts_dir(), _ph_base + '.posthistory.txt')
+        _, _, _ph_name = resolve_character_prompt_files(char_data)
+        _ph_path = os.path.join(get_system_prompts_dir(), _ph_name)
         if os.path.exists(_ph_path):
             with open(_ph_path, 'r', encoding='utf-8') as _phf:
                 _gph_val = _phf.read().strip()
             if _gph_val:
-                print(f"📌 Post-history directive loaded from {_ph_base}.posthistory.txt")
+                print(f"📌 Post-history directive loaded from {_ph_name}")
     except Exception as _phe:
         print(f"⚠️ Could not load post-history directive: {_phe}")
         _gph_val = ""
@@ -3216,6 +3235,17 @@ def chat():
     sampling = load_sampling_settings()
 
     if has_images:
+        # Vision-capability guard — images only mean anything if the loaded
+        # model has an mmproj (vision) file. Without it the image would be
+        # silently dropped or error out on the model server, so fail loudly
+        # here with a message the user can act on.
+        _vcfg = get_llama_settings()
+        _vmmproj = _vcfg.get('mmproj_path', '') if _vcfg else ''
+        if not (_vmmproj and os.path.isfile(_vmmproj)):
+            print("⚠️ Image attached but no mmproj/vision model loaded — refusing vision path", flush=True)
+            return ("⚠️ This model can't see images — no vision (mmproj) file is loaded. "
+                    "Load a vision-capable model, or remove the image and resend."), 400
+
         # --------------------------------------------------------
         # VISION PATH: Use /v1/chat/completions with messages array
         # Pixtral / LLaVA / multimodal models
@@ -4603,6 +4633,29 @@ def set_active_prompt_filename(filename):
     with open('settings.json', 'w', encoding='utf-8') as f:
         json.dump(s, f, indent=2)
 
+
+def resolve_character_prompt_files(char_data):
+    """Resolve the system-prompt + paired example / post-history filenames for
+    a character, applying the canonical resolution chain:
+      per-character bound filename → global active filename.
+
+    char_data may be None or {} — handled gracefully (→ global active).
+    A None-valued or whitespace-only "system_prompt" field also falls back.
+
+    Returns (sp_filename, example_filename, posthistory_filename) as bare
+    filenames (NOT full paths) — callers join with get_system_prompts_dir().
+    The paired files share the SP stem: e.g. GPT-4o.txt → GPT-4o.example.txt,
+    GPT-4o.posthistory.txt.
+
+    ⚠️ Any route that loads a character SP or its paired files MUST call this —
+    do NOT re-inline the resolution chain. Inline duplication is exactly how
+    the /continue route silently drifted to global-only SP. (changes.md.)
+    """
+    char_sp = ((char_data or {}).get("system_prompt") or "").strip()
+    sp_filename = char_sp or get_active_prompt_filename()
+    base = sp_filename.rsplit('.', 1)[0] if '.' in sp_filename else sp_filename
+    return sp_filename, base + '.example.txt', base + '.posthistory.txt'
+
 @app.route('/system_prompts/list', methods=['GET'])
 def list_system_prompts():
     folder = get_system_prompts_dir()
@@ -4785,6 +4838,55 @@ def system_prompt():
 # --------------------------------------------------
 # List Characters (for config dropdown)
 # --------------------------------------------------
+# --------------------------------------------------
+# Active Character — server-side shared state (desktop ↔ mobile)
+# Mirrors the active-project pattern (projects/_active_project.json) so the
+# last-used character follows the user across devices instead of living in
+# per-device localStorage. ⚠️ This is intentionally GLOBAL — switching
+# character on one device switches it everywhere. Fine for single-user use.
+# --------------------------------------------------
+def _active_character_state_file():
+    return os.path.join(os.path.dirname(__file__), "characters", "_active_character.json")
+
+
+def get_active_character():
+    """Return the server-side active character name, or None. Never raises."""
+    try:
+        path = _active_character_state_file()
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f).get("active_character")
+    except Exception as e:
+        print(f"⚠️ Failed to read active character: {e}")
+    return None
+
+
+def set_active_character(character_name):
+    """Persist the server-side active character. Mirrors set_active_project()."""
+    try:
+        path = _active_character_state_file()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"active_character": character_name}, f, indent=2)
+    except Exception as e:
+        print(f"❌ Failed to set active character: {e}")
+
+
+@app.route("/active_character", methods=["GET"])
+def active_character_get():
+    """Return the shared active character so a client can restore it on load."""
+    return jsonify({"active_character": get_active_character()})
+
+
+@app.route("/active_character", methods=["POST"])
+def active_character_set():
+    """Persist the shared active character (called when a client switches)."""
+    data = request.get_json(silent=True) or {}
+    name = (data.get("active_character") or data.get("character") or "").strip()
+    set_active_character(name or None)
+    return jsonify({"success": True, "active_character": name or None})
+
+
 @app.route("/list_characters", methods=["GET"])
 def list_characters():
     chars = []
@@ -4794,6 +4896,8 @@ def list_characters():
         return jsonify([])
 
     for file in os.listdir(char_dir):
+        if file == "_active_character.json":
+            continue  # internal shared-state file, not a character
         if file.endswith(".json"):
             path = os.path.join(char_dir, file)
             try:
@@ -5386,18 +5490,29 @@ def load_model():
         "--timeout", str(args.get("timeout", 0)),
         "--parallel", str(args.get("parallel", 1)),
     ]
-    if _chat_template not in ('jinja', 'qwen', ''):
-        cmd += ["--chat-template", _chat_template]
-        print(f"📐 Chat template: {_chat_template}")
-    else:
-        print(f"📐 Chat template: {_chat_template} (native GGUF — not passing --chat-template)")
-    # Only load mmproj if explicitly configured — never auto-detect
+    # Only load mmproj if explicitly configured — never auto-detect.
+    # Decided BEFORE the chat-template flag because it gates it.
     mmproj_path = cfg.get('mmproj_path', '')
-    if mmproj_path and os.path.isfile(mmproj_path):
+    _loading_mmproj = bool(mmproj_path and os.path.isfile(mmproj_path))
+    if _loading_mmproj:
         cmd += ["--mmproj", mmproj_path]
         print(f"🖼️ Vision mode: mmproj loaded from {mmproj_path}")
     else:
         print("📝 No mmproj — text-only mode")
+
+    # Chat template.
+    # ⚠️ NEVER globally force --chat-template chatml. A multimodal GGUF (e.g.
+    # Pixtral) ships its own multimodal-aware chat template, and that template
+    # is what drives image-token insertion. Overriding it with plain ChatML
+    # breaks vision — llama-server then rejects image input ("image input is
+    # not supported"). So --chat-template is only passed for text-only loads.
+    if _loading_mmproj:
+        print("🖼️ Vision model detected — using model's native chat template (skipping ChatML override)")
+    elif _chat_template not in ('jinja', 'qwen', ''):
+        cmd += ["--chat-template", _chat_template]
+        print(f"📐 Chat template: {_chat_template}")
+    else:
+        print(f"📐 Chat template: {_chat_template} (native GGUF — not passing --chat-template)")
 
     try:
         show_console = cfg.get('show_console', False)
@@ -5533,7 +5648,8 @@ def save_llama_config():
 
 @app.route("/auto_detect_mmproj", methods=["POST"])
 def auto_detect_mmproj():
-    """Given a model path, look for a matching mmproj file in the same folder."""
+    """Given a model path, look for a matching mmproj file in the same folder
+    or any subfolder beneath it."""
     try:
         data = request.json
         model_path = data.get("model_path", "").strip()
@@ -5544,14 +5660,18 @@ def auto_detect_mmproj():
         if not os.path.isdir(folder):
             return jsonify({"mmproj_path": None})
 
-        # Look for any file in the same folder that contains 'mmproj' in its name
-        for fname in os.listdir(folder):
-            if "mmproj" in fname.lower() and fname.endswith(".gguf"):
-                found = os.path.join(folder, fname)
-                print(f"🖼️ Auto-detected mmproj: {found}")
-                return jsonify({"mmproj_path": found})
+        # Walk the folder tree recursively — os.walk is top-down, so an mmproj
+        # in the folder itself is preferred over one nested in a subfolder.
+        # Names are sorted for deterministic results.
+        for root, dirs, files in os.walk(folder):
+            dirs.sort()
+            for fname in sorted(files):
+                if "mmproj" in fname.lower() and fname.lower().endswith(".gguf"):
+                    found = os.path.join(root, fname)
+                    print(f"🖼️ Auto-detected mmproj: {found}")
+                    return jsonify({"mmproj_path": found})
 
-        print(f"⚠️ No mmproj found in {folder}")
+        print(f"⚠️ No mmproj found under {folder}")
         return jsonify({"mmproj_path": None})
     except Exception as e:
         print(f"❌ auto_detect_mmproj error: {e}")
@@ -6252,21 +6372,29 @@ def continue_chat():
         character = data.get("character", "")
         memory_context = data.get("memory_context", "")
 
-        # Load system prompt from active template
-        from utils.session_handler import get_active_system_prompt_path
-        _sp_path = get_active_system_prompt_path()
+        # Load character data — needed both for the bound SP and the main prompt.
+        char_file = os.path.join("characters", f"{character}.json")
+        char_data = {}
+        if os.path.exists(char_file):
+            try:
+                with open(char_file, "r", encoding="utf-8") as cf:
+                    char_data = json.load(cf)
+            except Exception as _ce:
+                print(f"⚠️ /continue could not read character file: {_ce}")
+                char_data = {}
+        char_main = char_data.get("main_prompt", "")
+
+        # Resolve the system prompt via the shared resolver: per-character bound
+        # filename → global active → fallback. Previously /continue read the
+        # global active SP only, ignoring a character's bound SP — fixed here so
+        # it matches /chat. ⚠️ DO NOT re-inline this chain.
+        _sp_name, _, _ = resolve_character_prompt_files(char_data)
+        _sp_path = os.path.join(get_system_prompts_dir(), _sp_name)
         try:
             with open(_sp_path, "r", encoding="utf-8") as sp:
                 system_prompt = sp.read().strip()
         except Exception:
             system_prompt = "You are an LLM-based assistant."
-
-        # Load character main prompt
-        char_file = os.path.join("characters", f"{character}.json")
-        char_main = ""
-        if os.path.exists(char_file):
-            with open(char_file, "r", encoding="utf-8") as cf:
-                char_main = json.load(cf).get("main_prompt", "")
 
         # Combine system + character prompt
         system_full = f"{system_prompt}\n\n{char_main}".strip()

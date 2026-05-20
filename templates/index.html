@@ -640,9 +640,29 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
 // ================================================
 window.attachedImages = []; // array of {base64, mimeType, previewUrl}
 
-function handleImageAttach(input) {
+async function handleImageAttach(input) {
   const files = Array.from(input.files);
   if (!files.length) return;
+
+  // Vision-capability guard — block attaching images to a text-only model
+  // (no mmproj loaded). The backend rejects them anyway; this gives the user
+  // the reason up front instead of a failed send. Fails open if the check
+  // itself errors — the backend guard is the real safety net.
+  try {
+    const mres = await fetch('/get_model');
+    if (mres.ok) {
+      const mdata = await mres.json();
+      if (!mdata.vision_active) {
+        alert('⚠️ The loaded model has no vision support (no mmproj file).\n\n'
+            + 'Load a vision-capable model before attaching images — otherwise '
+            + 'the image cannot be read.');
+        input.value = '';
+        return;
+      }
+    }
+  } catch (e) {
+    console.warn('Vision-capability check failed, allowing attach:', e);
+  }
 
   files.forEach(file => {
     const reader = new FileReader();
@@ -1543,8 +1563,18 @@ if (typeof marked === "undefined") {
       // Cache character list for filename parsing
       localStorage.setItem('characterListCache', JSON.stringify(sorted));
 
+      // Initial character resolution: server-side active character (shared
+      // desktop ↔ mobile) → per-device localStorage cache → first in list.
+      let activeChar = null;
+      try {
+        const acRes = await fetch('/active_character');
+        if (acRes.ok) activeChar = (await acRes.json()).active_character;
+      } catch (e) { console.warn('active_character fetch failed:', e); }
       const lastChar = localStorage.getItem('lastCharacter');
-      const initialChar = lastChar && sorted.includes(lastChar) ? lastChar : sorted[0];
+      const initialChar =
+        (activeChar && sorted.includes(activeChar)) ? activeChar :
+        (lastChar && sorted.includes(lastChar)) ? lastChar :
+        sorted[0];
       if (initialChar) {
         select.value = initialChar;
         await loadCharacter(initialChar);
@@ -1749,6 +1779,13 @@ async function loadCharacter(name, skipChatHistory = false) {
         data.tagline || (data.main_prompt ? data.main_prompt.split('\n')[0] : '');
       systemPrompt = data.system_prompt || '';
       localStorage.setItem('lastCharacter', name);
+      // Persist as the server-side active character so the choice follows the
+      // user to the mobile app (and back). Fire-and-forget — non-blocking.
+      fetch('/active_character', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active_character: name })
+      }).catch(e => console.warn('active_character save failed:', e));
 
       // Load this character's saved TTS voice — server first (shared with mobile), localStorage fallback
       try {
@@ -3217,7 +3254,17 @@ async function openChat(filename) {
       });
       
       if (!response.ok) {
-        chat.innerHTML += '<div class="message error-msg">⚠️ Server error.</div>';
+        // Surface the server's actual message (e.g. the vision-capability
+        // guard) instead of a generic "Server error".
+        let _errMsg = '⚠️ Server error.';
+        try {
+          const _body = (await response.text()).trim();
+          if (_body) _errMsg = _body;
+        } catch (e) {}
+        const _errDiv = document.createElement('div');
+        _errDiv.className = 'message error-msg';
+        _errDiv.textContent = _errMsg;
+        chat.appendChild(_errDiv);
         return;
       }
       

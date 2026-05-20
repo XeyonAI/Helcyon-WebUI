@@ -1,3 +1,284 @@
+## May 19 2026 — Fixed SP Fields Showing the Wrong Template
+
+**Files:** templates/config.html
+
+**The bug:** on the System Prompt config page, selecting a system-prompt
+template left the System Prompt / Example Dialogue / Post-History fields out of
+sync — they showed a *different* template's content than the one selected.
+
+**Root cause — a race between redundant loaders.** Three functions wrote to
+those fields:
+- `loadSelectedSystemPrompt(filename)` — loads all three fields together, for
+  the *selected* template. Runs on init, character load, and dropdown change.
+- `loadGlobalExampleDialog()` — loaded *only* the example field, for the
+  *globally active* template.
+- `loadGlobalPostHistory()` — loaded *only* the post-history field, for the
+  *globally active* template.
+
+The latter two ran on `DOMContentLoaded` and each did two sequential fetches,
+so they resolved late. Selecting a template shortly after page load filled all
+three fields correctly via `loadSelectedSystemPrompt`, then the still-in-flight
+global loaders resolved and overwrote the example + post-history fields with
+the *active* template's content — leaving the dropdown on one template and
+those two fields on another.
+
+**The fix:** removed `loadGlobalExampleDialog()` and `loadGlobalPostHistory()`
+entirely (calls + definitions). `loadSelectedSystemPrompt()` already loads
+system prompt + example + post-history together for the correct template, and
+it is the single code path used by init, character load, and dropdown change —
+so the three fields now always reflect one template. The `saveGlobal*`
+counterparts are unchanged. Tombstone comments mark why the loaders were
+removed.
+
+- ⚠️ DO NOT re-add a separate per-field loader for example dialogue or
+  post-history — partial loaders keyed to the *active* template race the
+  unified loader and reintroduce the field/dropdown mismatch.
+
+---
+
+## May 19 2026 — Vision Fix: --chat-template No Longer Forced on Vision Models
+
+**Files:** app.py
+
+**The bug:** an image-attached chat to a genuinely vision-ready llama-server
+(Pixtral 12B, mmproj loaded, `clip_model_loader: has vision encoder` confirmed
+in the server console) failed with llama-server's error "image input is not
+supported". Root cause: the `/load_model` launch-command builder appended
+`--chat-template chatml` whenever `settings.json` set the chat template to a
+concrete value — **including vision-model loads**. A multimodal GGUF ships its
+own multimodal-aware chat template, and that template is what drives
+image-token insertion. Forcing plain ChatML over it broke vision: the request
+reached `/v1/chat/completions` correctly formatted, but the overridden template
+left llama-server unable to place the image, so it rejected the input.
+
+**The fix:** the launch builder now decides `--mmproj` first, then makes
+`--chat-template` conditional — it is appended **only when no mmproj is being
+loaded**. Vision loads keep the model's native multimodal template; a clear
+console line is printed when ChatML is skipped for this reason
+(`🖼️ Vision model detected — using model's native chat template …`). Text-only
+loads (Helcyon and any other non-vision GGUF) are unaffected — they receive
+`--chat-template` exactly as before.
+
+- ⚠️ Never globally force `--chat-template chatml` — vision models depend on
+  their native multimodal template for image-token insertion. The conditional
+  (skip when an mmproj is loaded) is required.
+
+**Known issue — deferred to post-launch (do NOT fix now):** `/get_model`'s
+`vision_active` and the `/chat` vision guard both derive vision-readiness from
+`settings.json["mmproj_path"]`, not from the live llama-server. If a user sets
+`mmproj_path` without reloading the model, `vision_active` flips true while the
+running server has no projector — a false "vision-ready" report. It did not
+bite here (the projector is genuinely loaded), but the proper fix is to probe
+llama-server's `/props` endpoint at runtime for authoritative vision capability
+rather than trusting `settings.json`.
+
+---
+
+## May 19 2026 — mmproj Auto-Detect Now Scans Subfolders
+
+**Files:** app.py, templates/config.html
+
+`/auto_detect_mmproj` previously scanned only the immediate Models Folder
+(`os.listdir`), so an mmproj file kept in a per-model subfolder was never
+found. It now walks the folder tree recursively (`os.walk`, top-down) — an
+mmproj in the Models Folder itself is still preferred over a nested one, and
+results are deterministic (dir/file names sorted). The `.gguf` extension check
+is now case-insensitive. Auto-Detect button tooltip and status messages
+updated to say "and subfolders".
+
+Verified: `app.py` parses.
+
+---
+
+## May 19 2026 — mmproj (Vision Projector) Config UI + Silent-Wipe Fix
+
+**Files:** templates/config.html
+
+The mmproj/vision system was fully wired in the backend (`settings.json`
+`mmproj_path`, `/save_llama_config` accepts it, the server launches with
+`--mmproj`, `/auto_detect_mmproj` endpoint) but had **no UI control at all** —
+the only way to enable vision was hand-editing `settings.json`.
+
+**The silent-wipe trap (found and fixed here).** Because config.html had no
+mmproj field, `saveLlamaConfig()` sent no `mmproj_path`, and the backend
+defaults a missing value to empty:
+`s['mmproj_path'] = data.get('mmproj_path', '')`. So clicking **💾 Save Llama
+Config** for any reason **silently wiped a hand-set `mmproj_path` to empty**,
+disabling vision. Now that the field exists and is always sent, this can no
+longer happen — the value round-trips instead of being blanked.
+
+**Added to the Llama Config section** (placed between Models Folder and Launch
+Arguments — it is a model-loading concern, grouped with the path inputs):
+- A `Vision Projector — mmproj` text field. Empty is valid (= no vision) and
+  is not validated against.
+- A 📁 browse button using the **file** picker with a `.gguf` filter
+  (`browseFile` gained an optional `filter` arg; existing callers unaffected).
+- A 🔍 **Auto-Detect** button — scans the configured Models Folder for a
+  `*mmproj*.gguf` file via the previously-orphan `/auto_detect_mmproj`
+  endpoint, and reports the result in the config status line.
+- Wired into `loadLlamaConfig` (populate), `saveLlamaConfig` (send),
+  `saveLlamaPreset` + `loadLlamaPreset` (round-trip `mmproj_path` with the
+  other fields) — so presets capture mmproj too and don't reintroduce the
+  same wipe bug on preset load/save.
+
+- ⚠️ Mmproj UI control must remain in config.html — the backend still depends
+  on `settings.json["mmproj_path"]` for vision model loading. Removing the UI
+  silently breaks vision and reintroduces the wipe-on-save bug.
+
+---
+
+## May 19 2026 — Active Character Synced Across Desktop & Mobile
+
+**Files:** app.py, templates/index.html, templates/mobile.html
+
+The active project and its chat folder were already shared between the desktop
+and mobile apps (server-side `projects/_active_project.json`). The **character**
+was not — each app picked it from per-device `localStorage('lastCharacter')`,
+so it only matched by coincidence (and only because the build effectively had
+one character). Now the active character is shared too.
+
+- New server-side state file `characters/_active_character.json`, with
+  `get_active_character()` / `set_active_character()` — mirrors the
+  active-project pattern exactly.
+- New routes: `GET /active_character` (read on load) and
+  `POST /active_character` (write on switch).
+- `list_characters` skips `_active_character.json` so the state file is not
+  picked up as a phantom character.
+- Both apps now resolve the initial character as: **server-side active
+  character → per-device `localStorage` cache → first in list**, and write the
+  choice back to the server whenever a character is loaded/switched
+  (fire-and-forget, non-blocking). index.html does this in `loadCharacter`;
+  mobile.html via a shared `setActiveCharacterServer()` helper.
+
+Switching character on either device now carries to the other on its next
+load — same as how the active project already behaves.
+
+Verified: `app.py` parses.
+
+- ⚠️ The active character is intentionally GLOBAL server-side state — switching
+  it on one device switches it everywhere. This is correct for single-user
+  use (the overwhelmingly common case). Do NOT "fix" this into per-device
+  state — that reintroduces the desktop/mobile mismatch this change resolves.
+
+---
+
+## May 19 2026 — Vision/Image-Upload Guards + Error Surfacing
+
+**Files:** app.py, templates/index.html
+
+A review of the image-upload → vision pipeline found the happy path sound but
+two gaps where failures were silent. Both fixed:
+
+**Fix 1 — vision-capability guard.** Nothing checked whether the loaded model
+actually had an mmproj (vision) file before accepting an image. Attaching an
+image to a text-only model sent it to a non-vision server → silent drop or a
+blank reply.
+- Frontend (`handleImageAttach`): now checks `/get_model`'s `vision_active`
+  before attaching; if the model has no mmproj it alerts the user and aborts
+  the attach. Fails open if the check itself errors (backend guard still
+  catches it).
+- Backend (`/chat`): before entering the vision path, if images are present
+  but no valid `mmproj_path` is configured, it returns HTTP 400 with a clear
+  message instead of POSTing the image to a model that can't read it.
+
+**Fix 2 — error surfacing.**
+- `stream_vision_response` now wraps the request in try/except (server
+  unreachable → real message) and checks the HTTP status: on a non-200 it
+  reads the error body and yields a readable explanation, instead of feeding
+  the error body line-by-line into the JSON parser and yielding nothing (the
+  old behaviour produced a blank reply with no error). Added a 15s connect
+  timeout; the read timeout stays unbounded so slow vision generation is
+  unaffected.
+- Frontend `/chat` `!response.ok` handler now displays the server's actual
+  response body (e.g. the new vision guard message) instead of a generic
+  "Server error" — also improves visibility of pre-existing `/chat` errors.
+
+Verified: `app.py` parses. Vision pipeline otherwise unchanged — the happy
+path (vision model + mmproj) is untouched.
+
+- ⚠️ Vision/OpenAI/jinja request paths still rebuild system content from
+  `system_text` and bypass the `messages[0]` late-appends — pre-existing,
+  documented limitation, not addressed here.
+
+---
+
+## May 19 2026 — /continue SP Resolution Fix + Shared Prompt-File Resolver
+
+**Files:** app.py
+
+**Fix 1 — /continue route was character-blind for the system prompt.** The
+`/continue` route loaded the SP via `get_active_system_prompt_path()` — the
+global active SP only. Hitting Continue mid-conversation with a character that
+had a bound SP silently swapped to the global SP for that one generation.
+`/continue` now resolves the SP through the shared resolver, so it applies the
+same per-character-bound → global-active → fallback chain that `/chat` uses.
+No bound SP → still falls back to the global active SP (unchanged).
+
+**Fix 2 — extracted `resolve_character_prompt_files(char_data)`.** The pattern
+`char_data.get("system_prompt") or get_active_prompt_filename()` plus the
+`.example.txt` / `.posthistory.txt` stem derivation was inlined and duplicated
+in 4 places. It is now a single module-scope helper returning
+`(sp_filename, example_filename, posthistory_filename)`. The 4 paired-file
+sites (overhead pre-calc example, overhead pre-calc post-history, example-
+dialogue fallback loader, post-history directive loader) were refactored to
+call it — behaviour verified identical (5 parity cases: clean filename, empty
+field, no-extension name, missing field, multi-dot name; plus safe handling of
+a `None`-valued field and `None` char_data).
+
+**Deviation flagged — NOT unified.** The 5th candidate site, the `/chat`
+system-prompt *content* override (app.py ~2134-2149), is structurally
+different: it picks the SP file, reads its content, is gated on whether the
+character actually has a bound SP, rebuilds the prompt with a distinct
+`"Current date and time:"` time prefix, and has no global re-derivation
+fallback (the global is pre-loaded by `get_system_prompt()` with a different
+`"Current date:"` prefix). Routing it through the resolver would change the
+time-prefix for unbound characters. It was deliberately left inline to
+preserve behaviour parity. Only `/continue` changed behaviour in this task.
+
+Verified: `app.py` parses; helper parity unit-tested; traced `/chat` (bound
+and unbound) — same SP as before; traced `/continue` (bound → now loads the
+bound SP; unbound → global active, unchanged).
+
+- ⚠️ Any new route that loads a character SP or its paired files MUST call
+  `resolve_character_prompt_files()` — do NOT inline the resolution chain.
+  Inline duplication is what caused the /continue bug.
+
+---
+
+## May 19 2026 — Active SP Indicator: Clean Name + Bound-Character Display
+
+**Files:** templates/config.html (frontend only)
+
+Two tweaks to the active-SP status line under the Global System Prompt
+dropdown on the System Prompt page:
+
+- **`.txt` extension stripped for display.** The indicator showed the raw
+  filename (`Active: GPT-4o-API.txt`) — dev-leaky. It now strips a trailing
+  `.txt` (case-insensitive) for display only: `Active: GPT-4o-API`. The
+  underlying filename in storage and every backend call is unchanged.
+- **Bound character(s) now shown.** The indicator reads
+  `🟢 Active: <sp-name> — Bound to <character>` (em dash, single spaces). The
+  bound character is found by reverse-lookup: iterate `/list_characters` and
+  check each character's `system_prompt` field via
+  `/character_system_prompt/<n>` against the active SP filename. If multiple
+  characters are bound to the same SP they are all listed, comma-separated
+  (`Bound to Gemma, Aria, Dave`) — no truncation. If none are bound it shows
+  just `🟢 Active: <sp-name>` as before. Uses existing endpoints only — no new
+  route, no Python restart.
+- The rendering logic was extracted into a single shared function,
+  `refreshActiveSpIndicator()`, replacing the old `updateActiveIndicator`. It
+  is called from every trigger — page load, after Activate, after Bind, and on
+  character select — so the indicator stays current without duplicated render
+  code. The active filename is held in a module-level var so a post-Bind
+  refresh can re-render without the caller re-supplying it.
+
+Indicator styling (colour, size) is unchanged — only the content is longer.
+
+- ⚠️ Display-only filename stripping — do not rename stored files or change
+  backend filename handling.
+
+---
+
 ## May 19 2026 — Time-Decay Session Memory
 
 **Files:** app.py, settings.json
