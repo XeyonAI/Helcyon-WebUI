@@ -6,20 +6,20 @@
    ============================================================ */
 
 :root {
-  --topbar-bg: #1a1a1b;
-  --container-bg: #181818;
-  --chat-bg: #0f0f0f;
-  --project-header-bg: #0f0f0f;
+  --topbar-bg: #1e1f20;
+  --container-bg: #1e1f20;
+  --chat-bg: #131314;
+  --project-header-bg: #062b46;
   --sidebar-bg: #1e1f20;
   --chat-item-bg: #2e2e2e;
   --sidebar-button-hover: #143257;
   --new-chat-btn-bg: #00335a;
   --new-chat-btn-text: #c8c8c8;
-  --char-dropdown-bg: #121212;
+  --char-dropdown-bg: #202020;
   --char-dropdown-border: #303030;
   --sidebar-footer-btn-bg: #1e1f20;
   --sidebar-footer-btn-border: #25497f;
-  --user-msg-bg: #171717;
+  --user-msg-bg: #282a2c;
   --user-msg-text: #d3d3d3;
   --model-msg-bg: #1e1f20;
   --model-msg-text: #d3d3d3;
@@ -32,15 +32,14 @@
   --field-border-focus: #5f5f5f;
   --token-panel-bg: #1f1f1f;
   --token-panel-border: #000000;
-  --modal-bg: #1e1f1f;
+  --modal-bg: #1e1f20;
   --modal-bg-hover: #16394e;
   --modal-border: #363636;
-  --modal-text: #ebebeb;
+  --modal-text: #b2b2b2;
   --memory-tab-active-bg: #3e505b;
-  --memory-entry-bg: #151515;
-  --memory-entry-text: #d6d5d5;
-  --project-item-bg: #161616;
-  --project-edit-bg: #191919;
+  --memory-entry-bg: #121212;
+  --memory-entry-text: #929292;
+  --project-item-bg: #101010;
   --project-item-hover: #0d3248;
   --icon-button-bg: #234468;
   --icon-button-hover: #606060;
@@ -82,14 +81,14 @@ body {
   box-shadow: none !important;
   border-radius: 0 !important;
   padding: 0.5rem 1.5rem !important;
-  max-width: var(--chat-width) !important;
+  max-width: 900px !important;
 }
 
 @media (max-width: 1400px) {
-  .chat-page #container, .chat-page #center-column { max-width: var(--chat-width) !important; }
+  .chat-page #container, .chat-page #center-column { max-width: 800px !important; }
 }
 @media (max-width: 1024px) {
-  .chat-page #container, .chat-page #center-column { max-width: var(--chat-width) !important; }
+  .chat-page #container, .chat-page #center-column { max-width: 680px !important; }
 }
 
 #chat {

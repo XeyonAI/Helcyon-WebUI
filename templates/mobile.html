@@ -179,7 +179,6 @@ const marked={parse:function(txt){
       </button>
     </div>
     <div id="resume-row" style="display:flex;gap:6px;padding:0 0 4px;">
-      <button onclick="regenerateLastResponse()" style="flex:1;background:rgba(80,55,25,0.3);border:1px solid #6a4a2a;color:#f5b14a;border-radius:8px;padding:5px 0;font-size:12px;cursor:pointer;">🔁 Regen</button>
       <button onclick="resumeLastResponse()" style="flex:1;background:rgba(40,80,120,0.3);border:1px solid #2a4a6a;color:#7ab4f5;border-radius:8px;padding:5px 0;font-size:12px;cursor:pointer;">🔄 Resume</button>
       <button onclick="continueResponse()" style="flex:1;background:rgba(40,60,40,0.3);border:1px solid #2a4a2a;color:#6dbf8a;border-radius:8px;padding:5px 0;font-size:12px;cursor:pointer;">▶ Continue</button>
     </div>
@@ -296,14 +295,6 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden)stopAllAudi
 // Stop audio when page is unloaded (browser close, navigation away)
 window.addEventListener('pagehide',()=>stopAllAudio());
 
-// Persist the active character to shared server-side state so the choice
-// follows the user between the desktop and mobile apps. Fire-and-forget.
-function setActiveCharacterServer(name){
-  if(!name)return;
-  fetch('/active_character',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({active_character:name})}).catch(e=>console.warn('active_character save failed',e));
-}
-
 async function loadCharacterList(){
   try{
     const res=await fetch('/list_characters');
@@ -313,18 +304,10 @@ async function loadCharacterList(){
     const sel=document.getElementById('char-select');
     sel.innerHTML='';
     chars.forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c;sel.appendChild(o);});
-    // Initial character: server-side active character (shared with desktop)
-    // → per-device localStorage → first in list.
-    let activeChar=null;
-    try{const acR=await fetch('/active_character');if(acR.ok)activeChar=(await acR.json()).active_character;}
-    catch(e){console.warn('active_character fetch failed',e);}
     const saved=localStorage.getItem('lastCharacter');
-    if(activeChar&&chars.includes(activeChar)){characterName=activeChar;}
-    else if(saved&&chars.includes(saved)){characterName=saved;}
-    else if(chars.length>0){characterName=chars[0];}
-    if(characterName){sel.value=characterName;}
+    if(saved&&chars.includes(saved)){sel.value=saved;characterName=saved;}
+    else if(chars.length>0){characterName=chars[0];sel.value=chars[0];}
     await loadCharacterInfo(characterName);
-    setActiveCharacterServer(characterName);
   }catch(e){console.warn('char list error',e);}
 }
 
@@ -332,7 +315,6 @@ async function switchCharacter(name){
   if(!name)return;
   characterName=name;
   localStorage.setItem('lastCharacter',name);
-  setActiveCharacterServer(name);
   chatHistory=[];
   mobileChatFilename=null;
   localStorage.removeItem('mobile_chat_filename');
@@ -1447,7 +1429,40 @@ function showDeletePopover(wrap, text, role){
     const regenBtn=document.createElement('button');
     regenBtn.textContent='🔄 Regenerate';
     regenBtn.style.cssText='background:#1a2a3a;border:1px solid var(--accent);color:var(--accent);border-radius:8px;padding:10px;font-size:14px;cursor:pointer;font-weight:600;';
-    regenBtn.onclick=()=>{closePopover();regenerateLastResponse();};
+    regenBtn.onclick=async()=>{
+      closePopover();
+      // Find last user message index in chatHistory
+      let lastUserIdx=-1;
+      for(let i=chatHistory.length-1;i>=0;i--){
+        if(chatHistory[i].role==='user'){lastUserIdx=i;break;}
+      }
+      if(lastUserIdx===-1){showToast('No user message to regenerate from');return;}
+      const lastUserMsg=chatHistory[lastUserIdx].content;
+      // Splice everything after last user message (removes assistant response(s))
+      chatHistory.splice(lastUserIdx+1);
+      // Remove all AI bubbles after the last user bubble in DOM
+      const allWraps=Array.from(document.getElementById('chat').querySelectorAll('.msg-wrap'));
+      let lastUserDomIdx=-1;
+      for(let i=0;i<allWraps.length;i++){
+        if(allWraps[i].classList.contains('user'))lastUserDomIdx=i;
+      }
+      if(lastUserDomIdx!==-1){
+        for(let i=lastUserDomIdx+1;i<allWraps.length;i++){allWraps[i].remove();}
+      }
+      // Save before regenerating
+      await saveChatToDisk();
+      // Generate fresh response
+      showTyping(true);setStatus('Thinking...');
+      try{
+        const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({character:charFilename,user_name:userName,current_chat_filename:null,
+            conversation_history:chatHistory,author_note:'',temperature:0.8,max_tokens:4096,stop:[]})});
+        if(!res.ok){showTyping(false);showToast('⚠️ Server error');return;}
+        const ct=res.headers.get('content-type')||'';
+        if(ct.includes('text/event-stream')&&res.body){await handleStream(res);}
+        else{const d=await res.json();const reply=d.text||'';const rgTs=new Date().toISOString();showTyping(false);addBubble('ai',characterName,reply,rgTs);chatHistory.push({role:'assistant',content:reply,speaker:characterName,timestamp:rgTs});await saveChatToDisk();if(ttsEnabled)speakText(reply);setStatus('Ready');}
+      }catch(e){showTyping(false);showToast('⚠️ Error: '+e.message);}
+    };
     btnRow.appendChild(regenBtn);
   }
 
@@ -1506,37 +1521,7 @@ function fmtTime(d){
   const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   return days[d.getDay()]+' '+d.getDate()+' '+months[d.getMonth()]+', '+time;
 }
-// ── Regenerate / Resume / Continue ───────────────────────────────
-async function regenerateLastResponse(){
-  // Find last user message index in chatHistory
-  let lastUserIdx=-1;
-  for(let i=chatHistory.length-1;i>=0;i--){
-    if(chatHistory[i].role==='user'){lastUserIdx=i;break;}
-  }
-  if(lastUserIdx===-1){showToast('No user message to regenerate from');return;}
-  // Splice everything after last user message (removes any assistant response/error stub)
-  chatHistory.splice(lastUserIdx+1);
-  // Remove all bubbles after the last user bubble in the DOM
-  const allWraps=Array.from(document.getElementById('chat').querySelectorAll('.msg-wrap'));
-  let lastUserDomIdx=-1;
-  for(let i=0;i<allWraps.length;i++){
-    if(allWraps[i].classList.contains('user'))lastUserDomIdx=i;
-  }
-  if(lastUserDomIdx!==-1){
-    for(let i=lastUserDomIdx+1;i<allWraps.length;i++){allWraps[i].remove();}
-  }
-  await saveChatToDisk();
-  showTyping(true);setStatus('Thinking...');
-  try{
-    const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({character:charFilename,user_name:userName,current_chat_filename:null,
-        conversation_history:chatHistory,author_note:'',temperature:0.8,max_tokens:4096,stop:[]})});
-    if(!res.ok){showTyping(false);showToast('⚠️ Server error');return;}
-    const ct=res.headers.get('content-type')||'';
-    if(ct.includes('text/event-stream')&&res.body){await handleStream(res);}
-    else{const d=await res.json();const reply=d.text||'';const rgTs=new Date().toISOString();showTyping(false);addBubble('ai',characterName,reply,rgTs);chatHistory.push({role:'assistant',content:reply,speaker:characterName,timestamp:rgTs});await saveChatToDisk();if(ttsEnabled)speakText(reply);setStatus('Ready');}
-  }catch(e){showTyping(false);showToast('⚠️ Error: '+e.message);}
-}
+// ── Resume / Continue ────────────────────────────────────────────
 async function resumeLastResponse() {
   if (!mobileChatFilename) { showToast('⚠️ No chat file to resume from'); return; }
   showToast('🔄 Fetching full response from server...');

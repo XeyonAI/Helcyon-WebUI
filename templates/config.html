@@ -4,45 +4,6 @@
   <meta charset="UTF-8" />
   <title>Helcyon Config</title>
   <link rel="stylesheet" href="/style.css" />
-  <style>
-    /* ---- Config Tab System (self-contained — do not rely on style.css for this) ---- */
-    #config-tab-bar {
-      display: flex;
-      gap: 4px;
-      flex-wrap: wrap;
-      padding: 0 0 14px 0;
-      border-bottom: 1px solid #2a2a2a;
-      margin-bottom: 20px;
-    }
-    .config-tab {
-      background: transparent;
-      border: 1px solid #2a2a2a;
-      color: #888;
-      border-radius: 6px;
-      padding: 6px 14px;
-      font-size: 13px;
-      cursor: pointer;
-      transition: background 0.15s, color 0.15s, border-color 0.15s;
-      white-space: nowrap;
-    }
-    .config-tab:hover {
-      background: rgba(255,255,255,0.05);
-      color: #ccc;
-      border-color: #444;
-    }
-    .config-tab.active {
-      background: #1a3a2a;
-      border-color: #2a6a4a;
-      color: #6f6;
-      font-weight: 600;
-    }
-    .config-tab-panel {
-      display: none;
-    }
-    .config-tab-panel.active {
-      display: block;
-    }
-  </style>
   <link rel="stylesheet" href="/theme-files/midnight.css" id="active-theme-link" />
   <script>
     // Swap to actual active theme if different from default
@@ -55,7 +16,7 @@
 </head>
 <body id="config-page">
   <div id="top-bar">
-    <div><strong>Settings</strong></div>
+    <div><strong>Character Settings</strong></div>
     <a id="settings-link" href="/">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
@@ -149,13 +110,6 @@
         <button onclick="browseFolder('llama-models-dir')" title="Browse for folder" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">📁</button>
       </div>
 
-      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Vision Projector — mmproj <span style="color:#777;">(optional — leave blank for no vision)</span></label>
-      <div style="display:flex; align-items:center; gap:6px; margin-bottom:12px;">
-        <input id="llama-mmproj-path" type="text" placeholder="C:\path\to\model.mmproj.gguf" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
-        <button onclick="browseFile('llama-mmproj-path','gguf')" title="Browse for an mmproj .gguf file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">📁</button>
-        <button onclick="autoDetectMmproj()" title="Scan the Models Folder and its subfolders for a matching mmproj file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">🔍 Auto-Detect</button>
-      </div>
-
       <label style="font-size:11px; color:#aaa; display:block; margin-bottom:6px; font-weight:600;">Launch Arguments</label>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px 10px; margin-bottom:10px;">
         <div>
@@ -237,10 +191,6 @@
         </div>
       </div>
 
-      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">OpenAI-Compatible Endpoint</label>
-      <input id="openai-base-url" type="text" placeholder="https://api.openai.com/v1" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:2px;">
-      <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Base URL up to <code style="background:#222; padding:0 3px; border-radius:2px;">/v1</code> — leave default for OpenAI. Examples: <code style="background:#222; padding:0 3px; border-radius:2px;">https://api.anthropic.com/v1</code>, <code style="background:#222; padding:0 3px; border-radius:2px;">https://api.x.ai/v1</code>, <code style="background:#222; padding:0 3px; border-radius:2px;">https://openrouter.ai/api/v1</code></div>
-
       <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">OpenAI API Key</label>
       <input id="openai-api-key" type="password" placeholder="sk-..." style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:6px;">
 
@@ -287,18 +237,6 @@
       <!-- Active indicator -->
       <div id="active-prompt-indicator" style="font-size:12px; color:#6a9; margin-bottom:10px;"></div>
 
-      <!-- Bind selected template to a specific character — explicit choice, no silent default -->
-      <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
-        <span style="font-size:13px; color:#bbb; white-space:nowrap;">Bind to character:</span>
-        <select id="sp-bind-character-select" onchange="updateBindButtonState()" style="flex:1;">
-          <option value="">-- Select character --</option>
-        </select>
-        <button id="sp-bind-character-btn" onclick="bindSystemPromptToCharacter()" disabled
-                title="Bind the selected template to the chosen character"
-                style="background-color:#1f3a5a; border-color:#245080; color:white; white-space:nowrap;">🔗 Bind</button>
-      </div>
-      <div id="sp-bind-status" style="font-size:12px; color:#6a9; margin-bottom:10px; min-height:16px;"></div>
-
       <!-- Save as row -->
       <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
         <button onclick="saveSystemPromptAs()" style="background-color:#1f3a5a; border-color:#245080; color:white; white-space:nowrap;">💾 Save As New Template</button>
@@ -314,13 +252,6 @@
                 style="min-height:120px;"></textarea>
       <button onclick="saveGlobalExampleDialog()" style="background-color:#1f3a5a; border-color:#245080; color:white; margin-top:6px; margin-bottom:4px;">💾 Save Global Example Dialog</button>
       <div id="global-example-dialog-status" style="font-size:12px; color:#6a9; margin-bottom:6px; min-height:16px;"></div>
-
-      <label style="margin-top:14px; display:block;">Global Post-History Instructions: <span style="font-size:11px; color:#888; font-weight:normal;">Saved with this template — loads/switches with it. Injected at the bottom of the stack (right before the model replies) and overrides character/project text. Separate from the character card's own post-history field — both are used if set. Use for hard system rules.</span></label>
-      <textarea id="global-post-history"
-                placeholder="e.g. When the user is venting, mirror their emotion first — do not pivot to solutions until they signal they want them. Never use bullet points, numbered lists, or headers in emotional replies."
-                style="min-height:120px;"></textarea>
-      <button onclick="saveGlobalPostHistory()" style="background-color:#1f3a5a; border-color:#245080; color:white; margin-top:6px; margin-bottom:4px;">💾 Save Post-History</button>
-      <div id="global-post-history-status" style="font-size:12px; color:#6a9; margin-bottom:6px; min-height:16px;"></div>
       <hr />
 
       <!-- 📍 CURRENT SITUATION (semi-global) -->
@@ -575,26 +506,14 @@
       <div id="tab-appearance" class="config-tab-panel">
         <h3>🎨 Appearance</h3>
 
-        <!-- Background Mode Toggle -->
-        <h4 style="color:#aaa; font-size:12px; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px; margin-top:0;">Background Mode</h4>
-        <div style="display:flex; gap:8px; margin-bottom:18px;">
-          <button id="bg-mode-colour-btn" onclick="setBgMode('colour')" style="flex:1; padding:7px 0; border-radius:5px; font-size:13px; cursor:pointer; border:1px solid #444; background:#1a3a2a; color:#6f6; font-weight:600;">🎨 Theme Colour</button>
-          <button id="bg-mode-image-btn" onclick="setBgMode('image')" style="flex:1; padding:7px 0; border-radius:5px; font-size:13px; cursor:pointer; border:1px solid #333; background:#2a2a2a; color:#aaa;">🖼️ Background Image</button>
-        </div>
+        <h4 style="color:#aaa; font-size:12px; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px; margin-top:0;">Background Image</h4>
+        <input type="file" id="bg-image-input" accept="image/*" style="display:none;" onchange="handleBgImageChange(this)">
+        <button onclick="document.getElementById('bg-image-input').click()" style="background-color: #3a2a5a; border-color: #6a4a9a; color: white; width:100%; margin-bottom:8px;">🖼️ Change Background</button>
+        <button onclick="clearBackground()" style="background-color: #3a3b3f; border-color: #555; color: #aaa; width:100%; font-size:12px; margin-bottom:20px;">✕ Clear Background</button>
 
-        <!-- Colour mode info -->
-        <div id="bg-colour-section">
-          <p style="font-size:12px; color:#888; margin:0 0 10px;">Background colour is controlled by <strong style="color:#aaa;">Chat Panel BG</strong> in the Theme Editor.</p>
-          <button onclick="openThemeModal()" style="background:#1e3a4a; border:1px solid #2a5068; color:#a0c8d8; width:100%; font-size:13px; padding:10px 0; border-radius:6px; cursor:pointer;">🎨 Open Theme Editor</button>
-        </div>
-
-        <!-- Image mode -->
-        <div id="bg-image-section" style="display:none;">
-          <input type="file" id="bg-image-input" accept="image/*" style="display:none;" onchange="handleBgImageChange(this)">
-          <button onclick="document.getElementById('bg-image-input').click()" style="background-color: #3a2a5a; border-color: #6a4a9a; color: white; width:100%; margin-bottom:8px; padding:9px 0; border-radius:5px; font-size:13px; cursor:pointer;">🖼️ Choose Image</button>
-          <button onclick="clearBackground()" style="background-color: #3a3b3f; border-color: #555; color: #aaa; width:100%; font-size:12px; margin-bottom:14px; padding:7px 0; border-radius:5px; cursor:pointer;">✕ Clear Image</button>
-        </div>
-
+        <h4 style="color:#aaa; font-size:12px; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px;">Theme Editor</h4>
+        <p style="font-size:12px; color:#888; margin-top:-6px; margin-bottom:14px;">Customise colours, fonts, and UI variables for any theme. Changes apply live.</p>
+        <button onclick="openThemeModal()" style="background:#1e3a4a; border:1px solid #2a5068; color:#a0c8d8; width:100%; font-size:13px; padding:10px 0; border-radius:6px; cursor:pointer;">🎨 Open Theme Editor</button>
       </div><!-- end tab-appearance -->
 
     </div><!-- end #container -->
@@ -643,7 +562,7 @@
       // Auto-select and load active
       if (data.active) {
         select.value = data.active;
-        refreshActiveSpIndicator(data.active);
+        updateActiveIndicator(data.active);
         await loadSelectedSystemPrompt(data.active);
       }
     } catch (err) {
@@ -651,47 +570,9 @@
     }
   }
 
-  // Module-level: the currently-active SP filename (raw, WITH extension).
-  // Stored so the indicator can be re-rendered after a Bind without the
-  // caller having to re-supply it.
-  let activeSpFilename = '';
-
-  // Single shared renderer for the active-SP indicator. Used by every trigger
-  // (page load, Activate, Bind, character select) — do not duplicate this
-  // logic elsewhere. Strips a trailing .txt for DISPLAY ONLY (storage and all
-  // backend calls keep the real filename) and appends the character(s) the
-  // active SP is bound to, found by reverse-lookup over /list_characters +
-  // /character_system_prompt/<n>.
-  async function refreshActiveSpIndicator(filename) {
+  function updateActiveIndicator(filename) {
     const el = document.getElementById('active-prompt-indicator');
-    if (!el) return;
-    if (typeof filename !== 'undefined') activeSpFilename = filename || '';
-    const active = activeSpFilename;
-    if (!active) { el.textContent = ''; return; }
-    // Display name — strip a trailing .txt only (case-insensitive).
-    const displayName = /\.txt$/i.test(active) ? active.slice(0, -4) : active;
-    // Reverse-lookup: which character(s) have this exact SP filename bound.
-    let bound = [];
-    try {
-      const res = await fetch('/list_characters');
-      if (res.ok) {
-        const characters = await res.json();
-        const results = await Promise.all(characters.map(async (name) => {
-          try {
-            const r = await fetch('/character_system_prompt/' + encodeURIComponent(name));
-            if (!r.ok) return null;
-            const d = await r.json();
-            return (d && d.system_prompt === active) ? name : null;
-          } catch (e) { return null; }
-        }));
-        bound = results.filter(function(n) { return n; });
-      }
-    } catch (e) {
-      console.error('Bound-character lookup failed:', e);
-    }
-    el.textContent = bound.length
-      ? '🟢 Active: ' + displayName + ' — Bound to ' + bound.join(', ')
-      : '🟢 Active: ' + displayName;
+    if (el) el.textContent = filename ? '🟢 Active: ' + filename : '';
   }
 
   async function loadSelectedSystemPrompt(filename) {
@@ -714,15 +595,6 @@
     } catch (err) {
       console.warn('Could not load paired example dialog:', err);
     }
-    // Load paired post-history directive
-    try {
-      const phRes = await fetch('/system_prompts/load_posthistory/' + encodeURIComponent(filename));
-      const phRaw = phRes.ok ? await phRes.text() : '';
-      const phText = phRaw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
-      document.getElementById('global-post-history').value = phText;
-    } catch (err) {
-      console.warn('Could not load paired post-history:', err);
-    }
   }
 
   async function saveSystemPromptAs() {
@@ -734,7 +606,6 @@
     if (!filename.endsWith('.txt')) filename += '.txt';
     const text = document.getElementById('global-system-prompt').value;
     const exText = document.getElementById('global-example-dialog').value;
-    const phText = document.getElementById('global-post-history').value;
     try {
       const res = await fetch('/system_prompts/save/' + encodeURIComponent(filename), {
         method: 'POST',
@@ -746,11 +617,6 @@
         method: 'POST',
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
         body: exText
-      });
-      await fetch('/system_prompts/save_posthistory/' + encodeURIComponent(filename), {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-        body: phText
       });
       if (data.status === 'saved') {
         // Reload list but DON'T let it auto-switch to the active prompt
@@ -784,7 +650,7 @@
       }
       // Restore whatever was selected before, don't switch to active
       if (currentVal) select.value = currentVal;
-      if (data.active) refreshActiveSpIndicator(data.active);
+      if (data.active) updateActiveIndicator(data.active);
     } catch (err) {
       console.error('Error loading system prompt list:', err);
     }
@@ -803,7 +669,7 @@
       const res = await fetch('/system_prompts/activate/' + encodeURIComponent(filename), { method: 'POST' });
       const data = await res.json();
       if (data.status === 'ok') {
-        refreshActiveSpIndicator(filename);
+        updateActiveIndicator(filename);
         await loadSystemPromptList();
         // Bind this template to the current character card
         const charName = document.getElementById('character-select').value;
@@ -823,77 +689,6 @@
       }
     } catch (err) {
       alert('❌ Error: ' + err);
-    }
-  }
-
-  // --- BIND SYSTEM PROMPT TO A SPECIFIC CHARACTER ---
-  // Separate from Activate: Activate sets the global default in settings.json;
-  // Bind writes the selected template into ONE explicitly-chosen character's
-  // JSON. The character is picked here, on this page, with no pre-selected
-  // default — this prevents the old silent-binding bug where Activate quietly
-  // bound the template to whatever character happened to be selected elsewhere.
-  async function loadBindCharacterList() {
-    const select = document.getElementById('sp-bind-character-select');
-    if (!select) return;
-    try {
-      const res = await fetch('/list_characters');
-      if (!res.ok) throw new Error('Failed to fetch character list');
-      const characters = await res.json();
-      select.innerHTML = '<option value="">-- Select character --</option>';
-      characters.forEach((name) => {
-        const opt = document.createElement('option');
-        opt.value = name;
-        opt.textContent = name;
-        select.appendChild(opt);
-      });
-    } catch (err) {
-      console.error('Error loading characters for SP bind:', err);
-    }
-    updateBindButtonState();
-  }
-
-  // Bind is enabled only when BOTH a template and a character are chosen.
-  function updateBindButtonState() {
-    const btn = document.getElementById('sp-bind-character-btn');
-    if (!btn) return;
-    const sp = document.getElementById('system-prompt-file-select');
-    const ch = document.getElementById('sp-bind-character-select');
-    btn.disabled = !((sp && sp.value) && (ch && ch.value));
-  }
-
-  async function bindSystemPromptToCharacter() {
-    const sp = document.getElementById('system-prompt-file-select');
-    const ch = document.getElementById('sp-bind-character-select');
-    const status = document.getElementById('sp-bind-status');
-    const filename = sp ? sp.value : '';
-    const charName = ch ? ch.value : '';
-    if (!filename || !charName) return;
-    try {
-      const res = await fetch('/character_system_prompt/' + encodeURIComponent(charName), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ system_prompt: filename })
-      });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        if (status) {
-          status.style.color = '#6a9';
-          status.textContent = "✅ Bound '" + filename + "' to character '" + charName + "'";
-        }
-        // Binding for the active SP may have changed — re-render the indicator
-        // (no arg: reuse the stored active filename).
-        refreshActiveSpIndicator();
-      } else {
-        if (status) {
-          status.style.color = '#c66';
-          status.textContent = '❌ Bind failed: ' + (data.error || 'Unknown error');
-        }
-      }
-    } catch (err) {
-      if (status) {
-        status.style.color = '#c66';
-        status.textContent = '❌ Bind error: ' + err;
-      }
     }
   }
 
@@ -922,7 +717,6 @@
     if (!filename) { alert('No template selected. Use Save As to create a new one.'); return; }
     const text = document.getElementById('global-system-prompt').value;
     const exText = document.getElementById('global-example-dialog').value;
-    const phText = document.getElementById('global-post-history').value;
     try {
       const res = await fetch('/system_prompts/save/' + encodeURIComponent(filename), {
         method: 'POST',
@@ -935,12 +729,6 @@
         method: 'POST',
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
         body: exText
-      });
-      // Also save paired post-history directive
-      await fetch('/system_prompts/save_posthistory/' + encodeURIComponent(filename), {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-        body: phText
       });
       if (data.status === 'saved') alert('✅ Saved: ' + filename);
       else alert('❌ Save failed');
@@ -1023,7 +811,7 @@
       if (data.system_prompt) {
         const spSelect = document.getElementById('system-prompt-file-select');
         if (spSelect) spSelect.value = data.system_prompt;
-        refreshActiveSpIndicator(data.system_prompt);
+        updateActiveIndicator(data.system_prompt);
         await loadSelectedSystemPrompt(data.system_prompt);
         updateBindIndicator(true);
         console.log(`🎭 Auto-loaded system prompt for ${name}: ${data.system_prompt}`);
@@ -1597,9 +1385,9 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     loadSettings();
     loadGlobalSystemPrompt();
     loadCurrentSituation();
+    loadGlobalExampleDialog();
     loadTTSEngine();
     loadLlamaConfig();
-    loadBindCharacterList();
 
     const refreshBtn = document.getElementById("refresh-memory");
     if (refreshBtn) refreshBtn.addEventListener("click", loadCharacterMemory);
@@ -1609,7 +1397,6 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     if (spFileSelect) {
       spFileSelect.addEventListener('change', async () => {
         const filename = spFileSelect.value;
-        updateBindButtonState();
         if (filename) await loadSelectedSystemPrompt(filename);
       });
     }
@@ -2080,103 +1867,39 @@ async function saveTTSEngine() {
 }
 
 // --- BACKGROUND IMAGE ---
-// The image is uploaded to the server and saved as a real file; only its
-// short URL is kept in localStorage. ⚠️ DO NOT go back to storing the image
-// as a base64 data URL in localStorage — large images blow the ~5MB quota,
-// setItem throws, and the wallpaper silently fails to save.
 function handleBgImageChange(input) {
   const file = input.files[0];
   if (!file) return;
-  const formData = new FormData();
-  formData.append('file', file);
-  fetch('/save_bg', { method: 'POST', body: formData })
-    .then(r => r.json())
-    .then(data => {
-      if (data.error || !data.url) {
-        alert('Background upload failed: ' + (data.error || 'unknown error'));
-        return;
-      }
-      const url = data.url + '?v=' + Date.now();  // cache-bust so a replaced image refreshes
-      localStorage.setItem('hwui_bg_image', url);
-      localStorage.setItem('hwui_bg_mode', 'image');
-      applyBackground(url);
-    })
-    .catch(e => alert('Background upload failed: ' + e.message));
-  input.value = '';
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const dataUrl = e.target.result;
+    localStorage.setItem('hwui_bg_image', dataUrl);
+    applyBackground(dataUrl);
+  };
+  reader.readAsDataURL(file);
+  input.value = ''; // reset so same file can be picked again
 }
 
 function applyBackground(dataUrl) {
-  let tag = document.getElementById('hwui-bg-style');
-  if (!tag) {
-    tag = document.createElement('style');
-    tag.id = 'hwui-bg-style';
-    document.head.appendChild(tag);
-  }
   if (dataUrl) {
-    // html+body carry the image. #app MUST be forced transparent too —
-    // the frontier-look themes (chatgpt/claude/gemini/grok/moonlight) paint
-    // #app opaque with !important to kill wallpapers, which otherwise hides
-    // the image even though it's correctly applied to body.
-    tag.textContent =
-      'html, body { background-image: url("' + dataUrl + '") !important;' +
-      ' background-size: cover !important; background-position: center !important;' +
-      ' background-attachment: fixed !important; }' +
-      ' #app { background: transparent !important; background-color: transparent !important;' +
-      ' background-image: none !important; }' +
-      // Restore a solid centre pillar behind the chat so text stays readable
-      // over the wallpaper. The frontier themes strip #container's background;
-      // var(--chat-bg) is the theme's own flat backdrop colour, so the chat
-      // column matches the normal frontier look with the wallpaper showing
-      // only in the side margins. The soft shadow keeps the pillar defined.
-      ' .chat-page #container { background-color: var(--chat-bg) !important;' +
-      ' border-radius: 12px !important; box-shadow: 0 0 30px rgba(0,0,0,0.6) !important;' +
-      // Pull the pillar up behind the fixed top bar — cancels #main's
-      // padding-top:80px — then re-pad inside by the same 80px so the chat
-      // content stays put. The pillar's top edge tucks under the top bar.
-      ' margin-top: -80px !important; padding-top: calc(80px + 0.5rem) !important; }';
+    document.body.style.backgroundImage = `url(${dataUrl})`;
+    document.body.style.backgroundSize = 'cover';
+    document.body.style.backgroundPosition = 'center';
+    document.body.style.backgroundAttachment = 'fixed';
   } else {
-    // Colour mode — clear all overrides so the active theme fully controls
-    // the background again (including its opaque #app).
-    tag.textContent = '';
+    document.body.style.backgroundImage = '';
   }
 }
 
 function clearBackground() {
-  fetch('/clear_bg', { method: 'POST' }).catch(() => {});
   localStorage.removeItem('hwui_bg_image');
   applyBackground(null);
 }
 
-function setBgMode(mode) {
-  localStorage.setItem('hwui_bg_mode', mode);
-  const colourBtn = document.getElementById('bg-mode-colour-btn');
-  const imageBtn = document.getElementById('bg-mode-image-btn');
-  const colourSection = document.getElementById('bg-colour-section');
-  const imageSection = document.getElementById('bg-image-section');
-
-  if (mode === 'colour') {
-    colourBtn.style.background = '#1a3a2a'; colourBtn.style.color = '#6f6'; colourBtn.style.borderColor = '#444'; colourBtn.style.fontWeight = '600';
-    imageBtn.style.background = '#2a2a2a'; imageBtn.style.color = '#aaa'; imageBtn.style.borderColor = '#333'; imageBtn.style.fontWeight = '';
-    colourSection.style.display = 'block';
-    imageSection.style.display = 'none';
-    applyBackground(null); // clears the !important style tag
-  } else {
-    imageBtn.style.background = '#1a3a2a'; imageBtn.style.color = '#6f6'; imageBtn.style.borderColor = '#444'; imageBtn.style.fontWeight = '600';
-    colourBtn.style.background = '#2a2a2a'; colourBtn.style.color = '#aaa'; colourBtn.style.borderColor = '#333'; colourBtn.style.fontWeight = '';
-    colourSection.style.display = 'none';
-    imageSection.style.display = 'block';
-    const saved = localStorage.getItem('hwui_bg_image');
-    if (saved) applyBackground(saved);
-  }
-}
-
-// Apply on load — respect saved mode
+// Apply on load
 (function() {
-  const mode = localStorage.getItem('hwui_bg_mode') || 'colour';
   const saved = localStorage.getItem('hwui_bg_image');
-  if (mode === 'image' && saved) applyBackground(saved);
-  // Set button states once DOM is ready
-  window.addEventListener('DOMContentLoaded', () => setBgMode(mode));
+  if (saved) applyBackground(saved);
 })();
 
 // --- THEME EDITOR ---
@@ -2229,7 +1952,6 @@ const THEME_VARS = [
   ]},
   { group: 'Project List (inside modal)', vars: [
     { key: '--project-item-bg',     label: 'Project Row BG' },
-    { key: '--project-edit-bg',     label: 'Project Edit Panel BG' },
     { key: '--project-item-hover',  label: 'Project Row Hover' },
     { key: '--project-item-border', label: 'Project Row Border' },
   ], preview: 'project' },
@@ -2439,7 +2161,6 @@ async function loadLlamaConfig() {
     if (data.error) return;
     document.getElementById('llama-exe').value = data.exe || '';
     document.getElementById('llama-models-dir').value = data.models_dir || '';
-    document.getElementById('llama-mmproj-path').value = data.mmproj_path || '';
     document.getElementById('llama-show-console').checked = data.show_console || false;
     const a = data.args || {};
     document.getElementById('llama-gpu-layers').value = a.n_gpu_layers ?? 44;
@@ -2457,7 +2178,6 @@ async function saveLlamaConfig() {
   const payload = {
     exe: document.getElementById('llama-exe').value.trim(),
     models_dir: document.getElementById('llama-models-dir').value.trim(),
-    mmproj_path: document.getElementById('llama-mmproj-path').value.trim(),
     show_console: document.getElementById('llama-show-console').checked,
     args: {
       port: 5000,
@@ -2489,45 +2209,12 @@ async function saveLlamaConfig() {
 // ==================================================
 // BROWSE FILE / FOLDER DIALOGS
 // ==================================================
-async function browseFile(targetId, filter) {
-  // filter: optional file-type filter for the native picker ('gguf', 'exe', …).
-  // Omitted → backend default ('exe'), so existing callers are unaffected.
+async function browseFile(targetId) {
   try {
-    const res = await fetch('/browse_file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(filter ? { filter: filter } : {}) });
+    const res = await fetch('/browse_file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
     const data = await res.json();
     if (data.path) document.getElementById(targetId).value = data.path;
   } catch(e) { alert('Browse failed: ' + e); }
-}
-
-// Scan the configured Models Folder for an mmproj .gguf file via the existing
-// /auto_detect_mmproj endpoint. The endpoint scans the folder containing the
-// path it is given, so a probe path inside the Models Folder is passed.
-async function autoDetectMmproj() {
-  const status = document.getElementById('llama-config-status');
-  const setStatus = (msg, color) => { if (status) { status.style.color = color; status.textContent = msg; } };
-  const modelsDir = document.getElementById('llama-models-dir').value.trim();
-  if (!modelsDir) {
-    setStatus('Set the Models Folder first, then Auto-Detect.', '#c66');
-    return;
-  }
-  setStatus('🔍 Scanning Models Folder and subfolders for an mmproj file…', '#8ab4d4');
-  try {
-    const probe = modelsDir.replace(/[\\/]+$/, '') + '\\probe.gguf';
-    const res = await fetch('/auto_detect_mmproj', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model_path: probe })
-    });
-    const data = await res.json();
-    if (data.mmproj_path) {
-      document.getElementById('llama-mmproj-path').value = data.mmproj_path;
-      setStatus('🖼️ Found mmproj — click Save Llama Config to apply.', '#6a9');
-    } else {
-      setStatus('No mmproj (*mmproj*.gguf) file found in the Models Folder or its subfolders.', '#c66');
-    }
-  } catch(e) {
-    setStatus('Auto-detect failed: ' + e, '#c66');
-  }
 }
 
 async function browseFolder(targetId) {
@@ -2712,7 +2399,6 @@ function saveLlamaPreset() {
   const preset = {
     exe: document.getElementById('llama-exe').value.trim(),
     models_dir: document.getElementById('llama-models-dir').value.trim(),
-    mmproj_path: document.getElementById('llama-mmproj-path').value.trim(),
     show_console: document.getElementById('llama-show-console').checked,
     gpu_layers: document.getElementById('llama-gpu-layers').value,
     ctx_size: document.getElementById('llama-ctx-size').value,
@@ -2738,7 +2424,6 @@ function loadLlamaPreset() {
   if (!p) return;
   document.getElementById('llama-exe').value = p.exe || '';
   document.getElementById('llama-models-dir').value = p.models_dir || '';
-  document.getElementById('llama-mmproj-path').value = p.mmproj_path || '';
   document.getElementById('llama-show-console').checked = p.show_console || false;
   document.getElementById('llama-gpu-layers').value = p.gpu_layers || 44;
   document.getElementById('llama-ctx-size').value = p.ctx_size || 16384;
@@ -2796,14 +2481,21 @@ async function saveCurrentSituation() {
   }
 }
 
-// loadGlobalExampleDialog() was REMOVED — it loaded the ACTIVE template's
-// example dialogue independently of the selected one and, resolving late, raced
-// loadSelectedSystemPrompt() and clobbered the example field with a different
-// SP's content. loadSelectedSystemPrompt() already loads system prompt +
-// example + post-history together for the correct template (init, character
-// load, and dropdown change all route through it).
-// ⚠️ DO NOT re-add a separate per-field loader for example/post-history —
-// that reintroduces the field/dropdown mismatch bug. (changes.md.)
+async function loadGlobalExampleDialog() {
+  // Example dialog is now loaded as part of loadSelectedSystemPrompt.
+  // This function is kept for init — it loads the active template's paired example.
+  try {
+    const res = await fetch('/system_prompts/list');
+    const data = await res.json();
+    if (data.active) {
+      const exRes = await fetch('/system_prompts/load_example/' + encodeURIComponent(data.active));
+      const exText = exRes.ok ? await exRes.text() : '';
+      document.getElementById('global-example-dialog').value = exText.trim();
+    }
+  } catch (e) {
+    console.warn('Could not load global example dialog on init:', e);
+  }
+}
 
 async function saveGlobalExampleDialog() {
   const text = document.getElementById('global-example-dialog').value.trim();
@@ -2829,40 +2521,6 @@ async function saveGlobalExampleDialog() {
     }
   } catch (e) {
     console.error('Failed to save global example dialog:', e);
-    if (statusEl) { statusEl.textContent = '❌ Error saving'; statusEl.style.color = '#e66'; }
-  }
-}
-
-// loadGlobalPostHistory() was REMOVED for the same reason as
-// loadGlobalExampleDialog() above — it loaded the ACTIVE template's
-// post-history independently and raced loadSelectedSystemPrompt(), clobbering
-// the post-history field. loadSelectedSystemPrompt() is the single loader.
-// ⚠️ DO NOT re-add a separate per-field loader. (changes.md.)
-
-async function saveGlobalPostHistory() {
-  const text = document.getElementById('global-post-history').value.trim();
-  const statusEl = document.getElementById('global-post-history-status');
-  const select = document.getElementById('system-prompt-file-select');
-  const filename = select ? select.value : '';
-  if (!filename) {
-    if (statusEl) { statusEl.textContent = '⚠️ Select a system prompt template first'; statusEl.style.color = '#fa8'; }
-    setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 3000);
-    return;
-  }
-  try {
-    const res = await fetch('/system_prompts/save_posthistory/' + encodeURIComponent(filename), {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-      body: text
-    });
-    const data = await res.json();
-    if (data.status === 'saved') {
-      if (statusEl) { statusEl.textContent = '✅ Saved with ' + filename; statusEl.style.color = '#6a9'; setTimeout(() => statusEl.textContent = '', 2500); }
-    } else {
-      if (statusEl) { statusEl.textContent = '❌ Save failed'; statusEl.style.color = '#e66'; }
-    }
-  } catch (e) {
-    console.error('Failed to save global post-history:', e);
     if (statusEl) { statusEl.textContent = '❌ Error saving'; statusEl.style.color = '#e66'; }
   }
 }
@@ -3093,7 +2751,7 @@ async function saveGlobalPostHistory() {
 <div id="theme-modal-overlay" style="
   display:none; position:fixed; inset:0; z-index:10000;
   background:rgba(0,0,0,0.75); backdrop-filter:blur(3px);
-  overflow-y:auto; padding:30px 20px; padding-left:270px;">
+  overflow-y:auto; padding:30px 20px;">
 
   <div style="
     max-width:780px; margin:0 auto;
@@ -3396,7 +3054,6 @@ const THEME_SECTIONS = [
     vars: [
       { key: '--project-header-bg',  label: 'Header BG' },
       { key: '--project-item-bg',    label: 'Project Row BG' },
-      { key: '--project-edit-bg',    label: 'Project Edit Panel BG' },
       { key: '--project-item-hover', label: 'Project Row Hover' },
       { key: '--icon-button-bg',     label: 'Icon Btn BG' },
       { key: '--icon-button-hover',  label: 'Icon Btn Hover' },
@@ -3672,8 +3329,6 @@ function previewThemeVar(varName, value) {
       setBackendMode(data.backend_mode || 'local');
       const keyInput = document.getElementById('openai-api-key');
       if (keyInput) keyInput.value = data.openai_api_key || '';
-      const baseUrlInput = document.getElementById('openai-base-url');
-      if (baseUrlInput) baseUrlInput.value = data.openai_base_url || 'https://api.openai.com/v1';
       _setOpenAIModelSelect(data.openai_model || 'gpt-4o');
       const status = document.getElementById('openai-status');
       if (status) {
@@ -3692,20 +3347,14 @@ function previewThemeVar(varName, value) {
   }
 
   async function saveOpenAISettings() {
-    const key      = (document.getElementById('openai-api-key').value  || '').trim();
-    const model    = (document.getElementById('openai-model').value    || 'gpt-4o').trim();
-    const baseUrl  = (document.getElementById('openai-base-url').value || '').trim().replace(/\/+$/, '');
+    const key   = (document.getElementById('openai-api-key').value || '').trim();
+    const model = (document.getElementById('openai-model').value   || 'gpt-4o').trim();
     const status = document.getElementById('openai-status');
     try {
       const res = await fetch('/save_openai_settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          backend_mode:    _currentBackendMode,
-          openai_api_key:  key,
-          openai_model:    model,
-          openai_base_url: baseUrl
-        })
+        body: JSON.stringify({ backend_mode: _currentBackendMode, openai_api_key: key, openai_model: model })
       });
       const data = await res.json();
       if (data.status === 'ok') {
