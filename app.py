@@ -1406,6 +1406,88 @@ _CHAT_SEARCH_TRIGGER_RE = re.compile(
 
 
 # --------------------------------------------------
+# Chat-search trigger logic (intent-based, verb-driven)
+# --------------------------------------------------
+# Cross-chat search and session-summary RECALL are different things and the
+# user phrasing decides which one to use:
+#
+#   RECALL — "remember what we talked about", "last time", "the other day",
+#            "previously", "where we left off". The model should rely on the
+#            passive session summary that's already in the system block. No
+#            chat search runs. Recall is the SAFE DEFAULT.
+#
+#   SEARCH — "search our chats", "find that chat where we…", "look it up",
+#            "dig up", "go back and find", "pull up". An EXPLICIT search verb
+#            must be present. Only then does cross-chat search fire.
+#
+# Old logic fired chat search on (recall verb + cross-session marker)
+# co-occurrence — so "remember…last time" was treated as a search request and
+# unrelated chat snippets hijacked the response. New logic inverts the gate:
+# search must EARN its trigger via an explicit search verb. Recall phrasing
+# without a search verb suppresses search and routes to the session summary.
+#
+# ⚠️ Chat search requires an explicit search verb by design. Recall phrasing
+#    is the safe default and must NOT trigger search. Do not revert to the
+#    old recall-verb-as-trigger logic — it caused unrelated old-chat snippets
+#    to hijack recall responses. (changes.md.)
+
+_CHAT_SEARCH_VERBS = (
+    r'(?:search(?:\s+(?:our|the|my|through))?\s+(?:chats?|history|conversations?|logs?|messages?)|'
+    r'search\s+for|'
+    r'find\s+(?:that|the|our|a|me)\s+(?:chat|conversation|message|thread|session)|'
+    r'find\s+(?:where|when)\s+(?:we|i|you)|'
+    r'look\s+(?:up|for|through)|'
+    r'dig\s+(?:up|through|out)|'
+    r'(?:i\'?m\s+)?trying\s+to\s+find|'
+    r'(?:can\s+you\s+)?locate|'
+    r'go\s+back\s+(?:and\s+)?(?:find|check|look)|'
+    r'pull\s+up\s+(?:that|the|our)|'
+    r'check\s+(?:our\s+)?(?:chats?|history|logs?))'
+)
+
+# Recall phrasing — the user is asking the model to RECALL, not SEARCH.
+# When this matches without a search verb, suppress chat search entirely and
+# rely on the passive session summary that's already in the system block.
+_RECALL_PHRASES = (
+    r'(?:remember\s+(?:what|when|that|the|how|our|we|you|i|us|talking)|'
+    r'(?:do\s+you\s+)?recall\s+(?:what|when|that|the|how|our|we|you)|'
+    r'last\s+(?:chat|time|session|conversation)|'
+    r'(?:our\s+)?(?:last|previous|earlier)\s+(?:chat|session|conversation|talk|discussion)|'
+    r'the\s+other\s+(?:day|time|night|week)|'
+    r'where\s+we\s+left\s+off|'
+    r'pick\s+up\s+(?:where|from)|'
+    r'previously|earlier(?:\s+today)?|'
+    r'a\s+(?:while|bit)\s+(?:ago|back))'
+)
+
+_CHAT_SEARCH_VERB_RE = re.compile(rf'\b{_CHAT_SEARCH_VERBS}\b', re.IGNORECASE)
+_RECALL_PHRASE_RE    = re.compile(rf'\b{_RECALL_PHRASES}\b',    re.IGNORECASE)
+
+
+def _classify_chat_search_intent(user_msg):
+    """Decide whether to run cross-chat search on a user message.
+
+    Returns (should_search, suppressed_by_recall) where:
+      - should_search=True   → fire chat search (explicit search verb present)
+      - suppressed_by_recall → True when recall phrasing matched but no search
+                               verb. Caller should log this case when
+                               diag_verbose is on so misfires are visible.
+
+    Rule: an EXPLICIT search verb is required to fire. Recall phrasing
+    without a search verb suppresses — the passive session summary in the
+    system block handles it. Both gating sites (memory-skip in chat prep,
+    primary search-fire downstream) must use this helper so they stay in
+    lockstep — otherwise we end up skipping memory but NOT firing the
+    search, leaving the model with neither.
+    """
+    has_search = bool(_CHAT_SEARCH_VERB_RE.search(user_msg))
+    has_recall = bool(_RECALL_PHRASE_RE.search(user_msg))
+    if has_recall and not has_search:
+        return False, True
+    return has_search, False
+
+
+# --------------------------------------------------
 # Character memory — parsing + matching helpers
 # --------------------------------------------------
 # Memory file format (per character, in memories/<name>_memory.txt):
@@ -1451,17 +1533,25 @@ def do_chat_search(query, current_filename=None):
                 dirs_to_scan.append(proj_chats)
 
     # Build keyword list — strip stopwords and recall meta-verbs
+    # Defensive backstop: even when the new search-verb gate lets a request
+    # through, generic words like "talking" / "were" / "remembering" must not
+    # become match keywords (any chat will contain them, every chat would
+    # score). The trigger gate is the primary protection; this list is the
+    # second line of defence.
     stopwords = {
         'the', 'a', 'an', 'in', 'on', 'at', 'to', 'for', 'of', 'and', 'or',
         'we', 'i', 'you', 'me', 'my', 'about', 'with', 'this', 'that', 'was',
-        'is', 'are', 'it', 'its', 'be', 'been', 'have', 'had', 'do', 'did',
+        'were', 'is', 'are', 'it', 'its', 'be', 'been', 'have', 'had', 'do', 'did',
         'when', 'where', 'what', 'how', 'which', 'our', 'us', 'he', 'she',
         'they', 'them', 'there', 'then', 'so', 'but', 'if', 'up', 'out',
-        'remember', 'talked', 'discussed', 'said', 'mentioned', 'tell', 'chat',
-        'spoke', 'speaking', 'another', 'other', 'previous', 'before', 'ago',
-        'last', 'time', 'conversation', 'earlier', 'know', 'recall', 'going',
-        'get', 'got', 'just', 'like', 'also', 'will', 'can', 'could', 'would',
-        'should', 'does', 'been', 'her', 'his', 'him', 'who', 'very', 'really',
+        'remember', 'remembering', 'talked', 'talking', 'discussed',
+        'discussing', 'said', 'saying', 'mentioned', 'mentioning', 'tell',
+        'telling', 'chat', 'chatting', 'spoke', 'speaking', 'asking',
+        'wondering', 'thinking', 'another', 'other', 'previous', 'before',
+        'ago', 'last', 'time', 'conversation', 'earlier', 'know', 'recall',
+        'going', 'get', 'got', 'just', 'like', 'also', 'will', 'can', 'could',
+        'would', 'should', 'does', 'been', 'her', 'his', 'him', 'who', 'very',
+        'really',
     }
     raw_words = _re.sub(r'[^\w\s]', ' ', query.lower()).split()
     keywords = [w for w in raw_words if w not in stopwords and len(w) > 2]
@@ -2612,20 +2702,62 @@ def chat():
         # builder near the end of prompt assembly.
 
         # 🧠 INJECT SESSION SUMMARY — only on fresh chats
-        # A chat is "new" if there are no real assistant replies yet.
-        # Keyed purely on the is_opening_line flag — NOT on word count.
-        # The old ≤30-word branch caused curt replies ("Yeah, fair." / "Mm.")
-        # to silently reset the chat into new-chat state and re-inject the full
-        # session summary on every subsequent turn. ⚠️ DO NOT re-add word-count check.
+        # A chat is "new" if there are no real assistant replies yet — i.e. no
+        # assistant message that comes AFTER a user message. An assistant at
+        # position 0 of active_chat is structurally an opening-line greeting
+        # (or project RP opener), pre-conversation, not a real exchange.
+        #
+        # Detection uses two signals:
+        #  1. Explicit `is_opening_line` flag — primary signal for in-memory
+        #     sessions (set by displayOpeningLine in utils.js / mobile.html).
+        #  2. Positional fallback — first message of active_chat is assistant.
+        #     ⚠️ Load-bearing. The is_opening_line flag does NOT survive the
+        #     disk round-trip: the on-disk chat-file format
+        #     (chat_routes.py:_format_chat_messages) has no slot for it, and
+        #     /chats/open's line-walking parser can't reconstruct it. Autosave
+        #     writes the file immediately after the greeting displays, so the
+        #     flag is lost on any subsequent reload-from-disk (refresh,
+        #     character switch, reopen). Without the positional check, post-
+        #     reload `_is_new_chat` flips False and session-summary injection
+        #     is silently suppressed, causing the model to confabulate when
+        #     asked "remember what we talked about last time?". Do not remove
+        #     the positional check assuming the flag is sufficient. (changes.md.)
+        #
+        # ⚠️ DO NOT re-add word-count check. The old ≤30-word branch caused
+        # curt replies ("Yeah, fair." / "Mm.") to silently reset the chat into
+        # new-chat state and re-inject the full session summary every turn.
         assistant_msgs = [m for m in active_chat if m.get("role") == "assistant"]
         def _is_opening_line_msg(m):
             return bool(m.get("is_opening_line"))
 
-        _is_new_chat = (
-            len(assistant_msgs) == 0 or
-            (len(assistant_msgs) == 1 and _is_opening_line_msg(assistant_msgs[0]))
+        _first_msg_is_assistant = bool(active_chat) and active_chat[0].get("role") == "assistant"
+
+        _new_via_no_asst        = len(assistant_msgs) == 0
+        _new_via_explicit_flag  = (
+            len(assistant_msgs) == 1 and _is_opening_line_msg(assistant_msgs[0])
         )
-        print(f"🧠 _is_new_chat: {_is_new_chat} ({len(assistant_msgs)} assistant msgs in active_chat)")
+        _new_via_positional     = (
+            len(assistant_msgs) == 1
+            and not _new_via_explicit_flag
+            and _first_msg_is_assistant
+        )
+        _is_new_chat = _new_via_no_asst or _new_via_explicit_flag or _new_via_positional
+
+        if _new_via_positional:
+            _is_new_reason = (
+                "True (positional fallback — opening-line flag lost in "
+                "disk round-trip)"
+            )
+        elif _new_via_explicit_flag:
+            _is_new_reason = "True (is_opening_line flag)"
+        elif _new_via_no_asst:
+            _is_new_reason = "True (no assistant messages)"
+        else:
+            _is_new_reason = "False"
+        print(
+            f"🧠 _is_new_chat: {_is_new_reason} "
+            f"({len(assistant_msgs)} assistant msgs in active_chat)"
+        )
         if _is_new_chat:
             # Time-decay session memory: the hot summary (single most recent,
             # age <= hot_hours) is held for the tail-injection slot; cold
@@ -3885,15 +4017,21 @@ def chat():
         import re as _csre
         _cs_user_msg = user_input.strip()
 
-        # Chat history search — only fires on EXPLICIT cross-session recall requests.
-        # Uses the shared _CHAT_SEARCH_TRIGGER_RE so the primary trigger stays in
-        # lockstep with the early-memory-skip check above. Structural rule: a
-        # recall verb (remember / told you / discussed / mentioned / said /
-        # talked / spoke / chatted) AND a cross-session marker (in another chat,
-        # last time we, the other day, a few days ago, …) must co-occur within
-        # ~80 chars. Either alone is not enough — that's what kept firing on
-        # in-thread back-references and general-knowledge recall before.
-        _should_chat_search = bool(_CHAT_SEARCH_TRIGGER_RE.search(_cs_user_msg))
+        # Chat history search — only fires when an EXPLICIT search verb is present.
+        # Uses _classify_chat_search_intent (defined near do_chat_search) so the
+        # primary trigger stays in lockstep with the early-memory-skip check above.
+        # Rule: search must EARN its trigger via an explicit verb (search / find that
+        # chat / look up / dig up / go back and find / pull up / locate). Recall
+        # phrasing without a search verb ("remember…last time", "the other day")
+        # suppresses — the passive session summary in the system block handles it.
+        # ⚠️ Do not revert to the old recall-verb-as-trigger logic. (changes.md.)
+        _should_chat_search, _recall_suppressed_search = _classify_chat_search_intent(_cs_user_msg)
+        if _recall_suppressed_search and _diag_verbose:
+            print(
+                "🧠 Recall phrasing detected, no search verb — suppressing chat search, "
+                "relying on session summary",
+                flush=True,
+            )
 
         if _should_chat_search:
             print(f"🗂️ Chat search intent detected: {repr(_cs_user_msg[:80])}", flush=True)

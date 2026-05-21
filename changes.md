@@ -1,3 +1,250 @@
+## May 21 2026 — Session Summary Not Injecting After Opening-Line Greeting
+
+**Files:** app.py
+
+**The bug:** user starts a new chat, the character shows an opening-line
+greeting, user asks "remember what we talked about in the last chat?" — the
+session summary did not inject. Log showed `🧠 _is_new_chat: False
+(1 assistant msgs in active_chat)`. Model had no recent-session context and
+confabulated.
+
+**Root cause — the `is_opening_line` flag does not survive the disk round-
+trip.** The flag is set in-memory when the opening line is added
+(`utils.js:207-211` desktop, `mobile.html:867` mobile), but the on-disk
+chat-file format has no slot for it:
+
+- `chat_routes.py:_format_chat_messages` serialises each message as
+  `[<timestamp>] <speaker>: <content>` — flag silently dropped.
+- `/chats/open`'s line-walking parser at `chat_routes.py:223,253` builds
+  entries with only `{role, content, speaker, timestamp}` — can't
+  reconstruct the flag.
+
+Autosave fires immediately after the opening line displays (`utils.js:220` —
+`autoSaveCurrentChat()` runs on the same frame as the push). So the moment
+the user does anything that reloads the chat from disk — page refresh,
+character switch, chat-list click — the in-memory flag is gone and the
+loaded message is just an unmarked assistant entry.
+
+`_is_new_chat` then saw `[unmarked_opener, new_user_msg]` → 1 assistant
+message without the flag → False → both session-summary injection sites
+(cold `YOUR OWN MEMORY OF RECENT SESSIONS` block at app.py:2705-2738 and
+hot tail-append at app.py:3363-3397) silently skipped.
+
+**The contradictory `🆕 New conversation` log line** at app.py:3523 was not
+a second bug — it's a different check at a different pipeline stage. The
+leading-assistant stripper at app.py:3068-3076 drops the opener
+unconditionally before app.py:3081 recounts assistant messages, so the post-
+stripper check correctly sees zero. The pre-stripper `_is_new_chat` check
+didn't benefit from that transformation. Both logs become consistent once
+`_is_new_chat` is fixed.
+
+**The fix — positional fallback in `_is_new_chat` (app.py:2786-2840).** A
+single assistant message at position 0 of `active_chat` (before any user
+message) is structurally an opening-line greeting or project RP opener
+regardless of whether the explicit flag survived. Detection now uses two
+signals in order:
+
+1. **Explicit flag** (`is_opening_line=True`) — primary signal for in-
+   memory sessions. Unchanged.
+2. **Positional fallback** — `active_chat[0]` is an assistant message AND
+   there's only one assistant message total. Engages when the flag is
+   missing post-disk-load.
+
+The diagnostic log now names which signal fired, so the post-disk-load
+case is visible when debugging:
+
+- `🧠 _is_new_chat: True (no assistant messages)` — zero asst path
+- `🧠 _is_new_chat: True (is_opening_line flag)` — in-memory session
+- `🧠 _is_new_chat: True (positional fallback — opening-line flag lost in
+  disk round-trip)` — post-reload case
+- `🧠 _is_new_chat: False` — real exchange
+
+**Why not change the file format instead?** Persisting the flag would mean
+modifying `_format_chat_messages`, the `/chats/open` parser, and any
+downstream reader of chat-file text (`do_chat_search`, the session-summary
+generator). Larger blast radius for the same end result — the positional
+check is a 1:1 stand-in for the flag in this specific context (any
+assistant at position 0 is, by construction, pre-conversation).
+
+**Verified:** `app.py` parses cleanly. Helper tested against 9 edge cases —
+empty chat, opener with flag, opener without flag, opener + user (with and
+without flag), user-only, user + assistant (real reply), opener + user +
+assistant (real exchange started), full multi-turn exchange — all classify
+correctly. The failure-case input `[opener_noflag, user_msg]` now resolves
+to `(is_new=True, reason='positional')`.
+
+**Untouched:**
+- Hot tail injection at app.py:3363-3397 — `_recent_session_summary` now
+  populates correctly because `_is_new_chat` is correctly True.
+- Cold block at app.py:2705-2738 — same gate, now correct.
+- Leading-assistant stripper at app.py:3068-3076 — its positional drop
+  logic is independent and was already robust against missing flag.
+- Post-stripper `🆕 New conversation` log at app.py:3520-3523 — left as-is;
+  the contradiction with the pre-stripper line resolves on its own now
+  that `_is_new_chat` is correct.
+- Chat-file format (`_format_chat_messages`, `/chats/open`) — unchanged.
+  No migration, no risk to existing chats on disk.
+
+- ⚠️ The positional fallback in `_is_new_chat` is load-bearing — the
+  `is_opening_line` flag does NOT survive the disk round-trip. Do not
+  remove the "first message is assistant" check assuming the flag is
+  sufficient.
+
+⚠️ Flask restart required (Python edit).
+
+---
+
+## May 21 2026 — Chat-Search Trigger Inverted: Search Now Requires an Explicit Verb
+
+**Files:** app.py
+
+**The bug:** asking "do you remember what we were talking about last time?" did
+not surface the recent-session summary already injected at the system-block
+tail — instead, cross-chat search fired and injected unrelated raw chat
+snippets from old chats at depth-0, which dominated the response.
+
+**Two defects compounded:**
+- The trigger was **(recall verb + cross-session marker within 80 chars)**, so
+  `"remember…last time"` was treated as a *search* request rather than a
+  *recall* request. The user's phrasing was indistinguishable from "go search
+  the archives" under the old rule, even though the intent is "use what you
+  already know".
+- The `do_chat_search` stopword set caught `talked`, `spoke`, `speaking`,
+  `last`, `time`, etc., but missed the **`-ing` forms** (`talking`,
+  `remembering`, `discussing`) and a few common copulas (`were`). So the
+  preamble-stripped query `"what we were talking about last time"` reduced
+  to keywords `['were', 'talking']` — both of which appear in nearly every
+  chat — and the co-occurrence scorer returned matches from arbitrary
+  unrelated conversations.
+
+**The fix — invert the gate. Search must EARN its trigger via an explicit
+search verb; recall is the safe default.** Three new module-level constants
+near the existing `_CHAT_RECALL_VERBS` / `_CHAT_CROSS_SESSION_MARKERS`:
+
+- `_CHAT_SEARCH_VERBS` — explicit search/find verbs: `search [our/the/my]
+  chats/history/conversations`, `search for`, `find that/the/our chat`,
+  `find where/when we`, `look up/for/through`, `dig up/through/out`,
+  `trying to find`, `locate`, `go back and find/check/look`, `pull up
+  that/the/our`, `check our chats/history`.
+- `_RECALL_PHRASES` — recall phrasing that **suppresses** search when no
+  search verb is present: `remember what/when/that/the/how/our/we/you/i/us/
+  talking`, `(do you) recall …`, `last chat/time/session/conversation`,
+  `(our) last/previous/earlier chat/session/…`, `the other day/time/night/
+  week`, `where we left off`, `pick up where/from`, `previously`,
+  `earlier (today)`, `a while/bit ago/back`.
+- `_classify_chat_search_intent(user_msg)` — returns `(should_search,
+  suppressed_by_recall)`. Rule: if recall phrasing matches and no search
+  verb matches, return `(False, True)` — suppressed. Else return
+  `(has_search, False)`.
+
+Both call sites updated to use the helper:
+- **Memory-skip site (app.py ~2863)** — character memory is now skipped
+  *only* when chat search will actually fire. Recall phrasing leaves
+  character memory injection enabled (it's per-character persistent state,
+  unrelated to chat search). Suppression logs
+  `🧠 Recall phrasing detected, no search verb — suppressing chat search,
+  relying on session summary` when `diag_verbose=true` in settings.json.
+- **Primary trigger site (app.py ~4095)** — same helper, same suppression
+  log path. The two sites are guaranteed to agree because they're
+  classified by the same helper — preserves the original "lockstep"
+  invariant.
+
+The old `_CHAT_SEARCH_TRIGGER_RE` regex is left in place; it's no longer
+used to gate behaviour but kept as a generic recall-detector in case a
+future site wants it.
+
+**Stopword backstop (`do_chat_search`):** even with the new gate, if a
+search does fire on phrasing that slipped through, generic words like
+`talking`, `were`, `remembering`, `discussing`, `chatting`, `asking`,
+`wondering`, `thinking` must not become match keywords. Added the `-ing`
+forms and the missing copulas; the gate is the primary protection, this is
+the second line of defence.
+
+**The model-emitted `[CHAT SEARCH: …]` tag path (app.py ~4915-4919) is
+unchanged.** That path is model-driven (tag-emission gated at training);
+user-phrasing classification doesn't apply to it.
+
+**Session-summary injection is untouched** — both the cold block at
+app.py:2705-2738 and the hot tail-append at app.py:3363-3397. Per the
+existing tail-position note (changes.md), that injection is load-bearing
+for attention weighting and must not move.
+
+**Verified:** `app.py` parses cleanly. Helper tested against 13 cases
+(recall queries → suppressed; explicit-search queries → fire; neutral
+queries → default behaviour) — all pass. Failure-case query
+`"do you remember what we were talking about last time?"` correctly
+classifies as `(should_search=False, suppressed_by_recall=True)`.
+
+- ⚠️ Chat search requires an explicit search verb by design. Recall
+  phrasing is the safe default and must NOT trigger search. Do not revert
+  to the old recall-verb-as-trigger logic — it caused unrelated old-chat
+  snippets to hijack recall responses.
+
+⚠️ Flask restart required (Python edit).
+
+---
+
+## May 20 2026 — F5-TTS: HWUI → "Helcyon Web You Eye" Substitution Fixed
+
+**Files:** f5_server.py
+
+**The bug:** the literal string `HWUI` (and every case variant — `Hwui`,
+`hwui`) was reaching `tts.infer()` unsubstituted, so F5 read the letters
+literally and the spoken output was wrong.
+
+**Trace of text through `/tts_to_audio` → `tts.infer()`:**
+1. `tts_to_audio()` (f5_server.py:481) reads `text` from JSON and calls
+   `clean_text(text)` (f5_server.py:484).
+2. Inside `clean_text` (f5_server.py:356), the ALL-CAPS → Title Case pass
+   at f5_server.py:397 runs first:
+   `re.sub(r'\b[A-Z]{2,}\b', lambda m: m.group(0) if m.group(0) in
+   _known_acronyms else m.group(0).title(), text)`. `HWUI` is **not** in
+   `_known_acronyms` (the set at f5_server.py:371–396 covers reserved tech
+   / business / medical acronyms; HWUI was never added), so a user-typed
+   `HWUI` is Title-Cased to `Hwui` here.
+3. Later, the HWUI substitution at f5_server.py:437 runs:
+   `re.sub(r'\bHWUI\b', 'H-W-U-I', text)`. **Case-sensitive pattern** — no
+   `re.IGNORECASE` — so it never matched the now-`Hwui` form, and equally
+   never matched a user-typed `hwui`. The substitution silently no-op'd.
+4. The unmodified text (still containing `Hwui` / `hwui` / occasionally
+   `HWUI` if the Title-Case pass missed it for any reason) flows into
+   `tts.infer(gen_text=text, …)` at f5_server.py:515.
+
+**Two defects in one line:**
+- Case-sensitive `\bHWUI\b` couldn't catch the Title-Cased `Hwui`
+  produced upstream, nor a user-typed `hwui`.
+- Even when it *did* match (an `HWUI` that somehow survived the Title-
+  Case pass), the replacement was `'H-W-U-I'` — forced letter-spelling —
+  not the intended sentence form `'Helcyon Web You Eye'`.
+
+**The fix:** at f5_server.py:437, swap the replacement to
+`'Helcyon Web You Eye'` and add `flags=re.IGNORECASE`. The `IGNORECASE`
+flag is load-bearing — without it the Title-Case pass at line 397 will
+keep neutralising the match for any all-caps input. Added a comment above
+the line explaining the ordering interaction so a future edit doesn't
+strip the flag back off thinking it's redundant.
+
+**Why not add `HWUI` to `_known_acronyms` instead?** That would preserve
+the all-caps `HWUI` so the case-sensitive line could match it, but it
+still wouldn't catch user-typed `Hwui` or `hwui`. `IGNORECASE` covers all
+cases in one step and keeps `_known_acronyms` reserved for genuine
+spell-out acronyms.
+
+**Verified:** grep for `🔍` in `f5_server.py` returns no matches — there
+were no debug print statements to strip. `clean_text` parses cleanly.
+The substitution now runs after the Title-Case pass regardless of input
+casing.
+
+- ⚠️ DO NOT revert — `re.IGNORECASE` on the HWUI substitution is required.
+  The ALL-CAPS → Title Case pass at f5_server.py:397 runs before this
+  line and converts `HWUI` → `Hwui`, so a case-sensitive pattern will
+  silently fail again. Either keep `IGNORECASE` here, or move the HWUI
+  substitution *above* the Title-Case pass — but not both removed.
+
+⚠️ Flask restart required (Python edit).
+
+---
+
 ## May 20 2026 — MEMORY TAGS Instruction Tightened (Single-Tag-Only)
 
 **Files:** utils/session_handler.py

@@ -434,7 +434,11 @@ def clean_text(text):
     text = re.sub(r'(\d)\s*[Pp][Mm]\b', r'\1 P M', text)
     text = re.sub(r'\bAM\b', 'am', text)
     text = re.sub(r'\bPM\b', 'pm', text)
-    text = re.sub(r'\bHWUI\b', 'H-W-U-I', text)
+    # HWUI → spoken sentence form. IGNORECASE is load-bearing: the ALL-CAPS →
+    # Title Case pass above converts "HWUI" → "Hwui" (it isn't in
+    # _known_acronyms), so a case-sensitive \bHWUI\b never matched here and
+    # the substitution silently no-op'd.
+    text = re.sub(r'\bHWUI\b', 'Helcyon Web You Eye', text, flags=re.IGNORECASE)
     text = re.sub(r'\bhuman\b', 'yooman', text, flags=re.IGNORECASE)
     text = re.sub(r'\bGPT-40\b', 'GPT-4o', text, flags=re.IGNORECASE)
     text = re.sub(r'\bGPT-4o\b', 'G P T four oh', text, flags=re.IGNORECASE)
