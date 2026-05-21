@@ -178,6 +178,31 @@ def open_chat(filename):
             print(f"📋 Known characters: {available_characters}")
     except Exception as e:
         print(f"⚠️ Could not load character list: {e}")
+
+    # ✅ The chat filename prefix is the authoritative source for which
+    # character this chat belongs to (save side uses the same prefix: see
+    # /chats/save). characters/index.json can be incomplete — manual import,
+    # partial registration, characters added via file copy — and when it is,
+    # every line spoken by that character fails the speaker check and either
+    # gets dropped (untimestamped opener) or absorbed into the wrong turn
+    # (timestamped replies). Seed the filename-derived character into the
+    # list so the parser recognises this chat's character regardless of the
+    # global index's state. Mirrors the prefix-walking logic in
+    # auto_name_chat (chat_routes.py) and the frontend's
+    # extractCharacterFromFilename. (changes.md.)
+    name_no_ext = filename[:-4] if filename.endswith(".txt") else filename
+    parts = name_no_ext.split(" - ")
+    filename_char = None
+    for i in range(len(parts), 0, -1):
+        candidate = " - ".join(parts[:i])
+        if candidate in available_characters:
+            filename_char = candidate
+            break
+    if not filename_char and parts:
+        filename_char = parts[0]
+    if filename_char and filename_char not in available_characters:
+        available_characters = list(available_characters) + [filename_char]
+        print(f"📋 Added filename-derived character to recognition list: {filename_char!r}")
     
     # ✅ Load list of valid user personas dynamically
     valid_users = []
@@ -195,7 +220,19 @@ def open_chat(filename):
     current_content = []
     current_speaker = None
     current_timestamp = None
-    
+
+    # Track [ATTACHED DOCUMENT: …]…[END ATTACHED DOCUMENT] spans. Content
+    # inside is opaque reference material (typically a pasted chat
+    # transcript) and may legitimately contain lines like "Helcyon: …" or
+    # "User: …" which the speaker detector would otherwise treat as new
+    # message boundaries — shredding the user's single attached-document
+    # message into bogus turns and reintroducing the very bug the paste-
+    # transcript feature was supposed to prevent (pasted transcripts being
+    # absorbed as actual conversation history). While inside_doc is True,
+    # the speaker check is bypassed and every line is appended verbatim to
+    # the current message's content. (changes.md.)
+    inside_doc = False
+
     for line in lines:
         # Strip timestamp prefix if present
         ts_match = _TS_PREFIX_RE.match(line)
@@ -205,11 +242,13 @@ def open_chat(filename):
             line = line[ts_match.end():]
 
         stripped = line.strip()
-        
-        # Check for speaker pattern
-        if ":" in stripped and not stripped.startswith(" "):
+
+        # Speaker pattern check — gated on inside_doc. Inside a document
+        # span, names that happen to look like speakers are content, not
+        # turn boundaries.
+        if not inside_doc and ":" in stripped and not stripped.startswith(" "):
             potential_speaker = stripped.split(":")[0].strip()
-            
+
             # ✅ Check against dynamic lists instead of hard-coded names
             is_known_character = potential_speaker in available_characters
             is_valid_user = potential_speaker in valid_users
@@ -224,28 +263,46 @@ def open_chat(filename):
                     if current_timestamp:
                         entry["timestamp"] = current_timestamp
                     messages.append(entry)
-                
+
                 # Start new message
                 content_after_colon = stripped.split(":", 1)[1].strip()
                 current_speaker = potential_speaker
                 current_timestamp = line_timestamp
-                
+
                 if is_known_character:
                     current_role = "assistant"
                     print(f"✅ Recognized assistant: {potential_speaker}")
                 else:
                     current_role = "user"
                     print(f"✅ Recognized user: {potential_speaker}")
-                
+
                 current_content = [content_after_colon] if content_after_colon else []
+
+                # The first line of this new message may itself open an
+                # ATTACHED DOCUMENT span — e.g. "User: [ATTACHED DOCUMENT:
+                # foo.txt]". Update inside_doc here so subsequent lines are
+                # parsed as document content, not as new turns.
+                if "[ATTACHED DOCUMENT:" in stripped:
+                    inside_doc = True
+                if "[END ATTACHED DOCUMENT]" in stripped:
+                    inside_doc = False
                 continue
-        
+
         # Continue current message
         if current_role:
             if stripped:
                 current_content.append(stripped)
             else:
                 current_content.append("")
+
+        # ATTACHED DOCUMENT span tracking for lines that didn't open a new
+        # turn. Order matters when both markers appear on the same line
+        # (degenerate single-line doc): treat as opening then closing, net
+        # effect inside_doc=False — same as the speaker-branch above.
+        if "[ATTACHED DOCUMENT:" in stripped:
+            inside_doc = True
+        if "[END ATTACHED DOCUMENT]" in stripped:
+            inside_doc = False
     
     # Flush last message
     if current_role and current_content:
@@ -640,6 +697,142 @@ def copy_chat():
         
     except Exception as e:
         print(f"❌ Copy failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+# --------------------------------------------------
+# Branch Chat — duplicate up to and including a chosen assistant message
+# --------------------------------------------------
+@chat_bp.route('/chats/branch', methods=['POST'])
+def branch_chat():
+    """Create a new chat containing the source truncated to its first
+    `message_index` assistant turns (1-based). Everything after the chosen
+    assistant message is dropped; the source chat is left untouched.
+
+    Truncation is done by walking lines and detecting speaker lines exactly
+    the way /chats/open does — splitting on blank lines would break any
+    assistant message that contains paragraph breaks.
+    """
+    try:
+        data = request.json or {}
+        source_filename = data.get("source_filename")
+        message_index = data.get("message_index")  # 1-based count of assistant turns to keep
+
+        if not source_filename:
+            return jsonify({"error": "No source file"}), 400
+        if message_index is None:
+            return jsonify({"error": "No message_index"}), 400
+        try:
+            message_index = int(message_index)
+        except (TypeError, ValueError):
+            return jsonify({"error": "message_index must be a number"}), 400
+        if message_index < 1:
+            return jsonify({"error": "message_index must be >= 1"}), 400
+
+        chats_dir = get_chats_dir()
+        source_path = os.path.join(chats_dir, source_filename)
+        if not os.path.exists(source_path):
+            return jsonify({"error": "Source not found"}), 404
+
+        with open(source_path, "r", encoding="utf-8") as f:
+            raw_text = f.read()
+
+        # Speaker detection mirrors /chats/open so the branched file is parsed
+        # back into exactly the same turns the source chat renders.
+        available_characters = []
+        try:
+            with open(os.path.join(os.getcwd(), "characters", "index.json"), "r", encoding="utf-8") as f:
+                available_characters = json.load(f)
+        except Exception as e:
+            print(f"⚠️ Branch: could not load character list: {e}")
+        # Seed the filename-derived character into the recognition list —
+        # see /chats/open for the rationale. Without this, branching a chat
+        # whose character is missing from characters/index.json would split
+        # the wrong way and the branched file would re-parse incorrectly.
+        _name_no_ext = source_filename[:-4] if source_filename.endswith(".txt") else source_filename
+        _parts = _name_no_ext.split(" - ")
+        _filename_char = None
+        for _i in range(len(_parts), 0, -1):
+            _candidate = " - ".join(_parts[:_i])
+            if _candidate in available_characters:
+                _filename_char = _candidate
+                break
+        if not _filename_char and _parts:
+            _filename_char = _parts[0]
+        if _filename_char and _filename_char not in available_characters:
+            available_characters = list(available_characters) + [_filename_char]
+        valid_users = []
+        try:
+            with open(os.path.join(os.getcwd(), "users", "index.json"), "r", encoding="utf-8") as f:
+                valid_users = json.load(f)
+        except Exception as e:
+            print(f"⚠️ Branch: could not load user list: {e}")
+
+        def speaker_role(line):
+            """Return 'assistant'/'user' if `line` starts a message, else None."""
+            ts_match = _TS_PREFIX_RE.match(line)
+            if ts_match:
+                line = line[ts_match.end():]
+            stripped = line.strip()
+            if ":" not in stripped or stripped.startswith(" "):
+                return None
+            speaker = stripped.split(":")[0].strip()
+            if len(speaker) >= 30:
+                return None
+            if speaker in available_characters:
+                return "assistant"
+            if speaker in valid_users or speaker.lower() == "user":
+                return "user"
+            return None
+
+        lines = raw_text.split('\n')
+        assistant_seen = 0
+        cut_at = None  # index of the first line to drop
+        for idx, line in enumerate(lines):
+            role = speaker_role(line)
+            if role is None:
+                continue
+            if assistant_seen >= message_index:
+                # The requested assistant turn is already kept in full; this
+                # speaker line starts the next turn — truncate before it.
+                cut_at = idx
+                break
+            if role == "assistant":
+                assistant_seen += 1
+
+        if assistant_seen < message_index:
+            return jsonify({"error": f"Chat only has {assistant_seen} assistant message(s)"}), 400
+
+        truncated = raw_text if cut_at is None else '\n'.join(lines[:cut_at])
+        truncated = truncated.rstrip('\n')
+        if truncated:
+            truncated += '\n\n'  # match the on-disk trailing-blank-line format
+
+        # Build new filename — insert " - Branch" before the trailing date.
+        name_without_ext = source_filename.replace(".txt", "")
+        last_dash_index = name_without_ext.rfind(" - ")
+        if last_dash_index != -1:
+            before_date = name_without_ext[:last_dash_index]
+            date_suffix = name_without_ext[last_dash_index:]
+            base_new = f"{before_date} - Branch{date_suffix}"
+        else:
+            base_new = f"{name_without_ext} - Branch"
+
+        # Avoid clobbering an existing branch of the same chat.
+        new_filename = f"{base_new}.txt"
+        counter = 2
+        while os.path.exists(os.path.join(chats_dir, new_filename)):
+            new_filename = f"{base_new} ({counter}).txt"
+            counter += 1
+
+        _atomic_write_text(os.path.join(chats_dir, new_filename), truncated)
+        print(f"🌿 Branch created: {source_filename} → {new_filename} (kept {message_index} assistant turn(s))")
+        return jsonify({"success": True, "new_filename": new_filename})
+
+    except Exception as e:
+        print(f"❌ Branch failed: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500

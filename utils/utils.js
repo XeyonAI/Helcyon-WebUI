@@ -361,6 +361,12 @@ let ttsQueue = [];
 let ttsProcessing = false;
 let ttsSentenceBuffer = '';
 let ttsStreamingComplete = false;
+// Code-block stripping state — persists across streaming chunks so a fenced
+// ```...``` block that spans multiple chunks is fully suppressed. The tail
+// holds back 1-2 trailing backticks at chunk boundaries in case they are the
+// start of a ``` marker completed in the next chunk.
+let ttsInsideCodeBlock = false;
+let ttsBacktickTail = '';
 const TTS_START_THRESHOLD = 1;  // Start playing after this many sentences buffered
 
 let lastTTSResponseText = '';  // 🔊 Stored for Replay button
@@ -451,6 +457,8 @@ function stopAllAudio() {
   isPlayingAudio = false;
   ttsSentenceBuffer = '';
   ttsStreamingComplete = false;
+  ttsInsideCodeBlock = false;
+  ttsBacktickTail = '';
 
   const btn = document.getElementById('tts-toggle-btn');
   if (btn) btn.classList.remove('speaking');
@@ -473,9 +481,75 @@ function fixContractionsForTTS(text) {
 }
 
 
+// Strip fenced ```...``` and inline `...` code from a streaming chunk so the
+// TTS engine never reads code aloud. State (`ttsInsideCodeBlock`,
+// `ttsBacktickTail`) persists across chunks because a code block can span
+// many chunks and the ``` fence itself can split at a chunk boundary.
+function stripCodeForTTS(chunk) {
+  // Re-attach any backticks held back from the previous chunk
+  chunk = ttsBacktickTail + chunk;
+  ttsBacktickTail = '';
+
+  // If the chunk ends in 1 or 2 trailing backticks, hold them back — they
+  // might be the leading bytes of a ``` fence completed in the next chunk.
+  const trail = chunk.match(/`{1,2}$/);
+  if (trail) {
+    ttsBacktickTail = trail[0];
+    chunk = chunk.slice(0, -trail[0].length);
+  }
+
+  let out = '';
+  let i = 0;
+  while (i < chunk.length) {
+    // Triple-backtick fence — toggle block state
+    if (chunk[i] === '`' && chunk[i + 1] === '`' && chunk[i + 2] === '`') {
+      ttsInsideCodeBlock = !ttsInsideCodeBlock;
+      i += 3;
+      // On opener, skip optional language tag up to (and including) newline
+      if (ttsInsideCodeBlock) {
+        while (i < chunk.length && chunk[i] !== '\n') i++;
+        if (i < chunk.length) i++;  // consume the newline
+      }
+      continue;
+    }
+    // Inside a fenced block — drop everything
+    if (ttsInsideCodeBlock) { i++; continue; }
+    // Inline code: single backtick → next single backtick on same chunk
+    if (chunk[i] === '`') {
+      const close = chunk.indexOf('`', i + 1);
+      if (close === -1) {
+        // No close yet — hold the opening ` and following text for next chunk
+        ttsBacktickTail = chunk.substring(i) + ttsBacktickTail;
+        return out;
+      }
+      i = close + 1;
+      continue;
+    }
+    out += chunk[i];
+    i++;
+  }
+  return out;
+}
+
+
 // --- Called from streaming loop for each chunk ---
 function bufferTextForTTS(chunk) {
   if (!ttsEnabled || !chunk) return;
+
+  // Reset code-block state at start of each new response — must happen
+  // BEFORE stripCodeForTTS so stale state from a prior response can't gut
+  // the first chunk of the next one.
+  if (ttsSentenceBuffer === '' && ttsQueue.length === 0 && !ttsProcessing) {
+    ttsStreamingComplete = false;
+    ttsInsideCodeBlock = false;
+    ttsBacktickTail = '';
+  }
+
+  // Strip fenced and inline code BEFORE any other transforms — code may
+  // contain parens, dashes, emoji-like Unicode that other passes would mangle
+  // into spoken artefacts.
+  chunk = stripCodeForTTS(chunk);
+  if (!chunk) return;
 
   // Strip source links and HTML before anything else
   // Must run BEFORE HTML tag stripping so the full <a>...</a> block is caught
@@ -488,11 +562,6 @@ function bufferTextForTTS(chunk) {
                .replace(/https?:\/\/[^\s\])"'>]+/g, '')    // bare URLs (broader terminator set)
                .replace(/www\.[^\s\])"'>]+/g, '')           // bare www URLs
                .replace(/[\u{1F517}\uD83D\uDD17]/gu, ''); // link emoji (all variants)
-
-  // Reset streaming flag at start of each new response
-  if (ttsSentenceBuffer === '' && ttsQueue.length === 0 && !ttsProcessing) {
-    ttsStreamingComplete = false;
-  }
 
   // Fix contractions FIRST before apostrophes get stripped
   chunk = fixContractionsForTTS(chunk);
@@ -647,6 +716,10 @@ function flushTTSBuffer() {
     console.log(`📝 Flushed: "${withPunct.substring(0, 50)}"`);
   }
   ttsSentenceBuffer = '';
+  // Drop any held-back backtick fragments — never spoken aloud regardless
+  // of whether the closing ``` ever arrived.
+  ttsBacktickTail = '';
+  ttsInsideCodeBlock = false;
 
   // Delay setting streamingComplete so the queue processor's poll loop
   // has time to pick up any last-queued sentences before seeing "done"

@@ -74,16 +74,28 @@ def trim_chat_history(messages, token_budget: int = None, extra_system_overhead:
     print(f"📊 Conversation budget: ~{conversation_budget} tokens "
           f"(context {CONTEXT_WINDOW} - gen {GENERATION_RESERVE} - buffer {SYSTEM_BUFFER} - system {system_tokens})")
 
-    # Trim conversation history to fit budget (keep most recent messages)
+    # Trim conversation history to fit budget (keep most recent messages).
+    # ⚠️ The latest turn (body[-1] — normally the user's current message) is
+    # ALWAYS kept, even if it alone exceeds the budget. Dropping it leaves the
+    # model with no user input at all, so it emits EOS or hallucinates a reply
+    # with no grounding. This is critical for large attached documents: the
+    # document rides inside that turn and can single-handedly exceed the
+    # conversation budget — without the `and trimmed` guard the whole turn
+    # (document + question) is silently dropped. DO NOT remove the guard.
     total = 0
     trimmed = []
 
     for msg in reversed(body):
         n = rough_token_count(msg.get("content", "")) + 20  # +20 for ChatML tags
-        if total + n > conversation_budget:
+        if total + n > conversation_budget and trimmed:
             break
         trimmed.insert(0, msg)
         total += n
+
+    if trimmed and total > conversation_budget:
+        print(f"⚠️ Latest turn alone is ~{total} rough tokens — over the "
+              f"~{conversation_budget}-token conversation budget. Kept it whole "
+              f"anyway (likely a large attached document); older turns dropped.")
 
     print(f"📊 Kept {len(trimmed)} conversation messages (~{total} tokens)")
     print(f"📊 Estimated total context: ~{system_tokens + total} / {CONTEXT_WINDOW} tokens")

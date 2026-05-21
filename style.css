@@ -43,16 +43,22 @@
   --icon-button-hover: #161c2a;
   --sidebar-border: #333;
   --project-item-border: #333;
+  --project-edit-bg: #1a1d22;
+  --project-edit-bg: #0a0d10;
   --input-border: #293d4b;
   --field-bg: #0a0d10;
   --field-border: #1d3349;
   --field-border-focus: #2a3f50;
+
+  /* ── Chat column width — SINGLE SOURCE OF TRUTH ──────────────────────
+     Change this ONE value to resize the chat column on every theme.
+     The chat #container, all theme files, midnight/evening, and the
+     config page (via calc) all reference this. Nothing else to touch. */
+  --chat-width: 860px;
 }
 
 body {
   font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-  background: url("/static/images/bg.jpg") no-repeat center center fixed;
-  background-size: cover;
   color: #eee;
   margin: 0;
   padding: 0;
@@ -172,12 +178,12 @@ body {
   position: fixed;
   left: 0;
   top: 60px;
-  width: 240px; /* <<<<----------------------------------------------Sampling sidebar width - CHANGE THIS!! */
-  height: calc(100vh - 30px);
-  background: var(--container-bg);
+  width: 260px; /* matches main chat sidebar width */
+  height: calc(100vh - 60px);
+  background: var(--sidebar-bg);
   border-right: 1px solid var(--sidebar-border);
   padding: 1rem 0.9rem;
-  padding-bottom: 2rem;
+  padding-bottom: 3rem;
   box-sizing: border-box;
   overflow-y: auto;
   z-index: 90;
@@ -242,25 +248,38 @@ body {
 }
 #container,
 #center-column {
-  flex: 0 1 770px;
-  max-width: 770px;
-  min-width: 600px;
+  flex: 1;
+  max-width: var(--chat-width);
+  min-width: 480px;
   background-color: var(--container-bg);
   padding: 1.5rem;
   border-radius: 12px;
   box-shadow: 0 0 30px rgba(0, 0, 0, 0.6);
   overflow-x: hidden;
 }
-/* CHAT PAGE: CENTRE CONTENT IN SPACE RIGHT OF SIDEBAR */
+/* CHAT PAGE: PUSH CONTENT RIGHT FOR SIDEBAR */
 .chat-page #center-column,
 .chat-page #container {
-  margin-left: auto;
-  margin-right: auto;
+  margin-left: 0;
 }
 
 /* Config page: push #main content right to clear fixed sampling sidebar */
 #config-page #main {
-  padding-left: 240px;
+  padding-left: 260px;
+}
+
+/* Config page has no inner #chat wrapper, so its content sits wider than
+   the chat page (chat nests messages inside #chat, which adds 1.5rem
+   padding each side = 3rem total). Subtract that 3rem so the visible
+   content width matches the chat page. Tracks --chat-width automatically. */
+#config-page #container {
+  max-width: calc(var(--chat-width) - 3rem);
+  /* Extend the config panel up behind the fixed top bar so it meets it with
+     no gap — mirrors the chat page pillar. margin-top cancels #main's
+     padding-top:80px; padding-top re-insets the tab content by the same 80px
+     (plus the panel's own 1.5rem) so nothing shifts. */
+  margin-top: -80px;
+  padding-top: calc(80px + 1.5rem);
 }
 
 #center-column h3, #center-column h2, #center-column label {
@@ -879,7 +898,7 @@ button {
 }
 .model-text-cont ul,
 .model-text-cont ol {
-  margin: 0.6em 0 0.8em 0 !important;
+  margin: 0.8em 0 1.1em 0 !important;
   padding-left: 1.5em !important;
   line-height: 1.6 !important;
 }
@@ -1172,6 +1191,65 @@ small {
   color: #fff;
 }
 
+
+/* Project item colour tinting */
+.project-item.tinted {
+  background: var(--project-tint-color) !important;
+}
+
+/* Project colour picker context menu */
+#project-color-menu {
+  position: fixed;
+  z-index: 9999;
+  background: #1a2a36;
+  border: 1px solid #3a5a6a;
+  border-radius: 8px;
+  padding: 10px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 160px;
+}
+#project-color-menu.visible {
+  display: flex;
+}
+#project-color-menu .color-menu-label {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+#project-color-menu .color-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+#project-color-menu .color-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: transform 0.1s, border-color 0.1s;
+}
+#project-color-menu .color-swatch:hover {
+  transform: scale(1.2);
+  border-color: rgba(255,255,255,0.5);
+}
+#project-color-menu .color-clear {
+  font-size: 12px;
+  color: #aaa;
+  cursor: pointer;
+  padding: 3px 0;
+  text-align: center;
+  border-top: 1px solid #2a3a46;
+  margin-top: 2px;
+}
+#project-color-menu .color-clear:hover {
+  color: #fff;
+}
+
 .chat-item-content {
   display: flex;
   flex-direction: column;
@@ -1246,8 +1324,6 @@ small {
 
 body {
   font-family: "Inter", system-ui, sans-serif;
-  background: url("/static/images/bg.jpg") no-repeat center center fixed;
-  background-size: cover;
   color: #eee;
   margin: 0;
   padding: 0;
@@ -1769,7 +1845,7 @@ hr.msg-separator {
 .model-text ol,
 .user-text ul,
 .user-text ol {
-  margin: 0.6em 0 0.8em 0 !important;
+  margin: 0.8em 0 1.1em 0 !important;
   padding-left: 1.5em !important;
   line-height: 1.6 !important;
 }
@@ -2000,7 +2076,7 @@ hr.msg-separator {
 }
 
 #edit-project-name {
-  background: #0f0f0f !important;
+  background: var(--field-bg) !important;
   color: #888 !important;
   font-size: 15px !important;
   font-weight: 600 !important;
@@ -2074,124 +2150,217 @@ hr.msg-separator {
   font-weight: 600;
 }
 
-#project-modal .modal-content,
-#edit-project-modal .modal-content {
-  /* inherits global */
+/* ===== PROJECT MODAL — fullscreen card grid layout ===== */
+#project-modal {
+  padding-left: 250px;
+  padding-top: 0;
+  padding-bottom: 70px;
+  align-items: center;
+  justify-content: center;
+  z-index: 9500;
 }
-
-
-#project-modal .modal-body,
-#edit-project-modal .modal-body {
-  overflow-y: auto;
-  flex: 1;
-}
-.current-project-display {
-  background: transparent;
-  padding: 0;
-  border: none;
-  margin-bottom: 20px;
-}
-.current-project-display strong {
-  color: #aaa;
-  font-size: 15px;
-  font-weight: 600;
-}
-#current-project-display {
-  color: #4a7c9e;
-  font-size: 17px;
-  font-weight: 700;
-  margin-left: 8px;
-}
-.project-section {
-  margin: 15px 0;
-}
-.project-section h4 {
-  font-size: 15px;
-  color: #fff;
-  margin-bottom: 12px;
-  font-weight: 600;
-}
-/* All project input fields - same darker grey */
-#new-project-name,
-#new-project-instructions,
-#edit-project-name,
-#edit-project-instructions {
-  width: 100%;
-  margin-bottom: 10px;
-  background: #0f0f0f !important;
-  color: #ddd !important;
-  border: 1px solid #333 !important;
-}
-
-#edit-project-name {
-  font-size: 15px !important;
-  font-weight: 600 !important;
-  color: #888 !important;
-}
-
-/* Projects list */
-#projects-list {
+#project-modal .modal-content {
+  width: calc(100vw - 310px);
+  max-width: 1200px;
+  height: calc(100vh - 130px);
+  max-height: 900px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
 }
+#project-modal .modal-header {
+  padding: 8px 16px;
+}
+#project-modal .modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Top strip */
+#project-modal-top {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 6px 18px;
+  border-bottom: 1px solid #2a2a2a;
+  flex-shrink: 0;
+  position: relative;
+}
+#project-modal-active {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #aaa;
+  white-space: nowrap;
+  pointer-events: none;
+}
+#project-modal-active span {
+  color: #6a9fb5;
+  font-weight: 700;
+}
+#project-modal-create {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  min-width: 280px;
+}
+#project-modal-create input {
+  flex: 1;
+  background: #111 !important;
+  border: 1px solid #333 !important;
+  color: #ddd !important;
+  border-radius: 4px;
+  padding: 5px 10px;
+  font-size: 13px;
+  height: 30px;
+  box-sizing: border-box;
+}
+#project-modal-create button {
+  background: #1a3a2a;
+  border: 1px solid #2a6a4a;
+  color: #6f6;
+  border-radius: 4px;
+  padding: 5px 14px;
+  font-size: 13px;
+  height: 30px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+#project-modal-create button:hover { background: #1f4a32; }
+
+/* Two-column wrapper — removed, now grid and panel swap */
+
+/* Grid column — fills full modal body */
+#project-modal-grid-wrap {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 18px 18px;
+  min-width: 0;
+}
+
+/* Grid */
+#projects-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px;
+}
+
+/* Card */
 .project-item {
   background: var(--project-item-bg);
   border: 1px solid var(--project-item-border);
-  border-radius: 6px;
-  padding: 5px 10px;
+  border-radius: 8px;
+  padding: 12px 10px 8px;
   display: flex;
+  flex-direction: column;
   justify-content: space-between;
-  align-items: center;
+  align-items: stretch;
   gap: 8px;
-  transition: background 0.2s;
-  min-height: 0;
-  line-height: 1.3;
+  transition: background 0.2s, border-color 0.2s;
+  min-height: 80px;
+  cursor: pointer;
 }
 .project-item:hover {
   background: var(--project-item-hover);
+  border-color: #555;
+}
+.project-item.is-active {
+  border-color: #3a8a6a;
+  background: rgba(26,58,42,0.5);
+  cursor: default;
+}
+/* Tinted active: brighten the tint instead of overriding with green */
+.project-item.tinted.is-active {
+  filter: brightness(1.6);
+  border-color: rgba(255,255,255,0.25);
+  background: var(--project-tint-color) !important;
+}
+.project-item.tinted:hover {
+  filter: brightness(1.3);
 }
 .project-name-section {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
   flex: 1;
   min-width: 0;
 }
 .project-name {
-  font-size: 15px;
+  font-size: 13px;
   color: #ddd;
-  font-weight: 500;
-  white-space: nowrap;
+  font-weight: 600;
+  white-space: normal;
   overflow: hidden;
   text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.35;
+  word-break: break-word;
 }
-/* Group header row */
+.active-badge {
+  background: rgba(40,167,69,0.2);
+  color: #28a745;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.project-buttons {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+.project-buttons button {
+  flex: 1;
+  min-width: 28px;
+  height: 26px;
+  font-size: 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid #333;
+  background: rgba(255,255,255,0.04);
+  color: #aaa;
+  transition: background 0.15s, border-color 0.15s;
+  padding: 0;
+}
+.project-buttons button:hover {
+  background: rgba(255,255,255,0.10);
+  border-color: #555;
+  color: #fff;
+}
 .project-group-header {
+  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 4px 3px;
-  margin-top: 6px;
+  padding: 6px 4px 4px;
+  margin-top: 4px;
   border-top: 1px solid #2a2a2a;
   cursor: pointer;
   user-select: none;
 }
-.project-group-header:first-child {
-  border-top: none;
-  margin-top: 0;
-}
+.project-group-header:first-child { border-top: none; margin-top: 0; }
 .project-group-toggle {
   font-size: 10px;
   color: #666;
   transition: transform 0.15s;
   display: inline-block;
 }
-.project-group-toggle.collapsed {
-  transform: rotate(-90deg);
-}
+.project-group-toggle.collapsed { transform: rotate(-90deg); }
 .project-group-label {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: #aaa;
   text-transform: uppercase;
@@ -2208,19 +2377,9 @@ hr.msg-separator {
   opacity: 0;
   transition: opacity 0.15s;
 }
-.project-group-header:hover .project-group-delete {
-  opacity: 1;
-}
-.project-group-children {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding-left: 12px;
-}
-.project-group-children.collapsed {
-  display: none;
-}
-/* Assign-to-group button */
+.project-group-header:hover .project-group-delete { opacity: 1; }
+.project-group-children { display: contents; }
+.project-group-children.collapsed { display: none; }
 .project-assign-btn {
   background: none !important;
   border: 1px solid #333 !important;
@@ -2231,11 +2390,7 @@ hr.msg-separator {
   cursor: pointer;
   transition: all 0.15s !important;
 }
-.project-assign-btn:hover {
-  border-color: #555 !important;
-  color: #aaa !important;
-}
-/* Group picker dropdown */
+.project-assign-btn:hover { border-color: #555 !important; color: #aaa !important; }
 .group-picker-dropdown {
   position: absolute;
   background: #1a1a1a;
@@ -2253,93 +2408,183 @@ hr.msg-separator {
   cursor: pointer;
   white-space: nowrap;
 }
-.group-picker-option:hover {
-  background: #2a2a2a;
-  color: #fff;
-}
-.group-picker-option.active-group {
-  color: #6a9fb5;
-}
-.group-picker-option.new-group {
-  color: #888;
-  border-top: 1px solid #333;
-}
-.group-picker-option.ungroup {
-  color: #c0a060;
-  border-bottom: 1px solid #333;
-}
-.active-badge {
-  background: rgba(40, 167, 69, 0.2);
-  color: #28a745;
-  padding: 3px 10px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 600;
-}
-.project-buttons {
+.group-picker-option:hover { background: #2a2a2a; color: #fff; }
+.group-picker-option.active-group { color: #6a9fb5; }
+.group-picker-option.new-group { color: #888; border-top: 1px solid #333; }
+.group-picker-option.ungroup { color: #c0a060; border-bottom: 1px solid #333; }
+.back-to-global-item {
+  grid-column: 1 / -1;
   display: flex;
-  gap: 8px;
   align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-top: 1px solid #2a2a2a;
+  margin-top: 4px;
+  cursor: pointer;
+  color: #888;
+  font-size: 13px;
+  background: none;
+  transition: color 0.15s;
 }
-.project-buttons button {
-  background: var(--project-item-bg);
-  border: 1px solid #444;
-  color: #fff;
-  padding: 3px 8px;
+.back-to-global-item:hover { color: #ccc; }
+
+/* Edit panel — hidden by default, replaces grid when open, fills same space */
+#project-edit-panel {
+  display: none;
+  flex-direction: column;
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  background: var(--modal-bg);
+  align-items: center;
+  padding: 24px 20px 20px;
+}
+#project-edit-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 680px;
+  margin-bottom: 18px;
+  flex-shrink: 0;
+}
+#project-edit-panel-back {
+  background: none;
+  border: 1px solid #333;
+  color: #aaa;
+  font-size: 13px;
+  padding: 4px 10px;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 12px;
-  transition: all 0.2s;
+  flex-shrink: 0;
 }
-.project-switch-btn {
-  color: #fff !important;
-  font-size: 18px !important;
-}
-.project-buttons button:hover {
-  background: var(--icon-button-hover);
-  border-color: #555;
-  color: #fff;
-}
-/* Adjust chat list to not overlap footer */
-#chat-list {
-  padding-bottom: 160px !important;
-}
-/* Edit project modal styling */
-#edit-project-modal .modal-body label {
-  color: #ccc;
-  font-size: 15px;
+#project-edit-panel-back:hover { color: #fff; border-color: #555; }
+#project-edit-panel-title {
+  font-size: 16px;
   font-weight: 600;
-  display: block;
-  margin-top: 1rem;
-  margin-bottom: 0.5rem;
+  color: #ddd;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-
-/* Back to global chats button */
-.back-to-global-item {
+#project-edit-panel-close {
+  background: none;
+  border: none;
+  color: #666;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+#project-edit-panel-close:hover { color: #fff; background: rgba(255,255,255,0.08); }
+#project-edit-panel-body {
+  width: 100%;
+  max-width: 680px;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  gap: 10px;
+  flex-shrink: 0;
+  background: var(--project-edit-bg);
+  border-radius: 8px;
   padding: 20px;
-  cursor: pointer;
-  transition: all 0.2s;
-  border-radius: 6px;
+  box-sizing: border-box;
 }
-
-.back-to-global-item:hover {
-  background: rgba(255, 255, 255, 0.05);
-}
-
-.back-button {
-  font-size: 32px;
-  color: #fff;
-  margin-bottom: 8px;
-}
-
-.back-text {
+#project-edit-panel-body label {
   font-size: 13px;
+  color: #aaa;
+  margin-bottom: 3px;
+  display: block;
+}
+#project-edit-panel-body input[type="text"],
+#project-edit-panel-body textarea {
+  width: 100%;
+  background: var(--field-bg) !important;
+  border: 1px solid var(--field-border) !important;
+  color: #ddd !important;
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 13px;
+  box-sizing: border-box;
+  resize: vertical;
+  font-family: inherit;
+}
+#edit-project-instructions {
+  min-height: 160px !important;
+  resize: vertical !important;
+}
+#edit-project-rp-opener {
+  min-height: 100px !important;
+  resize: vertical !important;
+}
+#project-edit-panel-body hr {
+  border: none;
+  border-top: 1px solid #2a2a2a;
+  margin: 4px 0;
+}
+#project-edit-panel-body small {
+  font-size: 11px !important;
   color: #888;
-  text-align: center;
+}
+#project-edit-panel-footer {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  max-width: 680px;
+  margin-top: 16px;
+  flex-shrink: 0;
+}
+#project-edit-panel-footer button { padding: 8px 24px; font-size: 13px; }
+.edit-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 6px;
+  border: 1px solid #2a2a2a;
+}
+.edit-toggle-row button {
+  padding: 5px 14px;
+  border-radius: 4px;
+  border: 1px solid #555;
+  background: #3a3b3f;
+  color: #aaa;
+  cursor: pointer;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+  background: var(--project-item-bg);
+  border: 1px solid var(--project-item-border);
+  border-radius: 8px;
+  padding: 12px 10px 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: stretch;
+  gap: 8px;
+  transition: background 0.2s, border-color 0.2s;
+  min-height: 80px;
+  cursor: pointer;
+}
+.project-item:hover {
+  background: var(--project-item-hover);
+  border-color: #555;
+}
+.project-item.is-active {
+  border-color: #3a8a6a;
+  background: rgba(26,58,42,0.5);
+  cursor: default;
+}
+/* Tinted active: brighten the tint instead of overriding with green */
+.project-item.tinted.is-active {
+  filter: brightness(1.6);
+  border-color: rgba(255,255,255,0.25);
+  background: var(--project-tint-color) !important;
+}
+.project-item.tinted:hover {
+  filter: brightness(1.3);
 }
 
 

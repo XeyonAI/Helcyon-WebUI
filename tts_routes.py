@@ -129,6 +129,10 @@ def generate_tts():
         data = request.json
         text = data.get('text', '')
         voice = data.get('voice') or DEFAULT_VOICE
+        # first_chunk lets the F5 server use a faster nfe_step for the opening
+        # word (lower first-byte latency). Was previously dropped here, so the
+        # fast path never actually fired.
+        first_chunk = bool(data.get('first_chunk', False))
         # Guard against 'null' string or empty string from mobile/JS
         if not voice or voice.lower() in ('null', 'none', 'undefined'):
             voice = DEFAULT_VOICE
@@ -139,7 +143,7 @@ def generate_tts():
         server_url = get_server_url()
         logging.info(f"Generating TTS [{engine}] for: {text[:50]}...")
 
-        payload = {'text': text, 'voice': voice}
+        payload = {'text': text, 'voice': voice, 'first_chunk': first_chunk}
 
         response = requests.post(
             f'{server_url}/tts_to_audio',
