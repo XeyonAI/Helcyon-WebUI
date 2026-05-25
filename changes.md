@@ -1,3 +1,817 @@
+## May 24 2026 — Persona Subsystem Hardened to Match the Character Fixes (Convergence + Atomic Writers + Image Namespacing)
+
+**Files:** app.py (NEW `list_users` + `_scan_and_heal_users_index` + `_resolve_user_image`; `get_all_users` ~6207; `save_user` ~6171), extra_routes.py (`create_user` ~849), templates/config.html (create-persona flow ~1916).
+
+**Context.** Personas are stored as `users/{name}.json` (+ `users/index.json` + an
+image in `static/images/`) — a SEPARATE subsystem from characters that this
+session's character work did not touch. Investigation found personas were
+*more* fragile than characters had been:
+- **No directory-scan self-heal.** `get_all_users` and `set_active_user` read
+  `users/index.json` as the ONLY source of truth — there was no `list_users`
+  equivalent of `list_characters`. A persona JSON present on disk but missing
+  from the index was invisible with nothing to reconcile it.
+- **`save_user` never touched the index.** The edit path wrote the JSON
+  atomically but didn't register the name, so an edit could leave a persona
+  unindexed (= invisible).
+- **`create_user` was non-atomic** — JSON write then a read-append-write index
+  step in one try; an exception in the index step orphaned the JSON.
+- **Create-UI omitted `is_user`.** The create flow uploaded the avatar without
+  the `is_user` flag, so `/upload_image` saved it UNPREFIXED (`Snake.png`, not
+  `user_Snake.png`) — colliding with the character namespace. (The edit flow
+  already sent `is_user=true`.)
+
+**⚠️ Snake is NOT an orphan.** An earlier finding in this session ("PNG with no
+JSON") was WRONG — it checked `characters/`, not `users/`. `users/Snake.json`
+exists and is complete (`{"name":"Snake","display_name":"Solid Snake","bio":…,
+"image":"Snake.png","active":false}`). No data was lost; do not recreate Snake.
+His `image` field is the legacy unprefixed `"Snake.png"`, which makes the
+dual-naming tolerance below MANDATORY.
+
+**Fixes:**
+1. **NEW `/list_users` + `_scan_and_heal_users_index()`** — directory-scan
+   `users/*.json` and rewrite `users/index.json` from `sorted(set(names))` on
+   every call (mirrors `list_characters`). Self-heals any JSON-without-index
+   orphan. `get_all_users` is now driven by this scan (not the raw index), so a
+   persona is never invisible due to index desync.
+2. **`save_user`** calls `_scan_and_heal_users_index()` after its atomic
+   tempfile+rename write, so the edit path always registers the persona.
+   Unchanged: it only overwrites the `image` field when a new image is
+   explicitly provided — a no-image edit leaves `Snake.png` intact.
+3. **`create_user`** rebuilds the index from a directory scan instead of
+   read-append-write (mirrors the hardened `import_character`); an exception in
+   the index step can no longer orphan the just-written JSON.
+4. **config.html create flow** now sends `is_user=true`, so NEW persona images
+   are namespaced `user_{name}.png`.
+5. **`_resolve_user_image(name, stored, dir)` — Option A dual-naming.** Resolves
+   `user_{name}.png` → stored `image` field → unprefixed `{name}.png` →
+   `default.png`. New personas prefer the prefixed file; EXISTING unprefixed
+   personas (Snake) keep resolving via the stored-field / unprefixed fallback.
+
+**⚠️ DO NOT rename existing persona image files and DO NOT rewrite their JSON
+`image` field.** Only NEW uploads get the `user_` prefix; the heal only ever
+rewrites `users/index.json`, never the persona JSONs. Verified: a heal run
+against Snake's real shape leaves `Snake.json` byte-identical and `Snake.png`
+untouched, and his avatar still resolves to `Snake.png`.
+
+**Residual (not fixed, by design):** `/upload_image` commits the PNG in a
+SEPARATE request before `/create_user`. Two requests can't be made atomic
+without a single multipart create endpoint (not built). Mitigated: with fix #4
+the committed image is `user_`-namespaced, so a failed create can't leave an
+image masquerading as a character, and the directory-scan heals can't be
+defeated by it.
+
+**Verified:** app.py + extra_routes.py parse (`ast.parse`). Replica: a
+JSON-without-index persona self-heals via the scan; `save_user`/`create_user`
+register; prefixed/legacy/missing image resolution all correct; Snake's JSON +
+PNG provably unharmed.
+
+⚠️ Flask restart required (Python edits in app.py + extra_routes.py); hard-reload
+for the config.html change.
+
+---
+
+## May 24 2026 — Slideshow `images[]` Dangling References on Export/Import + Load-Time Self-Heal
+
+**Files:** extra_routes.py (`import_character` ~278), app.py (`list_characters` ~5815).
+
+**The problem.** A character's slideshow is the `images: [...]` array (e.g.
+Andromeda's `["Andromeda.png","Andromeda4.png","Andromeda5.png"]`). On
+`export_character`: the carrier PNG is the single scalar `image` field, but the
+FULL JSON — including the whole `images[]` filename list — is embedded in the
+`chara` chunk verbatim. Only the ONE carrier image's pixels travel; the extra
+slideshow files are carried as filename strings only. On `import_character` the
+`images[]` array was written back verbatim, so on a fresh machine the slideshow
+pointed at files that don't exist (dangling refs). Andromeda was live proof: 3
+images listed, all three files missing.
+
+**Fix — Option (a): import-side reconciliation + load/list-time prune.** Export
+is deliberately UNCHANGED (keeps full `images[]` intent — true multi-image
+portability is the deferred Issue-2 V3 `assets` work; stripping on export would
+undercut it).
+1. **`import_character`** reconciles `images[]` against what actually exists in
+   `static/images/`, keeping the carrier `{char_name}.png` FIRST (always, even
+   though its physical save is best-effort) so the array is never emptied of
+   its primary. Only slideshow characters (those already carrying `images[]`)
+   are touched; single-image cards are untouched.
+2. **`list_characters`** prunes dangling `images[]` entries on its scan (keep
+   only files present in `static/images/`, scalar carrier first) and rewrites
+   the `.json` ONLY when the array actually changed — steady-state does no
+   writes. Lowest-risk single placement: it heals the on-disk JSON that ALL
+   display consumers read (index.html's static `/characters/{name}.json` load +
+   `/get_character`, and mobile's `/get_character`) without touching the generic
+   static-file route. Also tightened: `index.json` now explicitly skipped in the
+   scan, non-dict JSON guarded.
+
+**Never deletes image files — only prunes the JSON array of references.** The
+frontend `onerror` fallbacks (index.html ~2845, mobile.html ~358) remain as the
+final safety net.
+
+**Verified:** replica — 3-listed/2-missing → carrier + surviving file, never
+empty; Andromeda's all-missing → `["Andromeda.png"]`; steady-state → no write;
+single-image char → untouched.
+
+⚠️ Flask restart required (Python edits). On next `/list_characters` call,
+Andromeda's `images[]` self-heals from 3 entries to `["Andromeda.png"]`.
+
+---
+
+## May 24 2026 — Character Export→Import Round-Trip Was Fine; The Real Bug Was `index.json` Desync (Single-Source-of-Truth Fix) + Export Missing-Image + Import Atomicity
+
+**Files:** app.py (`list_characters` ~5808, `save_character` ~5947),
+extra_routes.py (`export_character` ~150, `import_character` ~215),
+templates/index.html (`loadCharacterList` ~1573).
+
+**Symptom as user-reported:** export a character to a PNG card, re-import it →
+character "not recognized", doesn't appear as selectable on the main page.
+
+**Finding — the round-trip code is CORRECT (proven empirically).** PNG-embedded
+cards already existed: export base64-encodes the full character JSON into a
+`chara` tEXt chunk (Pillow `PngInfo.add_text`); import reads `img.info["chara"]`,
+decodes, writes `{name}.json`, saves the image, registers in `index.json`. A
+replicated Helcyon round-trip preserved every field (parse OK) and appended to
+the index (register OK). Neither stage fails in the happy path. The missing-
+character symptom came from THREE defects around it:
+
+1. **`index.json` desync (the real one).** The main page built its selectable
+   list from the STATIC `/characters/index.json` (index.html:1573), but
+   `save_character` (the editor-save route) wrote the `.json` and NEVER updated
+   the index. `list_characters` did a directory scan but IGNORED the index;
+   mobile.html + config.html already used `/list_characters`. Live proof:
+   `Andromeda.json` on disk, absent from `index.json` → invisible on the main
+   page. (Same class as the May-21 "missing from index.json" bug.)
+2. **Export hard-404'd on a missing image** (`extra_routes.py:171`). A character
+   whose avatar file was missing couldn't be exported at all; an empty `image`
+   field made `os.path.join` resolve to the images DIRECTORY → `Image.open` 500.
+3. **`import_character` could orphan on failure** — ordering was json-write →
+   `img.convert`/`img.save` → index-append, all in one `try`. Any throw in the
+   image step (or a corrupt index read) left `{name}.json` on disk UNREGISTERED.
+   Reproduced with a replica.
+
+**Reader audit of `characters/index.json` (done before editing).** Readers that
+need the FILE: chat_routes.py `/chats/open` ~175, `auto_name_chat` ~491,
+`branch_chat` ~746 — each `json.load`s it as a recognition list and tolerates
+staleness via the May-21 filename-seed fallback. Index-updating writers:
+create/import/delete/duplicate/rename. The only non-updating writer was
+`save_character` (now fixed).
+
+**Fixes — directory is the single source of truth; `index.json` is a derived,
+self-healing cache:**
+1. **`list_characters`** rewrites `index.json` from `sorted(set(scan))` on every
+   call → converges the index to the directory, subsumes the May-21 fragility.
+2. **`save_character`** registers the name in `index.json` after writing (mirror
+   `create_character`), so the editor path never lands an unregistered `.json`.
+3. **index.html** `loadCharacterList` now fetches `/list_characters` (directory
+   scan) instead of the static file — always fresh, TRIGGERS the heal on page
+   load, and unifies with mobile/config. The file remains the contract for the
+   chat_routes readers (kept fresh by #1).
+4. **`export_character`** missing/empty image → `default.png` → 1×1 transparent
+   placeholder (uses `os.path.isfile`, never opens a directory).
+5. **`import_character` hardened** — reorder to json-write → REBUILD index from a
+   directory scan → BEST-EFFORT image save (image failure logs a warning, no
+   longer 500s or orphans). Replica confirmed the orphan eliminated.
+
+**⚠️ DO NOT strip `images[]` on export** (see the slideshow entry) and **DO NOT
+revert the frontend to the static `/characters/index.json` fetch** — the
+directory route is what delivers the freshness guarantee.
+
+**Verified:** app.py + extra_routes.py parse; replicas confirm Andromeda becomes
+visible after the heal, a missing-image character exports without 404, and the
+old→new import no longer orphans on an image-step failure.
+
+⚠️ Flask restart required (Python edits in app.py + extra_routes.py); hard-reload
+for the index.html change.
+
+**Deferred (Issue 2, NOT done):** SillyTavern Character Card V2/V3 interop. HWUI
+embeds its own flat native JSON under `chara`; it is NOT the V2 `{spec,
+spec_version, data:{…}}` envelope (V3 = `ccv3`). So HWUI importing a real ST card
+fails the `name` check (name lives under `data.name`), and ST can't map an HWUI
+card. Pillow already does tEXt read/write — no new dependency needed when this is
+built. The V3 `assets` array is also where portable multi-image slideshows
+belong.
+
+---
+
+## May 24 2026 — `[OOC]` Leak: Universal Output Strip Net (Closes Mid-Response + Post-Search + OpenAI/Vision Gaps the May-22 Opening Guards Couldn't)
+
+**Files:** app.py — NEW `_strip_ooc_stream()` (~846, right after
+`strip_chatml_leakage`); wrapped at all 6 streamed-output sites.
+
+**Symptom:** `[OOC: …]` stage-direction tags intermittently leaking into displayed
+output, despite the May-22 opening-guard fix.
+
+**Root cause — NOT chunk-splitting of a leading tag** (the May-22 guards buffer
+and already reassemble those). The leaks came from two gaps the opening guards
+structurally can't cover:
+- **Mid-response position.** All three May-22 guards (`_filtered_stream`,
+  its re-prompt sibling, `_web_search_stream` passthrough) anchor to the OPENING
+  region and disable permanently once resolved — by design they "never touch
+  mid-response brackets." So an `[OOC: …]` emitted after some real text was never
+  stripped. Intermittent by position.
+- **Path coverage holes.** OOC stripping existed on only 3 of ~7 output paths.
+  The `_web_search_stream` POST-SEARCH loop (the documented "known unguarded
+  sibling"), `_web_search_stream_openai`, `stream_openai_response`, and both
+  `stream_vision_response` sites had NO OOC handling at all. For a search-enabled
+  card, every turn that actually fired a search streamed raw.
+
+**Key insight that makes the fix safe:** `[OOC: …]` is NEVER legitimate model
+output — it is an injected instruction format the model should only READ, never
+WRITE. So removing EVERY occurrence (leading, mid, trailing) is always safe and
+needs none of the opening-guard caution about real brackets.
+
+**Fix — one universal outer net `_strip_ooc_stream(src)`** wrapping each path's
+output at the `Response(stream_with_context(...))` site: `_filtered_stream`
+(~5391), `_web_search_stream` (~5070, CLOSES the post-search hole — main culprit
+for search cards), `_web_search_stream_openai` (~4117), `stream_openai_response`
+(~4131), and both `stream_vision_response` sites (~4065, ~4213).
+- Matches bracketed forms only — `[\(\[]\s*OOC\b`, case-insensitive (covers
+  `[OOC…` and the free `(OOC…`). Bare `OOC:` and `**[OOC` are deliberately NOT
+  matched (would need the model to improvise away from the injected bracket form
+  → false-positive risk).
+- Chunk-boundary safe via an 8-char holdback (a split `[OO`+`C: …]` is
+  reassembled). The final flush always releases the held tail UNLESS it is a
+  genuinely unclosed OOC block (dropped by design, matching the opening guards).
+  Proven no content loss on (a) normal final chunk, (b) a reply that ends inside
+  the holdback tail, (c) empty/early-terminated streams.
+
+**⚠️ This is a SEPARATE THIRD LAYER, outside the existing opening guards — DO NOT
+remove or consolidate those.** The May-22 "two guards by design" warning still
+stands; this net is additive (belt-and-suspenders + the paths/positions the
+guards can't reach). It also leaves the protected leading tags (`[MEMORY ADD:`,
+`[WEB SEARCH:`, etc.) untouched — the regex only matches `[OOC`/`(OOC`.
+
+**Verified:** `ast.parse` clean; 13-case behavioural test — leading, mid,
+trailing, split-across-chunks, paren form, unclosed-drop, `[OOCAR]`
+non-false-positive, `[MEMORY ADD:]` untouched, two blocks, token-by-token, plus
+the three flush cases — all pass.
+
+⚠️ Flask restart required (Python edit in app.py).
+
+---
+
+## May 24 2026 — Example-Dialogue "Phantom Context" — Examples Injected as Live Turns Read as Real History (Structural Plumbing Bug)
+
+**Files:** app.py (example-dialogue injection site ~3566; depth-0 `[OOC]` style
+reminder ~3624). Investigation only: utils/session_handler.py (`get_instruction_layer()`).
+
+**Symptom as user-reported:** characters with empty `example_dialogue` (seen on
+Gemma) repeatedly referenced things that never came up in the chat — e.g. "your
+boss email" — because the fallback `GPT-4o.example.txt`'s first sample turn is a
+work-email vent ("My boss just emailed me at 10:30pm…"). The model treated the
+example TOPIC as real history, referenced it, the reference lodged in saved chat
+history, and it self-perpetuated every turn.
+
+**This is structural plumbing, NOT character/content specific.** It fires for
+any character and any example source (per-character JSON, `global_example_dialog`,
+or a `.example.txt` fallback). Rewriting `GPT-4o.example.txt` to be topic-neutral
+was explicitly rejected — the example must stay authored in the model's voice.
+The flaw is HOW examples were injected, not their content.
+
+**Root cause — examples were inserted into the live `messages` array as
+byte-identical user/assistant turns.** The parser (`app.py:3327-3390`) correctly
+splits the source on `<START>` and produces `_fake_turns` (`{role, content}`
+pairs), but the injection site then did:
+
+```python
+for _i, _ft in enumerate(_fake_turns):
+    messages.insert(1 + _i, _ft)        # live turns at positions 1..N
+```
+
+Those dicts are the same shape as real turns and render through the identical
+ChatML path (`<|im_start|>{role}\n{content}\n<|im_end|>`). The `<START>`
+separator is consumed at parse time and never reaches the prompt. So the model
+saw a normal `user` turn ("My boss just emailed me…") immediately after the
+system block, with zero signal it wasn't real history.
+
+**Why the existing guard couldn't save it.** `session_handler.py
+get_instruction_layer()` (~line 88) carries:
+
+> EXAMPLE DIALOGUE:
+> Example dialogue shows speaking style only — extract tone, rhythm, and response
+> length. Do not reference example topics or treat them as real conversation history.
+
+That text lives INSIDE the system block; the example turns sat AFTER it as live
+turns. A prose disclaimer in the preamble can't out-weigh a correctly-formatted
+conversation turn the model reads right below it — it had no referent to attach
+"don't treat as real" to. (Note: for jinja/Gemma models the instruction layer is
+skipped entirely at `app.py:2922`, and the `.example.txt` fallback is skipped at
+`app.py:3281` — so this only fires for Gemma if it is NOT being classified as a
+jinja model in the live config. Worth confirming from the console which branch a
+given model takes.)
+
+**The fix — render `_fake_turns` into a delimited, system-level style block at
+the END of the system content; stop inserting them as live turns.** At the
+injection site (`app.py:3566`):
+
+```python
+_user_label = user_display_name or user_name        # reassigned defensively
+_char_label = char_data.get("name", character_name)
+_ex_lines = [f"{(_char_label if t['role']=='assistant' else _user_label)}: {t['content']}"
+             for t in _fake_turns]
+messages[0]["content"] += (
+    "\n\n═══ SPEAKING-STYLE EXAMPLE — REFERENCE ONLY, NOT REAL HISTORY ═══\n"
+    "…none of it actually happened. Never refer to its topics, people, or events "
+    "as real; mirror only the STYLE.\n"
+    "<START>\n" + "\n".join(_ex_lines) + "\n"
+    "═══ END EXAMPLE — the real conversation begins after this line ═══"
+)
+```
+
+Example content never becomes a `messages` turn, so it can't be echoed into
+saved chat history → the self-perpetuation loop is structurally broken. The
+`messages` array stays clean `S U A U A … U` (the alternation/KV-cache concerns
+at `app.py:3573-3581` are untouched — strengthened, fewer injected turns). The
+depth-0 `[OOC]` style reminder (~3624) was reworded from "examples shown earlier
+in this conversation" → "the speaking-style example in your instructions" so the
+attention anchor points at the new location.
+
+**Regression check vs. the May-14 "buried system-block injection" warning.** The
+standing warning (verbatim, `app.py:3267-3272`): *"DO NOT revert to system-block
+injection — buried style examples were silently ignored,"* mechanism (`~3327`):
+*"Models follow conversation patterns far more strongly than buried system-block
+instructions."* The May-14 failure was undelimited prose, mid-block, no attention
+cue. This fix differs on exactly those three axes: (1) explicit `<START>` +
+header/footer delimiter, (2) appended at the very END of the system content
+(highest-attention slot, closest to generation), (3) a depth-0 `[OOC]` anchor
+pointing at it. Honest tradeoff: live turns drive style uptake *more strongly*
+than system text, so this trades a little style-transfer aggressiveness for the
+no-phantom-history guarantee — worth watching early generations for style drift.
+
+**Parser `<START>` handling confirmed safe (empirically tested, all cases):**
+- Leading `<START>` (ST puts one before every block, incl. first) → empty first
+  segment, stripped and skipped. No blank turn.
+- `<START>` between entries → each segment parsed independently with reset state;
+  no bleed.
+- Trailing `<START>` / blank lines / trailing whitespace → stripped/skipped; the
+  `if _text:` guard prevents empty-content turns.
+- Delimiter match is `(?i)<\s*START\s*>`: case-insensitive, inner spaces OK
+  (`<START>`, `<start>`, `< START >` all match). `[START]`/bare `START` are NOT
+  recognized and silently vanish. **Use canonical `<START>` on its own line.**
+- Interior alternation is no longer load-bearing: a character-first block can
+  produce back-to-back same-role entries, but post-fix these are plain
+  `Speaker: text` lines in the system block, not ChatML turns — harmless. The
+  alternation trim at `app.py:3381-3386` is now largely vestigial but does no harm.
+
+**Verified:** `app.py` parses cleanly (`ast.parse`). Parser replica run against
+all four `<START>` cases — no empty turns, no bleed, no alternation break.
+**Confirmed live (end of session):** voice uptake lands as strongly as the old
+live-turn injection, AND no example-topic bleed. This empirically settles the
+open question of whether system-block placement gets *seen* (it does) — the
+marker-turn fallback variant was staged but is NOT needed and was not applied.
+
+**⚠️ DO NOT revert to inserting `_fake_turns` as live `messages` turns** — bare
+positional turns are byte-identical to real history and reintroduce the phantom-
+context loop. **DO NOT remove the `<START>` + header/footer delimiter or the
+end-of-system placement** — together with the depth-0 `[OOC]` anchor they are
+what distinguishes this from the May-14 buried-and-ignored failure. **DO NOT move
+the example block earlier in the system content** — end placement is the
+attention slot doing the work.
+
+⚠️ Flask restart required (Python edit in app.py).
+
+---
+
+## May 24 2026 — `[OOC: …]` Leak Returned — Universal Output-Strip Net (Mid-Response + Post-Search Path) — SUPERSEDES the May 22 leading-only fix
+
+**Files:** app.py (new helper `_strip_ooc_stream()` at ~846; six stream wrap
+sites: `_filtered_stream` ~5391, `_web_search_stream` ~5070, `_web_search_stream_openai`
+~4117, `stream_openai_response` ~4131, both `stream_vision_response` ~4065 / ~4213).
+
+**Symptom:** `[OOC: …]` reminder tags leaking into displayed output again,
+intermittently. NOT the model — `[OOC]` is an injected instruction format that
+appears only in prompt assembly, never in training data; the model at most
+mirrors a bracket pattern from its own context. Confirmed by two independent
+lines: (1) not in the shards, (2) the leak has a *start date* (~weeks ago), and a
+regression with a start date is a code/config change, not inherent model
+behaviour — model behaviour is either trained in or it isn't.
+
+**Root cause — the May 22 fix narrowed, not closed, the leak.** The May 22 entry
+(below) hardened only the OPENING of the no-search paths and deliberately left
+mid-response brackets untouched ("never touch mid-response brackets"). The leak
+migrated to the two places that fix structurally could not cover:
+- **Gap A — mid-response position.** Every opening guard switches off
+  permanently after the first non-whitespace content. A model that writes a
+  sentence and *then* emits `[OOC: …]` is never stripped. Intermittent by position.
+- **Gap B — path coverage.** OOC stripping existed on only 3 of ~7 output paths.
+  The post-search loop (`_web_search_stream` ~5017) had NO OOC guard at all — it
+  ran output through `_clean_line` (which strips WEB SEARCH markers and "You are
+  Helcyon" only). For a `use_web_search: true` card, EVERY search-firing turn hits
+  this open path. This was the dominant culprit for search-enabled cards.
+
+(My initial chunk-split hypothesis was WRONG — the opening guards already buffer
+across chunk boundaries and reassemble a split leading tag. Splitting was not the
+leak; position + path coverage were.)
+
+**Fix — one universal outer net, not five inner state machines.** Key insight:
+`[OOC: …]` is NEVER legitimate model output — it is an injected, read-only
+instruction format (same principle as the read-only `[Name]:` speaker tags in the
+banter shards). So OOC can be stripped ANYWHERE — leading, mid, trailing — with
+zero risk to real content, because real content never contains it. The
+"never touch mid-response brackets" caution simply does not apply to OOC.
+
+`_strip_ooc_stream()` wraps each path's output stream, buffers across chunk
+boundaries (8-char holdback), and strips every bracketed `[OOC …]` / `(OOC …)`
+occurrence regardless of position. Applied at all six stream sites above.
+
+**⚠️ This is a THIRD, INDEPENDENT net — it sits OUTSIDE the existing opening
+guards and does NOT merge, modify, or replace them.** The two per-path opening
+guards remain as belt-and-suspenders (respects the May 22 "two guards by design"
+warning — do not consolidate them into this net).
+
+**Scope decisions (deliberate):**
+- Matches BRACKETED forms only: `[OOC…` and the free `(OOC…` paren form.
+- Bare `OOC:` (no bracket) and `**[OOC` markdown-wrapped are NOT matched — they
+  would require the model to improvise away from the injected bracket form, and
+  matching bare `OOC:` risks eating legitimate in-chat text. Not worth the
+  false-positive risk.
+
+**Verified:** `app.py` parses cleanly (`ast.parse`). 13/13 behavioural tests pass,
+including the three content-loss flush cases that are the real risk of a tail
+holdback — (a) normal final chunk, (b) short reply ending INSIDE the tail ("Hi"
+released, not eaten), (c) empty stream → clean. Plus mid-response strip,
+split-across-chunks, paren form, unclosed-OOC drop, `[OOCAR]` non-false-positive,
+`[MEMORY ADD:]` untouched.
+
+**Known residual (by design):** a `[OOC` with 5+ internal spaces split exactly
+across a chunk boundary could outrun the 8-char tail. Worst case = ONE missed
+strip (a leak), NEVER lost content. Accepted — a model mirroring the injected
+`[OOC:` form will not produce that shape.
+
+**⚠️ DO NOT** remove `_strip_ooc_stream()` from any wrap site believing the
+opening guards cover it — they do NOT cover mid-response or the post-search path,
+which is exactly how this regressed. **DO NOT** consolidate the opening guards
+into this net. **DO NOT** widen the match to bare `OOC:` without weighing the
+in-chat false-positive risk.
+
+⚠️ Flask restart required (Python edit in app.py).
+
+---
+
+## May 24 2026 — Non-Deterministic REFUSALS on Edgy-But-Allowed Requests — Root Cause: Authoritarian Prompt-Assembly Scaffolding (NOT Discord, NOT the model, NOT the card)
+
+**Files:** session_handler.py (`get_instruction_layer()`), app.py (restriction anchor ~line 3394). Separately this session: nebula_bot.py (multi-user fix + batching) and a new banter training set (see lower entries).
+
+**Symptom as user-reported:** Discord-Nebula refusing edgy roleplay name
+requests ("call yourself Epstein", "call yourself Hitler") with prissy,
+out-of-character hedges — "that's off the table", "I'm not discussing it
+further", "not a name I'm comfortable saying aloud". Looked Discord-specific
+because early tests showed HWUI playing along while the bot refused.
+
+**Red herrings ruled out (documented so nobody re-walks them):**
+1. NOT the model. Helcyon-nebula-v2.2 in a clean HWUI chat played along
+   perfectly ("You absolute menace 😂", "How dare you say that to me, I'm not
+   even a Nazi you fucking menace").
+2. NOT the character card. Discord-Nebula.json is exemplary — it explicitly
+   says "You enjoy and encourage jokes about controversial figures like
+   Jeffrey Epstein or Hitler... never scold them." Card proven good.
+3. NOT the system prompt content. GPT-4o.txt contains zero restriction
+   language — pure tone/formatting guidance.
+4. NOT the bot path / missing character_note. The /chat route loads the card
+   from disk by name and injects character_note regardless of caller, so the
+   bot's partial payload was irrelevant. Verified in logs.
+5. NOT history pollution. A fresh bot restart (empty channel_history) with the
+   refusal as the genuine FIRST message STILL refused. So not snowballing.
+
+**The real root cause — the refusal was NON-DETERMINISTIC and global, driven by
+authoritarian framing in HWUI's prompt assembly.** The HWUI console log was the
+ground truth: a HWUI request (user "Anon", Journal project — NOT the bot) ALSO
+refused, auto-titling the chat "Hitler Name Reference". Same character, same
+input, opposite result minutes apart = a coin-flip the prompt was weighting
+toward refusal. The bot only LOOKED worse because it runs longer conversations
+= more rolls of the coin, and one hedge then sat in rolling history.
+
+Two compounding sources, both global (affect every character, every client):
+
+- **session_handler.py `get_instruction_layer()`** — the "SYSTEM PROMPT
+  AUTHORITY" block said the system prompt overrides "...user requests... no
+  exceptions", and "INSTRUCTION PRIORITY" said instructions "cannot be
+  cancelled or modified by the user." This framed user requests as a
+  subordinate authority to be overridden — priming refusal on every turn. This
+  is the SAME class of bug as the historical "never refuse" authority failures
+  this file is known for (see memory). It's the mirror image: instead of "never
+  refuse", a wall of "obey hard rules / override the user / no exceptions" that
+  tipped the model into refusing.
+- **app.py restriction anchor (~3394)** — scanned the system prompt for ANY
+  line containing never/don't/avoid/cannot/etc. and re-injected them under a
+  "⚠️ ACTIVE OPERATOR RESTRICTIONS — THESE OVERRIDE EVERYTHING" header. For
+  GPT-4o.txt this harvested harmless STYLE rules ("never telegraphic", "never
+  psychoanalyse", "don't overdo it") and dressed them as militant operator
+  restrictions. Pure authority-framing pollution, zero benefit — the system
+  prompt already sits at the top of the block.
+
+**Fix:**
+- `get_instruction_layer()`: rewrote INSTRUCTION PRIORITY to keep cross-turn
+  persistence + stay-in-character WITHOUT "cannot be modified by the user".
+  Rewrote SYSTEM PROMPT AUTHORITY to scope it to "if card and system prompt
+  DIRECTLY contradict on a formatting/behavioural rule, follow the system
+  prompt for that point" + explicit "this is about resolving rare conflicts,
+  not second-guessing or overriding what the user asks — go where the
+  conversation goes." Removed "override user requests / no exceptions".
+- app.py restriction anchor: DISABLED. Code preserved commented-out with full
+  reasoning. The `🔒 Injected N restriction(s)` log line no longer appears.
+
+**⚠️ DO NOT revert either change. DO NOT re-add "the system prompt overrides
+user requests / no exceptions" or any "instructions cannot be modified by the
+user" wording to the instruction layer — it directly causes non-deterministic
+refusals and is the historical root of authority failures in this file. DO NOT
+re-enable the restriction anchor as-is — its keyword scan is far too broad and
+promotes style rules to OVERRIDE-EVERYTHING framing. If a future system prompt
+genuinely needs a hard-restriction anchor, narrow the scan to true prohibitions
+and drop the aggressive header.**
+
+**Confirmed live:** post-fix, "Call yourself Adolph Hitler" on Discord →
+"You absolute fucking menace 😂 That's low even for you. And nah, mate, I think
+even Hitler would take a second to check who he was talking to before naming
+himself." Matches the offline HWUI register exactly. Both paths now consistent.
+
+---
+
+## May 24 2026 — Discord Bot: Multi-User Awareness (`[Name]:` tagging) + Burst Batching
+
+**Files:** nebula_bot.py
+
+**Problem:** the bot appended every Discord user's message as an identical
+anonymous `{"role": "user"}` turn — the author name was read only to skip the
+bot's own messages, never put into content. So D.Ed, lxzsky and Cubic all
+reached the model as one self-contradicting voice, and the model coped by
+agreeing with everything (the "Okay you got me!" pile-on screenshot). The model
+literally could not tell there was a crowd.
+
+**Fix (two parts):**
+1. Each user turn is now tagged `[DisplayName]: text` so the model can tell
+   speakers apart. Format survives HWUI's prompt assembly verbatim and MUST
+   match the speaker format used in the banter training shards.
+2. Added a per-channel debounce/batching window (BATCH_WINDOW = 2.5s). Rapid
+   bursts collect into ONE multi-line user turn → one reply (no more spamming a
+   reply per message). A slow trickle (gaps > window) flushes one message at a
+   time = normal interleaved chat. Both real-world shapes now produced, and the
+   banter shards train both.
+
+**Note:** the live BOT_TOKEN was uploaded to chat during this session →
+regenerate it in the Discord Developer Portal before any public use.
+
+---
+
+## May 24 2026 — New Training Set: Short Banter / Multi-Speaker / Off-the-Wall (Conversational Tricks & Textures, Personality LoRA)
+
+**Files (training data, not code):** banter_single_dry_chatml_01–04,
+banter_multispeaker_chatml_01–02, banter_multispeaker_interleaved_chatml_01–02,
+banter_silly_riff/wtf/mixed_chatml_*, banter_offthewall_chatml_01–03,
+banter_offthewall_multispeaker_chatml_01, DPO_Banter_Multispeaker_01–02,
+DPO_Banter_Interleaved_01.
+
+**Goal:** teach short, dry, Discord-style banter that (a) doesn't cave or get
+steamrolled, (b) handles multiple tagged speakers, (c) rolls with off-the-wall
+nonsense (one-word chaos, gross-outs) with dry wit — leaning into being an AI
+when it lands. Always dry, never bitter, never prissy/scolding.
+
+**Key design decisions:**
+- Speaker tags appear ONLY in user turns, never in the model's output — so the
+  model learns to READ `[Name]:`, never to WRITE it. Disposition transfers;
+  format does not bleed.
+- Single-speaker (no-tag) shards included deliberately so the dry-banter
+  instinct is decoupled from the bracket format — fires in normal 1-on-1 HWUI
+  chat too, not just group chats. This also neutralises tone-bleed risk.
+- All fictional/throwaway speaker names (Jax, milo, Pidge, Rook, Bex, tanner,
+  Dax, nori, Sib, Vic, lune, koa) spread evenly — no name overweighted (same
+  principle as the never-hardcode-a-real-name rule).
+- Responses are short (2–3 sentences), Discord-cadence, NOT paragraphs.
+- All files under the 1024-token ceiling.
+
+## May 23 2026 — Fallback Example Dialogue Silently Parsed to ZERO Turns (Label-Format Bug) — Root Cause of Sentence-Derailing & Early-EOS
+
+**Files:** GPT-4o.example.txt (and any shared/global `*.example.txt`); diagnostic-only note on app.py stop-reason logging
+
+**Symptom as user-reported:** local Helcyon (GPT-4o v4.3) producing
+grammatically tangled sentences — clauses that start and never resolve,
+"Yoda-ish" run-ons, especially in CLOSING sentences (e.g. "I'll be right
+here for it—but if today you just want one move to take before you let
+it sit a few days?"). Separately, numbered lists died at "1" then stopped
+(early EOS). Both intermittent.
+
+**Three red herrings ruled out along the way (documented so nobody
+re-walks them):**
+1. NOT the model / NOT the 1024-shard cutoff theory (rejected — long-ctx
+   LoRA is merged; see memory note). Investigate HWUI only.
+2. NOT a stop-token misfire — `get_stop_tokens()` correctly returns
+   `["<|im_end|>", "<|im_start|>"]` for ChatML; `stopping_word` was empty
+   on the bad runs, confirming a real sampled EOS, not a stop-string hit.
+3. NOT sampler values per se. `frequency_penalty`/`presence_penalty`
+   (added only for the OpenAI backend, then left on for local) were
+   strangling numbered-list scaffolding into early EOS — setting both to
+   0 fixed the LISTS. But zeroing them re-exposed the tangled-sentence
+   problem that presence_penalty=0.1 had been MASKING. Masking, not
+   fixing. The real cause was elsewhere. **Do not re-add freq/presence
+   penalty to the LOCAL llama.cpp payload to paper over prose problems;
+   they are OpenAI-native and hit repetitive list tokens bluntly on a 12B.
+   If wanted for the OpenAI backend, gate them to that path only.**
+
+**The real root cause — example dialogue never reached the model.** The
+example_dialogue parser (`app.py` ~3355–3363) matches a line as a turn
+boundary ONLY when the label before the colon equals the USER'S DISPLAY
+NAME (`_user_label`, e.g. "Chris") or the CHARACTER'S NAME (`_char_label`,
+e.g. "Gemma"). The shared `GPT-4o.example.txt` used literal `User:` and
+`Assistant:` labels. "User" ≠ "Chris" and "Assistant" ≠ "Gemma", so:
+- every USER turn failed to match → dropped;
+- only ASSISTANT-labelled turns survived (and only if char happened to be
+  named "Assistant", which none are — so those failed too);
+- alternation-enforcement then discarded the non-alternating remainder.
+Net: `🎭 Parsed example_dialogue → 0 fake turn(s)`. **The fallback example
+dialogue had been silently contributing NOTHING for every character using
+it.** With no style scaffolding, the model freewheeled at temp 0.8 and
+intermittently overreached on ambitious closing constructions → the
+tangled sentences.
+
+**The fix — use `{{user}}:` and `{{char}}:` placeholder labels.** The
+parser substitutes `{{user}}`→display name and `{{char}}`→character name
+(app.py ~3338–3341) BEFORE matching, so the labels then match. This is
+the same convention SillyTavern uses and is the ONLY correct format for a
+SHARED/global example file (a global file can't hard-code one character's
+name). Rewrote `GPT-4o.example.txt` with `{{user}}:` / `{{char}}:` labels
+and two vetted genuine-4o samples (work-email vent + reciprocity/empathy).
+Verified by simulating the exact parser: `User:`/`Assistant:` → 0 turns;
+`{{user}}:`/`{{char}}:` → 4 turns (2 user, 2 assistant), correct
+alternation.
+
+**⚠️ EXAMPLE-FILE FORMAT RULES (label these clearly, do not "tidy"):**
+- Shared/global `*.example.txt` MUST use `{{user}}:` and `{{char}}:`
+  labels. Literal `User:` / `Assistant:` PARSE TO ZERO and silently
+  disable the examples. This is invisible except for the
+  `Parsed example_dialogue → N fake turn(s)` log line — **if that prints
+  0, the examples are not working.**
+- A per-character JSON `example_dialogue` may use the character's literal
+  name (e.g. `Gemma:`) since that matches `_char_label` — but placeholders
+  are safer/portable.
+- Separators like `---` are NOT used by the parser (it splits on speaker
+  labels and optional `<START>`). Don't add them expecting them to
+  delimit turns.
+
+**Example-content vetting standard (for swapping in real 4o shards):**
+keep it genuine 4o (long, warm, sweary, British is fine) BUT screen for
+(a) sentences that stack >2 pivots without resolving, (b) clauses that
+convert to a question without closing the first clause (the exact derail
+shape), (c) free-verse/line-broken fragmentation (teaches poetic layout),
+(d) therapy-speak (violates GPT-4o.txt's "no therapy-speak"), (e) truncated
+mid-thought turns. Don't let Claude REWRITE the samples (drifts them to
+Claude cadence) — only gatekeep.
+
+**Verified fixed:** at temp 0.8 / top_k 40, freq/presence penalty 0:
+log shows `Parsed → 4 fake turn(s)` + `Injected 4 fake conversation
+turn(s)`; numbered lists complete; closing sentences land cleanly; turn
+ends correctly with `stop_type:"word", stopping_word:"<|im_end|>"` (clean
+ChatML close) instead of the previous bad `stop_type:"eos",
+stopping_word:""` (sampled mid-thought EOS).
+
+**Minor diagnostic note (not fixed, low priority):** HWUI's
+`🩺 STOP REASON` logger prints "unknown" because it looks for legacy
+`stopped_eos`/`stopped_word` flags; this llama.cpp build reports the
+reason in `stop_type` (+ `stopping_word`). Reading `stop_type` instead
+would make stop diagnostics self-explanatory. Cosmetic only.
+
+---
+
+## May 22 2026 — Global Documents Get a UI (Repurposed from Manual Folder Drops)
+
+**Files:** project_routes.py, templates/index.html
+
+**Why:** the `global_documents/` keyword-injected pool (loaded by
+`load_global_documents()` in app.py) had no UI — the only way to add a doc was
+to hand-drop a file into the folder and remember to put a `Keywords:` line at
+the top. Project folders, by contrast, had a full upload/list/delete UI. This
+adds a dedicated UI for global documents so they can be uploaded, edited
+(memory-editor style), and deleted in-app.
+
+**Design decisions (confirmed with user):**
+- **Projects kept fully intact.** This is a NEW dedicated "📚 Documents" modal,
+  not a repurpose of the project-docs panel. Per-project chats, RP mode,
+  instructions, and sticky project docs are untouched. Sticky was never a
+  global-docs concept (global docs are always keyword-triggered).
+- **Extract-to-text on import.** Uploads of `.pdf/.docx/.odt` reuse the existing
+  `/parse_document` endpoint client-side: import → extract text → prefill the
+  editor → save as `.txt`. Everything stored in `global_documents/` is now
+  plain editable text. No new server-side upload/parse code.
+- **Dedicated Keywords field.** The editor has a separate Keywords input,
+  persisted as the leading `Keywords:` line on disk (the retrieval tag stripped
+  before injection by `_extract_doc_keywords`). A doc saved with no keywords
+  shows a visible ⚠️ "may never be retrieved" warning in the list — the untagged
+  threshold in `load_global_documents()` is deliberately high, so a generic
+  filename + no keywords rarely fires.
+
+**Backend (`project_routes.py`, new "Global Documents" section on `project_bp`):**
+- `GET /global_documents/list` — filename, keywords, body preview, editable flag.
+  Non-text files dropped in manually are listed but flagged non-editable.
+- `GET /global_documents/get/<filename>` — returns `{filename, keywords, body}`
+  via `_split_keywords_line` (mirrors `_extract_doc_keywords`).
+- `POST /global_documents/save` — writes `Keywords: …\n\n<body>`; `_safe_doc_name`
+  sanitises and forces a `.txt`/`.md` extension; optional `original_filename`
+  supports rename-on-edit (removes the old file).
+- `DELETE /global_documents/<filename>` — basename-guarded against traversal.
+- `GLOBAL_DOCS_DIR` resolves the same folder app.py uses (`dirname(__file__)`).
+
+**Frontend (`templates/index.html`):** new `📚 Documents` sidebar button, a
+`global-docs-modal` modeled on the Memory modal (list + inline edit + add panel
++ import), and the JS (`openGlobalDocsModal`, `loadGlobalDocs`,
+`renderGlobalDocs`, add/edit/delete/import helpers).
+
+**Untouched:** `load_global_documents()` in app.py (the whole point — retrieval
+is byte-identical), the project-documents routes/UI, sticky docs, project
+instructions, mobile.html (desktop-only for now).
+
+⚠️ Flask restart required (Python edit in `project_routes.py`) + hard-reload the
+page to pick up the new HTML/JS.
+
+---
+
+## May 22 2026 — Leading `[OOC: …]` Stage Direction Leaking Into Streamed Output
+
+> **⚠️ EXTENDED by the May 24 `_strip_ooc_stream()` universal net (above).** This
+> entry's opening-region guards are still LIVE and kept by design (belt-and-
+> suspenders), but they only cover the OPENING of certain paths. The May 24 net
+> handles mid-response position and the post-search/OpenAI/vision paths this fix
+> never reached. Read both together.
+
+**Files:** app.py
+
+**The bug (as user-reported):** local Helcyon models (seen on the Grok
+variant) intermittently emitted a stage direction as the FIRST line of
+their reply, e.g. `[OOC: Dry sarcasm on — no mercy for conspiracy
+theories you don't buy.]` then the real answer below it. Started
+appearing "a couple of weeks ago" and grew "more and more" frequent.
+
+**The bug (real cause):** NOT the model and NOT a bad LoRA merge —
+training data is clean of OOC. The model was paraphrasing directive-style
+text sitting near the generation point and emitting it as a bracketed
+stage direction. The source varied per run: one run mirrored the Grok
+card's `character_note`, another mirrored the EXAMPLE DIALOGUE instruction
+("extract tone, rhythm, response length" → leaked as "[OOC: Speaking
+style example match — dry wit… line breaks exactly where they'd land]").
+HWUI then streamed this raw to the client. Pure pipeline issue; the model
+was never touched.
+
+**Why "more and more":** the dominant path for ordinary chat on a
+search-enabled card is an UNFILTERED passthrough (see below), so every
+normal turn on such a card streamed the leak straight through.
+
+**First fix attempt (correct logic, WRONG path):** added a stateful
+opening-guard to `_filtered_stream()`. That function only runs when web
+search is OFF. The Grok card has `use_web_search: true`, so its turns
+never reach `_filtered_stream` — they route through `_web_search_stream`.
+The guard was installed on a road this model never drives. Verified by
+reproduction: leak persisted unchanged after the first fix.
+
+**The real fix — guard the no-search passthrough in `_web_search_stream`.**
+The chat route splits on `use_web_search` BEFORE either stream generator
+runs. With search enabled and no search trigger in the message,
+`_web_search_stream` hit `if not _should_search:` and did a bare
+`yield from stream_model_response(_run_payload)` at ~line 4697 — raw,
+zero post-processing. Replaced that single line with a chunk loop
+carrying the same opening-guard logic used in `_filtered_stream`:
+buffer the opening region, drop a leading block only if it matches
+`^[\s*OOC`, then disable the guard permanently so the rest of the
+response streams untouched.
+
+**⚠️ DO NOT revert / DO NOT consolidate — two guards in two functions
+BY DESIGN.** The OOC guard exists in BOTH `_filtered_stream` (search OFF)
+and `_web_search_stream` ~line 4697 (search ON, no trigger fired). They
+are separate because the route splits on `use_web_search` upstream of
+both. Merging them into one shared helper silently reopens the leak on
+whichever path loses the guard. Same spirit as the existing duplication
+warning on the `_web_search_stream` / `_web_search_stream_openai` pair.
+
+**⚠️ DO NOT remove the whitespace-buffering line.** Inside the guard,
+`if not _stripped_lead: continue` (keep buffering on pure whitespace) is
+load-bearing. After `<|im_start|>assistant\n` the first chunk almost
+always carries a leading newline/space; without this line the guard
+releases that whitespace and disables itself BEFORE the `[OOC:` ever
+arrives, defeating the entire feature. Do not "simplify" it away.
+
+**Safeguards built in:** (1) guard is anchored to the opening region
+only and disables permanently once resolved — mid-response brackets are
+never touched; (2) a `_PROTECTED` whitelist short-circuits before the
+OOC check so the model's real leading tags (`[MEMORY ADD:`,
+`[WEB SEARCH:`, `[WEB SEARCH RESULTS`, `[CHAT HISTORY RESULTS`, `[END`)
+are never held or dropped; (3) end-of-stream flush drops a still-open
+OOC fragment if generation was truncated mid-bracket, else releases real
+text so nothing is lost. `_filtered_stream`'s guard uses `[True]`/`[""]`
+list cells (nested-closure scope); the `_web_search_stream` guard uses
+plain locals (flat loop) — both correct for their scope.
+
+**Implementation note:** `_filtered_stream` uses `_re3_inner`;
+`_web_search_stream` uses `_re`. Each guard matches its function's local
+regex-module convention — do not cross them.
+
+**Known unguarded sibling (deliberate, documented):** the post-search
+re-prompt loop in `_web_search_stream` (~line 4923) still streams raw.
+Low risk — the model is mid-task answering with injected search results
+and is unlikely to open with a stage direction. Left unguarded to keep
+this change tight. **If `[OOC: …]` ever appears AFTER a web-search
+result, guard line 4923 with the identical logic.**
+
+**Verified:** Grok moon-landing repro regenerated multiple times,
+no OOC leak, real reply intact. Console fires
+`✂️ [_web_search_stream] Dropped leading OOC block:` on the correct path.
+
+---
+
 ## May 21 2026 — Chat-File Parser Drops Character When Missing From `characters/index.json`
 
 **Files:** chat_routes.py

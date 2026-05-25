@@ -696,8 +696,14 @@
 
   async function loadSelectedSystemPrompt(filename) {
     if (!filename) return;
+    // ⚠️ Cache-bust every SP fetch (mirrors the character JSON fetch's
+    // ?cacheBust=). load_example/load_posthistory return an empty 200 when a
+    // paired file is absent, and that empty body is cacheable — without this
+    // the browser keeps serving blank for a URL after the file is created,
+    // so the field shows empty until a hard reload. (changes.md.)
+    const _cb = '?cacheBust=' + Date.now();
     try {
-      const res = await fetch('/system_prompts/load/' + encodeURIComponent(filename));
+      const res = await fetch('/system_prompts/load/' + encodeURIComponent(filename) + _cb);
       if (!res.ok) return;
       const raw = await res.text();
       const text = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
@@ -707,7 +713,7 @@
     }
     // Load paired example dialog
     try {
-      const exRes = await fetch('/system_prompts/load_example/' + encodeURIComponent(filename));
+      const exRes = await fetch('/system_prompts/load_example/' + encodeURIComponent(filename) + _cb);
       const exRaw = exRes.ok ? await exRes.text() : '';
       const exText = exRaw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
       document.getElementById('global-example-dialog').value = exText;
@@ -716,7 +722,7 @@
     }
     // Load paired post-history directive
     try {
-      const phRes = await fetch('/system_prompts/load_posthistory/' + encodeURIComponent(filename));
+      const phRes = await fetch('/system_prompts/load_posthistory/' + encodeURIComponent(filename) + _cb);
       const phRaw = phRes.ok ? await phRes.text() : '';
       const phText = phRaw.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
       document.getElementById('global-post-history').value = phText;
@@ -735,6 +741,7 @@
     const text = document.getElementById('global-system-prompt').value;
     const exText = document.getElementById('global-example-dialog').value;
     const phText = document.getElementById('global-post-history').value;
+    if (!confirmEmptyPairedSave({ 'Example Dialogue': exText, 'Post-History': phText }, filename)) return;
     try {
       const res = await fetch('/system_prompts/save/' + encodeURIComponent(filename), {
         method: 'POST',
@@ -915,6 +922,24 @@
     }
   }
 
+  // ⚠️ Empty SAVE of an example/post-history field DELETES the paired file
+  // (see app.py save_example / save_posthistory). The model reads those files
+  // from disk on every request, so an accidental empty save — e.g. after the
+  // load race/cache bug showed a blank box — would silently remove the
+  // directive from prompts too. Require explicit confirmation before any save
+  // that would blank-delete a paired file. `fields` maps a display label to
+  // the field's current value; only empty/whitespace values trigger the prompt.
+  function confirmEmptyPairedSave(fields, filename) {
+    const empties = Object.keys(fields).filter(k => !fields[k] || !fields[k].trim());
+    if (empties.length === 0) return true;
+    return confirm(
+      'Empty field(s): ' + empties.join(', ') + '.\n\n' +
+      'Saving will DELETE the paired file(s) for "' + filename + '". ' +
+      'The model reads these from disk, so they will also be removed from prompts.\n\n' +
+      'Continue?'
+    );
+  }
+
   // Overwrite the currently selected file
   async function saveGlobalSystemPrompt() {
     const select = document.getElementById('system-prompt-file-select');
@@ -923,6 +948,7 @@
     const text = document.getElementById('global-system-prompt').value;
     const exText = document.getElementById('global-example-dialog').value;
     const phText = document.getElementById('global-post-history').value;
+    if (!confirmEmptyPairedSave({ 'Example Dialogue': exText, 'Post-History': phText }, filename)) return;
     try {
       const res = await fetch('/system_prompts/save/' + encodeURIComponent(filename), {
         method: 'POST',
@@ -1592,14 +1618,27 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
 
   // --- INITIALIZATION ---
   document.addEventListener("DOMContentLoaded", () => {
-    loadCharacterList();
     loadUserList();
     loadSettings();
-    loadGlobalSystemPrompt();
     loadCurrentSituation();
     loadTTSEngine();
     loadLlamaConfig();
     loadBindCharacterList();
+
+    // ⚠️ The three SP fields (#global-system-prompt / -example-dialog /
+    // -post-history) are written by BOTH loadGlobalSystemPrompt (the globally
+    // ACTIVE template) and loadCharacterList → loadCharacter (the auto-loaded
+    // character's BOUND template). Firing both un-awaited let them race: the
+    // last async write won, so when the character's template had no paired
+    // example/post-history files (route returns ''), the fields would blank
+    // out non-deterministically. Run them sequentially — global first to
+    // establish the active-template defaults, character second so a bound
+    // character's template wins (its no-binding path leaves the fields
+    // untouched). This is the same single-loader rule as changes.md May 19.
+    (async () => {
+      await loadGlobalSystemPrompt();
+      await loadCharacterList();
+    })();
 
     const refreshBtn = document.getElementById("refresh-memory");
     if (refreshBtn) refreshBtn.addEventListener("click", loadCharacterMemory);
@@ -1914,7 +1953,8 @@ async function createNewUser() {
     const formData = new FormData();
     formData.append("file", fileInput.files[0]);
     formData.append("character_name", name); // Use user name for filename
-    
+    formData.append("is_user", "true"); // ⚠️ Namespace persona images (user_{name}.png) — prevents collision with the character namespace (the edit flow already does this)
+
     try {
       const uploadRes = await fetch("/upload_image", { method: "POST", body: formData });
       const uploadResult = await uploadRes.json();
@@ -1925,7 +1965,7 @@ async function createNewUser() {
       console.error("Image upload failed:", err);
     }
   }
-  
+
   try {
     const res = await fetch('/create_user', {
       method: 'POST',
@@ -2815,6 +2855,7 @@ async function saveGlobalExampleDialog() {
     setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 3000);
     return;
   }
+  if (!confirmEmptyPairedSave({ 'Example Dialogue': text }, filename)) return;
   try {
     const res = await fetch('/system_prompts/save_example/' + encodeURIComponent(filename), {
       method: 'POST',
@@ -2849,6 +2890,7 @@ async function saveGlobalPostHistory() {
     setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 3000);
     return;
   }
+  if (!confirmEmptyPairedSave({ 'Post-History': text }, filename)) return;
   try {
     const res = await fetch('/system_prompts/save_posthistory/' + encodeURIComponent(filename), {
       method: 'POST',

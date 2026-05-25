@@ -33,37 +33,12 @@ function saveAuthorNote() {
 
 
 // ============================================================
-// CURRENT SITUATION MODAL
+// CURRENT SITUATION MODAL — removed.
+// The sidebar button + modal were redundant with the Current Situation
+// field on the Config page. The field there (saveCurrentSituation /
+// loadCurrentSituation in config.html) still uses the same backend
+// endpoints: /get_current_situation and /save_current_situation.
 // ============================================================
-async function openSituationModal() {
-  try {
-    const res = await fetch('/get_current_situation');
-    const data = await res.json();
-    document.getElementById('situation-textarea').value = data.current_situation || '';
-  } catch (e) {
-    console.warn('Could not load current situation:', e);
-  }
-  document.getElementById('situation-modal').style.display = 'flex';
-}
-
-function closeSituationModal() {
-  document.getElementById('situation-modal').style.display = 'none';
-}
-
-async function saveSituationModal() {
-  const text = document.getElementById('situation-textarea').value.trim();
-  try {
-    await fetch('/save_current_situation', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ current_situation: text })
-    });
-    console.log('✅ Current situation saved');
-  } catch (e) {
-    console.error('Failed to save current situation:', e);
-  }
-  closeSituationModal();
-}
 
 
 // ==================================================

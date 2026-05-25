@@ -164,17 +164,35 @@ def export_character(n):
         with open(char_path, "r", encoding="utf-8") as f:
             char_data = json.load(f)
         
-        # Load character image
-        image_file = char_data.get("image", f"{n}.png")
-        image_path = os.path.join("static", "images", image_file)
-        
-        if not os.path.exists(image_path):
-            return jsonify({"error": "Character image not found"}), 404
-        
-        # Open the image
-        img = Image.open(image_path)
-        
-        # Ensure it's RGB (PNG requirement)
+        # Resolve the character image. A missing/empty avatar must NOT 404 —
+        # the character's DATA is still exportable. An empty `image` field
+        # would make os.path.join resolve to the images DIRECTORY (Image.open
+        # → 500), so treat ""/missing the same as a fallback: default.png if
+        # present, else a 1×1 transparent placeholder. Use isfile (not exists)
+        # so a directory path can never be opened as an image.
+        image_file = (char_data.get("image") or "").strip()
+        image_path = os.path.join("static", "images", image_file) if image_file else ""
+
+        img = None
+        if image_path and os.path.isfile(image_path):
+            try:
+                img = Image.open(image_path)
+            except Exception as _ie:
+                print(f"⚠️ Could not open character image {image_path}: {_ie}")
+                img = None
+        if img is None:
+            default_path = os.path.join("static", "images", "default.png")
+            if os.path.isfile(default_path):
+                try:
+                    img = Image.open(default_path)
+                    print(f"ℹ️ Export: image missing for '{n}', using default.png")
+                except Exception:
+                    img = None
+            if img is None:
+                img = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
+                print(f"ℹ️ Export: no usable image for '{n}', using 1×1 placeholder")
+
+        # Ensure it's RGB/RGBA (PNG requirement)
         if img.mode not in ('RGB', 'RGBA'):
             img = img.convert('RGBA')
         
@@ -256,35 +274,73 @@ def import_character():
         # Update image filename to match character name
         image_filename = f"{char_name}.png"
         char_data["image"] = image_filename
-        
+
+        # Reconcile slideshow images[] against what exists at the destination so
+        # the imported card never lands dangling refs. Export carries only the
+        # ONE carrier image's pixels (the rest of images[] is just filenames),
+        # so on a fresh machine those extra files won't exist — drop them.
+        # ALWAYS keep the carrier ({char_name}.png) first even though its
+        # physical save below is best-effort: the array is never emptied of its
+        # primary. Only touch slideshow characters (those that already carry an
+        # images[] array); single-image cards are left untouched.
+        if isinstance(char_data.get("images"), list):
+            _img_dir = os.path.join(os.path.dirname(__file__), "static", "images")
+            _existing = [f for f in char_data["images"]
+                         if isinstance(f, str)
+                         and os.path.isfile(os.path.join(_img_dir, f))]
+            char_data["images"] = [image_filename] + \
+                                   [f for f in _existing if f != image_filename]
+
         with open(char_path, "w", encoding="utf-8") as f:
             json.dump(char_data, f, indent=2, ensure_ascii=False)
-        
-        # Save image
-        image_dir = os.path.join(os.path.dirname(__file__), "static", "images")
-        os.makedirs(image_dir, exist_ok=True)
-        
-        image_path = os.path.join(image_dir, image_filename)
-        
-        # Convert to RGB/RGBA and save
-        if img.mode not in ('RGB', 'RGBA'):
-            img = img.convert('RGBA')
-        
-        img.save(image_path, "PNG")
-        
-        # Update character index
-        index_path = os.path.join(char_dir, "index.json")
-        if os.path.exists(index_path):
-            with open(index_path, "r", encoding="utf-8") as f:
-                characters = json.load(f)
-            if char_name not in characters:
-                characters.append(char_name)
-        else:
-            characters = [char_name]
-        
-        with open(index_path, "w", encoding="utf-8") as f:
-            json.dump(sorted(characters), f, indent=2, ensure_ascii=False)
-        
+
+        # Register in the index IMMEDIATELY after the .json is written, and
+        # BEFORE the image step — so data + registration succeed together.
+        # ⚠️ The previous ordering wrote {name}.json, then saved the image,
+        # then appended to index.json LAST, all in one try block. Any throw in
+        # the image step (img.convert/img.save) — or a corrupt index.json that
+        # blew up the read — aborted before the append, leaving {name}.json on
+        # disk but UNREGISTERED (a dropdown-invisible orphan). Rebuild the
+        # index from the directory scan instead of a fragile read-append-write:
+        # it's idempotent, can't be defeated by a stale/corrupt prior index,
+        # and guarantees the just-written character is present. (Same
+        # convergence logic as app.py list_characters; list_characters will
+        # reconcile again on its next call regardless.)
+        index_name = (char_data.get("name") or char_name).strip()
+        try:
+            _names = []
+            for _f in os.listdir(char_dir):
+                if _f == "_active_character.json" or _f == "index.json":
+                    continue
+                if _f.endswith(".json"):
+                    try:
+                        with open(os.path.join(char_dir, _f), "r", encoding="utf-8") as _cf:
+                            _names.append(json.load(_cf).get("name", _f[:-5]))
+                    except Exception:
+                        _names.append(_f[:-5])
+            if index_name and index_name not in _names:
+                _names.append(index_name)  # ensure self even if scan raced
+            index_path = os.path.join(char_dir, "index.json")
+            with open(index_path, "w", encoding="utf-8") as f:
+                json.dump(sorted(set(_names)), f, indent=2, ensure_ascii=False)
+        except Exception as _ie:
+            print(f"âš ï¸ Could not rebuild characters/index.json on import: {_ie}")
+
+        # Save image — BEST EFFORT. The character's data is already saved and
+        # registered above, so an image failure must NOT 500 the import or
+        # orphan the character (mirrors export's missing-image tolerance). A
+        # character with no avatar is still a valid, selectable character.
+        try:
+            image_dir = os.path.join(os.path.dirname(__file__), "static", "images")
+            os.makedirs(image_dir, exist_ok=True)
+            image_path = os.path.join(image_dir, image_filename)
+            if img.mode not in ('RGB', 'RGBA'):
+                img = img.convert('RGBA')
+            img.save(image_path, "PNG")
+        except Exception as _img_e:
+            print(f"âš ï¸ Import: character '{char_name}' saved + registered, "
+                  f"but image save failed: {_img_e}")
+
         print(f"âœ… Imported character: {char_name}")
         return jsonify({"status": "ok", "name": char_name})
         
@@ -822,20 +878,32 @@ def create_user():
         
         with open(user_path, "w", encoding="utf-8") as f:
             json.dump(user_data, f, indent=2, ensure_ascii=False)
-        
-        # Update users/index.json
-        index_path = os.path.join(users_dir, "index.json")
-        if os.path.exists(index_path):
-            with open(index_path, "r", encoding="utf-8") as f:
-                users = json.load(f)
-            if name not in users:
-                users.append(name)
-        else:
-            users = [name]
-        
-        with open(index_path, "w", encoding="utf-8") as f:
-            json.dump(sorted(users), f, indent=2, ensure_ascii=False)
-        
+
+        # Rebuild users/index.json from a directory scan instead of a fragile
+        # read-append-write, so an exception in the index step can't orphan the
+        # just-written JSON (mirrors the hardened import_character). Idempotent
+        # and immune to a stale/corrupt prior index.
+        index_name = (user_data.get("name") or name).strip()
+        try:
+            _names = []
+            for _f in os.listdir(users_dir):
+                if _f.startswith("_") or _f == "index.json" or not _f.endswith(".json"):
+                    continue
+                try:
+                    with open(os.path.join(users_dir, _f), "r", encoding="utf-8") as _uf:
+                        _ud = json.load(_uf)
+                    if isinstance(_ud, dict):
+                        _names.append(_ud.get("name", _f[:-5]))
+                except Exception:
+                    _names.append(_f[:-5])
+            if index_name and index_name not in _names:
+                _names.append(index_name)  # ensure self even if scan raced
+            index_path = os.path.join(users_dir, "index.json")
+            with open(index_path, "w", encoding="utf-8") as f:
+                json.dump(sorted(set(_names)), f, indent=2, ensure_ascii=False)
+        except Exception as _ie:
+            print(f"âš ï¸ Could not rebuild users/index.json on create: {_ie}")
+
         print(f"âœ… Created new user persona: {name}")
         return jsonify({"status": "ok", "name": name})
         

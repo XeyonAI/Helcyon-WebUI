@@ -2071,7 +2071,7 @@ hr.msg-separator {
 #projects-btn,
 #opening-line-btn,
 #author-note-btn,
-#situation-btn {
+#global-docs-btn {
   font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; !important;
 }
 
@@ -2108,7 +2108,7 @@ hr.msg-separator {
 #opening-line-btn,
 #author-note-btn,
 #memory-btn,
-#situation-btn {
+#global-docs-btn {
   background: var(--sidebar-footer-btn-bg);
   color: #ddd;
   border: 1px solid var(--sidebar-footer-btn-border);
@@ -2126,7 +2126,7 @@ hr.msg-separator {
 #opening-line-btn:hover,
 #author-note-btn:hover,
 #memory-btn:hover,
-#situation-btn:hover {
+#global-docs-btn:hover {
   background: var(--sidebar-button-hover);
   border-color: var(--button-border-light);
 }

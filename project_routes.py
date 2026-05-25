@@ -1,5 +1,6 @@
 # project_routes.py
 import os
+import re
 import json
 from flask import Blueprint, jsonify, request
 from datetime import datetime
@@ -473,3 +474,167 @@ def save_groups_route():
     save_groups(groups)
     print(f"📂 Groups saved: {list(groups.keys())}")
     return jsonify({"success": True})
+
+
+# --------------------------------------------------
+# Global Documents — UI for the global_documents/ folder
+# --------------------------------------------------
+# These documents are keyword-matched and injected by load_global_documents()
+# in app.py whenever a query matches their filename or leading 'Keywords:' line,
+# regardless of the active project. That loader is unchanged — this section only
+# adds a UI to upload (via /parse_document → text), edit, and delete them.
+# Everything stored here is plain editable text (.txt/.md); the leading
+# 'Keywords:' line is the retrieval tag and is stripped before injection.
+# Matches app.py's resolution of the folder (same directory as this package).
+GLOBAL_DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "global_documents")
+
+
+def ensure_global_docs_dir():
+    if not os.path.exists(GLOBAL_DOCS_DIR):
+        os.makedirs(GLOBAL_DOCS_DIR)
+        print(f"🌐 Created global_documents directory: {GLOBAL_DOCS_DIR}")
+
+
+def _split_keywords_line(content):
+    """Split an optional leading 'Keywords: a, b, c' line from the body.
+
+    Mirrors app.py's _extract_doc_keywords convention: only the first few
+    non-empty lines are scanned, case-insensitive. Returns (keywords, body).
+    """
+    lines = content.split('\n')
+    seen = 0
+    for i, line in enumerate(lines):
+        if not line.strip():
+            continue
+        seen += 1
+        if seen > 4:
+            break
+        m = re.match(r'^\s*keywords\s*[:;]\s*(.+)$', line.strip(), re.IGNORECASE)
+        if m:
+            kw = m.group(1).strip()
+            body = '\n'.join(lines[:i] + lines[i + 1:]).strip()
+            return kw, body
+    return "", content.strip()
+
+
+def _safe_doc_name(filename):
+    """Sanitise a filename and force a .txt/.md extension (everything is editable text)."""
+    safe = "".join(c for c in os.path.basename(filename)
+                    if c.isalnum() or c in (' ', '-', '_', '.')).strip()
+    if not safe:
+        return None
+    if not safe.lower().endswith(('.txt', '.md')):
+        safe += '.txt'
+    return safe
+
+
+@project_bp.route("/global_documents/list")
+def list_global_documents():
+    """List global documents with their keywords and a short body preview."""
+    ensure_global_docs_dir()
+    docs = []
+    try:
+        for fn in sorted(os.listdir(GLOBAL_DOCS_DIR)):
+            fp = os.path.join(GLOBAL_DOCS_DIR, fn)
+            if not os.path.isfile(fp):
+                continue
+            try:
+                with open(fp, "r", encoding="utf-8-sig") as f:
+                    content = f.read()
+            except (UnicodeDecodeError, OSError):
+                # A non-text file dropped in manually (e.g. a stray .pdf). Still
+                # injected by the loader, but not editable in this UI.
+                docs.append({
+                    "filename": fn, "keywords": "",
+                    "preview": "(non-text file — open the folder to edit)",
+                    "editable": False, "size": os.path.getsize(fp),
+                })
+                continue
+            kw, body = _split_keywords_line(content)
+            preview = re.sub(r'\s+', ' ', body).strip()[:160]
+            docs.append({
+                "filename": fn, "keywords": kw, "preview": preview,
+                "editable": True, "size": os.path.getsize(fp),
+            })
+        return jsonify({"documents": docs})
+    except Exception as e:
+        print(f"❌ Failed to list global documents: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@project_bp.route("/global_documents/get/<path:filename>")
+def get_global_document(filename):
+    """Return a global document split into keywords + body for editing."""
+    ensure_global_docs_dir()
+    fp = os.path.join(GLOBAL_DOCS_DIR, os.path.basename(filename))
+    if not os.path.isfile(fp):
+        return jsonify({"error": "Document not found"}), 404
+    try:
+        with open(fp, "r", encoding="utf-8-sig") as f:
+            content = f.read()
+    except (UnicodeDecodeError, OSError):
+        return jsonify({"error": "File is not editable text"}), 400
+    kw, body = _split_keywords_line(content)
+    return jsonify({"filename": os.path.basename(filename), "keywords": kw, "body": body})
+
+
+@project_bp.route("/global_documents/save", methods=["POST"])
+def save_global_document():
+    """Create or overwrite a global document.
+
+    Stores `Keywords: …` as the leading line (the retrieval tag) followed by the
+    body. `original_filename` (optional) lets an edit rename the file, deleting
+    the old one. Always written as plain editable text.
+    """
+    ensure_global_docs_dir()
+    data = request.json or {}
+    filename = (data.get("filename") or "").strip()
+    keywords = (data.get("keywords") or "").strip()
+    body = (data.get("body") or "").strip()
+    original = (data.get("original_filename") or "").strip()
+
+    if not filename:
+        return jsonify({"error": "Filename required"}), 400
+    if not body:
+        return jsonify({"error": "Document content required"}), 400
+
+    safe = _safe_doc_name(filename)
+    if not safe:
+        return jsonify({"error": "Invalid filename"}), 400
+
+    if keywords:
+        content = f"Keywords: {keywords}\n\n{body}\n"
+    else:
+        content = body + "\n"
+
+    fp = os.path.join(GLOBAL_DOCS_DIR, safe)
+    try:
+        with open(fp, "w", encoding="utf-8") as f:
+            f.write(content)
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+
+    # If an edit renamed the file, remove the old one.
+    if original:
+        old = os.path.join(GLOBAL_DOCS_DIR, os.path.basename(original))
+        if os.path.basename(original) != safe and os.path.isfile(old):
+            try:
+                os.remove(old)
+            except OSError:
+                pass
+
+    print(f"🌐 Saved global document: {safe} (keywords={'yes' if keywords else 'none'})")
+    return jsonify({"success": True, "filename": safe})
+
+
+@project_bp.route("/global_documents/<path:filename>", methods=["DELETE"])
+def delete_global_document(filename):
+    fp = os.path.join(GLOBAL_DOCS_DIR, os.path.basename(filename))
+    if not os.path.isfile(fp):
+        return jsonify({"error": "Document not found"}), 404
+    try:
+        os.remove(fp)
+        print(f"🗑️ Deleted global document: {os.path.basename(filename)}")
+        return jsonify({"success": True})
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500

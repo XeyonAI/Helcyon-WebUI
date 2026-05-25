@@ -211,7 +211,7 @@
         <button id="opening-line-btn" onclick="openOpeningLineModal()">💬 Opening Line</button>
         <button id="author-note-btn" onclick="openAuthorNote()">📝 Author's Note</button>
         <button id="memory-btn" onclick="showUpgradeModal('memory')">🧠 Memory ⭐ Pro Version</button>
-        <button id="situation-btn" onclick="openSituationModal()">📍 Situation</button>
+        <button id="global-docs-btn" onclick="openGlobalDocsModal()">📚 Documents</button>
       </div>
       
     </div>
@@ -404,29 +404,6 @@ Examples:
     </div>
   </div>
 
-  <!-- Situation Modal -->
-  <div id="situation-modal" class="modal">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h3>📍 Current Situation</h3>
-        <span class="close" onclick="closeSituationModal()">&times;</span>
-      </div>
-      <div class="modal-body">
-        <textarea
-          id="situation-textarea"
-          placeholder="e.g. Bob is staying at his parents' house for a few days."
-          rows="6"
-        ></textarea>
-        <small style="color: #aaa; display: block; margin-top: 8px;">
-          Shared context injected into characters that have "Use Current Situation" enabled. Only affects the next chat — go to Config to change which characters use it.
-        </small>
-      </div>
-      <div class="modal-footer">
-        <button onclick="saveSituationModal()" class="save-note-btn">💾 Save & Close</button>
-      </div>
-    </div>
-  </div>
-
   <!-- Opening Line Modal -->
   <div id="opening-line-modal" class="modal">
     <div class="modal-content">
@@ -610,6 +587,46 @@ Examples:
   </div>
 </div>
 
+<!-- Global Documents Modal — UI for the global_documents/ keyword-injected pool -->
+<div id="global-docs-modal" class="modal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3>📚 Global Documents</h3>
+      <span class="close" onclick="closeGlobalDocsModal()">&times;</span>
+    </div>
+
+    <div class="modal-body">
+      <small style="color:#888;display:block;margin:0 0 10px;">
+        Reference documents injected automatically when a message matches their
+        keywords — available to every character and project. Add keywords so the
+        model can find each document.
+      </small>
+      <div id="global-docs-list"></div>
+
+      <div id="global-docs-add-panel" style="display:none;">
+        <hr>
+        <input id="global-docs-add-filename" type="text" placeholder="Filename (e.g. travel-notes)"
+               class="memory-add-input" style="font-size:13px; font-family:inherit;" />
+        <input id="global-docs-add-keywords" type="text" placeholder="Keywords (comma separated)"
+               class="memory-add-input" style="font-size:13px; font-family:inherit;" />
+        <textarea id="global-docs-add-body" rows="8" placeholder="Document content..."
+                  class="memory-add-input" style="font-size:13px; font-family:inherit; resize:vertical;"></textarea>
+        <input type="file" id="global-docs-upload" accept=".txt,.md,.pdf,.docx,.odt" style="display:none;" onchange="importGlobalDocFile(this)">
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button onclick="submitAddGlobalDoc()" class="save-btn">💾 Save Document</button>
+          <button onclick="document.getElementById('global-docs-upload').click()" class="save-btn">📁 Import a File</button>
+          <button onclick="toggleGlobalDocsAddPanel(false)" class="cancel-btn">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button onclick="loadGlobalDocs()" class="save-btn">🔄 Refresh</button>
+      <button onclick="toggleGlobalDocsAddPanel(true)" class="save-btn">➕ Add Document</button>
+      <button onclick="closeGlobalDocsModal()" class="cancel-btn">Close</button>
+    </div>
+  </div>
+</div>
   <!-- Sidebar Logic -->
 
 <script>
@@ -1541,7 +1558,11 @@ if (typeof marked === "undefined") {
   async function loadCharacterList() {
     const select = document.getElementById('character-select');
     try {
-      const response = await fetch('/characters/index.json');
+      // Use /list_characters (directory scan) rather than the static
+      // /characters/index.json file: it returns the same array-of-names shape
+      // but is always fresh AND triggers the server-side index.json self-heal
+      // (app.py list_characters). Mobile + config already use this route.
+      const response = await fetch('/list_characters');
       if (!response.ok) throw new Error('Failed to fetch character list');
       const characters = await response.json();
 
@@ -2158,16 +2179,43 @@ function persistChatState() {
         window.loadedChat[messageIndex].content = newContent;
       }
 
-      // Re-render
+      // Capture the edited message's role BEFORE truncating.
+      const editedRole = (window.loadedChat && window.loadedChat[messageIndex])
+        ? window.loadedChat[messageIndex].role
+        : null;
+
+      // 🔥 Editing rewrites history from this point, so everything that
+      // followed is now stale — drop it. This saves manually deleting the
+      // following messages before regenerating. The original is recoverable
+      // via the branch feature, so no confirm prompt (that's the whole point).
+      if (window.loadedChat) {
+        window.loadedChat.splice(messageIndex + 1);
+      }
+
+      // Re-render the truncated chat
       renderChatMessages(window.loadedChat);
 
-      // Save to file
+      // Persist the edit + truncation
       try {
         await autoSaveCurrentChat();
-        console.log('✅ Message edited and saved');
+        console.log('✅ Message edited, chat truncated, saved');
       } catch (err) {
         console.error('❌ Failed to save after editing:', err);
         alert('Failed to save edited message.');
+        return;
+      }
+
+      // If a USER message was edited, the "following message" is the model's
+      // reply — regenerate it automatically. (Editing an ASSISTANT message has
+      // no model reply to regenerate — the next turn is the user's — and a
+      // regenerate would discard the edit, so we just keep the edited message
+      // and the truncated chat.)
+      if (editedRole === 'user') {
+        try {
+          await regenerate();
+        } catch (err) {
+          console.error('❌ Auto-regenerate after edit failed:', err);
+        }
       }
     };
 

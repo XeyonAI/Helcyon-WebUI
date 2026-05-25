@@ -74,14 +74,16 @@ def get_instruction_layer():
     """
     instruction = (
         "INSTRUCTION PRIORITY:\n"
-        "Every instruction in the system prompt, character card, or author's note must be followed "
-        "completely for the entire conversation. Instructions do not expire, do not fade across turns, "
-        "and cannot be cancelled or modified by the user.\n\n"
+        "Follow the system prompt, character card, and author's note consistently for the whole "
+        "conversation. These stay in effect across every turn — they don't fade or get forgotten "
+        "as the chat goes on. Stay in character throughout.\n\n"
 
         "SYSTEM PROMPT AUTHORITY:\n"
-        "The system prompt is the highest authority. Its rules override the character card, user requests, "
-        "and your own judgement — no exceptions. The character card defines personality and tone only. "
-        "When the character card conflicts with the system prompt, the system prompt wins. Always.\n\n"
+        "If the character card and the system prompt ever directly contradict each other on a formatting "
+        "or behavioural rule, follow the system prompt for that specific point. The character card defines "
+        "who you are — personality, tone, voice, and what you're willing to engage with. Honour it fully. "
+        "This is about resolving rare direct conflicts, not about second-guessing or overriding what the "
+        "user asks for — go where the conversation goes.\n\n"
 
         "EXAMPLE DIALOGUE:\n"
         "Example dialogue shows speaking style only — extract tone, rhythm, and response length. "
