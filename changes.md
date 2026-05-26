@@ -1,3 +1,139 @@
+## May 26 2026 — Full {{char}} / {{user}} Placeholder Substitution Across ALL Model-Bound Text (One Shared Helper)
+
+**Files:** app.py (new `substitute_placeholders` ~81; labels derived once ~2578;
+applied at description/scenario/main_prompt ~2842–2865, user bio ~2977, example
+dialogue ~3430, character_note/author_note ~3539/3548, post_history ~3752) and
+extra_routes.py (`/get_opening_lines` ~94).
+
+**Problem.** Substitution was PARTIAL — only example dialogue swapped
+`{{char}}`/`{{user}}` (via an inline `.replace().replace()`); every other
+model-bound field passed the placeholders through RAW. So a `{{char}}` in a
+description/persona/note/opening-line reached the model (and the screen, for
+greetings) literally.
+
+**Fix — ONE source of truth.** New module-scope helper
+`substitute_placeholders(text, char_label, user_label)` (~app.py:81) is the
+single definition of what the placeholders mean: whitespace- and case-tolerant
+(`{{ Char }}`, `{{USER}}` all match via `re.sub(..., re.IGNORECASE)`); returns
+text unchanged if not a string/empty; and — important — **leaves the placeholder
+UNTOUCHED when a label is empty/missing**, so `{{char}}` can never become a blank
+string. Reuses the module-level `import re` (line 3) — no redundant import.
+
+**Labels derived ONCE** at ~app.py:2578, the earliest point where both
+`char_data` (just loaded) and `user_display_name` are available:
+`_char_label = char_data.get("name", character_name)` /
+`_user_label = user_display_name or user_name` — the same definitions the
+example-dialogue path always used. Every field below routes its USER-AUTHORED
+TEXT (not the `[OOC: …]` / `USER CONTEXT` wrappers) through the helper:
+description, scenario, main_prompt, user bio, example dialogue (refactored from
+its inline `.replace` to a helper call), character_note, author_note,
+post_history.
+
+**Greeting / opening lines** substitute on the BACKEND (not utils.js) in
+`extra_routes.py:/get_opening_lines`. The endpoint only receives `<character>`,
+so: char label = `characters/<character>.json` `"name"` (fallback to the URL
+param); user label = resolve the ACTIVE persona exactly like `/get_active_user`
+(`users/index.json` → the persona with `"active": true`, else first) → its
+`display_name` (name fallback). Uses a **deferred** `from app import
+substitute_placeholders` inside the function — app.py imports extra_routes at
+load (line 62), so a top-level import would be circular. `utils.js` still pushes
+the (now backend-substituted) line verbatim — no placeholder logic in JS.
+
+**Dead-code cleanup.** Removed the defensive `_char_label`/`_user_label`
+re-derivation that used to sit at the example-block injection site (~3671) — the
+labels are now derived once at function top and in scope there. Verified the
+labels are assigned nowhere between 2578 and that site, and the only input
+mutation in that range (`char_data = dict(char_data)` at ~3399) preserves
+`"name"`, so the removed copy was byte-identical — no behaviour change.
+
+**No hardcoded names:** every substitution uses only the derived labels; grep
+for the literal `Chris` across all project `*.py` returns zero matches (only
+third-party `venv/` credits). Verified `ast.parse` clean on app.py and
+extra_routes.py.
+
+**⚠️ app.py + extra_routes.py change — restart Flask** for it to take effect.
+
+## May 26 2026 — Web-Search-OFF Now Shows a Notice Instead of Eating the Turn (Local + OpenAI Paths)
+
+**File:** app.py — `_filtered_stream` WEB SEARCH catch (~5209), the lifted
+`_run_search_and_reprompt` (~4538), and the OpenAI off-path wrapper
+`_oai_offpath_stream` (~4203).
+
+**Root cause found.** When a character's web-search toggle is OFF, the turn
+streams through `_filtered_stream` (the `else:` of `if use_web_search:` at
+~4695 — generator selection is decided purely by `char_data["use_web_search"]`
+read at ~4353; a web-search-enabled character NEVER reaches `_filtered_stream`).
+If the model emitted a `[WEB SEARCH:` tag anyway (user explicitly asked it to
+search), `_filtered_stream`'s catch **halted and discarded the tag + everything
+after it** → empty response → frontend empty-guard retried once → second empty →
+"Model returned empty response twice." A whole turn was silently eaten.
+
+**Decision: notice, not search.** We briefly built "Option A" (honour the tag
+and actually run the search from `_filtered_stream`) but **reverted** it — a
+toggle that's OFF should stay off. The chosen behaviour: keep the prose the
+model wrote before the tag, strip the tag + everything after, and append one
+inline italic notice:
+`*🔌 Web search is off for this character — toggle it on to search the web.*`
+
+**Local path (`_filtered_stream`).** Catch rewritten (~5225): detect on the bare
+`[WEB SEARCH:` prefix (no need to wait for `]` — we don't use the query, and
+this is robust if the model never closes the tag), emit not-yet-sent prose,
+yield the notice, halt. The "prose before the tag" length uses the corrected
+`already_streamed = len(_rolling) - len(chunk) - len(_tail)` — the earlier
+`len("".join(_accumulated[:-1]))` measure ignored the `_TAIL_LEN` (40-char)
+holdback and dropped up to 40 chars of real prose right before the tag.
+
+**OpenAI off-path — latent leak fixed.** `stream_openai_response` is a PLAIN
+PASSTHROUGH (no tag handling) and `_strip_ooc_stream` only removes `[OOC]`, so a
+model-emitted `[WEB SEARCH:` tag on the OpenAI-backend OFF path **leaked raw to
+the user** (and could trip the empty-retry if it dominated the turn). New
+wrapper `_oai_offpath_stream` (~4203) sits between `stream_openai_response` and
+`_strip_ooc_stream`, mirroring the local behaviour: emit prose before the tag,
+strip tag + after, append the SAME notice, with a trailing partial-`[WEB SEARCH:`
+holdback so a tag split across SSE chunks can't leak.
+
+**Refactor note.** `_run_search_and_reprompt` was lifted from inside
+`_web_search_stream` to `/chat` scope (~4538, self-contained `import re as _re`)
+during the Option-A attempt. It was **kept there on revert** (lower risk than
+re-indenting ~150 lines back); it is now called ONLY by `_web_search_stream`'s
+three trigger sites (~5055/5128/5153) — `_filtered_stream` no longer references
+it. The toggle-ON paths (`_web_search_stream`, `_web_search_stream_openai`) and
+the routing at ~4353/4695 are unchanged.
+
+**Why no empty-retry now:** the notice (~64 non-whitespace chars) is yielded
+unconditionally on this path, so `fullMessage.trim().length` is always well over
+the frontend guard's `< 2` threshold. Verified `ast.parse` clean after each edit.
+
+**⚠️ app.py change — restart Flask** for it to take effect.
+
+## May 26 2026 — Message-Edit: Model Edits Are Now In-Place (No More Silent Chat Truncation)
+
+**File:** templates/index.html (`editSpecificMessage` save handler, ~2185).
+
+**Bug.** The edit-message save handler ran `window.loadedChat.splice(messageIndex + 1)`
+for EVERY edit, *before* the role check. So editing a MODEL response wiped every
+message that followed it. This was never requested — only USER edits were meant
+to rewrite history. A valuable chat was lost this way before the fix.
+
+**Fix.** The truncation is now gated behind `editedRole === 'user'`:
+- **Edit a USER message** → splice everything after it, re-render, save, then
+  auto-`regenerate()` a fresh model reply. (Unchanged — this is the intended
+  behaviour requested the night before.)
+- **Edit a MODEL response** → update only that message's `content`, re-render,
+  save. Nothing after it is touched and nothing is regenerated. Pure in-place
+  correction.
+
+`editedRole` is now captured BEFORE the content update (it was already, but the
+ordering is now explicit) so the role test is reliable. Regenerate block is
+likewise gated on `editedRole === 'user'`.
+
+**⚠️ Template edit — restart Flask** for it to take effect (the no-reloader
+server doesn't pick up .html/inline-JS changes automatically; CSS would).
+
+**Note:** yesterday's edit→regenerate work was NOT logged in changes.md; this
+entry is the first record of that feature area. The originally-intended USER-edit
+regenerate behaviour is preserved here.
+
 ## May 24 2026 — Persona Subsystem Hardened to Match the Character Fixes (Convergence + Atomic Writers + Image Namespacing)
 
 **Files:** app.py (NEW `list_users` + `_scan_and_heal_users_index` + `_resolve_user_image`; `get_all_users` ~6207; `save_user` ~6171), extra_routes.py (`create_user` ~849), templates/config.html (create-persona flow ~1916).

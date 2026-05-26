@@ -99,13 +99,72 @@ def get_opening_lines(character):
         os.makedirs(opening_lines_dir, exist_ok=True)
         
         filepath = os.path.join(opening_lines_dir, f"{character}.json")
-        
+
         if not os.path.exists(filepath):
             return jsonify({"enabled": False, "lines": []})
-        
+
         with open(filepath, "r", encoding="utf-8") as f:
             data = json.load(f)
-        
+
+        # 🏷️ {{char}}/{{user}} substitution happens on the BACKEND (not utils.js)
+        # so there is one Python definition of the placeholders. Reuse the same
+        # helper chat() uses (deferred import — app.py imports this module at load,
+        # so a top-level import would be circular).
+        from app import substitute_placeholders
+
+        _root = os.path.dirname(__file__)
+
+        # char label: characters/<character>.json -> "name", fallback to the URL
+        # param (same as chat(): char_data.get("name", character_name)).
+        _char_label = character
+        try:
+            _cpath = os.path.join(_root, "characters", f"{character}.json")
+            if os.path.exists(_cpath):
+                with open(_cpath, "r", encoding="utf-8") as _cf:
+                    _cdata = json.load(_cf)
+                _char_label = _cdata.get("name") or character
+        except Exception as _ce:
+            print(f"⚠️ opening-lines: char label load failed: {_ce}")
+
+        # user label: this GET endpoint receives no user name, so resolve the
+        # ACTIVE persona the same way /get_active_user does (users/index.json ->
+        # the one with "active": true, else first) and use its display_name with
+        # name fallback (mirrors chat(): user_display_name or user_name).
+        _user_label = ""
+        try:
+            _users_dir = os.path.join(_root, "users")
+            with open(os.path.join(_users_dir, "index.json"), "r", encoding="utf-8") as _uf:
+                _ulist = json.load(_uf)
+            _chosen = None
+            for _n in _ulist:
+                _p = os.path.join(_users_dir, f"{_n}.json")
+                if os.path.exists(_p):
+                    with open(_p, "r", encoding="utf-8") as _puf:
+                        _ud = json.load(_puf)
+                    if _ud.get("active"):
+                        _chosen = _ud.get("display_name") or _n
+                        break
+            if _chosen is None and _ulist:
+                _first = _ulist[0]
+                _fp = os.path.join(_users_dir, f"{_first}.json")
+                if os.path.exists(_fp):
+                    with open(_fp, "r", encoding="utf-8") as _fuf:
+                        _fd = json.load(_fuf)
+                    _chosen = _fd.get("display_name") or _first
+                else:
+                    _chosen = _first
+            _user_label = _chosen or ""
+        except Exception as _ue:
+            print(f"⚠️ opening-lines: user label resolve failed: {_ue}")
+
+        # Substitute each opening line through the shared helper. Empty labels
+        # leave the placeholder untouched (handled inside the helper).
+        _lines = data.get("lines", [])
+        if isinstance(_lines, list):
+            data["lines"] = [
+                substitute_placeholders(_ln, _char_label, _user_label) for _ln in _lines
+            ]
+
         return jsonify(data)
         
     except Exception as e:

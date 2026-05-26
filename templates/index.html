@@ -2174,42 +2174,44 @@ function persistChatState() {
       const newContent = textarea.value.trim();
       if (!newContent) return;
 
+      // Capture the edited message's role BEFORE touching history.
+      const editedRole = (window.loadedChat && window.loadedChat[messageIndex])
+        ? window.loadedChat[messageIndex].role
+        : null;
+
       // Update loadedChat
       if (window.loadedChat && window.loadedChat[messageIndex]) {
         window.loadedChat[messageIndex].content = newContent;
       }
 
-      // Capture the edited message's role BEFORE truncating.
-      const editedRole = (window.loadedChat && window.loadedChat[messageIndex])
-        ? window.loadedChat[messageIndex].role
-        : null;
-
-      // 🔥 Editing rewrites history from this point, so everything that
-      // followed is now stale — drop it. This saves manually deleting the
-      // following messages before regenerating. The original is recoverable
-      // via the branch feature, so no confirm prompt (that's the whole point).
-      if (window.loadedChat) {
+      // 🔥 ONLY a USER edit rewrites history. Editing a user message makes the
+      // model's reply (and everything after it) stale, so we drop it and
+      // regenerate from the edited message. The original is recoverable via the
+      // branch feature, so no confirm prompt (that's the whole point).
+      //
+      // Editing a MODEL response is a pure IN-PLACE correction: the rest of the
+      // chat is untouched and NOTHING is regenerated. (Previously the splice
+      // ran for every edit, which silently wiped the rest of a chat whenever a
+      // model message was edited.)
+      if (editedRole === 'user' && window.loadedChat) {
         window.loadedChat.splice(messageIndex + 1);
       }
 
-      // Re-render the truncated chat
+      // Re-render the updated chat
       renderChatMessages(window.loadedChat);
 
-      // Persist the edit + truncation
+      // Persist the edit (plus truncation, for user edits)
       try {
         await autoSaveCurrentChat();
-        console.log('✅ Message edited, chat truncated, saved');
+        console.log('✅ Message edited, saved');
       } catch (err) {
         console.error('❌ Failed to save after editing:', err);
         alert('Failed to save edited message.');
         return;
       }
 
-      // If a USER message was edited, the "following message" is the model's
-      // reply — regenerate it automatically. (Editing an ASSISTANT message has
-      // no model reply to regenerate — the next turn is the user's — and a
-      // regenerate would discard the edit, so we just keep the edited message
-      // and the truncated chat.)
+      // Auto-regenerate ONLY after a USER edit — produces the fresh reply that
+      // replaces the now-removed stale one. A model edit regenerates nothing.
       if (editedRole === 'user') {
         try {
           await regenerate();

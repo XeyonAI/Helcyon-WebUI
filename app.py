@@ -69,6 +69,27 @@ app.register_blueprint(tts_bp, url_prefix='/api/tts')
 app.register_blueprint(whisper_bp)
 
 # --------------------------------------------------
+# Placeholder substitution — SINGLE source of truth
+# --------------------------------------------------
+# The ONE definition of what {{char}} / {{user}} mean. Every model-bound field
+# (description, scenario, main_prompt, character_note, author_note, post_history,
+# user bio, example dialogue, opening lines) routes through this so there are no
+# competing substitution passes. Whitespace- and case-tolerant ({{ Char }},
+# {{USER}} all match). If a label is empty/missing the placeholder is left
+# UNTOUCHED — never substituted to an empty string — so {{char}} can never go
+# blank. Names are always the live derived labels; nothing is hardcoded.
+def substitute_placeholders(text, char_label, user_label):
+    """Swap {{char}}/{{user}} (whitespace- and case-tolerant) for the live names.
+    Returns text unchanged if not a string, empty, or the labels are missing."""
+    if not isinstance(text, str) or not text:
+        return text
+    if char_label:
+        text = re.sub(r'\{\{\s*char\s*\}\}', char_label, text, flags=re.IGNORECASE)
+    if user_label:
+        text = re.sub(r'\{\{\s*user\s*\}\}', user_label, text, flags=re.IGNORECASE)
+    return text
+
+# --------------------------------------------------
 # Document helpers
 # --------------------------------------------------
 
@@ -2472,7 +2493,15 @@ def chat():
     print("🧩 Loaded character file:", char_path)
     print("🧩 example_dialogue present:", "example_dialogue" in char_data)
     print("🧩 example_dialogue length:", len(char_data.get("example_dialogue", "")))
-        
+
+    # 🏷️ Placeholder labels — derived ONCE here, the earliest point where both
+    # char_data (loaded just above) and user_display_name (initialised at the
+    # user-persona load above) are available. Every {{char}}/{{user}}
+    # substitution below uses these same two labels. Same definitions the
+    # example-dialogue path has always used.
+    _char_label = char_data.get("name", character_name)
+    _user_label = user_display_name or user_name
+
     # --------------------------------------------------
     # Load Helcyon's core system layer (hardcoded)
     # --------------------------------------------------
@@ -2734,9 +2763,9 @@ def chat():
         if char_data.get("name"):
             parts.append(f"Character Name: {char_data['name']}")
         if char_data.get("description"):
-            parts.append(f"Description: {strip_chatml(char_data['description'])}")
+            parts.append(f"Description: {substitute_placeholders(strip_chatml(char_data['description']), _char_label, _user_label)}")
         if char_data.get("scenario"):
-            parts.append(f"Scenario: {strip_chatml(char_data['scenario'])}")
+            parts.append(f"Scenario: {substitute_placeholders(strip_chatml(char_data['scenario']), _char_label, _user_label)}")
 
         # 📍 CURRENT SITUATION — semi-global, opt-in per character
         if char_data.get("use_current_situation"):
@@ -2757,7 +2786,7 @@ def chat():
                 )
 
         if char_data.get("main_prompt"):
-            parts.append(strip_chatml(char_data["main_prompt"]))
+            parts.append(substitute_placeholders(strip_chatml(char_data["main_prompt"]), _char_label, _user_label))
 
         # post_history is no longer added to the system block — it moved to the
         # [REPLY INSTRUCTIONS] depth-0 packet (folded into the last user turn)
@@ -2869,7 +2898,7 @@ def chat():
         # Always inject if we have a user name — bio is optional
         user_context = ""
         if user_display_name:
-            _bio_block = f"{user_bio}\n\n" if user_bio else ""
+            _bio_block = f"{substitute_placeholders(user_bio, _char_label, _user_label)}\n\n" if user_bio else ""
             user_context = (
                 f"\n\n"
                 f"═══════════════════════════════════════════════════════════\n"
@@ -3191,12 +3220,9 @@ def chat():
         # Handles both: "{{user}}:" / "{{char}}:" alternating lines AND
         # "<START>" block separators (case-insensitive).
         # ⚠️ DO NOT revert to ex_block in the system block. (changes.md.)
-        _user_label = user_display_name or user_name
-        _char_label = char_data.get("name", character_name)
-        _ex_subst = (
-            ex.replace("{{user}}", _user_label)
-              .replace("{{char}}", _char_label)
-        )
+        # Labels derived once near the top of chat(); reuse them here so this
+        # is the SAME substitution definition every other field uses.
+        _ex_subst = substitute_placeholders(ex, _char_label, _user_label)
         _blocks = re.split(r'(?i)<\s*START\s*>', _ex_subst)
         for _blk in _blocks:
             _blk = _blk.strip()
@@ -3305,6 +3331,7 @@ def chat():
             if _cn_sys:
                 _cn_sys = re.sub(r'<\|im_start\|>\w*', '', _cn_sys)
                 _cn_sys = re.sub(r'<\|im_end\|>', '', _cn_sys).strip()
+                _cn_sys = substitute_placeholders(_cn_sys, _char_label, _user_label)
                 if _cn_sys:
                     messages[0]["content"] += f"\n\n[OOC: Character note — {_cn_sys}]"
                     print(f"✅ Character Note appended to system block ({len(_cn_sys)} chars)")
@@ -3313,6 +3340,7 @@ def chat():
             if _an_sys:
                 _an_sys = re.sub(r'<\|im_start\|>\w*', '', _an_sys)
                 _an_sys = re.sub(r'<\|im_end\|>', '', _an_sys).strip()
+                _an_sys = substitute_placeholders(_an_sys, _char_label, _user_label)
                 if _an_sys:
                     messages[0]["content"] += f"\n\n[OOC: Author note — {_an_sys}]"
                     print(f"✅ Author's Note appended to system block ({len(_an_sys)} chars)")
@@ -3431,12 +3459,8 @@ def chat():
     # failure mode while removing the example content from referenceable
     # conversation history.
     if _fake_turns and messages and messages[0].get("role") == "system":
-        # Reassign labels defensively at the injection site — _user_label /
-        # _char_label are defined inside the example-parse block above and
-        # would only be missing if _fake_turns were empty (we're past that
-        # guard), but don't rely on cross-block scope.
-        _user_label = user_display_name or user_name
-        _char_label = char_data.get("name", character_name)
+        # _char_label / _user_label are derived once near the top of chat()
+        # (~line 2578) and are in scope here — no local re-derivation.
         _ex_lines = []
         for _ft in _fake_turns:
             _spk = _char_label if _ft["role"] == "assistant" else _user_label
@@ -3516,6 +3540,7 @@ def chat():
     if _ph_val:
         _ph_val = re.sub(r'<\|im_start\|>\w*', '', _ph_val)
         _ph_val = re.sub(r'<\|im_end\|>', '', _ph_val).strip()
+        _ph_val = substitute_placeholders(_ph_val, _char_label, _user_label)
         if _ph_val:
             _reply_instr_items.append(f"[OOC: Post-history reminder — {_ph_val}]")
 
@@ -3985,8 +4010,31 @@ def chat():
                         ))),
                         content_type="text/event-stream; charset=utf-8",
                     )
-                return Response(
-                    stream_with_context(_strip_ooc_stream(stream_openai_response(
+                # Web search is OFF for this character (OpenAI path). The base
+                # stream_openai_response is a PLAIN PASSTHROUGH — no tag handling —
+                # and _strip_ooc_stream only removes [OOC] blocks, so a model-emitted
+                # [WEB SEARCH: …] tag would otherwise leak RAW to the user. Mirror the
+                # local _filtered_stream "search is off" behaviour: keep the prose
+                # before the tag, strip the tag + everything after it (never run a
+                # search, never leak the tag), and append the SAME notice. A trailing
+                # partial '[WEB SEARCH:' prefix is held back so a tag split across
+                # chunks can't leak. The notice guarantees non-empty output, so the
+                # frontend empty-response guard never fires a retry.
+                def _oai_offpath_stream():
+                    _TAG = '[WEB SEARCH:'
+                    _rolling = ""
+                    _yielded = 0
+
+                    def _safe_end(buf):
+                        # Largest index safe to emit: hold back a trailing partial
+                        # prefix of _TAG so a forming tag never leaks mid-formation.
+                        _maxk = min(len(buf), len(_TAG) - 1)
+                        for _k in range(_maxk, 0, -1):
+                            if buf[-_k:] == _TAG[:_k]:
+                                return len(buf) - _k
+                        return len(buf)
+
+                    for _chunk in stream_openai_response(
                         messages          = _oai_messages,
                         api_key           = _oai_key,
                         model             = _oai_model,
@@ -3995,7 +4043,31 @@ def chat():
                         top_p             = sampling["top_p"],
                         frequency_penalty = sampling.get("frequency_penalty", 0.0),
                         presence_penalty  = sampling.get("presence_penalty", 0.0),
-                    ))),
+                    ):
+                        _rolling += _chunk
+                        _ti = _rolling.find(_TAG)
+                        if _ti != -1:
+                            # Full tag present — emit any prose before it that hasn't
+                            # been yielded yet, then strip the tag + everything after,
+                            # show the notice, and stop.
+                            if _ti > _yielded:
+                                yield _rolling[_yielded:_ti]
+                                _yielded = _ti
+                            print(f"🔌 [OpenAI off-path] [WEB SEARCH:] tag emitted but web search is OFF for this character — stripping tag, showing notice", flush=True)
+                            yield "\n\n*🔌 Web search is off for this character — toggle it on to search the web.*"
+                            return
+                        # No full tag yet — emit everything safe, holding back a
+                        # trailing partial-tag prefix.
+                        _end = _safe_end(_rolling)
+                        if _end > _yielded:
+                            yield _rolling[_yielded:_end]
+                            _yielded = _end
+                    # Stream ended with no tag — flush any held-back tail.
+                    if len(_rolling) > _yielded:
+                        yield _rolling[_yielded:]
+
+                return Response(
+                    stream_with_context(_strip_ooc_stream(_oai_offpath_stream())),
                     content_type="text/event-stream; charset=utf-8",
                 )
             except Exception as e:
@@ -4317,171 +4389,182 @@ def chat():
                 print(f"❌ Chat search intent error: {e}", flush=True)
                 return f"⚠️ Error: {e}", 500
 
+        # ── Shared search-execution tail (single path for ALL triggers) ──
+        # Gate/heuristic query, the short-query fallback watcher, AND a
+        # model-emitted [WEB SEARCH: ...] tag intercepted in passthrough
+        # all route here: run Brave, inject results, re-prompt. Centralised
+        # so no trigger branch can be left uncovered (the recurring cause
+        # of web-search holes).
+        # Defined at /chat scope (NOT nested in _web_search_stream) so it is
+        # reachable from BOTH generators: _web_search_stream (proactive/auto
+        # search when the toggle is ON) and _filtered_stream (an explicit
+        # model-emitted [WEB SEARCH: …] tag when the toggle is OFF). Closes
+        # over messages, user_input and payload plus the module-level
+        # do_search / format_search_results / stream_model_response — all in
+        # scope here. (changes.md — Option A explicit-tag fallback.)
+        def _run_search_and_reprompt(query):
+            import re as _re
+            print(f"\U0001f50d Web search triggered: {query}", flush=True)
+            yield "\n\n\U0001f50d *Searching...*\n\n"
+
+            res = do_search(query)
+            results_block = format_search_results(query, res)
+            has_results = bool(res.get("summary") or res.get("top_text") or res.get("pages"))
+            print(f"\U0001f50d Search done. has_results={has_results}", flush=True)
+            print(f"   summary={repr(res['summary'][:120])}", flush=True)
+            print(f"   top_url={res['top_url']}", flush=True)
+            print(f"   top_text_len={len(res['top_text'])}", flush=True)
+            print(f"   pages_fetched={len(res.get('pages') or [])}", flush=True)
+            print(f"   related_count={len(res['results'])}", flush=True)
+
+            if has_results:
+                import urllib.parse as _urlparse
+                _src = res.get('top_url', '')
+                if not _src:
+                    _src = f"https://search.brave.com/search?q={_urlparse.quote_plus(query)}"
+                augmented_user_msg = (
+                    f"{user_input.strip()}\n\n"
+                    f"[WEB SEARCH RESULTS FOR: {query}]\n"
+                    f"{results_block}\n"
+                    f"[END WEB SEARCH RESULTS]\n"
+                    f"IMPORTANT: Your response MUST be based on the search results above ONLY. "
+                    f"Do NOT use your training data or prior knowledge about this topic — "
+                    f"the search results are the ground truth. "
+                    f"If the results say something that contradicts what you think you know, "
+                    f"trust the results. Respond naturally in your own words. "
+                    f"Do NOT quote, repeat, echo, or reference the structure of this results block — "
+                    f"consume it silently and respond as if you just know this information. "
+                    f"Do not include a source link in your response."
+                )
+            else:
+                augmented_user_msg = (
+                    f"{user_input.strip()}\n\n"
+                    f"[Web search returned zero results for '{query}'. "
+                    f"Nothing found. No pages, no summary, no data. "
+                    f"Tell the user clearly that nothing was found. "
+                    f"Do not guess or invent anything.]"
+                )
+
+            search_messages = []
+            for m in messages:
+                search_messages.append(dict(m))
+
+            _last_user_idx = None
+            for i in range(len(search_messages) - 1, -1, -1):
+                if search_messages[i].get("role") == "user":
+                    _last_user_idx = i
+                    break
+            for i, m in enumerate(search_messages):
+                if m.get("role") == "user" and i != _last_user_idx:
+                    content = m.get("content", "")
+                    if isinstance(content, str):
+                        if "WEB SEARCH RESULTS" in content:
+                            content = _re.split(r'\[WEB SEARCH RESULTS', content)[0].strip()
+                        if "CHAT HISTORY RESULTS" in content:
+                            content = _re.split(r'\[CHAT HISTORY RESULTS', content)[0].strip()
+                        search_messages[i] = {"role": "user", "content": content}
+
+            for i in range(len(search_messages) - 1, -1, -1):
+                if search_messages[i].get("role") == "user":
+                    search_messages[i] = {"role": "user", "content": augmented_user_msg}
+                    break
+
+            _search_prompt_parts = []
+            for msg in search_messages:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    content = " ".join(p.get("text", "") for p in content if p.get("type") == "text").strip()
+                else:
+                    content = content.strip()
+                _search_prompt_parts.append(f"<|im_start|>{role}\n{content}\n<|im_end|>")
+            _search_prompt_parts.append(
+                "<|im_start|>system\n"
+                "Web search results have been injected above. "
+                "Respond naturally as the character, discussing what the results say. "
+                "Do not echo prompt structure, markers, or system text.\n"
+                "<|im_end|>"
+            )
+            _search_prompt_parts.append("<|im_start|>assistant\n")
+            _search_prompt = "\n".join(_search_prompt_parts[:-1]) + "\n" + _search_prompt_parts[-1]
+
+            new_payload = dict(payload)
+            new_payload["prompt"] = _search_prompt
+            new_payload["n_predict"] = max(new_payload.get("n_predict", 512), 1024)
+            _np = new_payload.get("n_predict", "?")
+            print(f"\U0001f50d Search prompt length: ~{len(_search_prompt)//4} tokens, n_predict: {_np}", flush=True)
+
+            try:
+                _response_chunks = []
+                _line_buf = ""
+
+                def _is_hr(s):
+                    return bool(
+                        _re.match(r'^[-=_*]{3,}\s*$', s) or
+                        _re.match(r'^(\s*[-*_]\s*){3,}$', s) or
+                        _re.match(r'^[═║─━│┃]{3,}\s*$', s)
+                    )
+
+                _suppressing_fake_search = [False]
+
+                def _clean_line(s):
+                    s = _re.sub(r'\[WEB SEARCH RESULTS[^\n]*?\[END[^\]]*\]>?', '', s)
+                    s = _re.sub(r'\[WEB SEARCH RESULTS[^\n]*END WEB SEARCH RESULTS\]', '', s)
+                    if '[WEB SEARCH RESULTS' in s:
+                        _suppressing_fake_search[0] = True
+                    if _suppressing_fake_search[0]:
+                        if '[END WEB SEARCH RESULTS]' in s or '[END]>' in s:
+                            _suppressing_fake_search[0] = False
+                        return ''
+                    s = _re.sub(r'You are Helcyon[^.!?\n]*[.!?\n]?', '', s)
+                    s = _re.sub(r'What do I search for[?]?', '', s)
+                    return s
+
+                for chunk in stream_model_response(new_payload):
+                    _response_chunks.append(chunk)
+                    _line_buf += chunk
+                    while '\n' in _line_buf:
+                        _line, _line_buf = _line_buf.split('\n', 1)
+                        if _is_hr(_line):
+                            continue
+                        yield _clean_line(_line) + '\n'
+                    if _line_buf and not _suppressing_fake_search[0]:
+                        if len(_line_buf) > 12 or _re.search(r'[a-zA-Z0-9]', _line_buf):
+                            yield _clean_line(_line_buf)
+                            _line_buf = ""
+                if _line_buf and not _is_hr(_line_buf):
+                    yield _clean_line(_line_buf)
+                if has_results:
+                    _full_response = "".join(_response_chunks)
+                    _pages = res.get("pages") or []
+                    _src_list = []
+                    if _pages:
+                        for p in _pages[:3]:
+                            u = p.get("url") or ""
+                            t = (p.get("title") or u).strip() or u
+                            if u and u not in _full_response:
+                                _src_list.append((u, t))
+                    elif _src and _src not in _full_response:
+                        _src_list.append((_src, _src))
+
+                    if _src_list:
+                        yield "\n\n"
+                        for i, (u, t) in enumerate(_src_list):
+                            _label = f"\U0001f517 Source: {t[:90]}" if i == 0 else f"\U0001f517 {t[:90]}"
+                            yield (
+                                f'<a href="{u}" target="_blank" '
+                                f'style="color:#7ab4f5; display:block; margin-top:2px;">'
+                                f'{_label}</a>'
+                            )
+            except Exception as e:
+                yield f"\n⚠️ Search error: {e}"
+
         if use_web_search:
             def _web_search_stream():
                 import re as _re
 
-                # ── Shared search-execution tail (single path for ALL triggers) ──
-                # Gate/heuristic query, the short-query fallback watcher, AND a
-                # model-emitted [WEB SEARCH: ...] tag intercepted in passthrough
-                # all route here: run Brave, inject results, re-prompt. Centralised
-                # so no trigger branch can be left uncovered (the recurring cause
-                # of web-search holes).
-                def _run_search_and_reprompt(query):
-                    print(f"\U0001f50d Web search triggered: {query}", flush=True)
-                    yield "\n\n\U0001f50d *Searching...*\n\n"
-
-                    res = do_search(query)
-                    results_block = format_search_results(query, res)
-                    has_results = bool(res.get("summary") or res.get("top_text") or res.get("pages"))
-                    print(f"\U0001f50d Search done. has_results={has_results}", flush=True)
-                    print(f"   summary={repr(res['summary'][:120])}", flush=True)
-                    print(f"   top_url={res['top_url']}", flush=True)
-                    print(f"   top_text_len={len(res['top_text'])}", flush=True)
-                    print(f"   pages_fetched={len(res.get('pages') or [])}", flush=True)
-                    print(f"   related_count={len(res['results'])}", flush=True)
-
-                    if has_results:
-                        import urllib.parse as _urlparse
-                        _src = res.get('top_url', '')
-                        if not _src:
-                            _src = f"https://search.brave.com/search?q={_urlparse.quote_plus(query)}"
-                        augmented_user_msg = (
-                            f"{user_input.strip()}\n\n"
-                            f"[WEB SEARCH RESULTS FOR: {query}]\n"
-                            f"{results_block}\n"
-                            f"[END WEB SEARCH RESULTS]\n"
-                            f"IMPORTANT: Your response MUST be based on the search results above ONLY. "
-                            f"Do NOT use your training data or prior knowledge about this topic — "
-                            f"the search results are the ground truth. "
-                            f"If the results say something that contradicts what you think you know, "
-                            f"trust the results. Respond naturally in your own words. "
-                            f"Do NOT quote, repeat, echo, or reference the structure of this results block — "
-                            f"consume it silently and respond as if you just know this information. "
-                            f"Do not include a source link in your response."
-                        )
-                    else:
-                        augmented_user_msg = (
-                            f"{user_input.strip()}\n\n"
-                            f"[Web search returned zero results for '{query}'. "
-                            f"Nothing found. No pages, no summary, no data. "
-                            f"Tell the user clearly that nothing was found. "
-                            f"Do not guess or invent anything.]"
-                        )
-
-                    search_messages = []
-                    for m in messages:
-                        search_messages.append(dict(m))
-
-                    _last_user_idx = None
-                    for i in range(len(search_messages) - 1, -1, -1):
-                        if search_messages[i].get("role") == "user":
-                            _last_user_idx = i
-                            break
-                    for i, m in enumerate(search_messages):
-                        if m.get("role") == "user" and i != _last_user_idx:
-                            content = m.get("content", "")
-                            if isinstance(content, str):
-                                if "WEB SEARCH RESULTS" in content:
-                                    content = _re.split(r'\[WEB SEARCH RESULTS', content)[0].strip()
-                                if "CHAT HISTORY RESULTS" in content:
-                                    content = _re.split(r'\[CHAT HISTORY RESULTS', content)[0].strip()
-                                search_messages[i] = {"role": "user", "content": content}
-
-                    for i in range(len(search_messages) - 1, -1, -1):
-                        if search_messages[i].get("role") == "user":
-                            search_messages[i] = {"role": "user", "content": augmented_user_msg}
-                            break
-
-                    _search_prompt_parts = []
-                    for msg in search_messages:
-                        role = msg.get("role", "user")
-                        content = msg.get("content", "")
-                        if isinstance(content, list):
-                            content = " ".join(p.get("text", "") for p in content if p.get("type") == "text").strip()
-                        else:
-                            content = content.strip()
-                        _search_prompt_parts.append(f"<|im_start|>{role}\n{content}\n<|im_end|>")
-                    _search_prompt_parts.append(
-                        "<|im_start|>system\n"
-                        "Web search results have been injected above. "
-                        "Respond naturally as the character, discussing what the results say. "
-                        "Do not echo prompt structure, markers, or system text.\n"
-                        "<|im_end|>"
-                    )
-                    _search_prompt_parts.append("<|im_start|>assistant\n")
-                    _search_prompt = "\n".join(_search_prompt_parts[:-1]) + "\n" + _search_prompt_parts[-1]
-
-                    new_payload = dict(payload)
-                    new_payload["prompt"] = _search_prompt
-                    new_payload["n_predict"] = max(new_payload.get("n_predict", 512), 1024)
-                    _np = new_payload.get("n_predict", "?")
-                    print(f"\U0001f50d Search prompt length: ~{len(_search_prompt)//4} tokens, n_predict: {_np}", flush=True)
-
-                    try:
-                        _response_chunks = []
-                        _line_buf = ""
-
-                        def _is_hr(s):
-                            return bool(
-                                _re.match(r'^[-=_*]{3,}\s*$', s) or
-                                _re.match(r'^(\s*[-*_]\s*){3,}$', s) or
-                                _re.match(r'^[═║─━│┃]{3,}\s*$', s)
-                            )
-
-                        _suppressing_fake_search = [False]
-
-                        def _clean_line(s):
-                            s = _re.sub(r'\[WEB SEARCH RESULTS[^\n]*?\[END[^\]]*\]>?', '', s)
-                            s = _re.sub(r'\[WEB SEARCH RESULTS[^\n]*END WEB SEARCH RESULTS\]', '', s)
-                            if '[WEB SEARCH RESULTS' in s:
-                                _suppressing_fake_search[0] = True
-                            if _suppressing_fake_search[0]:
-                                if '[END WEB SEARCH RESULTS]' in s or '[END]>' in s:
-                                    _suppressing_fake_search[0] = False
-                                return ''
-                            s = _re.sub(r'You are Helcyon[^.!?\n]*[.!?\n]?', '', s)
-                            s = _re.sub(r'What do I search for[?]?', '', s)
-                            return s
-
-                        for chunk in stream_model_response(new_payload):
-                            _response_chunks.append(chunk)
-                            _line_buf += chunk
-                            while '\n' in _line_buf:
-                                _line, _line_buf = _line_buf.split('\n', 1)
-                                if _is_hr(_line):
-                                    continue
-                                yield _clean_line(_line) + '\n'
-                            if _line_buf and not _suppressing_fake_search[0]:
-                                if len(_line_buf) > 12 or _re.search(r'[a-zA-Z0-9]', _line_buf):
-                                    yield _clean_line(_line_buf)
-                                    _line_buf = ""
-                        if _line_buf and not _is_hr(_line_buf):
-                            yield _clean_line(_line_buf)
-                        if has_results:
-                            _full_response = "".join(_response_chunks)
-                            _pages = res.get("pages") or []
-                            _src_list = []
-                            if _pages:
-                                for p in _pages[:3]:
-                                    u = p.get("url") or ""
-                                    t = (p.get("title") or u).strip() or u
-                                    if u and u not in _full_response:
-                                        _src_list.append((u, t))
-                            elif _src and _src not in _full_response:
-                                _src_list.append((_src, _src))
-
-                            if _src_list:
-                                yield "\n\n"
-                                for i, (u, t) in enumerate(_src_list):
-                                    _label = f"\U0001f517 Source: {t[:90]}" if i == 0 else f"\U0001f517 {t[:90]}"
-                                    yield (
-                                        f'<a href="{u}" target="_blank" '
-                                        f'style="color:#7ab4f5; display:block; margin-top:2px;">'
-                                        f'{_label}</a>'
-                                    )
-                    except Exception as e:
-                        yield f"\n⚠️ Search error: {e}"
+                # _run_search_and_reprompt lives at /chat scope (above) and is
+                # shared with _filtered_stream — there is no local copy here.
 
 
                 # Search only fires on EXPLICIT user request.
@@ -4990,23 +5073,42 @@ def chat():
                             _cs_tag_query = _cs_tag.group(1).strip()
                             break  # stop streaming, do chat search
 
-                        # Halt if model emits [WEB SEARCH: ...] tag — either hallucinating
-                        # results on a web-search-disabled character, or emitting the tag
-                        # when it should have been caught by the web search path.
-                        # Catch it here in the rolling buffer before it reaches the user.
+                        # Model emitted a [WEB SEARCH: …] tag even though this
+                        # character's web-search toggle is OFF. This generator does
+                        # NOT run searches — the search machinery lives only in
+                        # _web_search_stream (the toggle-ON path). So here we:
+                        #   1. keep any real prose the model wrote BEFORE the tag,
+                        #   2. strip the tag and everything after it (never leak it),
+                        #   3. append a short inline notice so the user knows why no
+                        #      search happened.
+                        # The notice guarantees non-empty output, so the frontend's
+                        # empty-response guard (fullMessage.trim().length < 2) never
+                        # fires a retry. Detection is on the bare '[WEB SEARCH:'
+                        # prefix (no need to wait for the closing ']' — we don't use
+                        # the query), which is also robust if the model never closes
+                        # the tag. The forming-tag prefix is held in _tail by the
+                        # normal path's _TAIL_LEN holdback, so it can't leak before
+                        # this fires.
                         if not _halted[0] and '[WEB SEARCH:' in _rolling:
                             _ws_tag_match = _re3_inner.search(r'\[WEB SEARCH:', _rolling, _re3_inner.IGNORECASE)
                             if _ws_tag_match:
+                                # Real prose before the tag. The client has already
+                                # received the whole stream EXCEPT the _TAIL_LEN
+                                # holdback still sitting in _tail and the current
+                                # (not-yet-processed) chunk, so the not-yet-sent prose
+                                # is safe[already_streamed:].
                                 safe = _rolling[:_ws_tag_match.start()].rstrip()
-                                # Only yield what came before the tag
-                                already_yielded = "".join(_accumulated[:-1])  # everything before this chunk
-                                new_safe = safe[len(already_yielded):] if len(safe) > len(already_yielded) else ""
-                                print(f"🛑 [_filtered_stream] WEB SEARCH tag in stream — halting, stripping tag+beyond", flush=True)
+                                already_streamed = len(_rolling) - len(chunk) - len(_tail)
+                                if already_streamed < 0:
+                                    already_streamed = 0
+                                new_safe = safe[already_streamed:]
                                 if new_safe.strip():
                                     yield new_safe
+                                print(f"🔌 [_filtered_stream] [WEB SEARCH:] tag emitted but web search is OFF for this character — stripping tag, showing notice", flush=True)
+                                yield "\n\n*🔌 Web search is off for this character — toggle it on to search the web.*"
                                 _halted[0] = True
                                 _tail = ""
-                                continue
+                                return
 
                         # ── Opening guard: strip a leading [OOC: …] stage direction ──
                         # Only a bracket that is the FIRST non-whitespace content of the whole
