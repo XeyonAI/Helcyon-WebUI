@@ -649,6 +649,35 @@ def real_token_count(text):
         print(f"⚠️ /tokenize call failed: {_e!r} — falling back to rough*1.4", flush=True)
     return int(rough_token_count(text) * 1.4)
 
+
+def neutralize_chatml_tokens(text):
+    """Make ChatML control-token strings in user-supplied content harmless.
+
+    llama.cpp's /completion endpoint parses `<|im_start|>` / `<|im_end|>` as
+    real special tokens — that is precisely why HWUI's own structural tags act
+    as turn boundaries. The flip side: if a user pastes a ChatML shard for the
+    model to look at, the shard's *embedded* markers are also parsed as turn
+    boundaries. The model then sees a complete assistant turn already closed
+    inside the user message, reaches the real `<|im_start|>assistant` tag with
+    nothing left to answer, and emits EOS as its first token
+    (tokens_predicted=1, 0 chars — the "refused to respond" symptom).
+
+    Fix at the source: swap the ASCII angle brackets for their unicode
+    look-alikes (⟨ ⟩) so the exact special-token byte sequence no longer
+    matches. The markers stay visually faithful — the model can still read and
+    discuss the shard — and they remain visible in console diagnostics (unlike
+    a zero-width-space escape). Structural tags are added by the prompt builder
+    AFTER this runs, so they are never touched.
+
+    ⚠️ Run on message CONTENT only, never on the assembled prompt.
+    """
+    if not text or "<|im_" not in text:
+        return text
+    return (text
+            .replace("<|im_start|>", "⟨|im_start|⟩")
+            .replace("<|im_end|>", "⟨|im_end|⟩"))
+
+
 CURRENT_MODEL = None
 
 print("--------------------------------------------------")
@@ -3505,6 +3534,15 @@ def chat():
             ).strip()
         else:
             content = raw_content.strip()
+        # Neutralize any ChatML control-token strings the user pasted into the
+        # message (e.g. a ChatML shard) BEFORE wrapping — otherwise llama.cpp
+        # parses them as real turn boundaries and the model fires EOS as its
+        # first token. See neutralize_chatml_tokens().
+        _pre = content
+        content = neutralize_chatml_tokens(content)
+        if content != _pre:
+            print(f"🧼 Neutralized embedded ChatML tokens in {role} content "
+                  f"(pasted shard / role markers)", flush=True)
         prompt_parts.append(f"<|im_start|>{role}\n{content}\n<|im_end|>")
 
     # ───────────────────────────────────────────────────────────────────────
@@ -4328,6 +4366,7 @@ def chat():
                         content = " ".join(p.get("text", "") for p in content if p.get("type") == "text").strip()
                     else:
                         content = content.strip()
+                    content = neutralize_chatml_tokens(content)
                     _cs_parts.append(f"<|im_start|>{role}\n{content}\n<|im_end|>")
                 _cs_parts.append(
                     "<|im_start|>system\n"
@@ -4477,6 +4516,7 @@ def chat():
                     content = " ".join(p.get("text", "") for p in content if p.get("type") == "text").strip()
                 else:
                     content = content.strip()
+                content = neutralize_chatml_tokens(content)
                 _search_prompt_parts.append(f"<|im_start|>{role}\n{content}\n<|im_end|>")
             _search_prompt_parts.append(
                 "<|im_start|>system\n"
@@ -4885,9 +4925,20 @@ def chat():
                         _ws_rolling += chunk
                         _wsm = _re.search(r"\[WEB SEARCH:\s*(.+?)\]", _ws_rolling, _re.IGNORECASE)
                         if _wsm:
-                            _ws_query = _wsm.group(1).strip()
-                            print(f"\U0001f50e Model-emitted [WEB SEARCH:] intercepted in passthrough (gate said no — honouring it): {_ws_query!r}", flush=True)
-                            break
+                            # Gate already said NO this turn (we are inside
+                            # `if not _should_search`). A model-emitted search
+                            # tag here is a hallucinated tool call — suppress,
+                            # never honour. Excise from every buffer so the tag
+                            # can't leak and the detector can't re-fire, then
+                            # keep streaming the rest of the reply.
+                            _supp_query = _wsm.group(1).strip()
+                            print(f"\U0001f6ab Model-emitted [WEB SEARCH:] SUPPRESSED (gate said no): {_supp_query!r}", flush=True)
+                            _ws_rolling   = _re.sub(r"\[WEB SEARCH:\s*.+?\]", "", _ws_rolling, count=1, flags=_re.IGNORECASE)
+                            _post         = _re.sub(r"\[WEB SEARCH:\s*.+?\]", "", _post, flags=_re.IGNORECASE)
+                            _post         = _re.sub(r"\[WEB SEARCH:[^\]]*$", "", _post, flags=_re.IGNORECASE)
+                            _ooc_holdback = _re.sub(r"\[WEB SEARCH:\s*.+?\]", "", _ooc_holdback, flags=_re.IGNORECASE)
+                            _ooc_holdback = _re.sub(r"\[WEB SEARCH:[^\]]*$", "", _ooc_holdback, flags=_re.IGNORECASE)
+                            continue
                         _emit = None
                         if _ooc_guard_active:
                             _ooc_holdback += chunk
@@ -4992,6 +5043,13 @@ def chat():
                 if len(_q) > 2:
                     # Gate/heuristic produced a usable query — search directly via
                     # the shared helper.
+                    # Symmetry with the 🚫 suppression log above: mark intent
+                    # (before the call) when the model-judged intent gate is what
+                    # agreed. Explicit-imperative requests already log via
+                    # "🔍 Explicit search request:" earlier, so only the true
+                    # gate path is annotated here to avoid a misleading label.
+                    if _gate_query:
+                        print(f"\U0001f50e Web search honoured (gate agreed): {_gate_query!r}", flush=True)
                     yield from _run_search_and_reprompt(_q)
                     return
 
@@ -5260,6 +5318,7 @@ def chat():
                                 content = " ".join(p.get("text", "") for p in content if p.get("type") == "text").strip()
                             else:
                                 content = content.strip()
+                            content = neutralize_chatml_tokens(content)
                             _cs_parts.append(f"<|im_start|>{role}\n{content}\n<|im_end|>")
                         _cs_parts.append(
                             "<|im_start|>system\n"

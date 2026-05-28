@@ -113,7 +113,11 @@
 
   <!-- Top Bar -->
   <div id="top-bar" style="position:fixed; top:0; left:0; right:0; z-index:1000;">
-    <div><strong>Helcyon-WebUI</strong></div>
+    <!-- Title doubles as the active-folder indicator: shows the current project
+         name (so you can see what folder you're in without scrolling to the top
+         of chat), and falls back to "Helcyon-WebUI" when in global chats.
+         Updated in loadProjects(). -->
+    <div><strong id="topbar-title">Helcyon-WebUI</strong></div>
     <!-- Model trigger — floating below top bar, right aligned -->
     <div style="position:fixed; top:72px; right:12px; z-index:999; display:flex; align-items:center; gap:8px;">
       <!-- OpenAI active indicator -->
@@ -3214,6 +3218,21 @@ async function openChat(filename) {
     }
   }
 // ==================================================
+// MEMORY-SAVE INTENT GATE
+// ==================================================
+  // The model can emit a [MEMORY ADD: …] tag inside an otherwise unrelated
+  // reply (a hallucinated tool call). This mirrors the server-side web-search
+  // suppression: only let that tag surface the save-confirm bar when the
+  // user's own message this turn actually asked for something to be
+  // remembered. Pure keyword check — no model call, no latency.
+  // Returns true = honour (show the bar), false = suppress.
+  function memoryIntentGate(userMsg) {
+    if (!userMsg || typeof userMsg !== 'string') return false;
+    const MEMORY_INTENT_RE = /\b(?:remember (?:this|that|to)|save (?:this|that)(?: to memory)?|(?:make|take) a note|don['’]?t forget|for (?:future|later) reference|add to memory|note this down|keep (?:this|that) in mind|save to memory)\b/i;
+    return MEMORY_INTENT_RE.test(userMsg);
+  }
+
+// ==================================================
 // FETCH AND DISPLAY RESPONSE (WITH DEBUG LOGS)
 // ==================================================
   async function fetchAndDisplayResponse(input, chat, isRegenerate = false) {
@@ -4964,6 +4983,14 @@ async function loadProjects() {
     if (currentDisplay) {
       currentDisplay.textContent = data.active || 'None';
       currentDisplay.style.color = data.active ? '#6a9fb5' : '#666';
+    }
+
+    // Top-bar title doubles as the active-folder indicator: swap "Helcyon-WebUI"
+    // for the current project name so the folder is visible without scrolling
+    // to the top of chat. Falls back to the app name when in global chats.
+    const topbarTitle = document.getElementById('topbar-title');
+    if (topbarTitle) {
+      topbarTitle.textContent = data.active ? '📁 ' + data.active : 'Helcyon-WebUI';
     }
 
     const indicator = document.getElementById('active-project-indicator');

@@ -4525,3 +4525,52 @@ Root cause: memory confirmation handler calling `fetchAndDisplayResponse()` with
 - Display only fix — content sent to model was always correct, this was purely visual
 - Quality of life improvement: pasted code, scripts, and multiline prompts now display correctly in chat
 
+---
+
+## Session: May 27 2026 — Pasted ChatML Shard → Immediate EOS (0-char reply) Fix
+
+### `app.py`
+**Bug fix: Pasting a ChatML shard into chat makes the model emit nothing then "refuse"**
+- Symptom: model "spazzed out" then returned an empty reply. Flask console showed `tokens_predicted=1`, `stop_type:"eos"`, `🎯 DONE: 2 chunks, 0 chars total` — the model fired EOS as its very first token.
+- Root cause: llama.cpp's `/completion` endpoint parses `<|im_start|>` / `<|im_end|>` as **real special tokens** (this is why HWUI's own structural tags work as turn boundaries). When a user pastes a ChatML shard, the shard's *embedded* markers were wrapped into the user turn verbatim (build site `app.py` ~line 3713) and were likewise parsed as turn boundaries. The model saw a complete assistant turn already closed inside the user message, reached the real `<|im_start|>assistant` tag with nothing to answer, and emitted EOS immediately.
+- Why the existing CHATML SANITY CHECK didn't catch it: it depends on `embedded_ends == expected_ends` count-matching and `prompt.split("<|im_start|>assistant")[0]`. A *balanced* shard skews both — the split grabs the shard's embedded assistant tag instead of the real one, and the lazy repair regex mis-parses. Detect-and-repair after assembly is the wrong layer.
+- Fix: new module-level `neutralize_chatml_tokens(text)` helper. Swaps the ASCII angle brackets of `<|im_start|>`/`<|im_end|>` for unicode look-alikes (`⟨ ⟩`) so the exact special-token byte sequence no longer matches. **Escapes rather than strips** — the shard stays visually faithful and readable so the model can still analyse it (the whole point of pasting it), and the markers remain visible in console diagnostics (unlike a zero-width-space escape).
+- Applied at the source — on message CONTENT, before the structural tags are added — at all four ChatML build sites: main chat prompt builder + the three search/chat-search prompt builders (so a shard sitting in history can't silently break search-query generation either).
+- The old CHATML SANITY CHECK block is left in place as defense-in-depth; it now correctly reports "tags balanced" since content arrives pre-neutralized.
+- ⚠️ `neutralize_chatml_tokens` runs on message CONTENT only, never on the assembled prompt — running it on the full prompt would break the structural tags.
+
+---
+
+## Session: May 27 2026 — Re-added Active Project Name in Top Bar
+
+### `index.html`
+**Feature (re-add): Active project folder shown in the top-left**
+- Previously added then lost (overwritten via a reverse extract) — restored so the current folder is visible without scrolling to the top of the chat.
+- The top-bar title element itself doubles as the indicator: `<strong id="topbar-title">` swaps "Helcyon-WebUI" for `📁 <project>` when a project is active, and falls back to "Helcyon-WebUI" in global chats. (Sleeker than a separate label beside the title — matches the prior implementation the user preferred.)
+- Updated inside `loadProjects()` right after the existing `current-project-display` update — single source of truth, no new fetch.
+- Stays in sync automatically: `switchProject()` (including `switchProject(null)` for global chats) already calls `loadProjects()`, so the title updates on every switch.
+
+---
+
+## Session: May 27 2026 — Suppress Model-Triggered Web Search + Memory Save (gate said no)
+
+**Bug: the model could unilaterally trigger a web search OR a memory-save prompt mid-response, even when the gate had correctly said no / the user had zero intent.**
+- Web search evidence: gate logged `💬 No gate trigger`, then the model emitted a `[WEB SEARCH:]` tag inside an unrelated reply and HWUI honoured it unconditionally (`🔎 … intercepted in passthrough (gate said no — honouring it)` → `🔍 Web search triggered`). A hallucinated tool call.
+- Memory evidence: a save-confirm bar surfaced unprompted because the model emitted a `[MEMORY ADD:]` tag in a reply the user never asked to be remembered. Memory had **no intent gate at all** — the tag alone surfaced the bar (the write itself still needs a click, but the unprompted bar is the symptom).
+
+### `app.py`
+**Fix 1: `[WEB SEARCH:]` passthrough now suppresses in the gate-said-no branch (~line 5131)**
+- The passthrough interception lives entirely inside `if not _should_search:` — i.e. it only ever runs when the gate already said no. On detecting the tag it now **suppresses** instead of honouring: logs `🚫 Model-emitted [WEB SEARCH:] SUPPRESSED (gate said no)`, excises the tag from every streaming buffer (`_ws_rolling`, `_post` full + partial-open, `_ooc_holdback` full + partial-open), and `continue`s so the rest of the reply still streams. `_ws_query` is never set, so no search fires.
+- The gate-agreed path is untouched and now logs symmetric intent **before** the call (~line 5251): `🔎 Web search honoured (gate agreed): <query>`, guarded on `_gate_query` so only genuine intent-gate agreements are labelled (explicit-imperative requests already log `🔍 Explicit search request:` upstream).
+- ⚠️ The gate logic itself (`_should_search`, `_search_intent_gate`) was NOT touched — only the passthrough interception.
+
+### `index.html`
+**Fix 2: new `memoryIntentGate(userMsg)` — `[MEMORY ADD:]` tag only surfaces the save bar on explicit user intent (~line 3660)**
+- Added a frontend keyword gate (defined just above `fetchAndDisplayResponse`) matching explicit save-intent phrases: remember this/that/to, save this/that (to memory), make/take a note, don't forget, for future/later reference, add to memory, note this down, keep this/that in mind, save to memory.
+- At the `[MEMORY ADD:` detection point it now checks `memoryIntentGate(input)` before `showMemoryConfirmInBubble`. No intent → `🚫 Model-emitted memory save SUPPRESSED (no user intent)`, bar not shown. Intent → `💾 Model-emitted memory save honoured`, bar shown as before.
+- No extra display-stripping needed: `stripChatMLOutsideCodeBlocks` (~L983) already strips `[MEMORY ADD:]` from both the displayed and saved text, so suppression just skips the bar — nothing leaks.
+
+**Out of scope / left as-is:** the OpenAI cloud backend path (`_web_search_stream_openai`, `app.py` ~2158) is **intentionally ungated** — GPT-4o self-emits the tag with reliable native judgement, so its passthrough is honoured by design. The local fallback watcher (~line 5270) is the gate-*agreed* "query too short, let the model supply it" case and correctly still honours.
+
+- ⚠️ DO NOT revert — these prevent hallucinated tool calls (search + memory) from firing UI/network actions the user never requested.
+
