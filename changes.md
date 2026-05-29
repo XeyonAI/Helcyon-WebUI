@@ -1,3 +1,604 @@
+# Pending / Backlog
+
+**TODO — Memory-confirm short-reply cap (server-side)**
+The client previously signaled an 80-token cap for memory-confirm replies via
+`max_tokens: 80` in the `/chat` body (`index.html`, gated on
+`window._memoryConfirmMaxTokens`). The server ignores client-side `max_tokens`
+(it sources sampling from `settings.json` via `load_sampling_settings()`), so the
+cap never worked. The client-side payload key was removed in the May 29 cleanup
+below; the flag setter `window._memoryConfirmMaxTokens = 80` (~index.html:5213)
+is now a harmless dangling write (no reader). Reimplement server-side: client
+sends a flag (e.g. `short_reply: true`), and the `/chat` handler applies a
+temporary `max_tokens` override for that request only.
+
+---
+
+## May 29 2026 — Anthropic per-model sampling filter (Opus 4.7/4.8 reject all sampling params)
+
+**File:** `app.py` — `ANTHROPIC_MODEL_SAMPLING_RULES` + `_anthropic_allow_for()`
+(new module constants) and `stream_anthropic_response()`. Optional UI note in
+`config.html` Sampling section.
+
+**Problem.** Anthropic rejects sampling params on a PER-MODEL, presence-based basis
+(the key merely being present 400s, regardless of value): Opus 4.7/4.8 reject
+temperature/top_p/top_k entirely; older models reject top_p alongside temperature.
+This keeps changing per model release.
+
+**Fix — two layers:**
+- **Layer 1 (known-model pre-filter):** `ANTHROPIC_MODEL_SAMPLING_RULES` maps model
+  ID → allow-list of permitted sampling params. The payload includes only allowed
+  sampling params; `model`/`max_tokens`/`stream`/`messages`/`system` are always
+  sent (not sampling params). Lookup is exact → longest-prefix (so dated IDs like
+  `claude-opus-4-8-20260101` resolve to `claude-opus-4-8`) → `DEFAULT_ANTHROPIC_ALLOW`
+  (temperature + max_tokens + stop_sequences) for unknown models. Opus 4.7/4.8 →
+  `{max_tokens, stop_sequences}` only.
+- **Layer 2 (retry-on-deprecation safety net):** if the request still 400s with a
+  message matching `(\w+) is deprecated`, the named param is stripped from the
+  payload and the request retried ONCE. A second 400 surfaces normally (no loop).
+  The retry logs `UPDATE ANTHROPIC_MODEL_SAMPLING_RULES …` — that's the signal a
+  new/unknown model needs a table entry.
+
+**Scope notes.** `top_p`/`top_k` remain un-plumbed into the Anthropic transport
+(Opus 4.7/4.8 reject them; older models work without) — trivial to add later via
+the allow-list. Local llama.cpp and OpenAI paths are untouched (filter is
+Anthropic-only). Frontend keeps ONE universal sampling set; the backend filters
+silently. Added a small UI note: "Anthropic Opus 4.7+ models ignore sampling
+parameters…".
+
+**⚠️ When new Anthropic models launch, update `ANTHROPIC_MODEL_SAMPLING_RULES`** —
+the Layer 2 retry catches unknown models gracefully in the meantime.
+
+## May 29 2026 — ⚠️ DO NOT REVERT: full sweep — native alert/confirm/prompt BANNED
+
+**Completed the sweep started in the entry below.** Every remaining native dialog
+call across `config.html`, `index.html`, `utils.js` is gone:
+- **~158 `alert(...)` → `hwuiToast(...)`** (final counts: config.html 97, index.html
+  71, utils.js 5). `kind` inferred from content: ❌/⚠️/error/failed → `'error'`,
+  ✅/saved/applied/updated/created/deleted/set-to → `'success'`, else `'info'`.
+- **20 `confirm(...)` → `await hwuiConfirm(...)`** (Promise<boolean>).
+- **5 `prompt(...)` → `await hwuiPrompt(...)`** (Promise<string|null>).
+
+**Helpers.** `hwuiConfirm` / `hwuiPrompt` are styled in-page modals (dark panel +
+backdrop, Cancel/OK, Escape = cancel, Enter = confirm/submit, backdrop-click =
+cancel). On close they restore focus to the previously-focused element, so the
+input pipeline returns naturally. Defined in **`utils.js`** (loaded by index.html →
+global for the chat page) and **inline in `config.html`** (which loads no shared
+JS). `hwuiToast` lives in both for the same reason.
+
+**Async conversions** (since `hwuiConfirm`/`hwuiPrompt` are Promise-based — `await`
+binds tighter than `!`, so `!confirm(x)` → `!await hwuiConfirm(x)` is correct):
+- `confirmEmptyPairedSave()` (config.html) made `async` (it `return`s the result);
+  its 4 callers now `await` it — `saveSystemPromptAs`, `saveGlobalSystemPrompt`,
+  `saveGlobalExampleDialog`, `saveGlobalPostHistory` (all already async).
+- `resetTheme()` and `deleteLlamaPreset()` (config.html) made `async` (both are
+  fire-and-forget `onclick` handlers — verified no caller uses their return value).
+- The "➕ New folder…" `newOpt.onclick` arrow (index.html) made `async () =>`.
+- All other confirm/prompt sites were already inside `async` functions.
+
+**Verified:** grep for word-boundary `alert(` / `confirm(` / `prompt(` (excluding
+`hwui*` and comments) → **0 hits**. `utils.js` passes `node --check`.
+
+**⚠️ DO NOT REVERT, and never reintroduce `alert()` / `confirm()` / `prompt()`** —
+they stall the Electron renderer input pipeline after dismissal (root cause below).
+Use `hwuiToast()`, `await hwuiConfirm()`, `await hwuiPrompt()`.
+
+## May 29 2026 — ⚠️ ROOT CAUSE / DO NOT REVERT: native alert()/confirm() stalls keyboard input
+
+**Real root cause of the dead-typing bug.** Native `window.alert()` / `confirm()`
+dialogs (fired on save persona, save theme, etc.) stall the Electron renderer's
+keyboard-input pipeline AFTER the dialog is dismissed: focus is technically correct
+on `#user-input` but keystrokes don't reach it until a reflow/focus-cycle
+(minimize→restore, DevTools open, click). Known Electron/Chromium quirk with native
+modals.
+
+**Fix.** Replace `alert()`/`confirm()` with in-page, non-blocking UI. Added a
+reusable `hwuiToast(message, kind, ms)` helper to `config.html` (fixed-position,
+`pointer-events:none`, fades after ~2.2s; `kind` = success/error/info). **First
+pass (Chris's confirmed triggers):** routed `alert()` → `hwuiToast()` in
+`setActiveUser()` (the actual "Active user set to …" trigger), `saveUserDetails()`
+(User Persona save), `saveTheme()`, and the Theme-tab handlers `switchThemeFile()`,
+`newThemeFile()`, `deleteThemeFile()`, `loadPreset()`. Remaining ~160 `alert()` and
+~20 `confirm()` (+ a couple of `prompt()`, e.g. `newThemeFile`/`deleteThemeFile`,
+which are the SAME native-dialog class and stall identically) across `config.html`
+/ `index.html` / `utils.js` to be swept next: success/info/error → `hwuiToast`;
+`confirm()`/`prompt()` → in-page HWUI modal.
+
+**⚠️ DO NOT REVERT — and never add new ones:** no native `alert()` or `confirm()`
+anywhere in HWUI. Use `hwuiToast()` for notifications and the in-page HWUI modal
+pattern for yes/no prompts.
+
+**Prior session fixes all STAY (correct fixes for adjacent issues found while
+hunting this):** the `mainWindow.on('focus')` + `did-navigate` refocus handlers and
+the `pageshow` listener + `focusChatInputIfIdle()` (app-switch / navigation focus);
+the bfcache disable (Flask `Cache-Control: no-store` on HTML + Electron
+`disable-features=BackForwardCache`); and the Anthropic streaming header parity.
+
+## May 29 2026 — ⚠️ DO NOT REVERT: disabled bfcache (root cause of dead-typing after nav)
+
+**Files:** `app.py` (`add_security_headers` after_request hook), `I:\HWUI-Launcher\main.js`
+(commandLine switches), plus removal of all debug instrumentation.
+
+**Root cause (finally).** The intermittent "can't type in the chat box" was NOT a
+focus bug — diagnostics confirmed `document.activeElement` was `#user-input` the
+whole time, no handler cancelled keys (`defaultPrevented` never set on typing
+keys), and `#user-input` was never `disabled`/`readonly`. It was **Chromium's
+back-forward cache (bfcache)**: navigating index ⇄ config restored the page from
+bfcache without a fresh load, leaving the renderer's **input pipeline stalled** —
+focus correct, but keystrokes not pumping until a reflow forced it (DevTools open,
+a click, or minimize→restore, all of which Chris observed "fixing" it).
+
+**Fix (belt-and-braces, both layers):**
+1. **Flask (`app.py`):** extended the existing `add_security_headers` after_request
+   hook to set `Cache-Control: no-store` on `text/html` responses only — opts HTML
+   page loads out of bfcache. Gated to `text/html` so API JSON, static assets, and
+   SSE streams (`text/event-stream`, which set their own `no-cache`) are untouched.
+2. **Electron (`main.js`):** added
+   `app.commandLine.appendSwitch('disable-features', 'BackForwardCache')` before
+   `app.whenReady()` — kills bfcache app-wide at the Chromium level, so even a
+   route that misses the Flask header is covered.
+
+**⚠️ DO NOT REVERT either.** A desktop Electron app gains nothing from bfcache
+(it's a website back-button optimisation) and it's a known source of Chromium
+input/render stalls.
+
+**Kept (legitimate fixes from this debug session — do NOT strip as "debug code"):**
+- `main.js`: `mainWindow.on('focus')` → `webContents.focus()` (app-switch refocus);
+  `webContents.on('did-navigate' / 'did-navigate-in-page')` → deferred 300ms
+  `webContents.focus()` (navigation refocus).
+- `index.html`: `focusChatInputIfIdle()` helper (with its **activeElement guard**),
+  called on `DOMContentLoaded`, `window` `focus`, and `pageshow` (deferred 300ms).
+- `app.py`: Anthropic streaming `Response` header parity (`X-Accel-Buffering: no` +
+  `Cache-Control: no-cache`).
+
+**Removed:** all TEMP DIAG instrumentation (main.js focus/nav event logger;
+index.html focus logger + keystroke-pipeline logger) — debugging complete.
+
+## May 29 2026 — Electron: defer nav-event refocus by 300ms (was firing pre-commit)
+
+**Files:** `I:\HWUI-Launcher\main.js`, `templates/index.html`.
+
+The `did-navigate` / `did-navigate-in-page` (main.js) and `pageshow` (index.html)
+refocus handlers added earlier were calling `focus()` synchronously — too early in
+the navigation lifecycle. The renderer hadn't fully committed, so Chromium's own
+post-commit focus handling overrode ours and typing stayed dead. Proven by the
+repro: **minimize→restore fixes it** — that routes through the window `focus`
+handler on an already-settled renderer, so the bare `webContents.focus()` call is
+correct; it was just firing before the page committed.
+
+**Fix:** wrapped both the main.js `_refocusRenderer` (`webContents.focus()`) and
+the index.html `pageshow` (`focusChatInputIfIdle()`) calls in `setTimeout(…, 300)`,
+matching the reliable `did-finish-load` + 300ms pattern. The `activeElement` guard
+inside `focusChatInputIfIdle` is unchanged (still no focus-stealing from modals).
+TEMP DIAG left in place. If it still fails, next step is bumping the delay (500ms →
+1000ms) to distinguish a pure timing race from something structural.
+
+## May 29 2026 — Electron: fix keyboard focus loss on index ⇄ config navigation (bfcache)
+
+**Files:** `I:\HWUI-Launcher\main.js` (`createMainWindow`) and
+`templates/index.html` (`DOMContentLoaded`).
+
+**Problem.** More specific repro than the app-switch case: launch → can type;
+go to config, return to index → **can't type**; go to config, return again →
+can type. The alternating break/work is the classic **back-forward-cache
+(bfcache)** signature. Navigation is standard `<a href>` (`index.html` →
+`/config`; `config.html` `<a href="/">` → index). On a bfcache restore Chromium
+brings the index page back WITHOUT firing `DOMContentLoaded`, so the load-time
+focus (`focusChatInputIfIdle()` from the prior fix) never re-runs and the caret
+isn't placed in `#user-input`. The `did-finish-load` / window-`focus` handlers
+don't reliably cover internal navigation either.
+
+**Dual fix (complementary, not redundant):**
+- **Renderer side (index.html):** added `window.addEventListener('pageshow',
+  focusChatInputIfIdle)`. `pageshow` fires on BOTH fresh loads and bfcache
+  restores; the listener persists across the bfcache freeze, so focus is
+  re-applied on every show even when `DOMContentLoaded` doesn't fire.
+- **Main-process side (main.js):** added `webContents.on('did-navigate', …)` and
+  `on('did-navigate-in-page', …)` → bare `webContents.focus()` (same guard as the
+  window `focus` handler — destroyed-guard, no `alwaysOnTop`). Restores renderer
+  keyboard focus whenever a navigation commits, regardless of which renderer event
+  fires.
+
+The `activeElement` guard in `focusChatInputIfIdle()` still applies (won't steal
+focus from a modal/field). `did-frame-finish-load` added to the TEMP DIAG logger;
+**TEMP DIAG instrumentation intentionally kept in place** to verify the right
+events fire post-fix.
+
+## May 29 2026 — Electron: fix intermittent loss of keyboard focus on app-switch
+
+**Files:** `I:\HWUI-Launcher\main.js` (`createMainWindow`) and
+`templates/index.html` (`DOMContentLoaded`).
+
+**Problem.** The Electron HWUI window intermittently wouldn't accept typing — the
+chat box ignored keystrokes until the user clicked inside. Investigation found the
+main `BrowserWindow` had **no `focus`/`blur` handlers at all**; the only focus
+logic was a `did-finish-load` handler, which fires on load/reload but NOT on
+app-switch refocus. So when Windows re-foregrounded the window (Alt-Tab, taskbar
+click, clicking back from another app), Chromium did not restore renderer keyboard
+focus and nothing re-applied it. Compounding it: `#user-input` had no `autofocus`
+and nothing focused it on load, so even with renderer focus the caret sat on
+`<body>`.
+
+**Fix 1 (main.js).** Added `mainWindow.on('focus', …)` → `webContents.focus()` to
+restore renderer keyboard focus every time the OS re-foregrounds the window.
+Deliberately a bare `webContents.focus()` — NOT `forceFocusMain()`, whose
+`alwaysOnTop` toggle can emit focus events and feed back on itself.
+`forceFocusMain()` stays reserved for cold-start + explicit re-show paths.
+
+**Fix 2 (index.html).** Added `focusChatInputIfIdle()` — puts the caret in
+`#user-input` on `DOMContentLoaded` (incl. after `location.reload()`) and on
+`window` `focus` (renderer-side belt-and-braces alongside Fix 1).
+
+**⚠️ DO NOT revert the `activeElement` guard.** `focusChatInputIfIdle()` grabs
+focus ONLY when `activeElement` is `<body>`, `null`, or the chat box itself.
+Without the guard, opening the config / paste-transcript modal or clicking a
+sampling field would have focus yanked back to the chat box mid-type.
+
+**Diagnostics:** the `TEMP DIAG` focus instrumentation (main.js + index.html) is
+intentionally LEFT IN for now so the logs can confirm the fix; strip it in a
+follow-up once confirmed.
+
+## May 29 2026 — Streaming: frontend drip/typewriter renderer + Anthropic header parity
+
+**Files:** `templates/index.html` (`/chat` stream consumer, ~line 3520) and
+`app.py` (both Anthropic streaming `Response` wrappers).
+
+**Background (diagnosed, not a bug at source).** An isolation test (standalone
+harness replicating the exact `iter_lines(chunk_size=1)` read loop, hitting the
+real API) proved Anthropic's `/v1/messages` SSE cadence is **~50–90 chars every
+~470ms** — coarse and lumpy. llama.cpp emits per-token deltas (fine-grained),
+which is why local feels smooth and Anthropic feels chunky. The backend forwards
+faithfully (per-delta `yield`+`flush`, `stream_with_context`); the frontend
+rendered immediately with no batching. So the lumpiness is **upstream API
+behaviour we can only smooth visually**, not fix at source. No Flask-Compress /
+gzip / proxy buffering was involved.
+
+**Fix 1 — adaptive drip renderer (`index.html`).** The `/chat` stream consumer is
+now split: the reader loop is a pure PRODUCER (appends raw chunks to `fullMessage`
++ buffers TTS on receipt, no rendering), and a `requestAnimationFrame` loop is the
+CONSUMER that reveals characters of the cleaned text at an **adaptive rate**
+(drain current backlog over ~0.35s, clamped to 45–600 cps). Big Anthropic backlog
+→ fast catch-up; nearly caught up → eases toward the floor so it doesn't race the
+next delta and stutter; local per-token deltas keep the queue tiny → steady smooth
+reveal. **On stream end it flushes ALL remaining chars immediately** — no waiting
+on the typewriter after generation finishes. `marked.parse()` runs on the
+accumulated revealed text (not the single drip char) so markdown renders correctly
+as it grows; `stripChatMLOutsideCodeBlocks` cleaning is unchanged (still per-chunk).
+Applies to ALL backends uniformly (no backend-conditional logic). `fullMessage` /
+`cleanedMessage` keep their old final values, so the empty-response guard,
+memory-tag detection, autosave, and `loadedChat` push downstream are untouched.
+
+**Fix 2 — Anthropic header parity (`app.py`).** Both Anthropic streaming
+`Response` wrappers (web-search and offpath) now set `X-Accel-Buffering: no` +
+`Cache-Control: no-cache`, matching the local path (was missing). Hygiene against
+reverse-proxy / Tailscale buffering; does NOT change the upstream cadence (the
+harness proved that's Anthropic-side).
+
+**Cleanup.** Removed the three `# TEMP DIAG` prints from `stream_anthropic_response`
+and deleted `_diag_anthropic_stream.py`. Diagnostics complete.
+
+## May 29 2026 — HWUI Launcher: spell-check suggestions in the right-click menu
+
+**File:** `I:\HWUI-Launcher\main.js`, `createMainWindow()` — `webPreferences` +
+the `context-menu` handler.
+
+Added `spellcheck: true` (explicit; it's the Electron default) and
+`session.setSpellCheckerLanguages(['en-US'])`, and extended the right-click menu
+to surface corrections for a misspelled word under the cursor:
+`params.misspelledWord` + `params.dictionarySuggestions` → suggestion items at the
+top (each calls `webContents.replaceMisspelling(...)`), plus "Add to dictionary"
+(`session.addWordToSpellCheckerDictionary`). Falls back to a disabled "No spelling
+suggestions" entry. The existing Cut/Copy/Paste/Select All/Inspect items are
+unchanged, now appended after the spelling block. Extend the language list to add
+more dictionaries.
+
+## May 29 2026 — HWUI Launcher: single-instance lock (stops stacked/orphaned Electron consoles)
+
+**File:** `I:\HWUI-Launcher\main.js`, just before the `app.whenReady()` boot block.
+
+**Problem.** Each `START_HWUI-Launcher.bat` run does `npx electron .`, which holds
+the cmd console open until Electron exits and prints Electron's own stdout/stderr
+there (e.g. `ERROR:network_service_instance_impl.cc … Network service crashed`).
+There was no single-instance guard, so every run spawned a fresh Electron + cmd
+console. When one hung during boot (Chromium network-service crash → no window,
+no tray icon — `assets\icon.png` is present, so the missing tray was the hang, not
+the asset), it became an unkillable orphan and they stacked up two or three deep.
+
+**Fix.** Added `app.requestSingleInstanceLock()`. A duplicate launch exits
+immediately so its console closes instead of stacking. `second-instance` focuses
+the live window. **Uses `app.exit(0)`, NOT `app.quit()`** — `app.exit` skips the
+`before-quit` handler, so the exiting duplicate does NOT run `killKnownPortsSync()`
+and therefore can't sweep the already-running instance's Flask :8081 / F5 :8003 /
+llama ports out from under it. (Single fixed-port design means only one build runs
+at a time anyway, so single-instance is the correct model.)
+
+**Manual cleanup for existing orphans:** close each console's X (the console is the
+parent of its Electron, so closing it kills the tree), or
+`taskkill /F /IM electron.exe /T & taskkill /F /IM node.exe /T`.
+
+## May 29 2026 — HWUI Launcher: window close (X) now fully shuts down (was hide-to-tray)
+
+**File:** `I:\HWUI-Launcher\main.js`, `mainWindow.on('close')` (~line 525) + the
+header comment block.
+
+**Problem.** Closing the HWUI window (X) only **hid the launcher to the tray** —
+the Electron app kept running, and so did its two spawned console windows
+(**F5-TTS** `f5_server.py` and the **llama-server** grandchild). Users read
+"closed the window" as "shut everything down", so two consoles appeared to hang
+after every session. Only tray → Quit actually ran the cleanup.
+
+**Fix.** The `close` handler now calls `quitApp()` instead of
+`e.preventDefault(); mainWindow.hide()`. `quitApp()` already does the full
+teardown — `killAllSubprocesses()` (synchronous `taskkill /T /F` on each tracked
+child tree, incl. the F5 `cmd.exe` → python tree) + `killKnownPortsSync()` (sweeps
+Flask :8081, F5 :8003, and the build's llama port from settings.json, which
+catches the detached llama-server console). The `isQuitting` guard still lets the
+subsequent `app.quit()` close the window normally without re-entering teardown.
+
+**Tradeoff:** minimize-to-tray is gone — closing the window ends the session.
+Tray **Quit** and **Manage Builds…** still function while running. (Supersedes
+the "Window close (X) → hide to tray" behavior described in the May 28 launcher
+entry below.)
+
+## May 29 2026 — Fix: Anthropic /v1/messages 400 — payload filtered to accepted keys, top_p dropped
+
+**File:** `app.py`, `stream_anthropic_response()` (~line 2365, the function that
+builds and POSTs to `{base}/v1/messages`). This is the sole Anthropic
+payload-building site — `_web_search_stream_anthropic()` delegates its HTTP call
+here, so both the plain and web-search Anthropic paths are covered.
+
+**The bug.** Anthropic's `/v1/messages` rejects (400) any request that carries
+**both** `temperature` and `top_p` — they are mutually exclusive, and merely
+*including* `top_p` triggers it (even `top_p: 0`). The payload sent both, so every
+Anthropic generation 400'd once a sampling preset put `top_p` in the body.
+
+**The fix.** The Anthropic payload now includes **only keys Anthropic accepts**:
+`model`, `max_tokens` (required), `temperature` (clamped ≤1.0), `messages`,
+`stream`. **`top_p` is explicitly dropped** — since we always send `temperature`,
+forwarding `top_p` is what Anthropic rejects. `min_p` / `repeat_penalty` /
+`frequency_penalty` / `presence_penalty` were already never sent to Anthropic
+(the function doesn't receive them) — confirmed, not a second bug. The `top_p`
+parameter is retained in the signature only for call-site symmetry with the
+OpenAI/local transports; it is deliberately ignored for Anthropic.
+
+**Not in scope:** `top_k` (which Anthropic *does* accept) is not currently
+threaded into this function; sending it would require signature + call-site
+changes. Left as a possible follow-up. The OpenAI transport
+(`stream_openai_response`) was sanity-checked and is correct — it sends only
+valid OpenAI params (`temperature`+`top_p` are not mutually exclusive there, and
+it never sends `min_p`/`top_k`/`repeat_penalty`); no change made.
+
+## May 29 2026 — Cleanup: removed inert sampling keys from index.html /chat bodies
+
+**File:** `templates/index.html` — both `/chat` request bodies (the main
+send/regenerate flow ~line 3360, and the "continue last response" flow ~line
+3954).
+
+Deleted the hardcoded `temperature: 0.8`, `max_tokens`, and `stop: []` keys from
+both payloads. These were **inert dead code**: the `/chat` handler in `app.py`
+never reads sampling from the request — it sources everything
+(`temperature`/`top_p`/`top_k`/`min_p`/`repeat_penalty`/`max_tokens`/penalties)
+server-side from `settings.json` via `load_sampling_settings()`. The leftover
+client values made it falsely appear that generation was pinned to temp 0.8.
+Saved sampling settings were already honored; this is pure clarity cleanup, no
+behavior change.
+
+The deleted `max_tokens` ternary in the main body also carried the
+`window._memoryConfirmMaxTokens` reset side effect — but that cap was already
+non-functional (see "Pending / Backlog" above). The separate `_memoryConfirmNote`
+author-note override (different flag) is unaffected and still works.
+
+See the May 29 falsy-zero fix below — together these make saved sampling presets
+both persist correctly (Fix 1) and visibly drive generation (this cleanup
+confirms the server path was already correct).
+
+## May 29 2026 — ⚠️ DO NOT REVERT: saveSettings() falsy-zero coercion fix (config.html)
+
+**File:** `templates/config.html`, `saveSettings()` (~line 1646).
+
+**The bug.** `saveSettings()` built its `/save_sampling_settings` payload with the
+`parseFloat(field) || default` idiom:
+```js
+top_p: parseFloat(document.getElementById('top_p').value) || 0.95,   // ← WRONG
+```
+`0` is falsy in JS, so `parseFloat("0") || 0.95` evaluates to `0.95`. Any
+legitimately-zero sampling value was silently replaced by its default on save:
+`top_p:0→0.95`, `min_p:0→0.05`, `top_k:0→40`, `temperature:0→0.8`,
+`repeat_penalty:0→1.1`. This is exactly why a loaded preset with `top_p:0`
+"reverted" after the user hit 💾 Save & Apply — the field held 0, the save
+coerced it back to 0.95. (`loadSamplingPreset()` never had the bug; it persists
+via `buildSamplingPresetFromFields()` → `readNum()`, which preserves 0.)
+
+**The fix.** `saveSettings()` now calls `buildSamplingPresetFromFields()` — the
+same single-source-of-truth helper `loadSamplingPreset()` already uses — instead
+of rebuilding the payload inline.
+
+**⚠️ DO NOT REVERT to `|| default`.** `||` looks innocent and someone (human or
+AI) will reintroduce it. For ANY numeric sampling field where 0 is a valid value
+(`top_p`, `min_p`, `top_k`, `temperature`, `repeat_penalty`, `frequency_penalty`,
+`presence_penalty`), the ONLY safe read pattern is `readNum(id, default)` /
+`Number.isNaN(val)` — which falls back ONLY on NaN (empty/invalid field), never
+on a real 0. Never use `parseFloat(x) || default` or `parseInt(x) || default`
+for these fields.
+
+**Related (not changed here).** The `/chat` handler in `app.py` already sources
+ALL sampling from `settings.json` via `load_sampling_settings()` — the
+`temperature: 0.8` / `max_tokens: 4096` in index.html's `/chat` bodies
+(~lines 3366, 3961) are inert; the server ignores them. Cleanup of those dead
+keys is tracked separately.
+
+## May 28 2026 — HWUI Launcher: Standalone Electron Desktop Wrapper at I:\HWUI-Launcher\
+
+**Files:** new directory `I:\HWUI-Launcher\` containing `main.js`, `preload.js`,
+`picker.html`, `setup.html`, `loading.html`, `package.json`, `builds.json`,
+`.gitignore`, `START_HWUI-Launcher.bat`, and `assets\icon.png` (copied from
+`static\images\Helcyon.png`). **Independent of the dev build** — no hardcoded
+`I:\HWUI-Pro-Dev-build` paths anywhere. Each HWUI install is registered in
+`builds.json` and selected at runtime. Old `I:\HWUI-Pro-Dev-build\electron\`
+folder and `START_HWUI-Electron.bat` were removed; the launcher lives entirely
+under its own root and was authored on `C:\` then moved to `I:\` (every internal
+path resolves via `path.join(__dirname, …)` and the `.bat` uses `cd /d "%~dp0"`,
+so the folder is freely relocatable).
+
+**Purpose.** Wraps any HWUI install in a frameless Electron window so users can
+launch Flask + F5-TTS as a single desktop app with proper window chrome, system
+tray, and clean subprocess management. `START_HWUI-Dev.bat` is unchanged and
+still works for plain-python launches.
+
+**`builds.json` shape.** Ships empty (`[]`). Pre-populated examples:
+```json
+[
+  { "name": "Dev Build", "path": "I:\\HWUI-Pro-Dev-build", "services": ["f5", "whisper"] },
+  { "name": "Personal",  "path": "E:\\HWUI personal",      "services": ["f5", "whisper"] }
+]
+```
+Each entry is path + friendly name + a list of services to spawn for that build.
+Read/written by `loadBuilds()` / `saveBuilds()` in `main.js`. Validation
+(`validateBuildPath`) rejects folders without `app.py`, rejects duplicate paths
+(case-insensitive), rejects empty names.
+
+**Boot flow.**
+1. Apply GPU/disk-cache redirects BEFORE `app.whenReady()`:
+   `app.commandLine.appendSwitch('disable-gpu-shader-disk-cache')` +
+   `appendSwitch('disk-cache-dir', path.join(os.tmpdir(), 'hwui-launcher-cache'))`.
+   Suppresses the "Unable to move cache / Access denied" Chromium spam when
+   running from a non-system drive (Chromium's default cache lives under
+   `%LOCALAPPDATA%` and can't always relocate there cleanly from `I:\`).
+2. Install local cert bypass via `session.defaultSession.setCertificateVerifyProc` —
+   returns `0` (OK) when `request.hostname` is `127.0.0.1` / `localhost` /
+   `[::1]`, otherwise returns `-3` (use Chromium default verification). The
+   verification-layer hook is what actually stops the `ERR_CERT_*` spam — the
+   older `app.on('certificate-error', …)` event fires AFTER Chromium has
+   already logged each sub-resource (CSS/JS/SSE/etc.) on HWUI's self-signed
+   Tailscale cert. The certificate-error handler is kept as a hardened
+   fallback (parses with `new URL(url).hostname` so `https://127.0.0.1.evil.com`
+   no longer slips through the old `startsWith` check).
+3. Register persistent IPC handlers (see below) + create tray.
+4. Load `builds.json`. If empty → show first-run setup; user must add ≥1
+   build before launch. If non-empty → show **picker on every launch**
+   (no single-build shortcut — user confirms which build each time).
+5. Pre-launch port-kill of `:8081` (Flask) and `:8003` (F5) via
+   `netstat -ano | findstr :PORT` + `taskkill /PID … /F /T`. Mirrors the
+   existing `START_HWUI-Dev.bat` port-kill but covers F5 too.
+6. Spawn Flask: `<buildPath>\venv\Scripts\python.exe app.py`, cwd = build
+   path, `env: { …process.env, PYTHONIOENCODING: 'utf-8' }`. The
+   `PYTHONIOENCODING` is load-bearing — without it, the cp1252 default on
+   Windows raises `UnicodeEncodeError` on Flask's emoji startup prints
+   (🔒/🌐/✅/🚀) and the spawn dies before the readiness poll succeeds.
+7. Spawn optional services per `selectedBuild.services`.
+8. Detect scheme — HTTPS if `music.tail39b776.ts.net.crt` + `.key` exist in
+   the build root, else HTTP. Mirrors the same check in `app.py`.
+9. Poll `<scheme>://127.0.0.1:8081/` every 300 ms with a 60s budget;
+   navigate the main window from `loading.html` to the live URL on first
+   response (any 2xx/3xx/4xx counts — "Flask is awake" is all that matters).
+
+**Services architecture (`subprocesses[]` + two spawn helpers).**
+- **`flask`** (always) — `spawnService('flask', '<build>\app.py', '<build>')`
+  using venv python.
+- **`f5`** — `spawnBatService('f5-tts', '<build>\Start_F5_XTTS.bat', '<build>')`
+  via `cmd.exe /c <bat>`. **NOT** direct python — the .bat hardcodes
+  `cd /d "I:\HWUI-Pro-Dev-build"` and activates an EXTERNAL venv at
+  `I:\F5-TTS\f5_venv\Scripts\activate.bat`, which neither the dev build's
+  nor Personal's local venv has (Personal was missing `soundfile` on the
+  direct-python spawn attempt — fatal `ModuleNotFoundError`). Using the
+  .bat means F5 always runs from the Dev Build root regardless of the
+  selected build, against its dedicated f5_venv. The python process is a
+  direct child of cmd.exe, so `taskkill /pid <cmdPid> /T /F` reaps it on
+  quit. Caveat: the .bat ends with `pause`, so if F5 ever crashes, cmd.exe
+  hangs on the pause prompt instead of exiting — `taskkill` on quit still
+  cleans it up, but the `child.on('exit', …)` callback won't fire for
+  monitoring purposes.
+- **`whisper`** (no-op slot) — Whisper has no standalone server;
+  `whisper_routes.py` is a Flask Blueprint that does `import whisper` and
+  runs in-process. The launcher logs `"whisper is in-process with Flask —
+  no subprocess spawn"` and continues. The slot is kept in `services` for
+  forward compat if a `whisper_server.py` is ever extracted.
+
+Every spawn pushes `{ name, child }` into a `subprocesses[]` array.
+`killAllSubprocesses()` walks it and does `taskkill /pid <pid> /T /F` on
+each — `/T` reaps Python children of cmd.exe wrappers too. Called from
+`app.on('before-quit')` and the explicit tray-Quit path.
+
+**Setup / Manage Builds UI (`setup.html`).** One file serves two modes via an
+IPC `hwui:get-setup-mode` invoke:
+- **first-run** — titlebar "HWUI Launcher — Welcome"; primary button
+  "Launch HWUI" (disabled until ≥1 build added); closing the window quits.
+- **manage** — titlebar "HWUI Launcher — Manage Builds"; primary button
+  "Done"; closing the window is non-destructive (app keeps running with
+  whatever build is already selected for the session — `builds.json`
+  changes apply on the NEXT launch).
+
+Add flow: **+ Add Build** opens a modal with two fields. **Browse…** button
+opens `dialog.showOpenDialog({ properties: ['openDirectory'] })` and shows
+the chosen path read-only in a mono span next to it. **Name** is a text
+input (auto-fills with the last path segment if the user hasn't typed
+anything yet — never overwrites their typing). **Add** stays disabled
+until both path and name are filled. New builds default to
+`services: ["f5", "whisper"]`.
+
+**Picker (`picker.html`).** Always shown on launch (no single-build
+shortcut). Renders the list of builds with click-to-select via
+`hwui:select-build`. **+ Add Build** footer button opens the SAME modal as
+`setup.html` — on successful add the picker list refreshes immediately so
+the new entry is selectable without going through tray → Manage Builds.
+
+**Tray menu.**
+- **Show HWUI** — restore the main window (disabled pre-launch via
+  `enabled: !!mainWindow`; `rebuildTrayMenu()` flips this when the main
+  window is created).
+- **Manage Builds…** — opens `setup.html` in manage mode at any time.
+- **Quit** — only path that actually taskkills subprocesses and exits.
+
+Window close (X) → `event.preventDefault()` + `mainWindow.hide()`
+(minimize to tray).
+
+**Main window chrome.** `frame: false` + `titleBarStyle: 'hidden'` +
+`titleBarOverlay: { color: '#0e0e0e', symbolColor: '#e8e8e8', height: 32 }`
+gives Windows-native min/max/close buttons overlaid on a thin dark drag
+strip across the top. No custom HTML titlebar — the native overlay handles
+drag region, button hover states, and click dispatch. `resizable: true`,
+`maximizable: true`. Right-click context menu (Cut/Copy/Paste/Select All/
+Inspect Element) wired via `webContents.on('context-menu', …)` using
+`params.editFlags` so disabled actions stay greyed out instead of
+misfiring.
+
+**The `[hidden] { display: none !important; }` trap.** Modal overlays and
+empty-state divs in `setup.html` and `picker.html` used `<div hidden>` +
+`display: flex` on the same class — author CSS beats UA CSS at the origin
+level regardless of equal specificity, so `.modal-overlay { display:
+flex }` defeats `[hidden] { display: none }`. Symptom: clicking Cancel
+or Add appeared to do nothing because the modal couldn't visually hide
+(the JS handler DID fire — `pendingPath` got cleared, `nameInput.value =
+''`, `addModal.hidden = true` — the attribute just had no rendering
+effect). Fix is one line at the top of both files' `<style>` blocks:
+```css
+[hidden] { display: none !important; }
+```
+
+**IPC surface (`preload.js` exposes `window.hwui`):**
+- `getBuilds()` → `invoke('hwui:get-builds')`
+- `selectBuild(index)` → `send('hwui:select-build', index)`
+- `quit()` → `send('hwui:quit')`
+- `getSetupMode()` → `invoke('hwui:get-setup-mode')`
+- `browseForBuild()` → `invoke('hwui:browse-for-build')` — opens the
+  native `dialog.showOpenDialog` and validates `app.py` exists in the
+  result
+- `addBuild({ name, path })` → `invoke('hwui:add-build', payload)` —
+  validates, dedupes, persists
+- `removeBuild(index)` → `invoke('hwui:remove-build', index)`
+- `finishSetup()` → `send('hwui:finish-setup')` (first-run: closes setup
+  + signals "proceed to launch")
+- `closeSetup()` → `send('hwui:close-setup')` (manage: closes setup
+  without launching)
+
+**Launcher .bat (`START_HWUI-Launcher.bat`).** Checks `where node`; bails
+with an install-Node.js message if missing. On first run (`if not exist
+node_modules`) runs `npm install`, then `npx electron .`. Subsequent
+launches go straight to `npx electron .`.
+
+⚠️ The launcher is independent of the dev build — restart-Flask
+admonitions do NOT apply here; the launcher itself doesn't need any
+restart, and launches a fresh Flask subprocess per session.
+
 ## May 26 2026 — Full {{char}} / {{user}} Placeholder Substitution Across ALL Model-Bound Text (One Shared Helper)
 
 **Files:** app.py (new `substitute_placeholders` ~81; labels derived once ~2578;
@@ -4573,4 +5174,139 @@ Root cause: memory confirmation handler calling `fetchAndDisplayResponse()` with
 **Out of scope / left as-is:** the OpenAI cloud backend path (`_web_search_stream_openai`, `app.py` ~2158) is **intentionally ungated** — GPT-4o self-emits the tag with reliable native judgement, so its passthrough is honoured by design. The local fallback watcher (~line 5270) is the gate-*agreed* "query too short, let the model supply it" case and correctly still honours.
 
 - ⚠️ DO NOT revert — these prevent hallucinated tool calls (search + memory) from firing UI/network actions the user never requested.
+
+---
+
+## Session: May 28–29 2026 — Anthropic backend, Electron launcher fixes, sampling-preset persistence (PARTIALLY DONE — preset persistence STILL BROKEN)
+
+This session covered four areas. Two are believed complete; the sampling-preset
+persistence and the Electron typing-focus issues were iterated on repeatedly and
+are **still reported broken by the user** as of end of session. A fresh session
+should start from the "STILL BROKEN" notes below.
+
+### 1. Anthropic (Claude) cloud backend — DONE (untested by user)
+Added native Anthropic Messages-format support alongside the existing OpenAI
+backend. Keys for both providers are stored so switching is a toggle, no
+re-pasting.
+
+**`app.py`:**
+- `get_anthropic_base_url()` (next to `get_openai_base_url()`) — reads
+  `anthropic_base_url`, default `https://api.anthropic.com/v1`.
+- `stream_anthropic_response()` — native transport: `x-api-key` +
+  `anthropic-version: 2023-06-01` headers, `POST {base}/messages`, top-level
+  `system` param, `max_tokens` required, temperature clamped to ≤1.0, SSE parsed
+  via `content_block_delta` → `delta.text`.
+- `_web_search_stream_anthropic()` — mirrors `_web_search_stream_openai` for the
+  `[WEB SEARCH:]` tag flow on Anthropic transport.
+- `_anthropic_normalize()` — coerces chat list to user/assistant-only, leading-user,
+  no consecutive same-role.
+- Chat fork: `elif backend_mode == 'anthropic'` branch (after the OpenAI fork),
+  with the same off-path tag-suppression when web search is off.
+- Routes: `/get_anthropic_settings`, `/save_anthropic_settings`,
+  `/get_anthropic_models` (hits Anthropic `/v1/models`).
+- `backend_mode` now takes `local` | `openai` | `anthropic`.
+
+**`config.html`:** section retitled "☁️ Cloud Backend"; 3-way Local/OpenAI/Anthropic
+toggle; shared cloud-confirm modal (`confirmCloudSwitch`); Anthropic block
+(endpoint/key/model+Fetch/Save); `setBackendMode` handles 3 states; cloud mode
+dims local-only params; `loadAnthropicSettings`/`saveAnthropicSettings`/`fetchAnthropicModels`.
+
+**`index.html`:** added green `#anthropic-indicator` privacy badge mirroring the
+OpenAI one (`checkAnthropicIndicator()`), shown when `backend_mode==='anthropic'`
+and a key is set. Privacy signal that typed content is leaving the box.
+
+**`settings.json`:** added `anthropic_api_key`, `anthropic_model` (default
+`claude-sonnet-4-5`), `anthropic_base_url`.
+
+⚠️ NOT updated: `mobile.html` (still OpenAI-only). Anthropic web-search path is
+intentionally ungated like the OpenAI one.
+
+### 2. Electron launcher (`I:\HWUI-Launcher\main.js`) — process cleanup DONE; typing-focus STILL BROKEN
+- **Process cleanup on quit (believed DONE):** `killAllSubprocesses()` switched
+  from async `exec` to **`execSync`** so kills finish before the app exits.
+  Added `killPortSync(port)` + `killKnownPortsSync()` which sweeps Flask (8081),
+  F5 (8003), and the build's llama-server port (read from the build's
+  `settings.json` `llama_args.port`, default 5000) — llama-server is a grandchild
+  spawned by Flask and was being orphaned. Wired into `quitApp()` and the
+  `before-quit` safety net. Import line now `const { spawn, exec, execSync }`.
+  NOTE: closing via the X button still hides to tray by design; only tray→Quit
+  actually shuts down.
+- **Reload affordances (DONE):** tray "Reload HWUI" item; `reloadMain()`;
+  re-registered F5 / Ctrl+R / Ctrl+Shift+R via `before-input-event` (app menu is
+  nulled so the defaults were gone). In-window reload button added to BOTH
+  `index.html` and `config.html` top bars (Electron-only via userAgent check,
+  `#electron-reload-btn`, `location.reload()`).
+- **🔴 STILL BROKEN — typing in Electron requires a click first.** Iterated several
+  times. Current state of the focus fix (boot, end of `app.whenReady`): a
+  PERSISTENT `did-finish-load` handler calls `forceFocusMain()` immediately and
+  again at 300ms. `forceFocusMain()` does restore→`setAlwaysOnTop(true)`→`show()`
+  →`setAlwaysOnTop(false)`→`focus()`→`webContents.focus()`→`app.focus({steal:true})`.
+  Picker is now `destroy()`ed (not `close()`) in the select handler + a boot guard
+  destroys it before `createMainWindow()`. **User still reports keyboard dead until
+  a manual click.** NEXT SESSION: this may not be a launcher problem at all —
+  investigate whether the HWUI page (`index.html`) moves focus on load (an element
+  `.focus()`/`.blur()`, an autofocused hidden input, or a focus-trap), or whether
+  Windows foreground-lock is defeating `app.focus`. Consider `webContents` `'focus'`
+  event, or focusing `#user-input` from within the page on load.
+
+### 3. Sampling presets — Update button + disk persistence — 🔴 STILL BROKEN (preset reverts on refresh)
+Long back-and-forth. Believed-correct code is in place but the user STILL reports
+that loading a preset and refreshing reverts the values.
+
+**What was built (all present in the files now):**
+- `config.html`: `🔄 Update Preset` button (`updateSamplingPreset()`) overwrites the
+  selected preset; visible only when a preset is selected (`syncSamplingUpdateBtn`).
+- Presets moved from localStorage to **disk**: in-memory `samplingPresets` cache
+  hydrated by `loadSamplingPresetsFromServer()` (called directly in
+  `DOMContentLoaded`, NOT inside `loadLlamaConfig` — that coupling was a bug, since
+  `loadLlamaConfig` early-returns on `data.error`). `buildSamplingPresetFromFields()`
+  / `readNum()` (only falls back on NaN, logs raw values). `persistSamplingPreset()`
+  POSTs to the backend and updates cache only on success.
+- `app.py`: `SAMPLING_PRESETS_FILE = "sampling_presets.json"` (relative),
+  `load_sampling_presets()`/`save_sampling_presets()` (atomic), routes
+  `/sampling_presets` (GET), `/sampling_presets/save`, `/sampling_presets/delete`.
+  All have `[SP]` logging incl. disk read-back proof.
+- `loadSamplingPreset()` now ALSO POSTs the loaded values to
+  `/save_sampling_settings` so they persist into `settings.json` and survive a
+  refresh (refresh repopulates fields from `settings.json` via `loadSettings()`).
+
+**Verified by trace (all correct & mutually consistent):** `loadSettings()` reads
+`/get_sampling_settings`; `/save_sampling_settings` merges into `SETTINGS_FILE`
+(absolute = `dirname(__file__)/settings.json`); `load_sampling_settings()` reads
+the same; `get_llama_settings()` is read-only (does NOT clobber). So the
+save→disk→load chain is logically sound.
+
+**Last hypothesis (acted on):** Jinja template caching — Flask runs
+`use_reloader=False, debug=False`, so compiled templates were cached in-process
+and edited `config.html` was never served until a manual restart. Enabled
+`app.config['TEMPLATES_AUTO_RELOAD'] = True` + `app.jinja_env.auto_reload = True`
+right after `app = Flask(...)` (app.py ~line 28). **User reports STILL broken
+after this.**
+
+**🔴 NEXT SESSION — open questions to resolve first:**
+- Confirm WHICH build the launcher is actually running (the picker can select a
+  different build folder than `I:\HWUI-Pro-Dev-build`). If edits are made here but
+  a different build is launched, none of this is live. **Check `builds.json` /
+  the selected build path vs. where edits are being made.** This is the most
+  likely explanation given everything traced correct.
+- Confirm via console/Flask logs whether the new code even runs: look for
+  `hydrating presets`, `[SP] loadSamplingPreset applied … to settings.json`, and
+  Flask `✅ Sampling settings saved:`. If absent → stale template / wrong build.
+- Note the relative vs absolute path inconsistency: `SAMPLING_PRESETS_FILE` and
+  `get_llama_settings()` use a RELATIVE `settings.json`/`sampling_presets.json`
+  (CWD-dependent), while `SETTINGS_FILE` is absolute. Launcher sets `cwd=buildPath`
+  so they normally coincide, but if CWD ever differs this splits the data across
+  two files. Worth making all paths absolute.
+
+### 4. Template auto-reload — DONE (needs ONE restart to take effect)
+`app.py` ~line 28: `app.config['TEMPLATES_AUTO_RELOAD'] = True` +
+`app.jinja_env.auto_reload = True`. After one restart, template/CSS/JS edits go
+live on a browser refresh; only `.py` edits need a restart thereafter. Memory note
+`project-flask-restart` updated to reflect this.
+
+### ⚠️ Cross-cutting reminder
+Everything above is in `I:\HWUI-Pro-Dev-build`. If the Electron launcher's picker
+is pointed at a DIFFERENT build folder, the running app will not reflect these
+edits — verify the launched build path before further debugging the two
+still-broken items.
 

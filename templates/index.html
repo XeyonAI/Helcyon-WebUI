@@ -118,6 +118,33 @@
          of chat), and falls back to "Helcyon-WebUI" when in global chats.
          Updated in loadProjects(). -->
     <div><strong id="topbar-title">Helcyon-WebUI</strong></div>
+
+    <!-- Electron-only window reload button. Sits in the frameless title-bar
+         strip, just left of the native min/max/close overlay (top-right). The
+         launcher nulls out the app menu, so Ctrl+R/F5 don't work — this is the
+         in-window way to recover from a stuck/failed page. Hidden in a normal
+         browser (no frameless chrome there, and F5 already works). Marked
+         no-drag so it stays clickable regardless of any title-bar drag region. -->
+    <button id="electron-reload-btn" onclick="location.reload()" title="Reload HWUI"
+      style="display:none; position:fixed; top:3px; right:150px; z-index:2000;
+             width:26px; height:26px; align-items:center; justify-content:center;
+             border-radius:6px; border:1px solid var(--modal-border,#2d394b);
+             background:rgba(255,255,255,0.06); color:#e8e8e8; cursor:pointer;
+             -webkit-app-region:no-drag; padding:0; line-height:0;">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="23 4 23 10 17 10"></polyline>
+        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+      </svg>
+    </button>
+    <script>
+      // Reveal the reload button only inside the Electron launcher.
+      if (navigator.userAgent.toLowerCase().indexOf('electron') !== -1) {
+        var _erb = document.getElementById('electron-reload-btn');
+        if (_erb) _erb.style.display = 'flex';
+      }
+    </script>
+
     <!-- Model trigger — floating below top bar, right aligned -->
     <div style="position:fixed; top:72px; right:12px; z-index:999; display:flex; align-items:center; gap:8px;">
       <!-- OpenAI active indicator -->
@@ -126,6 +153,14 @@
         <div style="display:flex; flex-direction:column; line-height:1.3;">
           <span style="font-size:12px; color:#4dffaa; font-weight:600;">☁️ OpenAI</span>
           <span id="openai-indicator-model" style="font-size:10px; color:#2aaa66;">gpt-4o</span>
+        </div>
+      </div>
+      <!-- Anthropic active indicator -->
+      <div id="anthropic-indicator" title="Anthropic backend active" style="display:none; align-items:center; gap:7px; background:rgba(0,180,100,0.12); border:1px solid rgba(0,200,100,0.35); border-radius:20px; padding:6px 14px; white-space:nowrap;">
+        <span style="width:8px; height:8px; border-radius:50%; background:#00e87a; display:inline-block; box-shadow:0 0 6px #00e87a; flex-shrink:0;"></span>
+        <div style="display:flex; flex-direction:column; line-height:1.3;">
+          <span style="font-size:12px; color:#4dffaa; font-weight:600;">🧠 Anthropic</span>
+          <span id="anthropic-indicator-model" style="font-size:10px; color:#2aaa66;">claude</span>
         </div>
       </div>
       <button id="model-display" onclick="toggleModelPicker()" title="Switch model" style="
@@ -674,9 +709,9 @@ async function handleImageAttach(input) {
     if (mres.ok) {
       const mdata = await mres.json();
       if (!mdata.vision_active) {
-        alert('⚠️ The loaded model has no vision support (no mmproj file).\n\n'
+        hwuiToast('⚠️ The loaded model has no vision support (no mmproj file).\n\n'
             + 'Load a vision-capable model before attaching images — otherwise '
-            + 'the image cannot be read.');
+            + 'the image cannot be read.', 'error');
         input.value = '';
         return;
       }
@@ -777,10 +812,10 @@ async function handleDocumentAttach(input) {
     try {
       var res = await fetch('/parse_document', { method: 'POST', body: formData });
       var data = await res.json();
-      if (data.error) { alert('Could not read "' + file.name + '": ' + data.error); continue; }
+      if (data.error) { hwuiToast('Could not read "' + file.name + '": ' + data.error, 'error'); continue; }
       window.attachedDocuments.push({ filename: data.filename || file.name, content: data.content || '' });
     } catch (e) {
-      alert('Failed to read "' + file.name + '": ' + e.message);
+      hwuiToast('Failed to read "' + file.name + '": ' + e.message, 'error');
     }
   }
   renderDocumentPreviews();
@@ -1434,7 +1469,7 @@ if (typeof marked === "undefined") {
   async function quickSwapTo(presetName) {
     const presets = getLlamaPresetsFromStorage();
     const p = presets[presetName];
-    if (!p) { alert('Preset "' + presetName + '" not found. Set it up in Config first.'); return; }
+    if (!p) { hwuiToast('Preset "' + presetName + '" not found. Set it up in Config first.', 'info'); return; }
 
     const status = document.getElementById('quick-swap-status');
     const buttons = document.querySelectorAll('#quick-swap-buttons button');
@@ -2065,7 +2100,7 @@ function persistChatState() {
           
         } catch (err) {
           console.error('❌ Duplicate failed:', err);
-          alert('Failed to duplicate chat: ' + err.message);
+          hwuiToast('Failed to duplicate chat: ' + err.message, 'error');
         }
       });
       
@@ -2077,14 +2112,14 @@ function persistChatState() {
       del.addEventListener('click', async (e) => {
         e.stopPropagation();
         
-        if (!confirm('Delete "' + displayTitle + '"?')) return;
+        if (!await hwuiConfirm('Delete "' + displayTitle + '"?')) return;
         
         try {
           await fetch('/chats/delete/' + chat.filename, { method: 'DELETE' });
           loadChats();
         } catch (err) {
           console.error('Delete failed:', err);
-          alert('Failed to delete chat.');
+          hwuiToast('Failed to delete chat.', 'error');
         }
       });
       
@@ -2210,7 +2245,7 @@ function persistChatState() {
         console.log('✅ Message edited, saved');
       } catch (err) {
         console.error('❌ Failed to save after editing:', err);
-        alert('Failed to save edited message.');
+        hwuiToast('Failed to save edited message.', 'error');
         return;
       }
 
@@ -2426,7 +2461,7 @@ function persistChatState() {
         const data = await res.json();
         
         if (data.error) {
-          alert('Rename failed: ' + data.error);
+          hwuiToast('Rename failed: ' + data.error, 'error');
         } else {
           console.log('✅ Renamed:', filename, '→', data.new_filename);
           
@@ -2447,7 +2482,7 @@ function persistChatState() {
         
       } catch (err) {
         console.error('Rename error:', err);
-        alert('Failed to rename chat.');
+        hwuiToast('Failed to rename chat.', 'error');
         loadChats();
       }
     };
@@ -2532,7 +2567,7 @@ function persistChatState() {
     if (!option) {
       console.warn('⚠️ Character "' + characterName + '" not found in dropdown');
       console.warn('Available characters:', Array.from(dropdown.options).map(o => o.value));
-      alert('Character "' + characterName + '" not found. Please select a valid character from the dropdown.');
+      hwuiToast('Character "' + characterName + '" not found. Please select a valid character from the dropdown.', 'info');
       return false;
     }
     
@@ -2592,7 +2627,7 @@ async function openChat(filename) {
     
     if (!characterName) {
       console.warn('⚠️ No character name detected in filename:', filename);
-      alert('Invalid chat filename format. Expected: "Character - Title.txt"');
+      hwuiToast('Invalid chat filename format. Expected: "Character - Title.txt"', 'error');
       return;
     }
     
@@ -2609,7 +2644,7 @@ async function openChat(filename) {
     var data = await res.json();
     
     if (data.error) {
-      alert("Chat not found.");
+      hwuiToast("Chat not found.", 'info');
       return;
     }
     
@@ -2666,7 +2701,7 @@ async function openChat(filename) {
     
   } catch (err) {
     console.error("❌ Error opening chat:", err);
-    alert('Failed to open chat: ' + err.message);
+    hwuiToast('Failed to open chat: ' + err.message, 'error');
   }
 }
   // ==================================================
@@ -3068,7 +3103,7 @@ async function openChat(filename) {
         var data = await res.json();
         
         if (data.error) {
-          alert('Failed to create chat.');
+          hwuiToast('Failed to create chat.', 'error');
           return;
         }
         
@@ -3093,7 +3128,7 @@ async function openChat(filename) {
                 
       } catch (err) {
         console.error('Error auto-creating chat:', err);
-        alert('Failed to create chat.');
+        hwuiToast('Failed to create chat.', 'error');
         return;
       }
     }
@@ -3316,9 +3351,9 @@ async function openChat(filename) {
           current_chat_filename: currentChatFilename,
           conversation_history: chatToSend,
           author_note: (window._memoryConfirmNote ? (window._memoryConfirmNote = false, '[SYSTEM OVERRIDE: The user just confirmed a memory save. Write ONE short sentence confirming it is saved. Do NOT write any MEMORY ADD tags. Do NOT summarize. Do NOT ask questions.]') : localStorage.getItem(`author-note-${currentChatFilename}`) || ''),
-          temperature: 0.8,
-          max_tokens: (window._memoryConfirmMaxTokens ? (window._memoryConfirmMaxTokens = 0, 80) : 4096),
-          stop: [],      
+          // Sampling (temperature/max_tokens/top_p/etc.) is sourced server-side
+          // from settings.json via load_sampling_settings() — client values were
+          // inert. See CHANGES.md "Pending / Backlog" for the memory-confirm cap.
         })
       });
       
@@ -3474,17 +3509,79 @@ async function openChat(filename) {
       const reader = response.body.getReader();
       window._activeReader = reader;
       const decoder = new TextDecoder("utf-8");
-      let fullMessage = "";
-      let cleanedMessage = "";
+      let fullMessage = "";       // ALL raw chars received — used by TTS, the empty
+                                  // guard, and memory-tag detection below.
+      let cleanedMessage = "";    // final cleaned text — set when the drip finishes.
 
       // Get user/char names for cleanup
       const userName = activeUserName || "User";
       const charName = currentCharName || "Assistant";
 
-      // Simple per-token render — clean and re-parse on each chunk.
-      // No artificial delay (was 25ms before — caused progressive slowdown on long responses).
-      // marked.parse cost is acceptable at typical token rates.
+      // ── Adaptive drip / typewriter renderer ───────────────────────────────
+      // Decouples backend SSE cadence from the visual reveal so every backend
+      // unspools smoothly. Local llama.cpp emits per-token deltas (fine-grained);
+      // Anthropic emits ~50–90 chars every ~470ms (coarse, lumpy — proven to be
+      // upstream API behaviour, not something we can fix at source). The reader
+      // loop is a pure PRODUCER (appends raw chunks + buffers TTS, no rendering);
+      // this rAF loop is the CONSUMER that reveals characters at an adaptive rate.
+      // marked.parse() runs on the ACCUMULATED revealed text (not the single drip
+      // char), so markdown formatting renders correctly as the text grows.
+      let cleanedFull   = "";     // stripChatML(fullMessage) — refreshed per chunk by the reader
+      let revealedCount = 0;      // chars of cleanedFull currently shown
+      let streamDone    = false;  // reader loop finished (done / error / cancel)
 
+      function renderRevealed(isFinal) {
+        const slice = cleanedFull.slice(0, revealedCount);
+        let html = marked.parse(sanitizeMarkdown(slice));
+        html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
+        if (isFinal) {
+          cleanedMessage = cleanedFull;   // hand the full cleaned text to post-stream logic
+          renderModelHTML(streamEl, html);
+          addCodeCopyButtons(streamEl.parentNode || streamEl);
+        } else {
+          streamEl.innerHTML = html;
+        }
+        chat.scrollTop = chat.scrollHeight;
+      }
+
+      const dripDone = new Promise((resolve) => {
+        const MIN_CPS = 45, MAX_CPS = 600, DRAIN_SEC = 0.35;
+        let lastTs = performance.now();
+        let carry  = 0;           // fractional-char accumulator across frames
+        function tick(ts) {
+          const dt = Math.min((ts - lastTs) / 1000, 0.1);  // clamp dt after a tab stall
+          lastTs = ts;
+
+          if (!streamDone) {
+            // Adaptive: aim to drain the current backlog in ~DRAIN_SEC, clamped to
+            // [MIN,MAX] cps. A big Anthropic backlog → fast catch-up; nearly caught
+            // up → eases toward MIN so we don't race ahead of the next delta and
+            // stutter. Local per-token deltas keep the queue tiny → steady ~MIN.
+            const queue = cleanedFull.length - revealedCount;
+            if (queue > 0) {
+              const cps = Math.max(MIN_CPS, Math.min(MAX_CPS, queue / DRAIN_SEC));
+              carry += cps * dt;
+              const advance = Math.floor(carry);
+              if (advance > 0) {
+                carry -= advance;
+                revealedCount = Math.min(revealedCount + advance, cleanedFull.length);
+                renderRevealed(false);
+              }
+            }
+            requestAnimationFrame(tick);
+            return;
+          }
+
+          // Stream ended → flush ALL remaining chars at once. The user never waits
+          // on the typewriter after generation is actually finished.
+          revealedCount = cleanedFull.length;
+          renderRevealed(true);
+          resolve();
+        }
+        requestAnimationFrame(tick);
+      });
+
+      // ── Reader loop (producer only — no rendering) ────────────────────────
       while (true) {
         let readResult;
         try {
@@ -3495,11 +3592,12 @@ async function openChat(filename) {
         }
         const { value, done } = readResult;
         if (done) { console.log('✅ Stream done signal received'); break; }
-        
+
         const chunk = decoder.decode(value, { stream: true });
         fullMessage += chunk;
-        
-        // Buffer text for TTS — pass cleaned chunk so sentence splitting works correctly
+
+        // Buffer text for TTS on RECEIPT (not on the drip) so audio isn't delayed
+        // by the typewriter. Pass cleaned chunk so sentence splitting works correctly.
         if (typeof bufferTextForTTS === 'function') {
           const ttsChunk = chunk
             .replace(/<\|im_start\|>(assistant|user|system)[^\n]*/gi, '')
@@ -3515,21 +3613,13 @@ async function openChat(filename) {
           bufferTextForTTS(ttsChunk);
         }
 
-        cleanedMessage = stripChatMLOutsideCodeBlocks(fullMessage, charName, userName).trim();
+        // Refresh the cleaned text the drip reveals from (same cleaning as before).
+        cleanedFull = stripChatMLOutsideCodeBlocks(fullMessage, charName, userName).trim();
+      }
 
-        let html = marked.parse(sanitizeMarkdown(cleanedMessage));
-        html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
-        streamEl.innerHTML = html;
-        chat.scrollTop = chat.scrollHeight;
-      }
-      // Final render to ensure last chunks are displayed
-      {
-        let html = marked.parse(sanitizeMarkdown(cleanedMessage));
-        html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
-        renderModelHTML(streamEl, html);
-        addCodeCopyButtons(streamEl.parentNode || streamEl);
-        chat.scrollTop = chat.scrollHeight;
-      }
+      // Signal the drip we're done; it flushes the remainder on its next tick.
+      streamDone = true;
+      await dripDone;
 
       // ── Empty response guard ─────────────────────────────────────────
       // Model occasionally fires EOS as first token — retry exactly once.
@@ -3625,7 +3715,7 @@ async function openChat(filename) {
 
   async function manualSaveChat() {
     if (!currentChatFilename || !window.loadedChat || window.loadedChat.length === 0) {
-      alert('Nothing to save yet.');
+      hwuiToast('Nothing to save yet.', 'info');
       return;
     }
     const btn = document.getElementById('save-chat-btn');
@@ -3804,7 +3894,7 @@ async function openChat(filename) {
     }
 
     if (lastAssistantIdx === -1) {
-      alert('No previous model message to continue.');
+      hwuiToast('No previous model message to continue.', 'info');
       return;
     }
 
@@ -3847,9 +3937,7 @@ async function openChat(filename) {
           conversation_history: chatToSend,
           continue_prefix: continuePrefix,
           author_note: localStorage.getItem(`author-note-${currentChatFilename}`) || '',
-          temperature: 0.8,
-          max_tokens: 4096,
-          stop: [],
+          // Sampling sourced server-side from settings.json — client values were inert.
         })
       });
 
@@ -3944,7 +4032,7 @@ async function openChat(filename) {
         waited += 100;
       }
       if (window.isSaving) {
-        alert('Previous save still in progress. Please wait and try again.');
+        hwuiToast('Previous save still in progress. Please wait and try again.', 'info');
         return;
       }
     }
@@ -3955,7 +4043,7 @@ async function openChat(filename) {
     
     // 1. Find last user message in window.loadedChat
     if (!window.loadedChat || window.loadedChat.length === 0) {
-      alert('No chat history to regenerate from.');
+      hwuiToast('No chat history to regenerate from.', 'info');
       return;
     }
     
@@ -3972,7 +4060,7 @@ async function openChat(filename) {
     }
     
     if (!lastUserMessage) {
-      alert('No user message found to regenerate from.');
+      hwuiToast('No user message found to regenerate from.', 'info');
       return;
     }
     
@@ -4062,7 +4150,7 @@ async function stopGeneration() {
     const charName = dropdown.value;
     
     if (!charName) {
-      alert('Please select a character first.');
+      hwuiToast('Please select a character first.', 'info');
       return;
     }
     
@@ -4087,7 +4175,7 @@ async function stopGeneration() {
       
     } catch (err) {
       console.error('Failed to load opening lines:', err);
-      alert('Failed to load opening lines.');
+      hwuiToast('Failed to load opening lines.', 'error');
     }
   }
 
@@ -4113,7 +4201,7 @@ async function stopGeneration() {
       deleteBtn.title = 'Delete this line';
       deleteBtn.onclick = function() {
         if (lines.length === 1) {
-          alert('You must have at least one opening line field.');
+          hwuiToast('You must have at least one opening line field.', 'info');
           return;
         }
         lineDiv.remove();
@@ -4140,7 +4228,7 @@ async function stopGeneration() {
     deleteBtn.onclick = function() {
       const items = document.querySelectorAll('.opening-line-item');
       if (items.length === 1) {
-        alert('You must have at least one opening line field.');
+        hwuiToast('You must have at least one opening line field.', 'info');
         return;
       }
       lineDiv.remove();
@@ -4158,7 +4246,7 @@ async function stopGeneration() {
     const charName = dropdown.value;
     
     if (!charName) {
-      alert('No character selected.');
+      hwuiToast('No character selected.', 'info');
       return;
     }
     
@@ -4171,7 +4259,7 @@ async function stopGeneration() {
       .filter(line => line.length > 0);
     
     if (enabled && lines.length === 0) {
-      alert('Please add at least one opening line or disable the feature.');
+      hwuiToast('Please add at least one opening line or disable the feature.', 'info');
       return;
     }
     
@@ -4206,7 +4294,7 @@ async function stopGeneration() {
       
     } catch (err) {
       console.error('Failed to save opening lines:', err);
-      alert('Failed to save opening lines: ' + err.message);
+      hwuiToast('Failed to save opening lines: ' + err.message, 'error');
     }
   }
 
@@ -4222,11 +4310,11 @@ async function stopGeneration() {
 // ==================================================
   async function clearChat() {
     if (!currentChatFilename) {
-      alert('No chat selected to clear.');
+      hwuiToast('No chat selected to clear.', 'info');
       return;
     }
     
-    if (!confirm('Clear this chat completely? This will delete all messages from the file.')) return;
+    if (!await hwuiConfirm('Clear this chat completely? This will delete all messages from the file.')) return;
     
     try {
       // Clear the file by sending empty messages array
@@ -4259,7 +4347,7 @@ async function stopGeneration() {
       
     } catch (err) {
       console.error('❌ Failed to clear chat:', err);
-      alert('Failed to clear chat: ' + err.message);
+      hwuiToast('Failed to clear chat: ' + err.message, 'error');
     }
   }
 
@@ -4325,18 +4413,18 @@ async function stopGeneration() {
         waited += 100;
       }
       if (window.isSaving) {
-        alert('Previous save still in progress. Please wait and try again.');
+        hwuiToast('Previous save still in progress. Please wait and try again.', 'info');
         return;
       }
     }
     
     if (!window.loadedChat || !Array.isArray(window.loadedChat)) {
-      alert('No messages loaded.');
+      hwuiToast('No messages loaded.', 'info');
       return;
     }
     
     if (!currentChatFilename) {
-      alert('No chat file selected.');
+      hwuiToast('No chat file selected.', 'info');
       return;
     }
     
@@ -4363,7 +4451,7 @@ async function stopGeneration() {
       console.log('✅ Deleted last message, ' + window.loadedChat.length + ' messages remaining');
     } catch (err) {
       console.error('❌ Failed to delete messages:', err);
-      alert('Failed to update chat file.');
+      hwuiToast('Failed to update chat file.', 'error');
     }
   }
   // ==================================================
@@ -4618,11 +4706,11 @@ async function stopGeneration() {
   
   async function deleteSpecificMessage(messageIndex) {
   if (!window.loadedChat || !Array.isArray(window.loadedChat)) {
-    alert('No chat loaded.');
+    hwuiToast('No chat loaded.', 'info');
     return;
   }
   
-  if (!confirm('Delete this message?')) {
+  if (!await hwuiConfirm('Delete this message?')) {
     return;
   }
 
@@ -4635,7 +4723,7 @@ async function stopGeneration() {
       waited += 100;
     }
     if (window.isSaving) {
-      alert('Previous save still in progress. Please wait and try again.');
+      hwuiToast('Previous save still in progress. Please wait and try again.', 'info');
       return;
     }
   }
@@ -4652,7 +4740,7 @@ async function stopGeneration() {
     console.log('✅ Message deleted and chat saved');
   } catch (err) {
     console.error('❌ Failed to save after deleting message:', err);
-    alert('Failed to update chat file.');
+    hwuiToast('Failed to update chat file.', 'error');
   }
 }
 
@@ -4661,10 +4749,10 @@ async function stopGeneration() {
 // ==================================================
 async function branchMessage(assistantIndex) {
   if (!currentChatFilename) {
-    alert('No active chat to branch.');
+    hwuiToast('No active chat to branch.', 'info');
     return;
   }
-  const confirmed = confirm('Branch from here? A new chat will be created up to this point. The original is untouched.');
+  const confirmed = await hwuiConfirm('Branch from here? A new chat will be created up to this point. The original is untouched.');
   if (!confirmed) return;
   try {
     const res = await fetch('/chats/branch', {
@@ -4673,11 +4761,11 @@ async function branchMessage(assistantIndex) {
       body: JSON.stringify({ source_filename: currentChatFilename, message_index: assistantIndex })
     });
     const data = await res.json();
-    if (data.error) { alert('Branch failed: ' + data.error); return; }
+    if (data.error) { hwuiToast('Branch failed: ' + data.error, 'error'); return; }
     await loadChats();
     openChat(data.new_filename);
   } catch (e) {
-    alert('Branch error: ' + e.message);
+    hwuiToast('Branch error: ' + e.message, 'error');
   }
 }
 
@@ -4685,8 +4773,40 @@ async function branchMessage(assistantIndex) {
   // INITIALISE PAGE (UNIFIED)
   // ==================================================
   window.addEventListener("DOMContentLoaded", async function() {
-    
+
     console.log('🟢 DOMContentLoaded fired');
+
+    // ── Keyboard-focus the chat input on load + on window refocus ──────────
+    // The Electron renderer can hold focus while the caret sits on <body>
+    // (webContents.focus() doesn't pick an element), so typing goes nowhere until
+    // the user clicks in. Put the caret in #user-input on load (incl. after any
+    // location.reload()) and when the window regains focus after an app-switch —
+    // a renderer-side belt-and-braces alongside the main.js webContents.focus().
+    // ⚠️ DO NOT remove the activeElement guard: focus is grabbed ONLY when nothing
+    // meaningful is focused (<body>, null, or the chat box itself). Without it,
+    // opening the config / paste-transcript modal or clicking a sampling field
+    // would have focus yanked back to the chat box mid-type.
+    function focusChatInputIfIdle() {
+      const ui = document.getElementById('user-input');
+      if (!ui) return;
+      const ae = document.activeElement;
+      if (ae === null || ae === document.body || ae === ui) ui.focus();
+    }
+    focusChatInputIfIdle();
+    window.addEventListener('focus', focusChatInputIfIdle);
+    // 'pageshow' fires on BOTH fresh loads and back-forward-cache (bfcache)
+    // restores — and bfcache restores do NOT fire DOMContentLoaded. This is the
+    // renderer-side cause of "first return to index can't type, second can": the
+    // index page is restored from bfcache without re-running load-time focus.
+    // The listener is registered once (persists across bfcache freeze/restore),
+    // so it re-focuses #user-input on every show. Complementary to the main.js
+    // did-navigate handler.
+    // Deferred 300ms: a bfcache restore can complete just after 'pageshow' fires,
+    // and an immediate focus() loses the race against Chromium's restore-time focus
+    // handling. Matches the main.js did-navigate + 300ms defer. The activeElement
+    // guard inside focusChatInputIfIdle still prevents stealing focus from a modal.
+    window.addEventListener('pageshow', () => setTimeout(focusChatInputIfIdle, 300));
+    // ───────────────────────────────────────────────────────────────────────
 
     // First-run banner: show if llama exe path hasn't been customised yet
     (async function checkFirstRun() {
@@ -4751,6 +4871,7 @@ async function branchMessage(assistantIndex) {
     await loadProjects();
     loadModelDisplay(); // fire and forget — non-critical
     checkOpenAIIndicator(); // show/hide OpenAI status dot
+    checkAnthropicIndicator(); // show/hide Anthropic status dot
     
     // Set up character dropdown change handler
     // Set up character dropdown change handler
@@ -4871,7 +4992,7 @@ async function branchMessage(assistantIndex) {
       console.log('🔵 Response:', data);
       
       if (data.error) {
-        alert('Failed to create new chat.');
+        hwuiToast('Failed to create new chat.', 'error');
         return;
       }
       
@@ -4916,7 +5037,7 @@ async function branchMessage(assistantIndex) {
       
     } catch (err) {
       console.error('❌ Error creating new chat:', err);
-      alert('Failed to create new chat.');
+      hwuiToast('Failed to create new chat.', 'error');
     } finally {
       isCreatingNewChat = false; // 🔓 ALWAYS unlock
     }
@@ -5052,9 +5173,9 @@ async function loadProjects() {
       const newOpt = document.createElement('div');
       newOpt.className = 'group-picker-option new-group';
       newOpt.textContent = '➕ New folder…';
-      newOpt.onclick = () => {
+      newOpt.onclick = async () => {
         picker.remove();
-        const gName = prompt('Folder name:');
+        const gName = await hwuiPrompt('Folder name:');
         if (gName && gName.trim()) assignProjectGroup(projectName, gName.trim());
       };
       picker.appendChild(newOpt);
@@ -5265,7 +5386,7 @@ async function createProject() {
   const instructions = instructionsEl ? instructionsEl.value.trim() : '';
   
   if (!name) {
-    alert('Please enter a project name');
+    hwuiToast('Please enter a project name', 'info');
     return;
   }
   
@@ -5279,7 +5400,7 @@ async function createProject() {
     const data = await res.json();
     
     if (data.error) {
-      alert('Error: ' + data.error);
+      hwuiToast('Error: ' + data.error, 'error');
       return;
     }
     
@@ -5298,11 +5419,11 @@ async function createProject() {
     window.loadedChat = [];
     await loadChats();
     
-    alert(`Project "${name}" created and activated!`);
+    hwuiToast(`Project "${name}" created and activated!`, 'success');
     
   } catch (err) {
     console.error('Failed to create project:', err);
-    alert('Failed to create project');
+    hwuiToast('Failed to create project', 'error');
   }
 }
 
@@ -5317,7 +5438,7 @@ async function switchProject(projectName) {
     const data = await res.json();
     
     if (data.error) {
-      alert('Error: ' + data.error);
+      hwuiToast('Error: ' + data.error, 'error');
       return;
     }
     
@@ -5342,7 +5463,7 @@ async function switchProject(projectName) {
     
   } catch (err) {
     console.error('Failed to switch project:', err);
-    alert('Failed to switch project');
+    hwuiToast('Failed to switch project', 'error');
   }
 }
 
@@ -5399,7 +5520,7 @@ function openEditProject(projectName) {
     })
     .catch(err => {
       console.error('Failed to load project:', err);
-      alert('Failed to load project');
+      hwuiToast('Failed to load project', 'error');
     });
 }
 
@@ -5439,7 +5560,7 @@ async function saveProjectEdit() {
     const data = await res.json();
     
     if (data.error) {
-      alert('Error: ' + data.error);
+      hwuiToast('Error: ' + data.error, 'error');
       return;
     }
     
@@ -5450,12 +5571,12 @@ async function saveProjectEdit() {
     
   } catch (err) {
     console.error('Failed to update project:', err);
-    alert('Failed to update project');
+    hwuiToast('Failed to update project', 'error');
   }
 }
 
 async function deleteProject(projectName) {
-  if (!confirm(`Delete project "${projectName}"?\n\nThis will permanently delete all chats in this project.`)) {
+  if (!await hwuiConfirm(`Delete project "${projectName}"?\n\nThis will permanently delete all chats in this project.`)) {
     return;
   }
   
@@ -5467,7 +5588,7 @@ async function deleteProject(projectName) {
     const data = await res.json();
     
     if (data.error) {
-      alert('Error: ' + data.error);
+      hwuiToast('Error: ' + data.error, 'error');
       return;
     }
     
@@ -5478,7 +5599,7 @@ async function deleteProject(projectName) {
     
   } catch (err) {
     console.error('Failed to delete project:', err);
-    alert('Failed to delete project');
+    hwuiToast('Failed to delete project', 'error');
   }
 }
 
@@ -5798,6 +5919,26 @@ async function checkOpenAIIndicator() {
       dot.title = 'OpenAI active — ' + (data.openai_model || 'gpt-4o');
       const modelSpan = document.getElementById('openai-indicator-model');
       if (modelSpan) modelSpan.textContent = data.openai_model || 'gpt-4o';
+    } else {
+      dot.style.display = 'none';
+    }
+  } catch(e) { /* silent — non-critical */ }
+}
+
+// ── Anthropic status indicator ───────────────────────────────────
+// Same green "live cloud — not private" privacy badge as OpenAI, so the user
+// always knows when typed content is leaving the box to Anthropic's servers.
+async function checkAnthropicIndicator() {
+  try {
+    const res  = await fetch('/get_anthropic_settings');
+    const data = await res.json();
+    const dot  = document.getElementById('anthropic-indicator');
+    if (!dot) return;
+    if (data.backend_mode === 'anthropic' && data.anthropic_api_key) {
+      dot.style.display = 'flex';
+      dot.title = 'Anthropic active — ' + (data.anthropic_model || 'claude');
+      const modelSpan = document.getElementById('anthropic-indicator-model');
+      if (modelSpan) modelSpan.textContent = data.anthropic_model || 'claude';
     } else {
       dot.style.display = 'none';
     }

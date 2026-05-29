@@ -25,12 +25,29 @@ def trim_chat_window(messages):
 # Initialize Flask
 # --------------------------------------------------
 app = Flask(__name__, static_folder="static", template_folder="templates")
+# Re-read templates from disk on every render. The launcher runs Flask with
+# use_reloader=False + debug=False, so by default Jinja compiles each template
+# ONCE and caches it in memory for the life of the process — meaning edits to
+# config.html / index.html only take effect after a manual server restart. That
+# cache is exactly why front-end fixes appeared "not to work" on a browser
+# refresh (the old cached template kept being served). Auto-reload makes a plain
+# page refresh pick up the current template, no restart needed.
+app.config['TEMPLATES_AUTO_RELOAD'] = True
+app.jinja_env.auto_reload = True
 CORS(app)
 
 # Add CSP headers for TTS audio playback
 @app.after_request
 def add_security_headers(response):
     response.headers['Content-Security-Policy'] = "default-src 'self' 'unsafe-inline' 'unsafe-eval'; media-src 'self' blob:; connect-src 'self'; img-src 'self' data: blob:"
+    # Disable the browser/Chromium back-forward cache (bfcache) for HTML PAGE
+    # loads only. bfcache restoring index/config without a fresh load left the
+    # Electron renderer's input pipeline stalled (focus correct, but typing dead
+    # until a reflow). no-store opts the page out of bfcache. Gated to text/html
+    # so API JSON, static assets, and SSE streams (text/event-stream — which set
+    # their own Cache-Control: no-cache) are untouched. ⚠️ DO NOT revert.
+    if (response.content_type or "").startswith("text/html"):
+        response.headers['Cache-Control'] = 'no-store'
     return response
 
 
@@ -1398,6 +1415,29 @@ def get_openai_base_url():
         return _default
 
 
+def get_anthropic_base_url():
+    """Read the Anthropic base URL from settings.json.
+
+    Unlike get_openai_base_url(), this path speaks Anthropic's NATIVE Messages
+    wire format (x-api-key header, /messages endpoint, top-level `system`, SSE
+    `content_block_delta` events) — it is NOT OpenAI-compatible. Point this at a
+    real Anthropic-format endpoint only (api.anthropic.com or a self-hosted
+    Anthropic-compatible proxy), never an OpenAI-style gateway.
+
+    Returns the URL up to but NOT including /messages (callers append /messages
+    or /models). Trailing slash stripped. Falls back to https://api.anthropic.com/v1
+    when the field is missing/empty or settings.json is unreadable.
+    """
+    _default = "https://api.anthropic.com/v1"
+    try:
+        with open("settings.json", "r", encoding="utf-8") as f:
+            s = json.load(f)
+        url = (s.get("anthropic_base_url", "") or "").strip().rstrip("/")
+        return url if url else _default
+    except Exception:
+        return _default
+
+
 def do_search(query):
     """
     Main search dispatcher.
@@ -2255,6 +2295,368 @@ def _web_search_stream_openai(messages, api_key, model, temperature, max_tokens,
                     )
     except Exception as e:
         yield f"\n⚠️ Search re-prompt error: {e}"
+
+# --------------------------------------------------
+# Anthropic per-model sampling rules — which sampling params each model ACCEPTS.
+# Anthropic rejects sampling params on a per-model, presence-based basis (the key
+# merely being present 400s, regardless of value). Opus 4.7/4.8 reject all of
+# temperature/top_p/top_k; older models reject top_p alongside temperature. Only
+# the "allow"-listed sampling params are sent. (model/max_tokens/stream/messages/
+# system are not sampling params and are always sent.) ⚠️ When new Anthropic models
+# launch, add them here — the retry-on-deprecation safety net in
+# stream_anthropic_response() catches unknown models in the meantime and logs a
+# prompt to update this table.
+ANTHROPIC_MODEL_SAMPLING_RULES = {
+    # Reject ALL sampling params
+    "claude-opus-4-8":   {"allow": ["max_tokens", "stop_sequences"]},
+    "claude-opus-4-7":   {"allow": ["max_tokens", "stop_sequences"]},
+    # Accept temperature, but not top_p alongside it
+    "claude-sonnet-4-6": {"allow": ["temperature", "max_tokens", "stop_sequences"]},
+    "claude-opus-4-6":   {"allow": ["temperature", "max_tokens", "stop_sequences"]},
+    "claude-haiku-4-5":  {"allow": ["temperature", "max_tokens", "stop_sequences"]},
+}
+# Safe baseline for current/older/unknown models: temperature is fine, top_p is not.
+DEFAULT_ANTHROPIC_ALLOW = ["temperature", "max_tokens", "stop_sequences"]
+
+def _anthropic_allow_for(model_id):
+    """Allow-list of params for a model. Exact match, else longest-prefix match
+    (so dated IDs like 'claude-opus-4-8-20260101' resolve to 'claude-opus-4-8'),
+    else the safe default."""
+    if model_id in ANTHROPIC_MODEL_SAMPLING_RULES:
+        return ANTHROPIC_MODEL_SAMPLING_RULES[model_id]["allow"]
+    best = None
+    for key in ANTHROPIC_MODEL_SAMPLING_RULES:
+        if model_id.startswith(key) and (best is None or len(key) > len(best)):
+            best = key
+    if best:
+        return ANTHROPIC_MODEL_SAMPLING_RULES[best]["allow"]
+    return DEFAULT_ANTHROPIC_ALLOW
+
+# --------------------------------------------------
+# Stream Anthropic API response (cloud backend — NATIVE Messages format)
+# --------------------------------------------------
+# ⚠️ This is NOT the OpenAI path. Anthropic's native API differs on every axis:
+#   - auth: `x-api-key` header (not `Authorization: Bearer`)
+#   - version: mandatory `anthropic-version` header
+#   - endpoint: POST {base}/messages (not /chat/completions)
+#   - system prompt: top-level `system` param (NOT a system-role message in the
+#     array — Anthropic rejects system entries inside `messages`)
+#   - max_tokens is REQUIRED, and temperature is clamped to [0, 1]
+#   - streaming: SSE events typed by a `type` field; text arrives as
+#     `content_block_delta` → delta.text (not choices[].delta.content)
+# `messages` here must be user/assistant only, start with user, and alternate.
+def stream_anthropic_response(messages, api_key, model, temperature, max_tokens, top_p, system=None):
+    global abort_generation
+    abort_generation = False
+
+    import sys, re
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    # Anthropic caps temperature at 1.0 — a >1 value (valid for OpenAI) 400s here.
+    _temp = max(0.0, min(float(temperature), 1.0))
+
+    # ── Layer 1: known-model pre-filter ────────────────────────────────────
+    # Include only the sampling params this model's allow-list permits (see
+    # ANTHROPIC_MODEL_SAMPLING_RULES). model/max_tokens/stream/messages/system are
+    # NOT sampling params and are always sent. min_p / repeat_penalty / frequency_
+    # penalty / presence_penalty are never Anthropic params. top_p / top_k are not
+    # plumbed into this function (Opus 4.7/4.8 reject them; older models are fine
+    # without) — to add later, gate them the same way: `if "top_p" in allow: ...`.
+    allow = _anthropic_allow_for(model)
+    payload = {
+        "model": model,
+        "max_tokens": max_tokens,   # always required by the API
+        "stream": True,
+        "messages": messages,
+    }
+    if system:
+        payload["system"] = system
+    if "temperature" in allow:
+        payload["temperature"] = _temp
+
+    _base_url = get_anthropic_base_url()
+
+    def _anthropic_post(pl):
+        return requests.post(f"{_base_url}/messages", headers=headers,
+                             json=pl, stream=True, timeout=None)
+
+    _sent = [k for k in ("temperature", "top_p", "top_k") if k in payload]
+    print(f"☁️ Anthropic stream: base={_base_url} model={model}, msgs={len(messages)}, sampling={_sent}", flush=True)
+    response = _anthropic_post(payload)
+
+    # ── Layer 2: retry-on-deprecation safety net ───────────────────────────
+    # Catches models NOT in the rule table (or rule drift): on a 400 naming a
+    # deprecated/unsupported param, strip it from the payload and retry ONCE. The
+    # warning log is the signal to add/adjust ANTHROPIC_MODEL_SAMPLING_RULES for
+    # that model. No loop — a second 400 is surfaced normally below.
+    if response.status_code == 400:
+        try: _err_body = response.text
+        except Exception: _err_body = ""
+        _m = re.search(r'(\w+)\s+is\s+deprecated', _err_body)
+        if _m and _m.group(1) in payload:
+            _bad = _m.group(1)
+            print(f"⚠️ Anthropic 400: '{_bad}' deprecated for model '{model}' — stripping it "
+                  f"and retrying once. UPDATE ANTHROPIC_MODEL_SAMPLING_RULES for this model.", flush=True)
+            payload.pop(_bad, None)
+            response = _anthropic_post(payload)
+
+    print(f"🔗 Anthropic response status: {response.status_code}", flush=True)
+    if response.status_code != 200:
+        err = response.text[:300]
+        print(f"❌ Anthropic error: {err}", flush=True)
+        yield f"[Anthropic error {response.status_code}: {err}]"
+        return
+
+    total_chunks = 0
+    all_text = []
+    for line in response.iter_lines(chunk_size=1):
+        if abort_generation:
+            print("🛑 Anthropic generation aborted", flush=True)
+            response.close()
+            break
+        if not line:
+            continue
+        try:
+            line_str = line.decode("utf-8").strip()
+            # Anthropic SSE interleaves `event:` and `data:` lines — we only
+            # need the JSON payloads and dispatch on the embedded `type` field.
+            if not line_str.startswith("data:"):
+                continue
+            data_str = line_str[5:].strip()
+            if not data_str:
+                continue
+            evt = json.loads(data_str)
+            etype = evt.get("type")
+            if etype == "content_block_delta":
+                # delta.type is text_delta for prose, input_json_delta for tool
+                # args — .get("text") naturally selects text-only.
+                chunk = evt.get("delta", {}).get("text") or ""
+                total_chunks += 1
+                if chunk:
+                    all_text.append(chunk)
+                    yield chunk
+                    sys.stdout.flush()
+            elif etype == "message_stop":
+                break
+            elif etype == "error":
+                _msg = evt.get("error", {}).get("message", "unknown")
+                print(f"❌ Anthropic stream error: {_msg}", flush=True)
+                yield f"[Anthropic error: {_msg}]"
+                break
+        except Exception as e:
+            print(f"❌ Anthropic parse error: {e}", flush=True)
+            continue
+
+    print(f"\n☁️ Anthropic DONE: {total_chunks} deltas, {len(''.join(all_text))} chars total", flush=True)
+
+
+# --------------------------------------------------
+# Anthropic cloud path — [WEB SEARCH: …] tag wrapper
+# --------------------------------------------------
+# Native-Anthropic sibling of _web_search_stream_openai(). Same two-phase
+# strategy (stream live watching for the tag; if found, run the real search and
+# re-prompt with an augmented final user turn) but on Anthropic's transport:
+# system stays a separate param, the conversation array is user/assistant only.
+# ⚠️ DO NOT consolidate with the OpenAI/local variants — different endpoints,
+# different system handling, different SSE shapes (see the duplication warnings
+# on the sibling functions).
+def _web_search_stream_anthropic(messages, api_key, model, temperature, max_tokens,
+                                 top_p, user_input, system=None):
+    global abort_generation
+    import re as _re
+
+    # ── Phase 1: stream live, watch for [WEB SEARCH: …] tag ──
+    _streamed = []
+    _yielded_chars = 0
+    _tag_found = False
+    _search_query = None
+
+    def _safe_yield_end(buf, start):
+        """First unclosed '[' at/after `start`, else len(buf) — never yield past
+        a bracket that might still be forming into a [WEB SEARCH: …] tag."""
+        idx = buf.find('[', start)
+        while idx != -1:
+            close = buf.find(']', idx)
+            if close == -1:
+                return idx
+            idx = buf.find('[', close + 1)
+        return len(buf)
+
+    try:
+        for chunk in stream_anthropic_response(
+            messages    = messages,
+            api_key     = api_key,
+            model       = model,
+            temperature = temperature,
+            max_tokens  = max_tokens,
+            top_p       = top_p,
+            system      = system,
+        ):
+            _streamed.append(chunk)
+            _rolling = "".join(_streamed)
+            _match = _re.search(r"\[WEB SEARCH:\s*(.+?)\]", _rolling, _re.IGNORECASE)
+            if _match:
+                _tag_found = True
+                _search_query = _match.group(1).strip()
+                _safe_end = _match.start()
+                if _safe_end > _yielded_chars:
+                    yield _rolling[_yielded_chars:_safe_end]
+                    _yielded_chars = _safe_end
+                abort_generation = True
+                break
+            _safe_end = _safe_yield_end(_rolling, _yielded_chars)
+            if _safe_end > _yielded_chars:
+                yield _rolling[_yielded_chars:_safe_end]
+                _yielded_chars = _safe_end
+    except Exception as e:
+        yield f"⚠️ Anthropic model error: {e}"
+        return
+    finally:
+        abort_generation = False
+
+    if not _tag_found:
+        _rolling_final = "".join(_streamed)
+        if len(_rolling_final) > _yielded_chars:
+            yield _rolling_final[_yielded_chars:]
+        return
+
+    query = _search_query
+    print(f"☁️🔍 [Anthropic] Web search triggered by model tag: {query}", flush=True)
+    yield "\n\n🔍 *Searching...*\n\n"
+
+    # ── Phase 2: do the search ──
+    try:
+        res = do_search(query)
+        results_block = format_search_results(query, res)
+        has_results = bool(res.get("summary") or res.get("top_text") or res.get("pages"))
+        print(f"☁️🔍 [Anthropic] Search done. has_results={has_results}", flush=True)
+    except Exception as e:
+        print(f"❌ [Anthropic] Search failed: {e}", flush=True)
+        yield f"\n⚠️ Search failed: {e}"
+        return
+
+    # ── Phase 3: build augmented user message (same template as the other paths) ──
+    if has_results:
+        import urllib.parse as _urlparse
+        _src = res.get('top_url', '')
+        if not _src:
+            _src = f"https://search.brave.com/search?q={_urlparse.quote_plus(query)}"
+        augmented_user_msg = (
+            f"{user_input.strip()}\n\n"
+            f"[WEB SEARCH RESULTS FOR: {query}]\n"
+            f"{results_block}\n"
+            f"[END WEB SEARCH RESULTS]\n"
+            f"IMPORTANT: Your response MUST be based on the search results above ONLY. "
+            f"Do NOT use your training data or prior knowledge about this topic — "
+            f"the search results are the ground truth. "
+            f"If the results say something that contradicts what you think you know, "
+            f"trust the results. Respond naturally in your own words. "
+            f"Do NOT quote, repeat, echo, or reference the structure of this results block — "
+            f"consume it silently and respond as if you just know this information. "
+            f"Do not include a source link in your response."
+        )
+    else:
+        _src = ""
+        augmented_user_msg = (
+            f"{user_input.strip()}\n\n"
+            f"[Web search returned zero results for '{query}'. "
+            f"Nothing found. No pages, no summary, no data. "
+            f"Tell the user clearly that nothing was found. "
+            f"Do not guess or invent anything.]"
+        )
+
+    # ── Phase 4: rebuild conversation array, strip stale search blocks from prior
+    # user turns, replace last user turn with the augmented version ──
+    search_messages = [dict(m) for m in messages]
+
+    _last_user_idx = None
+    for i in range(len(search_messages) - 1, -1, -1):
+        if search_messages[i].get("role") == "user":
+            _last_user_idx = i
+            break
+    for i, m in enumerate(search_messages):
+        if m.get("role") == "user" and i != _last_user_idx:
+            content = m.get("content", "")
+            if isinstance(content, str):
+                if "WEB SEARCH RESULTS" in content:
+                    content = _re.split(r'\[WEB SEARCH RESULTS', content)[0].strip()
+                if "CHAT HISTORY RESULTS" in content:
+                    content = _re.split(r'\[CHAT HISTORY RESULTS', content)[0].strip()
+                search_messages[i] = {"role": "user", "content": content}
+
+    if _last_user_idx is not None:
+        search_messages[_last_user_idx] = {"role": "user", "content": augmented_user_msg}
+    else:
+        search_messages.append({"role": "user", "content": augmented_user_msg})
+
+    # ── Phase 5: follow-up call with augmented messages, append source tail ──
+    try:
+        _response_chunks = []
+        for chunk in stream_anthropic_response(
+            messages    = search_messages,
+            api_key     = api_key,
+            model       = model,
+            temperature = temperature,
+            max_tokens  = max_tokens,
+            top_p       = top_p,
+            system      = system,
+        ):
+            _response_chunks.append(chunk)
+            yield chunk
+
+        if has_results:
+            _full_response = "".join(_response_chunks)
+            _pages = res.get("pages") or []
+            _src_list = []
+            if _pages:
+                for p in _pages[:3]:
+                    u = p.get("url") or ""
+                    t = (p.get("title") or u).strip() or u
+                    if u and u not in _full_response:
+                        _src_list.append((u, t))
+            elif _src and _src not in _full_response:
+                _src_list.append((_src, _src))
+
+            if _src_list:
+                yield "\n\n"
+                for i, (u, t) in enumerate(_src_list):
+                    _label = f"🔗 Source: {t[:90]}" if i == 0 else f"🔗 {t[:90]}"
+                    yield (
+                        f'<a href="{u}" target="_blank" '
+                        f'style="color:#7ab4f5; display:block; margin-top:2px;">'
+                        f'{_label}</a>'
+                    )
+    except Exception as e:
+        yield f"\n⚠️ Search re-prompt error: {e}"
+
+
+def _anthropic_normalize(active_chat):
+    """Coerce HWUI's conversation list into an Anthropic-valid messages array.
+
+    Anthropic requires: user/assistant roles only (no system entries), a
+    leading user turn, and no two consecutive same-role turns. Flattens list
+    content to text, merges adjacent same-role turns, and drops any leading
+    assistant turns.
+    """
+    out = []
+    for m in active_chat:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if isinstance(content, list):
+            content = " ".join(p.get("text", "") for p in content if p.get("type") == "text")
+        if role not in ("user", "assistant") or not content:
+            continue
+        if out and out[-1]["role"] == role:
+            out[-1]["content"] = (out[-1]["content"] + "\n" + content).strip()
+        else:
+            out.append({"role": role, "content": content})
+    while out and out[0]["role"] == "assistant":
+        out.pop(0)
+    return out
+
 
 # --------------------------------------------------
 # Global abort flag for stopping generation
@@ -4112,6 +4514,104 @@ def chat():
                 print(f"❌ OpenAI chat error: {e}", flush=True)
                 return f"⚠️ Error contacting OpenAI: {e}", 500
         # ── End OpenAI fork ────────────────────────────────────
+
+        # ── Anthropic cloud backend fork (NATIVE Messages format) ──
+        # Sibling of the OpenAI fork above. Key differences: the system block is
+        # passed as a separate `system` param (NOT a system-role message), and
+        # the conversation is normalized to user/assistant-only, leading-user,
+        # non-repeating roles via _anthropic_normalize(). Reuses the shared
+        # sampling/web-search machinery; transport lives in stream_anthropic_response.
+        if _oaist.get('backend_mode', 'local') == 'anthropic':
+            _ant_key   = _oaist.get('anthropic_api_key', '').strip()
+            _ant_model = _oaist.get('anthropic_model', '').strip() or 'claude-sonnet-4-5'
+            if not _ant_key:
+                return "⚠️ Anthropic backend selected but no API key set. Check config page.", 500
+
+            print(f"☁️ ANTHROPIC PATH: model={_ant_model}", flush=True)
+
+            # System goes in the top-level `system` param; messages are convo-only.
+            _ant_system   = system_text + ("\n\n" + memory if memory else "")
+            _ant_messages = _anthropic_normalize(active_chat)
+            if not _ant_messages:
+                return "⚠️ No user message to send to Anthropic.", 400
+
+            _ant_use_web_search = char_data.get("use_web_search", False)
+            try:
+                if _ant_use_web_search:
+                    print("☁️🔍 ANTHROPIC PATH: web search ENABLED — wrapping stream "
+                          "with [WEB SEARCH: …] tag detector", flush=True)
+                    _resp = Response(
+                        stream_with_context(_strip_ooc_stream(_web_search_stream_anthropic(
+                            messages    = _ant_messages,
+                            api_key     = _ant_key,
+                            model       = _ant_model,
+                            temperature = sampling["temperature"],
+                            max_tokens  = sampling["max_tokens"],
+                            top_p       = sampling["top_p"],
+                            user_input  = user_input,
+                            system      = _ant_system,
+                        ))),
+                        content_type="text/event-stream; charset=utf-8",
+                    )
+                    # Header parity with the local path — disable reverse-proxy /
+                    # Tailscale buffering. (Won't change Anthropic's upstream cadence.)
+                    _resp.headers['X-Accel-Buffering'] = 'no'
+                    _resp.headers['Cache-Control'] = 'no-cache'
+                    return _resp
+                # Web search OFF — plain passthrough with the SAME off-path tag
+                # suppression as the OpenAI branch: if the model self-emits a
+                # [WEB SEARCH: …] tag, keep the prose before it, strip the tag +
+                # everything after, append the notice, never search, never leak.
+                def _ant_offpath_stream():
+                    _TAG = '[WEB SEARCH:'
+                    _rolling = ""
+                    _yielded = 0
+
+                    def _safe_end(buf):
+                        _maxk = min(len(buf), len(_TAG) - 1)
+                        for _k in range(_maxk, 0, -1):
+                            if buf[-_k:] == _TAG[:_k]:
+                                return len(buf) - _k
+                        return len(buf)
+
+                    for _chunk in stream_anthropic_response(
+                        messages    = _ant_messages,
+                        api_key     = _ant_key,
+                        model       = _ant_model,
+                        temperature = sampling["temperature"],
+                        max_tokens  = sampling["max_tokens"],
+                        top_p       = sampling["top_p"],
+                        system      = _ant_system,
+                    ):
+                        _rolling += _chunk
+                        _ti = _rolling.find(_TAG)
+                        if _ti != -1:
+                            if _ti > _yielded:
+                                yield _rolling[_yielded:_ti]
+                                _yielded = _ti
+                            print("🔌 [Anthropic off-path] [WEB SEARCH:] tag emitted but web search is OFF for this character — stripping tag, showing notice", flush=True)
+                            yield "\n\n*🔌 Web search is off for this character — toggle it on to search the web.*"
+                            return
+                        _end = _safe_end(_rolling)
+                        if _end > _yielded:
+                            yield _rolling[_yielded:_end]
+                            _yielded = _end
+                    if len(_rolling) > _yielded:
+                        yield _rolling[_yielded:]
+
+                _resp = Response(
+                    stream_with_context(_strip_ooc_stream(_ant_offpath_stream())),
+                    content_type="text/event-stream; charset=utf-8",
+                )
+                # Header parity with the local path — disable reverse-proxy /
+                # Tailscale buffering. (Won't change Anthropic's upstream cadence.)
+                _resp.headers['X-Accel-Buffering'] = 'no'
+                _resp.headers['Cache-Control'] = 'no-cache'
+                return _resp
+            except Exception as e:
+                print(f"❌ Anthropic chat error: {e}", flush=True)
+                return f"⚠️ Error contacting Anthropic: {e}", 500
+        # ── End Anthropic fork ─────────────────────────────────
 
         try:
             with open('settings.json', 'r') as _sf:
@@ -7116,6 +7616,93 @@ def get_openai_models_route():
 
 
 # --------------------------------------------------
+# Anthropic Backend Settings Routes
+# --------------------------------------------------
+# Anthropic creds are stored ALONGSIDE the OpenAI ones (separate keys in
+# settings.json), so both providers stay saved and switching is just a
+# backend_mode flip — no re-pasting. backend_mode is shared and written by both
+# this route and /save_openai_settings (whichever Save button you press persists
+# the toggle's current value); the per-provider key/model/base_url fields are
+# only ever touched by their own route, so saving one never clobbers the other.
+@app.route("/get_anthropic_settings", methods=["GET"])
+def get_anthropic_settings_route():
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            s = json.load(f)
+        return jsonify({
+            "backend_mode":       s.get("backend_mode", "local"),
+            "anthropic_api_key":  s.get("anthropic_api_key", ""),
+            "anthropic_model":    s.get("anthropic_model", ""),
+            "anthropic_base_url": (s.get("anthropic_base_url", "") or "").strip() or get_anthropic_base_url(),
+        })
+    except Exception as e:
+        return jsonify({
+            "backend_mode": "local",
+            "anthropic_api_key": "",
+            "anthropic_model": "",
+            "anthropic_base_url": "https://api.anthropic.com/v1",
+            "error": str(e),
+        })
+
+@app.route("/save_anthropic_settings", methods=["POST"])
+def save_anthropic_settings_route():
+    data = request.get_json()
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            s = json.load(f)
+        s["backend_mode"]       = data.get("backend_mode", "local")
+        s["anthropic_api_key"]  = data.get("anthropic_api_key", "").strip()
+        s["anthropic_model"]    = data.get("anthropic_model", "").strip()
+        _incoming_base = (data.get("anthropic_base_url", "") or "").strip().rstrip("/")
+        s["anthropic_base_url"] = _incoming_base or "https://api.anthropic.com/v1"
+        import tempfile, shutil
+        tmp = SETTINGS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(s, f, indent=2)
+        shutil.move(tmp, SETTINGS_FILE)
+        print(f"✅ Anthropic settings saved — backend_mode={s['backend_mode']}, model={s['anthropic_model']}, base_url={s['anthropic_base_url']}")
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        print(f"❌ save_anthropic_settings failed: {e}")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.route("/get_anthropic_models", methods=["GET"])
+def get_anthropic_models_route():
+    """Fetch available models from the Anthropic /v1/models endpoint.
+
+    Native Anthropic format: GET {base}/models with x-api-key + anthropic-version
+    headers, returns {"data": [{"id": "claude-..."}]}. Newest first (the API
+    already returns descending by creation), filtered to claude-* chat models.
+    """
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            s = json.load(f)
+        api_key = s.get("anthropic_api_key", "").strip()
+        if not api_key:
+            return jsonify({"status": "error", "error": "No API key set"}), 400
+
+        _base_url = get_anthropic_base_url()
+        r = requests.get(
+            f"{_base_url}/models",
+            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+            params={"limit": 100},
+            timeout=10,
+        )
+        if r.status_code != 200:
+            return jsonify({"status": "error", "error": f"Provider returned {r.status_code}: {r.text[:200]}"}), 502
+
+        all_models = r.json().get("data", [])
+        chat_ids = [m.get("id", "") for m in all_models if m.get("id", "").lower().startswith("claude")]
+        print(f"✅ Anthropic models fetched: {len(chat_ids)} claude models")
+        return jsonify({"status": "ok", "models": chat_ids})
+
+    except Exception as e:
+        print(f"❌ get_anthropic_models failed: {e}")
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
+# --------------------------------------------------
 # Theme Routes
 # --------------------------------------------------
 THEMES_DIR = os.path.join(os.path.dirname(__file__), "themes")
@@ -7380,6 +7967,78 @@ def delete_theme_preset():
         return jsonify({"status": "ok"})
     except Exception as e:
         print(f"❌ delete_theme_preset failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+# --------------------------------------------------
+# Sampling presets — disk-backed (mirrors theme presets).
+# Previously these lived only in browser localStorage, so edits never persisted
+# to disk and were lost on cache-clear / different browser / Electron storage
+# resets. Stored as a name → {temperature, max_tokens, …} map.
+# --------------------------------------------------
+SAMPLING_PRESETS_FILE = "sampling_presets.json"
+
+def load_sampling_presets():
+    if os.path.exists(SAMPLING_PRESETS_FILE):
+        try:
+            with open(SAMPLING_PRESETS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"❌ load_sampling_presets failed: {e}")
+    return {}
+
+def save_sampling_presets(presets):
+    # Atomic write so a crash mid-save can't truncate the file.
+    import tempfile, shutil
+    tmp = SAMPLING_PRESETS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(presets, f, indent=2)
+    shutil.move(tmp, SAMPLING_PRESETS_FILE)
+
+@app.route("/sampling_presets", methods=["GET"])
+def get_sampling_presets():
+    presets = load_sampling_presets()
+    print(f"[SP] GET /sampling_presets → {list(presets.keys())} "
+          f"(top_p per preset: { {k: v.get('top_p') for k, v in presets.items()} })", flush=True)
+    return jsonify(presets)
+
+@app.route("/sampling_presets/save", methods=["POST"])
+def save_sampling_preset_route():
+    try:
+        data = request.get_json()
+        print(f"[SP] POST /sampling_presets/save raw body: {data}", flush=True)
+        name = (data.get("name", "") or "").strip()
+        preset = data.get("preset", {})
+        print(f"[SP]   name={name!r}  preset={preset}  top_p={preset.get('top_p') if isinstance(preset, dict) else 'N/A'}", flush=True)
+        if not name:
+            return jsonify({"error": "No name provided"}), 400
+        if not isinstance(preset, dict):
+            return jsonify({"error": "Preset must be an object"}), 400
+        presets = load_sampling_presets()
+        presets[name] = preset
+        save_sampling_presets(presets)
+        # Read back from disk to PROVE the write landed (and what top_p actually is).
+        verify = load_sampling_presets()
+        print(f"[SP]   wrote {os.path.abspath(SAMPLING_PRESETS_FILE)} — "
+              f"read-back '{name}'.top_p = {verify.get(name, {}).get('top_p')}", flush=True)
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        print(f"❌ save_sampling_preset failed: {e}", flush=True)
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/sampling_presets/delete", methods=["POST"])
+def delete_sampling_preset_route():
+    try:
+        data = request.get_json()
+        name = (data.get("name", "") or "").strip()
+        presets = load_sampling_presets()
+        if name in presets:
+            del presets[name]
+            save_sampling_presets(presets)
+            print(f"🗑️ Sampling preset deleted: {name}")
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        print(f"❌ delete_sampling_preset failed: {e}")
         return jsonify({"error": str(e)}), 500
 
 

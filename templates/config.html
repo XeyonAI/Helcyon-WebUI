@@ -56,6 +56,33 @@
 <body id="config-page">
   <div id="top-bar">
     <div><strong>Settings</strong></div>
+
+    <!-- Electron-only window reload button. Sits in the frameless title-bar
+         strip, just left of the native min/max/close overlay (top-right). The
+         launcher nulls out the app menu, so Ctrl+R/F5 don't work — this is the
+         in-window way to recover from a stuck/failed page. Hidden in a normal
+         browser (no frameless chrome there, and F5 already works). Marked
+         no-drag so it stays clickable regardless of any title-bar drag region. -->
+    <button id="electron-reload-btn" onclick="location.reload()" title="Reload HWUI"
+      style="display:none; position:fixed; top:3px; right:150px; z-index:2000;
+             width:26px; height:26px; align-items:center; justify-content:center;
+             border-radius:6px; border:1px solid var(--modal-border,#2d394b);
+             background:rgba(255,255,255,0.06); color:#e8e8e8; cursor:pointer;
+             -webkit-app-region:no-drag; padding:0; line-height:0;">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="23 4 23 10 17 10"></polyline>
+        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+      </svg>
+    </button>
+    <script>
+      // Reveal the reload button only inside the Electron launcher.
+      if (navigator.userAgent.toLowerCase().indexOf('electron') !== -1) {
+        var _erb = document.getElementById('electron-reload-btn');
+        if (_erb) _erb.style.display = 'flex';
+      }
+    </script>
+
     <a id="settings-link" href="/">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
@@ -68,6 +95,10 @@
     <!-- Left Sidebar: Sampling Settings -->
     <div id="sampling-sidebar">
       <h3>Sampling Settings</h3>
+
+      <div style="font-size:11px; color:#9aa; background:rgba(40,80,128,0.12); border:1px solid #245080; border-radius:5px; padding:6px 9px; margin-bottom:10px; line-height:1.4;">
+        ℹ️ Anthropic Opus 4.7+ models ignore sampling parameters — they're filtered out automatically. Use prompting and the effort setting instead.
+      </div>
 
       <label>Temperature:</label>
       <input type="number" id="temperature" step="0.05" min="0" max="2" />
@@ -211,28 +242,32 @@
 
       <hr style="margin: 20px 0; border-color: #333;">
 
-      <h3>☁️ OpenAI Backend</h3>
+      <h3>☁️ Cloud Backend</h3>
       <label style="font-size:11px; color:#aaa; display:block; margin-bottom:6px;">Backend Mode</label>
       <div style="display:flex; gap:0; margin-bottom:10px; border:1px solid #333; border-radius:4px; overflow:hidden;">
         <button id="mode-local-btn" onclick="setBackendMode('local')"
           style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#1a3a2a; color:#6f6; font-weight:bold;">
           🖥️ Local
         </button>
-        <button id="mode-openai-btn" onclick="confirmOpenAISwitch()"
+        <button id="mode-openai-btn" onclick="confirmCloudSwitch('openai')"
           style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#111; color:#888;">
           ☁️ OpenAI
         </button>
+        <button id="mode-anthropic-btn" onclick="confirmCloudSwitch('anthropic')"
+          style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#111; color:#888;">
+          🧠 Anthropic
+        </button>
       </div>
 
-      <!-- OpenAI switch confirmation modal -->
-      <div id="openai-confirm-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:9999; align-items:center; justify-content:center;">
+      <!-- Cloud switch confirmation modal (shared OpenAI / Anthropic) -->
+      <div id="cloud-confirm-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:9999; align-items:center; justify-content:center;">
         <div style="background:#1a1f2a; border:1px solid #3a5a7a; border-radius:10px; padding:24px 20px; max-width:300px; width:90%; box-shadow:0 8px 32px rgba(0,0,0,0.6);">
           <div style="font-size:22px; text-align:center; margin-bottom:10px;">⚠️</div>
-          <div style="font-size:14px; color:#ddd; text-align:center; margin-bottom:8px; font-weight:bold;">Switch to OpenAI?</div>
-          <div style="font-size:12px; color:#999; text-align:center; margin-bottom:20px; line-height:1.5;">Your conversations will be sent to <span style="color:#7ab4f5;">OpenAI's servers</span>. Make sure you're comfortable with that before continuing.</div>
+          <div id="cloud-confirm-title" style="font-size:14px; color:#ddd; text-align:center; margin-bottom:8px; font-weight:bold;">Switch to cloud?</div>
+          <div style="font-size:12px; color:#999; text-align:center; margin-bottom:20px; line-height:1.5;">Your conversations will be sent to <span id="cloud-confirm-provider" style="color:#7ab4f5;">this provider's servers</span>. Make sure you're comfortable with that before continuing.</div>
           <div style="display:flex; gap:8px;">
-            <button onclick="cancelOpenAISwitch()" style="flex:1; padding:8px 0; background:#2a1a1a; border:1px solid #6a2a2a; color:#e88; border-radius:6px; font-size:13px; cursor:pointer;">✕ Cancel</button>
-            <button onclick="confirmOpenAISwitchOK()" style="flex:1; padding:8px 0; background:#1a2a4a; border:1px solid #2a4a8a; color:#7ab4f5; border-radius:6px; font-size:13px; cursor:pointer; font-weight:bold;">☁️ Connect</button>
+            <button onclick="cancelCloudSwitch()" style="flex:1; padding:8px 0; background:#2a1a1a; border:1px solid #6a2a2a; color:#e88; border-radius:6px; font-size:13px; cursor:pointer;">✕ Cancel</button>
+            <button onclick="confirmCloudSwitchOK()" style="flex:1; padding:8px 0; background:#1a2a4a; border:1px solid #2a4a8a; color:#7ab4f5; border-radius:6px; font-size:13px; cursor:pointer; font-weight:bold;">☁️ Connect</button>
           </div>
         </div>
       </div>
@@ -255,6 +290,30 @@
 
       <div id="openai-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
       <button onclick="saveOpenAISettings()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">💾 Save OpenAI Settings</button>
+
+      <hr style="margin: 20px 0; border-color: #333;">
+
+      <h3>🧠 Anthropic (Claude)</h3>
+      <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Native Anthropic API — keep both keys saved here and flip the Backend Mode toggle above to switch. No re-pasting.</div>
+
+      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Anthropic Endpoint</label>
+      <input id="anthropic-base-url" type="text" placeholder="https://api.anthropic.com/v1" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:2px;">
+      <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Base URL up to <code style="background:#222; padding:0 3px; border-radius:2px;">/v1</code> — leave default for Anthropic. Must be a native Anthropic-format endpoint (not an OpenAI gateway).</div>
+
+      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Anthropic API Key</label>
+      <input id="anthropic-api-key" type="password" placeholder="sk-ant-..." style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:6px;">
+
+      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Model</label>
+      <div style="display:flex; gap:6px; align-items:center; margin-bottom:4px;">
+        <select id="anthropic-model" style="flex:1; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; height:28px;">
+          <option value="claude-sonnet-4-5">claude-sonnet-4-5</option>
+        </select>
+        <button onclick="fetchAnthropicModels()" title="Fetch models from Anthropic" style="background:#1a2a3a; border:1px solid #2a4a6a; color:#7ab4f5; border-radius:4px; padding:0 8px; font-size:12px; cursor:pointer; height:28px; white-space:nowrap; flex-shrink:0;">🔄 Fetch</button>
+      </div>
+      <div style="font-size:10px; color:#555; margin-bottom:8px;">Click 🔄 Fetch to load your available Claude models</div>
+
+      <div id="anthropic-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
+      <button onclick="saveAnthropicSettings()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">💾 Save Anthropic Settings</button>
 
     </div>
 
@@ -733,15 +792,15 @@
 
   async function saveSystemPromptAs() {
     const suggested = document.getElementById('system-prompt-file-select').value || '';
-    let filename = prompt('Save as template name:', suggested.replace('.txt', '') || '');
+    let filename = await hwuiPrompt('Save as template name:', suggested.replace('.txt', '') || '');
     if (filename === null) return; // cancelled
     filename = filename.trim();
-    if (!filename) { alert('Please enter a name.'); return; }
+    if (!filename) { hwuiToast('Please enter a name.', 'info'); return; }
     if (!filename.endsWith('.txt')) filename += '.txt';
     const text = document.getElementById('global-system-prompt').value;
     const exText = document.getElementById('global-example-dialog').value;
     const phText = document.getElementById('global-post-history').value;
-    if (!confirmEmptyPairedSave({ 'Example Dialogue': exText, 'Post-History': phText }, filename)) return;
+    if (!await confirmEmptyPairedSave({ 'Example Dialogue': exText, 'Post-History': phText }, filename)) return;
     try {
       const res = await fetch('/system_prompts/save/' + encodeURIComponent(filename), {
         method: 'POST',
@@ -765,12 +824,12 @@
         // Explicitly select and show the newly saved file
         document.getElementById('system-prompt-file-select').value = filename;
         document.getElementById('system-prompt-filename') && (document.getElementById('system-prompt-filename').value = filename);
-        alert('✅ Saved as: ' + filename);
+        hwuiToast('✅ Saved as: ' + filename, 'success');
       } else {
-        alert('❌ Save failed');
+        hwuiToast('❌ Save failed', 'error');
       }
     } catch (err) {
-      alert('❌ Save error: ' + err);
+      hwuiToast('❌ Save error: ' + err, 'error');
     }
   }
 
@@ -805,7 +864,7 @@
   async function activateSystemPrompt() {
     const select = document.getElementById('system-prompt-file-select');
     const filename = select.value;
-    if (!filename) { alert('Select a template first'); return; }
+    if (!filename) { hwuiToast('Select a template first', 'info'); return; }
     try {
       const res = await fetch('/system_prompts/activate/' + encodeURIComponent(filename), { method: 'POST' });
       const data = await res.json();
@@ -821,15 +880,15 @@
             body: JSON.stringify({ system_prompt: filename })
           });
           updateBindIndicator(true);
-          alert('✅ Active prompt set to: ' + filename + '\n💾 Bound to character: ' + charName);
+          hwuiToast('✅ Active prompt set to: ' + filename + '\n💾 Bound to character: ' + charName, 'success');
         } else {
-          alert('✅ Active prompt set to: ' + filename);
+          hwuiToast('✅ Active prompt set to: ' + filename, 'success');
         }
       } else {
-        alert('❌ Failed: ' + (data.error || 'Unknown'));
+        hwuiToast('❌ Failed: ' + (data.error || 'Unknown'), 'error');
       }
     } catch (err) {
-      alert('❌ Error: ' + err);
+      hwuiToast('❌ Error: ' + err, 'error');
     }
   }
 
@@ -907,18 +966,18 @@
   async function deleteSystemPrompt() {
     const select = document.getElementById('system-prompt-file-select');
     const filename = select.value;
-    if (!filename) { alert('Select a template to delete'); return; }
-    if (!confirm('Delete "' + filename + '"? This cannot be undone.')) return;
+    if (!filename) { hwuiToast('Select a template to delete', 'info'); return; }
+    if (!await hwuiConfirm('Delete "' + filename + '"? This cannot be undone.')) return;
     try {
       const res = await fetch('/system_prompts/delete/' + encodeURIComponent(filename), { method: 'POST' });
       const data = await res.json();
       if (data.status === 'deleted') {
         await loadSystemPromptList();
       } else {
-        alert('❌ Delete failed: ' + (data.error || 'Unknown'));
+        hwuiToast('❌ Delete failed: ' + (data.error || 'Unknown'), 'error');
       }
     } catch (err) {
-      alert('❌ Error: ' + err);
+      hwuiToast('❌ Error: ' + err, 'error');
     }
   }
 
@@ -929,10 +988,10 @@
   // directive from prompts too. Require explicit confirmation before any save
   // that would blank-delete a paired file. `fields` maps a display label to
   // the field's current value; only empty/whitespace values trigger the prompt.
-  function confirmEmptyPairedSave(fields, filename) {
+  async function confirmEmptyPairedSave(fields, filename) {
     const empties = Object.keys(fields).filter(k => !fields[k] || !fields[k].trim());
     if (empties.length === 0) return true;
-    return confirm(
+    return await hwuiConfirm(
       'Empty field(s): ' + empties.join(', ') + '.\n\n' +
       'Saving will DELETE the paired file(s) for "' + filename + '". ' +
       'The model reads these from disk, so they will also be removed from prompts.\n\n' +
@@ -944,11 +1003,11 @@
   async function saveGlobalSystemPrompt() {
     const select = document.getElementById('system-prompt-file-select');
     const filename = select.value;
-    if (!filename) { alert('No template selected. Use Save As to create a new one.'); return; }
+    if (!filename) { hwuiToast('No template selected. Use Save As to create a new one.', 'info'); return; }
     const text = document.getElementById('global-system-prompt').value;
     const exText = document.getElementById('global-example-dialog').value;
     const phText = document.getElementById('global-post-history').value;
-    if (!confirmEmptyPairedSave({ 'Example Dialogue': exText, 'Post-History': phText }, filename)) return;
+    if (!await confirmEmptyPairedSave({ 'Example Dialogue': exText, 'Post-History': phText }, filename)) return;
     try {
       const res = await fetch('/system_prompts/save/' + encodeURIComponent(filename), {
         method: 'POST',
@@ -968,10 +1027,10 @@
         headers: { 'Content-Type': 'text/plain; charset=utf-8' },
         body: phText
       });
-      if (data.status === 'saved') alert('✅ Saved: ' + filename);
-      else alert('❌ Save failed');
+      if (data.status === 'saved') hwuiToast('✅ Saved: ' + filename, 'success');
+      else hwuiToast('❌ Save failed', 'error');
     } catch (err) {
-      alert('❌ Error: ' + err);
+      hwuiToast('❌ Error: ' + err, 'error');
     }
   }
 
@@ -1076,7 +1135,7 @@
     const file = input.files[0];
     if (!file) return;
     const charName = document.getElementById("character-select").value;
-    if (!charName) { alert("Select a character first."); return; }
+    if (!charName) { hwuiToast("Select a character first.", 'info'); return; }
     const formData = new FormData();
     formData.append("file", file);
     try {
@@ -1091,10 +1150,10 @@
         img.src = `/static/images/${data.image}?v=${Date.now()}`;
         img.style.display = "block";
       } else {
-        alert("Upload failed: " + (data.error || "Unknown error"));
+        hwuiToast("Upload failed: " + (data.error || "Unknown error"), 'error');
       }
     } catch(e) {
-      alert("Upload failed: " + e);
+      hwuiToast("Upload failed: " + e, 'error');
     }
     input.value = '';
   }
@@ -1148,7 +1207,7 @@
     const file = input.files[0];
     if (!file) return;
     const charName = document.getElementById("character-select").value;
-    if (!charName) { alert("Select a character first."); return; }
+    if (!charName) { hwuiToast("Select a character first.", 'info'); return; }
     const formData = new FormData();
     formData.append("file", file);
     try {
@@ -1161,16 +1220,16 @@
         currentCharacter.images = data.images;
         renderExtraImages(data.images, document.getElementById("image").value);
       } else {
-        alert("Failed: " + (data.error || "Unknown error"));
+        hwuiToast("Failed: " + (data.error || "Unknown error"), 'error');
       }
-    } catch(e) { alert("Upload failed: " + e); }
+    } catch(e) { hwuiToast("Upload failed: " + e, 'error'); }
     input.value = '';
   }
 
   async function removeExtraImage(filename) {
     const charName = document.getElementById("character-select").value;
     if (!charName) return;
-    if (!confirm(`Remove "${filename}" from slideshow?`)) return;
+    if (!await hwuiConfirm(`Remove "${filename}" from slideshow?`)) return;
     try {
       const res = await fetch(`/remove_character_image/${encodeURIComponent(charName)}/${encodeURIComponent(filename)}`, {
         method: "DELETE"
@@ -1181,14 +1240,14 @@
         currentCharacter.images = data.images;
         renderExtraImages(data.images, document.getElementById("image").value);
       } else {
-        alert("Failed: " + (data.error || "Unknown error"));
+        hwuiToast("Failed: " + (data.error || "Unknown error"), 'error');
       }
-    } catch(e) { alert("Remove failed: " + e); }
+    } catch(e) { hwuiToast("Remove failed: " + e, 'error'); }
   }
 
   async function saveCharacter() {
     const name = document.getElementById("character-select").value;
-    if (!name) return alert("Select a character first.");
+    if (!name) return hwuiToast("Select a character first.", 'info');
     const updated = {
       name: document.getElementById("character-name").value,
       main_prompt: document.getElementById("main-prompt").value,
@@ -1213,10 +1272,10 @@
         body: JSON.stringify(updated),
       });
       if (!res.ok) throw new Error(await res.text());
-      alert("Character saved successfully.");
+      hwuiToast("Character saved successfully.", 'success');
     } catch (err) {
       console.error(err);
-      alert("Failed to save character.");
+      hwuiToast("Failed to save character.", 'error');
     }
   }
 
@@ -1232,12 +1291,12 @@
         console.log("Image uploaded:", result.filename);
         return result.filename;
       } else {
-        alert("Image upload failed: " + (result.error || "unknown error"));
+        hwuiToast("Image upload failed: " + (result.error || "unknown error"), 'error');
         return "";
       }
     } catch (err) {
       console.error("Upload failed:", err);
-      alert("Failed to upload image.");
+      hwuiToast("Failed to upload image.", 'error');
       return "";
     }
   }
@@ -1251,7 +1310,7 @@
     let image = "";
 
     if (!name) {
-      alert("Character name is required.");
+      hwuiToast("Character name is required.", 'info');
       return;
     }
 
@@ -1268,18 +1327,18 @@
       const result = await res.json();
 
       if (result.status === "ok") {
-        alert(`Character "${name}" created successfully!`);
+        hwuiToast(`Character "${name}" created successfully!`, 'success');
         document.getElementById("new-char-name").value = "";
         document.getElementById("new-char-description").value = "";
         document.getElementById("new-char-mainprompt").value = "";
         if (fileInput) fileInput.value = "";
         await loadCharacterList();
       } else {
-        alert("Error creating character: " + (result.error || "Unknown error"));
+        hwuiToast("Error creating character: " + (result.error || "Unknown error"), 'error');
       }
     } catch (err) {
       console.error("Failed to create character:", err);
-      alert("Error creating character.");
+      hwuiToast("Error creating character.", 'error');
     }
   }
 
@@ -1293,7 +1352,7 @@ document.getElementById('export-char-btn').addEventListener('click', async funct
   const charName = dropdown.value;
   
   if (!charName) {
-    alert('Please select a character first.');
+    hwuiToast('Please select a character first.', 'info');
     return;
   }
   
@@ -1303,7 +1362,7 @@ document.getElementById('export-char-btn').addEventListener('click', async funct
     console.log(`✅ Exporting character: ${charName}`);
   } catch (err) {
     console.error('Export error:', err);
-    alert('Failed to export character: ' + err.message);
+    hwuiToast('Failed to export character: ' + err.message, 'error');
   }
 });
 
@@ -1318,7 +1377,7 @@ document.getElementById('import-char-input').addEventListener('change', async fu
   if (!file) return;
   
   if (!file.name.toLowerCase().endsWith('.png')) {
-    alert('Please select a PNG file.');
+    hwuiToast('Please select a PNG file.', 'info');
     return;
   }
   
@@ -1334,12 +1393,12 @@ document.getElementById('import-char-input').addEventListener('change', async fu
     const result = await res.json();
     
     if (result.error) {
-      alert('Import failed: ' + result.error);
+      hwuiToast('Import failed: ' + result.error, 'error');
       return;
     }
     
     console.log(`✅ Imported character: ${result.name}`);
-    alert(`Character "${result.name}" imported successfully!`);
+    hwuiToast(`Character "${result.name}" imported successfully!`, 'success');
     
     // Reload character list and select the new character
     await loadCharacterList();
@@ -1348,7 +1407,7 @@ document.getElementById('import-char-input').addEventListener('change', async fu
     
   } catch (err) {
     console.error('Import error:', err);
-    alert('Failed to import character: ' + err.message);
+    hwuiToast('Failed to import character: ' + err.message, 'error');
   }
   
   // Reset file input
@@ -1365,12 +1424,12 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
   const charName = dropdown.value;
   
   if (!charName) {
-    alert('Please select a character first.');
+    hwuiToast('Please select a character first.', 'info');
     return;
   }
   
   // Confirm deletion
-  if (!confirm(`Are you sure you want to permanently delete "${charName}"?\n\nThis will delete:\n- Character data\n- Character image\n- All associated files\n\nThis cannot be undone.`)) {
+  if (!await hwuiConfirm(`Are you sure you want to permanently delete "${charName}"?\n\nThis will delete:\n- Character data\n- Character image\n- All associated files\n\nThis cannot be undone.`)) {
     return;
   }
   
@@ -1382,12 +1441,12 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     const result = await res.json();
     
     if (result.error) {
-      alert('Delete failed: ' + result.error);
+      hwuiToast('Delete failed: ' + result.error, 'error');
       return;
     }
     
     console.log(`✅ Deleted character: ${charName}`);
-    alert(`Character "${charName}" deleted successfully.`);
+    hwuiToast(`Character "${charName}" deleted successfully.`, 'success');
     
     // Reload character list and clear the form
     await loadCharacterList();
@@ -1410,7 +1469,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     
   } catch (err) {
     console.error('Delete error:', err);
-    alert('Failed to delete character: ' + err.message);
+    hwuiToast('Failed to delete character: ' + err.message, 'error');
   }
 });
 
@@ -1528,13 +1587,13 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       });
       const result = await res.json();
       if (result.status === "ok") {
-        alert(`User "${name}" updated successfully!`);
+        hwuiToast(`User "${name}" updated successfully!`, 'success');
       } else {
-        alert("Error saving user: " + (result.error || "Unknown error"));
+        hwuiToast("Error saving user: " + (result.error || "Unknown error"), 'error');
       }
     } catch (err) {
       console.error("Failed to save user:", err);
-      alert("Error saving user details: " + err.message);
+      hwuiToast("Error saving user details: " + err.message, 'error');
     }
   }
 
@@ -1552,13 +1611,13 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
         // ✅ ADD THIS LINE - Update localStorage so chat page knows
         localStorage.setItem('activeUserName', name);
         
-        alert(`Active user set to "${name}"`);
+        hwuiToast(`Active user set to "${name}"`, 'success');
       } else {
-        alert("Error setting active user: " + (result.error || "Unknown error"));
+        hwuiToast("Error setting active user: " + (result.error || "Unknown error"), 'error');
       }
     } catch (err) {
       console.error("Failed to set active user:", err);
-      alert("Error setting active user.");
+      hwuiToast("Error setting active user.", 'error');
     }
   }
 
@@ -1588,16 +1647,11 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
 
   async function saveSettings() {
     try {
-      const settings = {
-        temperature: parseFloat(document.getElementById('temperature').value) || 0.8,
-        max_tokens: parseInt(document.getElementById('max_tokens').value) || 4096,
-        top_p: parseFloat(document.getElementById('top_p').value) || 0.95,
-        min_p: parseFloat(document.getElementById('min_p').value) || 0.05,
-        top_k: parseInt(document.getElementById('top_k').value) || 40,
-        repeat_penalty: parseFloat(document.getElementById('repeat_penalty').value) || 1.1,
-        frequency_penalty: parseFloat(document.getElementById('frequency_penalty').value) || 0.0,
-        presence_penalty: parseFloat(document.getElementById('presence_penalty').value) || 0.0,
-      };
+      // Build the sampling payload via the shared helper so 0 is preserved.
+      // buildSamplingPresetFromFields() uses readNum()/Number.isNaN — NEVER the
+      // `|| default` idiom, which coerces a legitimate 0 (e.g. top_p:0) to its
+      // fallback. See the CHANGES.md "DO NOT revert" note.
+      const settings = buildSamplingPresetFromFields();
       
       const res = await fetch("/save_sampling_settings", {
         method: "POST",
@@ -1606,13 +1660,13 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       });
       
       if (res.ok) {
-        alert("✅ Settings saved successfully!");
+        hwuiToast("✅ Settings saved successfully!", 'success');
       } else {
-        alert("⚠️ Error saving settings.");
+        hwuiToast("⚠️ Error saving settings.", 'error');
       }
     } catch (err) {
       console.error("Failed to save settings:", err);
-      alert("Error saving settings.");
+      hwuiToast("Error saving settings.", 'error');
     }
   }
 
@@ -1623,6 +1677,10 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     loadCurrentSituation();
     loadTTSEngine();
     loadLlamaConfig();
+    console.log('hydrating presets');
+    loadSamplingPresetsFromServer();  // hydrate sampling presets from disk — MUST be
+                                      // independent of loadLlamaConfig (which early-returns
+                                      // on a llama-config error and would otherwise skip this)
     loadBindCharacterList();
 
     // ⚠️ The three SP fields (#global-system-prompt / -example-dialog /
@@ -1696,11 +1754,11 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
         const currentChar = select.value;
         
         if (!currentChar) {
-          alert('Please select a character to duplicate.');
+          hwuiToast('Please select a character to duplicate.', 'info');
           return;
         }
         
-        if (!confirm(`Duplicate "${currentChar}"?`)) {
+        if (!await hwuiConfirm(`Duplicate "${currentChar}"?`)) {
           return;
         }
         
@@ -1712,7 +1770,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
           const data = await res.json();
           
           if (data.error) {
-            alert('Error: ' + data.error);
+            hwuiToast('Error: ' + data.error, 'error');
             return;
           }
           
@@ -1727,11 +1785,11 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
           // Trigger change event to load the character
           select.dispatchEvent(new Event('change'));
           
-          alert(`Character duplicated as "${data.new_name}"`);
+          hwuiToast(`Character duplicated as "${data.new_name}"`, 'success');
           
         } catch (err) {
           console.error('❌ Duplicate failed:', err);
-          alert('Failed to duplicate character.');
+          hwuiToast('Failed to duplicate character.', 'error');
         }
       });
     }
@@ -1743,18 +1801,18 @@ document.getElementById('rename-char-btn').addEventListener('click', async funct
   const oldName = dropdown.value;
   
   if (!oldName) {
-    alert('Please select a character first.');
+    hwuiToast('Please select a character first.', 'info');
     return;
   }
   
-  const newName = prompt(`Rename "${oldName}" to:`, oldName);
+  const newName = await hwuiPrompt(`Rename "${oldName}" to:`, oldName);
   
   if (!newName || newName.trim() === '') {
     return;
   }
   
   if (newName.trim() === oldName) {
-    alert('Name unchanged.');
+    hwuiToast('Name unchanged.', 'info');
     return;
   }
   
@@ -1771,12 +1829,12 @@ document.getElementById('rename-char-btn').addEventListener('click', async funct
     const data = await res.json();
     
     if (data.error) {
-      alert('Error: ' + data.error);
+      hwuiToast('Error: ' + data.error, 'error');
       return;
     }
     
     console.log('✅ Character renamed:', data.new_name);
-    alert(`Character renamed to "${data.new_name}"`);
+    hwuiToast(`Character renamed to "${data.new_name}"`, 'success');
     
     // Reload character list and select the renamed one
     await loadCharacterList();
@@ -1785,7 +1843,7 @@ document.getElementById('rename-char-btn').addEventListener('click', async funct
     
   } catch (err) {
     console.error('❌ Rename failed:', err);
-    alert('Failed to rename character.');
+    hwuiToast('Failed to rename character.', 'error');
   }
 });
   
@@ -1942,7 +2000,7 @@ async function createNewUser() {
   const fileInput = document.getElementById('new-user-image-upload');
   
   if (!name) {
-    alert('User name is required.');
+    hwuiToast('User name is required.', 'info');
     return;
   }
   
@@ -1981,12 +2039,12 @@ async function createNewUser() {
     const result = await res.json();
     
     if (result.error) {
-      alert('Error creating user: ' + result.error);
+      hwuiToast('Error creating user: ' + result.error, 'error');
       return;
     }
     
     console.log('✅ User created:', name);
-    alert(`User persona "${name}" created successfully!`);
+    hwuiToast(`User persona "${name}" created successfully!`, 'success');
     
     // Clear the form
     document.getElementById('new-user-name').value = '';
@@ -2002,7 +2060,7 @@ async function createNewUser() {
     
   } catch (err) {
     console.error('Failed to create user:', err);
-    alert('Failed to create user.');
+    hwuiToast('Failed to create user.', 'error');
   }
 }
 
@@ -2029,12 +2087,12 @@ async function deleteUserPersona() {
   const userName = userSelect.value;
   
   if (!userName) {
-    alert('Please select a user to delete.');
+    hwuiToast('Please select a user to delete.', 'info');
     return;
   }
   
   // Confirm deletion
-  if (!confirm(`Are you sure you want to permanently delete user persona "${userName}"?\n\nThis cannot be undone.`)) {
+  if (!await hwuiConfirm(`Are you sure you want to permanently delete user persona "${userName}"?\n\nThis cannot be undone.`)) {
     return;
   }
   
@@ -2046,12 +2104,12 @@ async function deleteUserPersona() {
     const result = await res.json();
     
     if (result.error) {
-      alert('Delete failed: ' + result.error);
+      hwuiToast('Delete failed: ' + result.error, 'error');
       return;
     }
     
     console.log('✅ Deleted user:', userName);
-    alert(`User persona "${userName}" deleted successfully.`);
+    hwuiToast(`User persona "${userName}" deleted successfully.`, 'success');
     
     // Clear the form
     document.getElementById('user-display').value = '';
@@ -2063,7 +2121,7 @@ async function deleteUserPersona() {
     
   } catch (err) {
     console.error('Delete error:', err);
-    alert('Failed to delete user.');
+    hwuiToast('Failed to delete user.', 'error');
   }
 }
 
@@ -2111,11 +2169,11 @@ async function saveTTSEngine() {
     const data = await res.json();
     if (data.engine) {
       updateTTSEngineStatus(data.engine);
-      alert('✅ TTS engine set to: ' + data.engine.toUpperCase());
+      hwuiToast('✅ TTS engine set to: ' + data.engine.toUpperCase(), 'success');
     }
   } catch (err) {
     console.error('Failed to save TTS engine:', err);
-    alert('❌ Failed to save TTS engine');
+    hwuiToast('❌ Failed to save TTS engine', 'error');
   }
 }
 
@@ -2133,7 +2191,7 @@ function handleBgImageChange(input) {
     .then(r => r.json())
     .then(data => {
       if (data.error || !data.url) {
-        alert('Background upload failed: ' + (data.error || 'unknown error'));
+        hwuiToast('Background upload failed: ' + (data.error || 'unknown error'), 'error');
         return;
       }
       const url = data.url + '?v=' + Date.now();  // cache-bust so a replaced image refreshes
@@ -2141,7 +2199,7 @@ function handleBgImageChange(input) {
       localStorage.setItem('hwui_bg_mode', 'image');
       applyBackground(url);
     })
-    .catch(e => alert('Background upload failed: ' + e.message));
+    .catch(e => hwuiToast('Background upload failed: ' + e.message, 'error'));
   input.value = '';
 }
 
@@ -2317,7 +2375,7 @@ function refreshPresetDropdown() {
 
 async function loadPreset() {
   const name = document.getElementById('theme-preset-select').value;
-  if (!name || !themePresets[name]) { alert('Pick a preset first.'); return; }
+  if (!name || !themePresets[name]) { hwuiToast('Pick a preset first.', 'info'); return; }
   const colours = themePresets[name];
   renderThemeEditor({ ...originalTheme, ...colours });
   // Live preview
@@ -2334,16 +2392,16 @@ async function loadPreset() {
     });
     const data = await res.json();
     if (data.status !== 'ok') {
-      alert('Preset loaded but failed to save to CSS: ' + (data.error || 'Unknown error'));
+      hwuiToast('Preset loaded but failed to save to CSS: ' + (data.error || 'Unknown error'), 'error');
     }
   } catch(e) {
-    alert('Preset loaded but failed to save to CSS: ' + e);
+    hwuiToast('Preset loaded but failed to save to CSS: ' + e, 'error');
   }
 }
 
 async function updatePreset() {
   const name = document.getElementById('theme-preset-select').value;
-  if (!name) { alert('Pick a preset first.'); return; }
+  if (!name) { hwuiToast('Pick a preset first.', 'info'); return; }
   const inputs = document.querySelectorAll('.cp-swatch-btn');
   const colours = {};
   inputs.forEach(inp => { colours[inp.dataset.var] = inp.dataset.hex; });
@@ -2365,13 +2423,13 @@ async function updatePreset() {
       const btn = document.querySelector('button[onclick="updatePreset()"]');
       if (btn) { btn.textContent = '✓ Saved'; setTimeout(() => btn.textContent = 'Update', 1500); }
     } else {
-      alert('Failed: ' + (data.error || 'Unknown error'));
+      hwuiToast('Failed: ' + (data.error || 'Unknown error'), 'error');
     }
-  } catch(e) { alert('Failed: ' + e); }
+  } catch(e) { hwuiToast('Failed: ' + e, 'error'); }
 }
 
 async function saveAsPreset() {
-  const name = prompt('Preset name:');
+  const name = await hwuiPrompt('Preset name:');
   if (!name || !name.trim()) return;
   const inputs = document.querySelectorAll('.cp-swatch-btn');
   const colours = {};
@@ -2389,15 +2447,15 @@ async function saveAsPreset() {
       document.getElementById('theme-preset-select').value = name.trim();
       localStorage.setItem('hwui_last_preset', name.trim());
     } else {
-      alert('Failed: ' + (data.error || 'Unknown error'));
+      hwuiToast('Failed: ' + (data.error || 'Unknown error'), 'error');
     }
-  } catch(e) { alert('Failed: ' + e); }
+  } catch(e) { hwuiToast('Failed: ' + e, 'error'); }
 }
 
 async function deletePreset() {
   const name = document.getElementById('theme-preset-select').value;
-  if (!name) { alert('Pick a preset first.'); return; }
-  if (!confirm(`Delete preset "${name}"?`)) return;
+  if (!name) { hwuiToast('Pick a preset first.', 'info'); return; }
+  if (!await hwuiConfirm(`Delete preset "${name}"?`)) return;
   try {
     await fetch('/theme_presets/delete', {
       method: 'POST',
@@ -2406,7 +2464,7 @@ async function deletePreset() {
     });
     delete themePresets[name];
     refreshPresetDropdown();
-  } catch(e) { alert('Failed: ' + e); }
+  } catch(e) { hwuiToast('Failed: ' + e, 'error'); }
 }
 
 function renderThemeEditor(data) {
@@ -2424,6 +2482,118 @@ function toHex(value) {
 
 function _applyThemeVar(varName, value) {
   document.documentElement.style.setProperty(varName, value);
+}
+
+// In-page toast — replaces native alert(), which on Electron stalls the renderer's
+// keyboard-input pipeline after dismissal (typing stops reaching the chat box until
+// a reflow). ⚠️ NEVER use alert()/confirm() in HWUI. kind: 'success'|'error'|'info'.
+function hwuiToast(message, kind = 'success', ms = 2200) {
+  let host = document.getElementById('hwui-toast-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'hwui-toast-host';
+    host.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:99999;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;';
+    document.body.appendChild(host);
+  }
+  const c = ({
+    success: { bg:'#13361f', border:'#2a6a4a', fg:'#aef0c8' },
+    error:   { bg:'#3a1414', border:'#8a2424', fg:'#ffb0b0' },
+    info:    { bg:'#16263a', border:'#245080', fg:'#bcd8ff' },
+  })[kind] || { bg:'#13361f', border:'#2a6a4a', fg:'#aef0c8' };
+  const el = document.createElement('div');
+  el.textContent = message;
+  el.style.cssText = `background:${c.bg};border:1px solid ${c.border};color:${c.fg};border-radius:8px;padding:10px 16px;font-size:13px;max-width:480px;box-shadow:0 4px 16px rgba(0,0,0,0.5);opacity:0;transition:opacity .18s ease;white-space:pre-line;`;
+  host.appendChild(el);
+  requestAnimationFrame(() => { el.style.opacity = '1'; });
+  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 220); }, ms);
+}
+
+// hwuiConfirm(message[, opts]) → Promise<boolean>. In-page replacement for native
+// confirm(). Resolves true on confirm, false on cancel / backdrop / Escape.
+function hwuiConfirm(message, opts = {}) {
+  return new Promise((resolve) => {
+    const prevFocus = document.activeElement;
+    const backdrop = document.createElement('div');
+    backdrop.style.cssText = 'position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);';
+    const panel = document.createElement('div');
+    panel.style.cssText = 'background:#1a1a2a;border:1px solid #444;border-radius:10px;padding:20px 22px;max-width:440px;width:calc(100% - 48px);box-shadow:0 8px 32px rgba(0,0,0,0.6);color:#ddd;font-size:14px;';
+    const msg = document.createElement('div');
+    msg.textContent = message;
+    msg.style.cssText = 'white-space:pre-line;line-height:1.5;margin-bottom:18px;';
+    const rowEl = document.createElement('div');
+    rowEl.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = opts.cancelText || 'Cancel';
+    cancelBtn.style.cssText = 'background:#2a2a38;border:1px solid #555;color:#ccc;border-radius:6px;padding:7px 16px;font-size:13px;cursor:pointer;';
+    const okBtn = document.createElement('button');
+    okBtn.textContent = opts.confirmText || 'OK';
+    okBtn.style.cssText = `background:${opts.danger ? '#5a1f1f' : '#1f5a3a'};border:1px solid ${opts.danger ? '#8a2424' : '#248050'};color:#fff;border-radius:6px;padding:7px 16px;font-size:13px;font-weight:600;cursor:pointer;`;
+    rowEl.append(cancelBtn, okBtn);
+    panel.append(msg, rowEl);
+    backdrop.appendChild(panel);
+    document.body.appendChild(backdrop);
+    function cleanup(result) {
+      document.removeEventListener('keydown', onKey, true);
+      backdrop.remove();
+      try { if (prevFocus && prevFocus.focus) prevFocus.focus(); } catch (_) {}
+      resolve(result);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); cleanup(false); }
+      else if (e.key === 'Enter') { e.preventDefault(); cleanup(true); }
+    }
+    document.addEventListener('keydown', onKey, true);
+    backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) cleanup(false); });
+    cancelBtn.addEventListener('click', () => cleanup(false));
+    okBtn.addEventListener('click', () => cleanup(true));
+    okBtn.focus();
+  });
+}
+
+// hwuiPrompt(message[, defaultValue]) → Promise<string|null>. In-page replacement
+// for native prompt(). Resolves entered text, or null on cancel / backdrop / Escape.
+function hwuiPrompt(message, defaultValue = '', opts = {}) {
+  return new Promise((resolve) => {
+    const prevFocus = document.activeElement;
+    const backdrop = document.createElement('div');
+    backdrop.style.cssText = 'position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);';
+    const panel = document.createElement('div');
+    panel.style.cssText = 'background:#1a1a2a;border:1px solid #444;border-radius:10px;padding:20px 22px;max-width:440px;width:calc(100% - 48px);box-shadow:0 8px 32px rgba(0,0,0,0.6);color:#ddd;font-size:14px;';
+    const msg = document.createElement('div');
+    msg.textContent = message;
+    msg.style.cssText = 'white-space:pre-line;line-height:1.5;margin-bottom:12px;';
+    const field = document.createElement('input');
+    field.type = 'text';
+    field.value = defaultValue || '';
+    field.style.cssText = 'width:100%;box-sizing:border-box;background:#0e0e16;border:1px solid #555;color:#eee;border-radius:6px;padding:8px 10px;font-size:14px;margin-bottom:16px;';
+    const rowEl = document.createElement('div');
+    rowEl.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.style.cssText = 'background:#2a2a38;border:1px solid #555;color:#ccc;border-radius:6px;padding:7px 16px;font-size:13px;cursor:pointer;';
+    const okBtn = document.createElement('button');
+    okBtn.textContent = opts.confirmText || 'OK';
+    okBtn.style.cssText = 'background:#1f5a3a;border:1px solid #248050;color:#fff;border-radius:6px;padding:7px 16px;font-size:13px;font-weight:600;cursor:pointer;';
+    rowEl.append(cancelBtn, okBtn);
+    panel.append(msg, field, rowEl);
+    backdrop.appendChild(panel);
+    document.body.appendChild(backdrop);
+    function cleanup(result) {
+      document.removeEventListener('keydown', onKey, true);
+      backdrop.remove();
+      try { if (prevFocus && prevFocus.focus) prevFocus.focus(); } catch (_) {}
+      resolve(result);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); cleanup(null); }
+      else if (e.key === 'Enter') { e.preventDefault(); cleanup(field.value); }
+    }
+    document.addEventListener('keydown', onKey, true);
+    backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) cleanup(null); });
+    cancelBtn.addEventListener('click', () => cleanup(null));
+    okBtn.addEventListener('click', () => cleanup(field.value));
+    field.focus(); field.select();
+  });
 }
 
 async function saveTheme() {
@@ -2447,17 +2617,17 @@ async function saveTheme() {
     });
     const result = await res.json();
     if (result.status === 'ok') {
-      alert('✅ Theme saved! Refresh the chat page to see changes.');
+      hwuiToast('✅ Theme saved! Refresh the chat page to see changes.', 'success');
     } else {
-      alert('❌ Save failed: ' + (result.error || 'Unknown error'));
+      hwuiToast('❌ Save failed: ' + (result.error || 'Unknown error'), 'error');
     }
   } catch(e) {
-    alert('❌ Save failed: ' + e);
+    hwuiToast('❌ Save failed: ' + e, 'error');
   }
 }
 
-function resetTheme() {
-  if (!confirm('Reset all colours to the last saved values?')) return;
+async function resetTheme() {
+  if (!await hwuiConfirm('Reset all colours to the last saved values?')) return;
   renderThemeEditor(originalTheme);
   // Revert live preview
   for (const group of THEME_VARS) {
@@ -2486,7 +2656,6 @@ async function loadLlamaConfig() {
     document.getElementById('llama-ctx-size').value = a.ctx_size ?? 16384;
     document.getElementById('llama-chat-template').value = a.chat_template ?? 'chatml';
     populateLlamaPresetDropdown();
-    populateSamplingPresetDropdown();
   } catch(e) {
     console.error('Failed to load llama config:', e);
   }
@@ -2536,7 +2705,7 @@ async function browseFile(targetId, filter) {
     const res = await fetch('/browse_file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(filter ? { filter: filter } : {}) });
     const data = await res.json();
     if (data.path) document.getElementById(targetId).value = data.path;
-  } catch(e) { alert('Browse failed: ' + e); }
+  } catch(e) { hwuiToast('Browse failed: ' + e, 'error'); }
 }
 
 // Scan the configured Models Folder for an mmproj .gguf file via the existing
@@ -2575,24 +2744,24 @@ async function browseFolder(targetId) {
     const res = await fetch('/browse_folder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
     const data = await res.json();
     if (data.path) document.getElementById(targetId).value = data.path;
-  } catch(e) { alert('Browse failed: ' + e); }
+  } catch(e) { hwuiToast('Browse failed: ' + e, 'error'); }
 }
 
 // ==================================================
 // RESET ALL SETTINGS TO DEFAULT
 // ==================================================
 async function resetToDefault() {
-  if (!confirm('⚠️ This will reset ALL settings back to defaults. Your current settings.json will be overwritten. Continue?')) return;
+  if (!await hwuiConfirm('⚠️ This will reset ALL settings back to defaults. Your current settings.json will be overwritten. Continue?')) return;
   try {
     const res = await fetch('/reset_settings_to_default', { method: 'POST' });
     const data = await res.json();
     if (data.status === 'ok') {
-      alert('✅ Settings reset to default. Reloading config...');
+      hwuiToast('✅ Settings reset to default. Reloading config...', 'success');
       location.reload();
     } else {
-      alert('❌ Reset failed: ' + (data.error || 'Unknown error'));
+      hwuiToast('❌ Reset failed: ' + (data.error || 'Unknown error'), 'error');
     }
-  } catch(e) { alert('❌ Reset failed: ' + e); }
+  } catch(e) { hwuiToast('❌ Reset failed: ' + e, 'error'); }
 }
 
 // ==================================================
@@ -2600,13 +2769,107 @@ async function resetToDefault() {
 // ==================================================
 // Sampling Presets
 // ==================================================
+// Disk-backed presets (server: /sampling_presets). Held in this in-memory cache
+// so the dropdown/load helpers stay synchronous; the cache is hydrated from disk
+// on init and re-synced after every save/delete. Previously these lived only in
+// browser localStorage, so edits never reached disk and were lost on cache-clear
+// / different browser / Electron storage resets.
+let samplingPresets = {};
+
 function getSamplingPresets() {
-  try { return JSON.parse(localStorage.getItem('hwui_sampling_presets') || '{}'); }
-  catch(e) { return {}; }
+  return samplingPresets;
 }
 
-function saveSamplingPresetsToStorage(presets) {
-  localStorage.setItem('hwui_sampling_presets', JSON.stringify(presets));
+// Read the current slider/field values into a preset object.
+// NOTE: a <input type="number"> returns an EMPTY STRING (.value === "") when its
+// content is invalid or out of [min,max] — e.g. typing 1.5 into Top P (max=1).
+// The old `parseFloat(x) || default` pattern silently turned that (and any legit
+// 0) into the default, which is exactly the "Top P reverts to 0.95" symptom.
+// readNum only falls back on NaN, logs the raw vs parsed value, and warns loudly
+// when a field is empty/NaN so the failure point is visible in the console.
+function readNum(id, fallback, isInt) {
+  const el = document.getElementById(id);
+  const raw = el ? el.value : '(no element)';
+  let val = isInt ? parseInt(raw, 10) : parseFloat(raw);
+  if (Number.isNaN(val)) {
+    console.warn(`[SP] field #${id} raw=${JSON.stringify(raw)} parsed to NaN — using fallback ${fallback} (field empty/invalid/out-of-range?)`);
+    val = fallback;
+  } else {
+    console.log(`[SP] read #${id}: raw=${JSON.stringify(raw)} → ${val}`);
+  }
+  return val;
+}
+
+function buildSamplingPresetFromFields() {
+  const preset = {
+    temperature:       readNum('temperature', 0.8),
+    max_tokens:        readNum('max_tokens', 4096, true),
+    top_p:             readNum('top_p', 0.95),
+    min_p:             readNum('min_p', 0.05),
+    top_k:             readNum('top_k', 40, true),
+    repeat_penalty:    readNum('repeat_penalty', 1.1),
+    frequency_penalty: readNum('frequency_penalty', 0.0),
+    presence_penalty:  readNum('presence_penalty', 0.0),
+  };
+  console.log('[SP] buildSamplingPresetFromFields →', JSON.stringify(preset));
+  return preset;
+}
+
+// POST one preset to disk. Throws on failure. The in-memory cache is only updated
+// AFTER the server confirms the write, so the UI never reports a "saved" preset
+// that didn't actually persist.
+async function persistSamplingPreset(name, preset) {
+  const payload = JSON.stringify({ name, preset });
+  console.log(`[SP] persistSamplingPreset POST /sampling_presets/save payload=${payload}`);
+  const res = await fetch('/sampling_presets/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: payload,
+  });
+  console.log(`[SP]   response status=${res.status} ok=${res.ok}`);
+  let body = null;
+  try { body = await res.clone().json(); } catch (_) {}
+  console.log('[SP]   response body=', body);
+  if (!res.ok) {
+    throw new Error((body && body.error) || `save failed (HTTP ${res.status})`);
+  }
+  samplingPresets[name] = preset;
+  console.log(`[SP]   cache['${name}'].top_p now = ${samplingPresets[name].top_p}`);
+}
+
+// Hydrate the cache from disk on page load. One-time migration: if the server
+// has no presets but the browser still holds the old localStorage set, push them
+// up so presets created before this change aren't lost.
+async function loadSamplingPresetsFromServer() {
+  try {
+    const res = await fetch('/sampling_presets');
+    samplingPresets = (await res.json()) || {};
+    console.log('[SP] loadSamplingPresetsFromServer hydrated cache:', JSON.stringify(samplingPresets));
+  } catch (e) {
+    console.error('Failed to load sampling presets:', e);
+    samplingPresets = {};
+  }
+  if (Object.keys(samplingPresets).length === 0) {
+    let legacy = {};
+    try { legacy = JSON.parse(localStorage.getItem('hwui_sampling_presets') || '{}'); } catch (_) {}
+    const names = Object.keys(legacy);
+    if (names.length) {
+      console.log(`Migrating ${names.length} sampling preset(s) from localStorage to disk`);
+      for (const n of names) {
+        try { await persistSamplingPreset(n, legacy[n]); } catch (e) { console.error('migrate failed:', n, e); }
+      }
+    }
+  }
+  populateSamplingPresetDropdown();
+}
+
+// Show the "Update Preset" button only when a preset is actually selected in
+// the dropdown — single source of truth, callable after any selection change
+// (user-driven or programmatic) so the button state never drifts.
+function syncSamplingUpdateBtn() {
+  const name = document.getElementById('sampling-preset-select').value;
+  const updateBtn = document.getElementById('update-sampling-preset-btn');
+  if (updateBtn) updateBtn.style.display = name ? 'block' : 'none';
 }
 
 function populateSamplingPresetDropdown() {
@@ -2621,38 +2884,26 @@ function populateSamplingPresetDropdown() {
     sel.appendChild(opt);
   });
   if (current && presets[current]) sel.value = current;
+  syncSamplingUpdateBtn();
 }
 
 function onSamplingPresetSelect() {
   const name = document.getElementById('sampling-preset-select').value;
   const nameInput = document.getElementById('sampling-preset-name');
-  const updateBtn = document.getElementById('update-sampling-preset-btn');
-  if (name) {
-    nameInput.value = name;
-    if (updateBtn) updateBtn.style.display = 'block';
-  } else {
-    nameInput.value = '';
-    if (updateBtn) updateBtn.style.display = 'none';
-  }
+  nameInput.value = name || '';
+  syncSamplingUpdateBtn();
 }
 
-function updateSamplingPreset() {
+async function updateSamplingPreset() {
   const name = document.getElementById('sampling-preset-select').value;
   const status = document.getElementById('sampling-preset-status');
+  console.log(`[SP] updateSamplingPreset() clicked — selected preset = ${JSON.stringify(name)}`);
   if (!name) { status.style.color = '#e88'; status.textContent = '❌ Select a preset first'; setTimeout(() => status.textContent = '', 2000); return; }
-  const preset = {
-    temperature:       parseFloat(document.getElementById('temperature').value) || 0.8,
-    max_tokens:        parseInt(document.getElementById('max_tokens').value) || 4096,
-    top_p:             parseFloat(document.getElementById('top_p').value) || 0.95,
-    min_p:             parseFloat(document.getElementById('min_p').value) || 0.05,
-    top_k:             parseInt(document.getElementById('top_k').value) || 40,
-    repeat_penalty:    parseFloat(document.getElementById('repeat_penalty').value) || 1.1,
-    frequency_penalty: parseFloat(document.getElementById('frequency_penalty').value) || 0.0,
-    presence_penalty:  parseFloat(document.getElementById('presence_penalty').value) || 0.0,
-  };
-  const presets = getSamplingPresets();
-  presets[name] = preset;
-  saveSamplingPresetsToStorage(presets);
+  try {
+    await persistSamplingPreset(name, buildSamplingPresetFromFields());
+  } catch (e) {
+    status.style.color = '#e88'; status.textContent = '❌ Save failed: ' + e.message; setTimeout(() => status.textContent = '', 3000); return;
+  }
   populateSamplingPresetDropdown();
   document.getElementById('sampling-preset-select').value = name;
   status.style.color = '#6dbf8a';
@@ -2660,39 +2911,33 @@ function updateSamplingPreset() {
   setTimeout(() => status.textContent = '', 2500);
 }
 
-function saveSamplingPreset() {
+async function saveSamplingPreset() {
   const name = document.getElementById('sampling-preset-name').value.trim();
   const status = document.getElementById('sampling-preset-status');
   if (!name) { status.style.color = '#e88'; status.textContent = '❌ Enter a preset name first'; setTimeout(() => status.textContent = '', 2000); return; }
-  const preset = {
-    temperature:       parseFloat(document.getElementById('temperature').value) || 0.8,
-    max_tokens:        parseInt(document.getElementById('max_tokens').value) || 4096,
-    top_p:             parseFloat(document.getElementById('top_p').value) || 0.95,
-    min_p:             parseFloat(document.getElementById('min_p').value) || 0.05,
-    top_k:             parseInt(document.getElementById('top_k').value) || 40,
-    repeat_penalty:    parseFloat(document.getElementById('repeat_penalty').value) || 1.1,
-    frequency_penalty: parseFloat(document.getElementById('frequency_penalty').value) || 0.0,
-    presence_penalty:  parseFloat(document.getElementById('presence_penalty').value) || 0.0,
-  };
-  const presets = getSamplingPresets();
-  presets[name] = preset;
-  saveSamplingPresetsToStorage(presets);
+  try {
+    await persistSamplingPreset(name, buildSamplingPresetFromFields());
+  } catch (e) {
+    status.style.color = '#e88'; status.textContent = '❌ Save failed: ' + e.message; setTimeout(() => status.textContent = '', 3000); return;
+  }
   populateSamplingPresetDropdown();
   document.getElementById('sampling-preset-select').value = name;
   document.getElementById('sampling-preset-name').value = '';
-  const updateBtn = document.getElementById('update-sampling-preset-btn');
-  if (updateBtn) updateBtn.style.display = 'none';
+  // The just-saved preset is now the selected one, so the Update button should
+  // be available (it overwrites this same preset on click).
+  syncSamplingUpdateBtn();
   status.style.color = '#6dbf8a';
   status.textContent = `✅ Preset "${name}" saved`;
   setTimeout(() => status.textContent = '', 2500);
 }
 
-function loadSamplingPreset() {
+async function loadSamplingPreset() {
   const name = document.getElementById('sampling-preset-select').value;
   const status = document.getElementById('sampling-preset-status');
   if (!name) { status.style.color = '#e88'; status.textContent = '❌ Select a preset first'; setTimeout(() => status.textContent = '', 2000); return; }
   const presets = getSamplingPresets();
   const p = presets[name];
+  console.log(`[SP] loadSamplingPreset('${name}') — cached preset =`, JSON.stringify(p), `(top_p=${p ? p.top_p : 'n/a'})`);
   if (!p) return;
   document.getElementById('temperature').value        = p.temperature       ?? 0.8;
   document.getElementById('max_tokens').value         = p.max_tokens        ?? 4096;
@@ -2702,19 +2947,47 @@ function loadSamplingPreset() {
   document.getElementById('repeat_penalty').value     = p.repeat_penalty    ?? 1.1;
   document.getElementById('frequency_penalty').value  = p.frequency_penalty ?? 0.0;
   document.getElementById('presence_penalty').value   = p.presence_penalty  ?? 0.0;
-  status.style.color = '#6dbf8a';
-  status.textContent = `✅ Loaded "${name}" — hit Save & Apply to use`;
+
+  // Persist the loaded values to settings.json so they become the ACTIVE config
+  // and survive a page refresh. Without this, Load only set the fields in memory;
+  // on reload loadSettings() re-read settings.json and the preset appeared to
+  // "revert". (The dropdown/cache hydration was never the issue — it only fills
+  // the dropdown, never the fields.)
+  try {
+    const applied = buildSamplingPresetFromFields();
+    const res = await fetch('/save_sampling_settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(applied),
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    console.log(`[SP] loadSamplingPreset applied '${name}' to settings.json:`, JSON.stringify(applied));
+    status.style.color = '#6dbf8a';
+    status.textContent = `✅ Loaded & applied "${name}"`;
+  } catch (e) {
+    console.error('[SP] loadSamplingPreset apply failed:', e);
+    status.style.color = '#fa4';
+    status.textContent = `⚠️ Loaded "${name}" but apply failed: ${e.message}`;
+  }
   setTimeout(() => status.textContent = '', 3000);
 }
 
-function deleteSamplingPreset() {
+async function deleteSamplingPreset() {
   const name = document.getElementById('sampling-preset-select').value;
   const status = document.getElementById('sampling-preset-status');
   if (!name) { status.style.color = '#e88'; status.textContent = '❌ Select a preset first'; setTimeout(() => status.textContent = '', 2000); return; }
-  if (!confirm(`Delete preset "${name}"?`)) return;
-  const presets = getSamplingPresets();
-  delete presets[name];
-  saveSamplingPresetsToStorage(presets);
+  if (!await hwuiConfirm(`Delete preset "${name}"?`)) return;
+  try {
+    const res = await fetch('/sampling_presets/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) throw new Error('delete failed');
+  } catch (e) {
+    status.style.color = '#e88'; status.textContent = '❌ Delete failed: ' + e.message; setTimeout(() => status.textContent = '', 3000); return;
+  }
+  delete samplingPresets[name];
   populateSamplingPresetDropdown();
   status.style.color = '#aaa';
   status.textContent = `🗑 Preset "${name}" deleted`;
@@ -2788,11 +3061,11 @@ function loadLlamaPreset() {
   setTimeout(() => status.textContent = '', 3000);
 }
 
-function deleteLlamaPreset() {
+async function deleteLlamaPreset() {
   const name = document.getElementById('llama-preset-select').value;
   const status = document.getElementById('llama-preset-status');
   if (!name) { status.style.color = '#e88'; status.textContent = '❌ Select a preset first'; setTimeout(() => status.textContent = '', 2000); return; }
-  if (!confirm(`Delete preset "${name}"?`)) return;
+  if (!await hwuiConfirm(`Delete preset "${name}"?`)) return;
   const presets = getLlamaPresets();
   delete presets[name];
   saveLlamaPresetsToStorage(presets);
@@ -2855,7 +3128,7 @@ async function saveGlobalExampleDialog() {
     setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 3000);
     return;
   }
-  if (!confirmEmptyPairedSave({ 'Example Dialogue': text }, filename)) return;
+  if (!await confirmEmptyPairedSave({ 'Example Dialogue': text }, filename)) return;
   try {
     const res = await fetch('/system_prompts/save_example/' + encodeURIComponent(filename), {
       method: 'POST',
@@ -2890,7 +3163,7 @@ async function saveGlobalPostHistory() {
     setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 3000);
     return;
   }
-  if (!confirmEmptyPairedSave({ 'Post-History': text }, filename)) return;
+  if (!await confirmEmptyPairedSave({ 'Post-History': text }, filename)) return;
   try {
     const res = await fetch('/system_prompts/save_posthistory/' + encodeURIComponent(filename), {
       method: 'POST',
@@ -3214,11 +3487,11 @@ async function switchThemeFile(name) {
     const data = await res.json();
     originalTheme = { ...data };
     renderThemeModal(data);
-  } catch(e) { alert('Failed to switch theme: ' + e); }
+  } catch(e) { hwuiToast('Failed to switch theme: ' + e, 'error'); }
 }
 
 async function newThemeFile() {
-  const name = prompt('New theme name (e.g. "dark-blue"):');
+  const name = await hwuiPrompt('New theme name (e.g. "dark-blue"):');
   if (!name || !name.trim()) return;
   try {
     const res = await fetch('/themes/create', {
@@ -3226,28 +3499,28 @@ async function newThemeFile() {
       body: JSON.stringify({ name: name.trim() })
     });
     const data = await res.json();
-    if (data.error) { alert('Error: ' + data.error); return; }
+    if (data.error) { hwuiToast('Error: ' + data.error, 'error'); return; }
     await loadThemeFileList();
     await switchThemeFile(name.trim());
-  } catch(e) { alert('Failed to create theme: ' + e); }
+  } catch(e) { hwuiToast('Failed to create theme: ' + e, 'error'); }
 }
 
 async function deleteThemeFile() {
   const name = _activeThemeName;
-  if (!confirm(`Delete theme "${name}"? This cannot be undone.`)) return;
+  if (!await hwuiConfirm(`Delete theme "${name}"? This cannot be undone.`)) return;
   try {
     const res = await fetch('/themes/delete', {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ name })
     });
     const data = await res.json();
-    if (data.error) { alert('Error: ' + data.error); return; }
+    if (data.error) { hwuiToast('Error: ' + data.error, 'error'); return; }
     await loadThemeFileList();
     // Switch to whatever is now active
     const listRes = await fetch('/themes/list');
     const listData = await listRes.json();
     await switchThemeFile(listData.active);
-  } catch(e) { alert('Failed to delete theme: ' + e); }
+  } catch(e) { hwuiToast('Failed to delete theme: ' + e, 'error'); }
 }
 
 function openThemeModal() {
@@ -3621,42 +3894,58 @@ function previewThemeVar(varName, value) {
 
   // ── OpenAI Backend Settings ──────────────────────────────────────
   let _currentBackendMode = 'local';
+  let _pendingCloudMode = null;
 
-  function confirmOpenAISwitch() {
-    // Only show confirmation if not already in OpenAI mode
-    if (_currentBackendMode === 'openai') return;
-    const modal = document.getElementById('openai-confirm-modal');
-    if (modal) { modal.style.display = 'flex'; }
+  // Shared confirm modal for any cloud provider (OpenAI / Anthropic). Local
+  // never needs confirmation — only cloud switches warn that data leaves the box.
+  function confirmCloudSwitch(mode) {
+    if (_currentBackendMode === mode) return;
+    _pendingCloudMode = mode;
+    const isOpenAI = (mode === 'openai');
+    const titleEl = document.getElementById('cloud-confirm-title');
+    const provEl  = document.getElementById('cloud-confirm-provider');
+    if (titleEl) titleEl.textContent = isOpenAI ? 'Switch to OpenAI?' : 'Switch to Anthropic?';
+    if (provEl)  provEl.textContent  = isOpenAI ? "OpenAI's servers" : "Anthropic's servers";
+    const modal = document.getElementById('cloud-confirm-modal');
+    if (modal) modal.style.display = 'flex';
   }
 
-  function cancelOpenAISwitch() {
-    const modal = document.getElementById('openai-confirm-modal');
+  function cancelCloudSwitch() {
+    _pendingCloudMode = null;
+    const modal = document.getElementById('cloud-confirm-modal');
     if (modal) modal.style.display = 'none';
   }
 
-  function confirmOpenAISwitchOK() {
-    const modal = document.getElementById('openai-confirm-modal');
+  function confirmCloudSwitchOK() {
+    const modal = document.getElementById('cloud-confirm-modal');
     if (modal) modal.style.display = 'none';
-    setBackendMode('openai');
+    if (_pendingCloudMode) setBackendMode(_pendingCloudMode);
+    _pendingCloudMode = null;
   }
 
   function setBackendMode(mode) {
     _currentBackendMode = mode;
-    const localBtn    = document.getElementById('mode-local-btn');
-    const openaiBtn   = document.getElementById('mode-openai-btn');
-    const localParams = document.getElementById('local-only-params');
-    const localNote   = document.getElementById('local-only-note');
+    const localBtn     = document.getElementById('mode-local-btn');
+    const openaiBtn    = document.getElementById('mode-openai-btn');
+    const anthropicBtn = document.getElementById('mode-anthropic-btn');
+    const localParams  = document.getElementById('local-only-params');
+    const localNote    = document.getElementById('local-only-note');
+
+    // Reset all three buttons to inactive, then light up the active one.
+    const _inactive = (btn) => { if (btn) { btn.style.background = '#111'; btn.style.color = '#888'; btn.style.fontWeight = 'normal'; } };
+    _inactive(localBtn); _inactive(openaiBtn); _inactive(anthropicBtn);
     if (mode === 'openai') {
-      localBtn.style.background  = '#111'; localBtn.style.color  = '#888'; localBtn.style.fontWeight = 'normal';
-      openaiBtn.style.background = '#1a2a4a'; openaiBtn.style.color = '#7ab4f5'; openaiBtn.style.fontWeight = 'bold';
-      if (localParams) { localParams.style.opacity = '0.3'; localParams.style.pointerEvents = 'none'; }
-      if (localNote)   { localNote.style.display = 'block'; }
+      if (openaiBtn) { openaiBtn.style.background = '#1a2a4a'; openaiBtn.style.color = '#7ab4f5'; openaiBtn.style.fontWeight = 'bold'; }
+    } else if (mode === 'anthropic') {
+      if (anthropicBtn) { anthropicBtn.style.background = '#3a2a1a'; anthropicBtn.style.color = '#e0a060'; anthropicBtn.style.fontWeight = 'bold'; }
     } else {
-      localBtn.style.background  = '#1a3a2a'; localBtn.style.color  = '#6f6'; localBtn.style.fontWeight = 'bold';
-      openaiBtn.style.background = '#111'; openaiBtn.style.color = '#888'; openaiBtn.style.fontWeight = 'normal';
-      if (localParams) { localParams.style.opacity = '1'; localParams.style.pointerEvents = 'auto'; }
-      if (localNote)   { localNote.style.display = 'none'; }
+      if (localBtn) { localBtn.style.background = '#1a3a2a'; localBtn.style.color = '#6f6'; localBtn.style.fontWeight = 'bold'; }
     }
+
+    // Local-only sampling params dim whenever ANY cloud backend is active.
+    const _cloud = (mode !== 'local');
+    if (localParams) { localParams.style.opacity = _cloud ? '0.3' : '1'; localParams.style.pointerEvents = _cloud ? 'none' : 'auto'; }
+    if (localNote)   { localNote.style.display = _cloud ? 'block' : 'none'; }
   }
 
   function _setOpenAIModelSelect(savedModel) {
@@ -3725,6 +4014,9 @@ function previewThemeVar(varName, value) {
         } else if (data.backend_mode === 'openai') {
           status.textContent = '⚠️ OpenAI mode set but no API key';
           status.style.color = '#fa4';
+        } else if (data.backend_mode === 'anthropic') {
+          status.textContent = 'Anthropic active (see below)';
+          status.style.color = '#888';
         } else {
           status.textContent = 'Using local llama.cpp';
           status.style.color = '#888';
@@ -3772,7 +4064,117 @@ function previewThemeVar(varName, value) {
     }
   }
 
+  // --------------------------------------------------
+  // Anthropic settings (mirrors the OpenAI helpers above)
+  // --------------------------------------------------
+  function _setAnthropicModelSelect(savedModel) {
+    const sel = document.getElementById('anthropic-model');
+    if (!sel) return;
+    for (let i = 0; i < sel.options.length; i++) {
+      if (sel.options[i].value === savedModel) { sel.value = savedModel; return; }
+    }
+    if (savedModel) {
+      const opt = document.createElement('option');
+      opt.value = savedModel;
+      opt.textContent = savedModel;
+      sel.insertBefore(opt, sel.firstChild);
+      sel.value = savedModel;
+    }
+  }
+
+  async function fetchAnthropicModels() {
+    const status = document.getElementById('anthropic-status');
+    if (status) { status.textContent = '⏳ Fetching models…'; status.style.color = '#aaa'; }
+    try {
+      const res  = await fetch('/get_anthropic_models');
+      const data = await res.json();
+      if (data.status !== 'ok') {
+        if (status) { status.textContent = '❌ ' + (data.error || 'Failed to fetch'); status.style.color = '#f66'; }
+        return;
+      }
+      const sel = document.getElementById('anthropic-model');
+      const current = sel ? sel.value : '';
+      if (sel) {
+        sel.innerHTML = '';
+        data.models.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m; opt.textContent = m;
+          sel.appendChild(opt);
+        });
+        if (current) _setAnthropicModelSelect(current);
+      }
+      if (status) { status.textContent = `✅ ${data.models.length} models loaded`; status.style.color = '#6f6'; }
+    } catch(e) {
+      if (status) { status.textContent = '❌ Fetch failed: ' + e.message; status.style.color = '#f66'; }
+    }
+  }
+
+  async function loadAnthropicSettings() {
+    try {
+      const res  = await fetch('/get_anthropic_settings');
+      const data = await res.json();
+      setBackendMode(data.backend_mode || 'local');
+      const keyInput = document.getElementById('anthropic-api-key');
+      if (keyInput) keyInput.value = data.anthropic_api_key || '';
+      const baseUrlInput = document.getElementById('anthropic-base-url');
+      if (baseUrlInput) baseUrlInput.value = data.anthropic_base_url || 'https://api.anthropic.com/v1';
+      _setAnthropicModelSelect(data.anthropic_model || 'claude-sonnet-4-5');
+      const status = document.getElementById('anthropic-status');
+      if (status) {
+        if (data.backend_mode === 'anthropic' && data.anthropic_api_key) {
+          status.textContent = '✅ Anthropic active — ' + (data.anthropic_model || 'claude-sonnet-4-5');
+          status.style.color = '#6f6';
+        } else if (data.backend_mode === 'anthropic') {
+          status.textContent = '⚠️ Anthropic mode set but no API key';
+          status.style.color = '#fa4';
+        } else {
+          status.textContent = '';
+        }
+      }
+    } catch(e) { console.warn('Could not load Anthropic settings:', e); }
+  }
+
+  async function saveAnthropicSettings() {
+    const key     = (document.getElementById('anthropic-api-key').value  || '').trim();
+    const model   = (document.getElementById('anthropic-model').value    || '').trim();
+    const baseUrl = (document.getElementById('anthropic-base-url').value || '').trim().replace(/\/+$/, '');
+    const status = document.getElementById('anthropic-status');
+    try {
+      const res = await fetch('/save_anthropic_settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          backend_mode:       _currentBackendMode,
+          anthropic_api_key:  key,
+          anthropic_model:    model,
+          anthropic_base_url: baseUrl
+        })
+      });
+      const data = await res.json();
+      if (data.status === 'ok') {
+        if (_currentBackendMode === 'anthropic' && key) {
+          status.textContent = '✅ Anthropic active — ' + model;
+          status.style.color = '#6f6';
+        } else if (_currentBackendMode === 'anthropic') {
+          status.textContent = '⚠️ Anthropic mode set but no API key';
+          status.style.color = '#fa4';
+        } else {
+          status.textContent = 'Saved';
+          status.style.color = '#888';
+        }
+      } else {
+        status.textContent = '❌ Save failed: ' + (data.error || 'unknown');
+        status.style.color = '#f66';
+      }
+    } catch(e) {
+      console.error('Failed to save Anthropic settings:', e);
+      status.textContent = '❌ Save failed';
+      status.style.color = '#f66';
+    }
+  }
+
   loadOpenAISettings();
+  loadAnthropicSettings();
 </script>
 </body>
 </html>

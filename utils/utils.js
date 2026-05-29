@@ -1,4 +1,120 @@
 // ============================================================
+// IN-PAGE DIALOGS — replacements for native alert/confirm/prompt.
+// ⚠️ Native alert()/confirm()/prompt() stall the Electron renderer's keyboard
+// input pipeline after dismissal. NEVER use them. Use these instead.
+// (Defined here in utils.js, which index.html loads, so they're global to the
+// chat page. config.html has its own inline copy — it loads no shared JS.)
+// ============================================================
+function hwuiToast(message, kind = 'success', ms = 2200) {
+  let host = document.getElementById('hwui-toast-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'hwui-toast-host';
+    host.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:99999;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;';
+    document.body.appendChild(host);
+  }
+  const c = ({
+    success: { bg:'#13361f', border:'#2a6a4a', fg:'#aef0c8' },
+    error:   { bg:'#3a1414', border:'#8a2424', fg:'#ffb0b0' },
+    info:    { bg:'#16263a', border:'#245080', fg:'#bcd8ff' },
+  })[kind] || { bg:'#13361f', border:'#2a6a4a', fg:'#aef0c8' };
+  const el = document.createElement('div');
+  el.textContent = message;
+  el.style.cssText = `background:${c.bg};border:1px solid ${c.border};color:${c.fg};border-radius:8px;padding:10px 16px;font-size:13px;max-width:480px;box-shadow:0 4px 16px rgba(0,0,0,0.5);opacity:0;transition:opacity .18s ease;white-space:pre-line;`;
+  host.appendChild(el);
+  requestAnimationFrame(() => { el.style.opacity = '1'; });
+  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 220); }, ms);
+}
+
+// hwuiConfirm(message[, opts]) → Promise<boolean>. Resolves true on confirm,
+// false on cancel / backdrop click / Escape. opts: {confirmText, cancelText, danger}.
+function hwuiConfirm(message, opts = {}) {
+  return new Promise((resolve) => {
+    const prevFocus = document.activeElement;
+    const backdrop = document.createElement('div');
+    backdrop.style.cssText = 'position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);';
+    const panel = document.createElement('div');
+    panel.style.cssText = 'background:#1a1a2a;border:1px solid #444;border-radius:10px;padding:20px 22px;max-width:440px;width:calc(100% - 48px);box-shadow:0 8px 32px rgba(0,0,0,0.6);color:#ddd;font-size:14px;';
+    const msg = document.createElement('div');
+    msg.textContent = message;
+    msg.style.cssText = 'white-space:pre-line;line-height:1.5;margin-bottom:18px;';
+    const rowEl = document.createElement('div');
+    rowEl.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = opts.cancelText || 'Cancel';
+    cancelBtn.style.cssText = 'background:#2a2a38;border:1px solid #555;color:#ccc;border-radius:6px;padding:7px 16px;font-size:13px;cursor:pointer;';
+    const okBtn = document.createElement('button');
+    okBtn.textContent = opts.confirmText || 'OK';
+    okBtn.style.cssText = `background:${opts.danger ? '#5a1f1f' : '#1f5a3a'};border:1px solid ${opts.danger ? '#8a2424' : '#248050'};color:#fff;border-radius:6px;padding:7px 16px;font-size:13px;font-weight:600;cursor:pointer;`;
+    rowEl.append(cancelBtn, okBtn);
+    panel.append(msg, rowEl);
+    backdrop.appendChild(panel);
+    document.body.appendChild(backdrop);
+    function cleanup(result) {
+      document.removeEventListener('keydown', onKey, true);
+      backdrop.remove();
+      try { if (prevFocus && prevFocus.focus) prevFocus.focus(); } catch (_) {}
+      resolve(result);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); cleanup(false); }
+      else if (e.key === 'Enter') { e.preventDefault(); cleanup(true); }
+    }
+    document.addEventListener('keydown', onKey, true);
+    backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) cleanup(false); });
+    cancelBtn.addEventListener('click', () => cleanup(false));
+    okBtn.addEventListener('click', () => cleanup(true));
+    okBtn.focus();
+  });
+}
+
+// hwuiPrompt(message[, defaultValue]) → Promise<string|null>. Resolves the entered
+// text on OK/Enter, or null on cancel / backdrop click / Escape.
+function hwuiPrompt(message, defaultValue = '', opts = {}) {
+  return new Promise((resolve) => {
+    const prevFocus = document.activeElement;
+    const backdrop = document.createElement('div');
+    backdrop.style.cssText = 'position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);';
+    const panel = document.createElement('div');
+    panel.style.cssText = 'background:#1a1a2a;border:1px solid #444;border-radius:10px;padding:20px 22px;max-width:440px;width:calc(100% - 48px);box-shadow:0 8px 32px rgba(0,0,0,0.6);color:#ddd;font-size:14px;';
+    const msg = document.createElement('div');
+    msg.textContent = message;
+    msg.style.cssText = 'white-space:pre-line;line-height:1.5;margin-bottom:12px;';
+    const field = document.createElement('input');
+    field.type = 'text';
+    field.value = defaultValue || '';
+    field.style.cssText = 'width:100%;box-sizing:border-box;background:#0e0e16;border:1px solid #555;color:#eee;border-radius:6px;padding:8px 10px;font-size:14px;margin-bottom:16px;';
+    const rowEl = document.createElement('div');
+    rowEl.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.style.cssText = 'background:#2a2a38;border:1px solid #555;color:#ccc;border-radius:6px;padding:7px 16px;font-size:13px;cursor:pointer;';
+    const okBtn = document.createElement('button');
+    okBtn.textContent = opts.confirmText || 'OK';
+    okBtn.style.cssText = 'background:#1f5a3a;border:1px solid #248050;color:#fff;border-radius:6px;padding:7px 16px;font-size:13px;font-weight:600;cursor:pointer;';
+    rowEl.append(cancelBtn, okBtn);
+    panel.append(msg, field, rowEl);
+    backdrop.appendChild(panel);
+    document.body.appendChild(backdrop);
+    function cleanup(result) {
+      document.removeEventListener('keydown', onKey, true);
+      backdrop.remove();
+      try { if (prevFocus && prevFocus.focus) prevFocus.focus(); } catch (_) {}
+      resolve(result);
+    }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); cleanup(null); }
+      else if (e.key === 'Enter') { e.preventDefault(); cleanup(field.value); }
+    }
+    document.addEventListener('keydown', onKey, true);
+    backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) cleanup(null); });
+    cancelBtn.addEventListener('click', () => cleanup(null));
+    okBtn.addEventListener('click', () => cleanup(field.value));
+    field.focus(); field.select();
+  });
+}
+
+// ============================================================
 // AUTHOR'S NOTE
 // ============================================================
 function openAuthorNote() {
@@ -225,7 +341,7 @@ function initDocumentUpload() {
         const result = await res.json();
         
         if (result.error) {
-          alert('Upload failed: ' + result.error);
+          hwuiToast('Upload failed: ' + result.error, 'error');
           return;
         }
         
@@ -239,7 +355,7 @@ function initDocumentUpload() {
         
       } catch (err) {
         console.error('❌ Upload error:', err);
-        alert('Failed to upload document');
+        hwuiToast('Failed to upload document', 'error');
       }
     });
   }
@@ -288,7 +404,7 @@ async function loadProjectDocuments(projectName) {
 }
 
 async function deleteProjectDocument(projectName, filename) {
-  if (!confirm(`Delete "${filename}"?`)) return;
+  if (!await hwuiConfirm(`Delete "${filename}"?`)) return;
   
   try {
     const res = await fetch(`/projects/${projectName}/documents/${filename}`, {
@@ -298,7 +414,7 @@ async function deleteProjectDocument(projectName, filename) {
     const result = await res.json();
     
     if (result.error) {
-      alert('Delete failed: ' + result.error);
+      hwuiToast('Delete failed: ' + result.error, 'error');
       return;
     }
     
@@ -309,7 +425,7 @@ async function deleteProjectDocument(projectName, filename) {
     
   } catch (err) {
     console.error('❌ Delete error:', err);
-    alert('Failed to delete document');
+    hwuiToast('Failed to delete document', 'error');
   }
 }
 
@@ -959,7 +1075,7 @@ async function startVoiceInput() {
 
   } catch (err) {
     console.error('🎤 Mic access error:', err);
-    alert('Could not access microphone. Check Brave permissions.');
+    hwuiToast('Could not access microphone. Check Brave permissions.', 'info');
   }
 }
 
