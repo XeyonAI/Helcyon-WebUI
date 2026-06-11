@@ -191,6 +191,13 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 # Keep model weights off C: drive — same as f5_server.py
 os.environ.setdefault('HF_HOME', r'I:\HuggingFace')
 os.environ.setdefault('TRANSFORMERS_CACHE', r'I:\HuggingFace')
+# Default to offline so a cached model loads with no network check/re-download.
+# ⚠️ Chatterbox's model is fetched via from_pretrained and may NOT be cached yet
+# (only the F5 vocoder is currently cached). The FIRST chatterbox run therefore
+# needs to download it — launch with HF_HUB_OFFLINE=0 set in the environment that
+# one time; afterwards this default keeps subsequent launches fully offline.
+# Set at import time, before chatterbox/huggingface_hub is imported in get_model().
+os.environ.setdefault('HF_HUB_OFFLINE', '1')
 
 # --- CONFIG -------------------------------------------------------------------
 PORT          = 8004

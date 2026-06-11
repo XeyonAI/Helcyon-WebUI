@@ -19,6 +19,13 @@ VOICES_DIR = r"I:\F5-TTS\F5-TTS"
 # Force HuggingFace cache off C: drive entirely
 os.environ['HF_HOME'] = r"I:\HuggingFace"
 os.environ['TRANSFORMERS_CACHE'] = r"I:\HuggingFace"
+# The vocoder (charactr/vocos-mel-24khz) is fetched from HF on first run and
+# cached above — the local checkpoint loads from I:\F5-TTS, but the vocoder does
+# NOT (despite older comments). Default to offline so each launch loads it
+# straight from cache with no network version-check or re-download. Override
+# with HF_HUB_OFFLINE=0 in the environment if you ever need to refresh it.
+# Set before f5_tts/huggingface_hub is imported (below) so the flag takes effect.
+os.environ.setdefault('HF_HUB_OFFLINE', '1')
 
 # ----------------------------------------------------------------
 # STARTUP CHECK
@@ -364,6 +371,9 @@ def clean_text(text):
     # Fix smart quotes — keeps apostrophes intact for F5 to read contractions correctly
     text = text.replace('\u2019', "'").replace('\u2018', "'")
     text = text.replace('\u201c', '"').replace('\u201d', '"')
+
+    # Expand quoted phrases to spoken form: "word" → open quote, word, close quote
+    text = re.sub(r'"([^"]+)"', r'open quote, \1, close quote', text)
 
     # Convert ALL-CAPS words to Title Case BEFORE acronym expansion.
     # Words in the ACRONYMS dict are preserved as-is so expand_acronyms handles them.

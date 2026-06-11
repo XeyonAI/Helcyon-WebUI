@@ -119,14 +119,14 @@
          Updated in loadProjects(). -->
     <div><strong id="topbar-title">Helcyon-WebUI</strong></div>
 
-    <!-- Electron-only window reload button. Sits in the frameless title-bar
-         strip, just left of the native min/max/close overlay (top-right). The
-         launcher nulls out the app menu, so Ctrl+R/F5 don't work — this is the
-         in-window way to recover from a stuck/failed page. Hidden in a normal
-         browser (no frameless chrome there, and F5 already works). Marked
-         no-drag so it stays clickable regardless of any title-bar drag region. -->
+    <!-- Electron-only window reload button. Sits in a fixed vertical stack BELOW
+         the model selector (right-aligned), under the config gear — moved out of
+         the top-right corner where it overlapped Electron's native min/max/close
+         window controls (unclickable). The launcher nulls out the app menu, so
+         Ctrl+R/F5 don't work — this is the in-window way to recover from a stuck
+         page. Hidden in a normal browser (F5 works there). Marked no-drag. -->
     <button id="electron-reload-btn" onclick="location.reload()" title="Reload HWUI"
-      style="display:none; position:fixed; top:3px; right:150px; z-index:2000;
+      style="display:none; position:fixed; top:173px; right:12px; z-index:1001;
              width:26px; height:26px; align-items:center; justify-content:center;
              border-radius:6px; border:1px solid var(--modal-border,#2d394b);
              background:rgba(255,255,255,0.06); color:#e8e8e8; cursor:pointer;
@@ -208,7 +208,8 @@
         <button onclick="closeModelPicker()" style="background:transparent; border:1px solid var(--modal-border, #2d394b); color:#aaa; border-radius:6px; padding:3px 10px; font-size:11px; cursor:pointer; margin:0;">Close</button>
       </div>
     </div>
-    <div id="settings-link" onclick="toggleCogMenu(event)" title="Settings">
+    <div id="settings-link" onclick="toggleCogMenu(event)" title="Settings"
+         style="position:fixed; top:135px; right:12px; z-index:1001; margin:0; cursor:pointer;">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
         <circle cx="12" cy="12" r="3"></circle>
@@ -227,6 +228,202 @@
       </div>
     </div>
   </div>
+
+  <!-- ════════════════════════════════════════════════════════════════════
+       TOKEN MONITOR — retro phosphor readout of the last turn's KV budget.
+       Hidden by default; toggled by #token-monitor-btn in the chat bar.
+       Fed by GET /token_stats (see refreshTokenMonitor). Per-turn actuals
+       (prompt/headroom/reply) come from the last LOCAL model turn; ctx/gpu/
+       model are seeded from settings so it works before the first message.
+       ════════════════════════════════════════════════════════════════════ -->
+  <style>
+    #token-monitor {
+      position: fixed; top: 8px; left: 50%; transform: translateX(-50%) translateY(-12px);
+      z-index: 1500; display: none; opacity: 0;
+      transition: opacity .18s ease, transform .18s ease;
+      font-family: "Consolas","DejaVu Sans Mono","Courier New",monospace;
+      -webkit-app-region: no-drag;
+    }
+    #token-monitor.tm-open { display: block; opacity: 1; transform: translateX(-50%) translateY(0); }
+    .tm-screen {
+      position: relative; overflow: hidden;
+      background:
+        radial-gradient(120% 140% at 50% -20%, rgba(0,80,40,0.20), rgba(0,0,0,0) 60%),
+        #050a07;
+      border: 1px solid #103a26; border-radius: 8px;
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.6), 0 10px 30px rgba(0,0,0,0.55),
+                  inset 0 0 24px rgba(0,255,140,0.05);
+      padding: 10px 14px 11px; min-width: 360px;
+      color: #38f4a4; text-shadow: 0 0 4px rgba(40,255,150,0.45);
+      font-size: 12.5px; letter-spacing: 0.4px; line-height: 1.5;
+    }
+    /* faint scanlines */
+    .tm-screen::before {
+      content: ""; position: absolute; inset: 0; pointer-events: none;
+      background: repeating-linear-gradient(
+        to bottom, rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px, rgba(0,0,0,0.18) 3px);
+      mix-blend-mode: multiply; border-radius: 8px;
+    }
+    .tm-title {
+      display: flex; justify-content: space-between; align-items: center;
+      color: #5cf0ff; text-shadow: 0 0 5px rgba(90,240,255,0.5);
+      font-weight: 700; letter-spacing: 1.5px; font-size: 11px;
+      border-bottom: 1px solid rgba(40,255,150,0.18);
+      padding-bottom: 6px; margin-bottom: 7px;
+    }
+    .tm-title .tm-x { cursor: pointer; padding: 0 4px; color: #2f8f6b; }
+    .tm-title .tm-x:hover { color: #5cf0ff; }
+    .tm-row { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+    .tm-lbl { color: #2f9d72; width: 64px; flex-shrink: 0; letter-spacing: 1px; }
+    .tm-val { color: #7dffc0; font-weight: 700; }
+    .tm-dim { color: #2f8f6b; }
+    .tm-bar {
+      flex: 1 1 auto; height: 10px; min-width: 90px;
+      background: #07150e; border: 1px solid #143d29; border-radius: 2px;
+      overflow: hidden; box-shadow: inset 0 0 6px rgba(0,0,0,0.7);
+    }
+    .tm-bar-fill {
+      height: 100%; width: 0%;
+      background: linear-gradient(90deg, #1cff9a, #14d67f);
+      box-shadow: 0 0 8px rgba(28,255,154,0.7); transition: width .35s ease, background .35s ease;
+    }
+    .tm-bar-fill.tm-warn { background: linear-gradient(90deg,#ffd23c,#ffae2e); box-shadow:0 0 8px rgba(255,190,60,0.7); }
+    .tm-bar-fill.tm-crit { background: linear-gradient(90deg,#ff5b4d,#ff2e2e); box-shadow:0 0 9px rgba(255,70,60,0.8); }
+    #token-monitor .tm-model { font-size: 11px; color: #2f8f6b; }
+  </style>
+  <div id="token-monitor" aria-hidden="true">
+    <div class="tm-screen">
+      <div class="tm-row tm-title">
+        <span>▌ TOKEN MONITOR</span>
+        <span class="tm-x" onclick="toggleTokenMonitor()" title="Hide">×</span>
+      </div>
+      <div class="tm-row">
+        <span class="tm-lbl">PROMPT</span>
+        <span class="tm-val" id="tm-prompt">––––</span><span class="tm-dim">tok</span>
+        <div class="tm-bar"><div class="tm-bar-fill" id="tm-bar"></div></div>
+        <span class="tm-val" id="tm-pct">––%</span>
+      </div>
+      <div class="tm-row">
+        <span class="tm-lbl">CONTEXT</span>
+        <span class="tm-val" id="tm-ctx">––––</span><span class="tm-dim">tok</span>
+        <span class="tm-dim">·&nbsp; HEADROOM</span>
+        <span class="tm-val" id="tm-headroom">––––</span>
+        <span class="tm-dim" id="tm-headroom-pct"></span>
+      </div>
+      <div class="tm-row">
+        <span class="tm-lbl">REPLY</span>
+        <span class="tm-dim">budget</span><span class="tm-val" id="tm-npredict">––––</span>
+        <span class="tm-dim">·&nbsp; last gen</span><span class="tm-val" id="tm-lastgen">––</span>
+      </div>
+      <div class="tm-row">
+        <span class="tm-lbl">HISTORY</span>
+        <span class="tm-dim">kept</span><span class="tm-val" id="tm-kept">––</span>
+        <span class="tm-dim">·&nbsp; dropped</span><span class="tm-val" id="tm-dropped">––</span>
+      </div>
+      <div class="tm-row tm-model">
+        <span class="tm-lbl">MODEL</span>
+        <span id="tm-model">––</span>
+      </div>
+    </div>
+  </div>
+  <script>
+    // ── Token monitor wiring ──────────────────────────────────────────────
+    // Open/close (persisted), fetch GET /token_stats, paint the readout.
+    // refreshTokenMonitor() is a no-op while the panel is closed, so it's cheap
+    // to call from the chat-stream finally blocks after every turn.
+    function _tmFmt(n) { return (typeof n === 'number' && isFinite(n)) ? n.toLocaleString('en-US') : '––'; }
+
+    function paintTokenMonitor(d) {
+      const ctx = d.ctx_size || 0;
+      const pt  = (typeof d.prompt_tokens === 'number') ? d.prompt_tokens : null;
+      const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+
+      set('tm-ctx', _tmFmt(ctx));
+      set('tm-prompt', pt === null ? '––––' : _tmFmt(pt));
+
+      const pct = (pt !== null && ctx > 0) ? Math.min(100, Math.round(pt / ctx * 100)) : 0;
+      const bar = document.getElementById('tm-bar');
+      if (bar) {
+        bar.style.width = (pt === null ? 0 : pct) + '%';
+        bar.classList.remove('tm-warn', 'tm-crit');
+        if (pct >= 85) bar.classList.add('tm-crit');
+        else if (pct >= 60) bar.classList.add('tm-warn');
+      }
+      set('tm-pct', pt === null ? '––%' : pct + '%');
+
+      const hr = (typeof d.headroom === 'number') ? d.headroom : (pt !== null ? ctx - pt : null);
+      set('tm-headroom', hr === null ? '––––' : _tmFmt(hr));
+      set('tm-headroom-pct', (hr === null || ctx <= 0) ? '' : '(' + Math.round(hr / ctx * 100) + '%)');
+
+      set('tm-npredict', _tmFmt(d.n_predict));
+      set('tm-lastgen', (typeof d.last_gen === 'number') ? _tmFmt(d.last_gen) : '––');
+      set('tm-kept', (typeof d.convo_kept === 'number') ? d.convo_kept : '––');
+      set('tm-dropped', (typeof d.convo_dropped === 'number') ? d.convo_dropped : '––');
+
+      // Tidy the model label: drop any folder prefix and the .gguf extension.
+      let m = d.model || '––';
+      if (m !== '––') m = m.replace(/^.*[\\/]/, '').replace(/\.gguf$/i, '');
+      if (d.gpu_layers !== null && d.gpu_layers !== undefined) m += '  ·  gpu ' + d.gpu_layers;
+      set('tm-model', m);
+    }
+
+    // Centre the panel on the chat bar (not the viewport): the input area is
+    // offset by the sidebar, so match #input-row's centre. Reads the live rect
+    // so it adapts to any sidebar width / theme / window resize.
+    function positionTokenMonitor() {
+      const panel = document.getElementById('token-monitor');
+      if (!panel) return;
+      const row = document.getElementById('input-row') || document.getElementById('main');
+      if (!row) return;
+      const r = row.getBoundingClientRect();
+      if (r.width > 0) panel.style.left = Math.round(r.left + r.width / 2) + 'px';
+    }
+    window.addEventListener('resize', () => {
+      const p = document.getElementById('token-monitor');
+      if (p && p.classList.contains('tm-open')) positionTokenMonitor();
+    });
+
+    async function refreshTokenMonitor() {
+      const panel = document.getElementById('token-monitor');
+      if (!panel || !panel.classList.contains('tm-open')) return;  // closed → skip the fetch
+      try {
+        const r = await fetch('/token_stats', { cache: 'no-store' });
+        if (!r.ok) return;
+        paintTokenMonitor(await r.json());
+      } catch (e) { /* silent — monitor is non-critical */ }
+    }
+    window.refreshTokenMonitor = refreshTokenMonitor;
+
+    function toggleTokenMonitor(force) {
+      const panel = document.getElementById('token-monitor');
+      const btn = document.getElementById('token-monitor-btn');
+      if (!panel) return;
+      const open = (typeof force === 'boolean') ? force : !panel.classList.contains('tm-open');
+      if (open) {
+        panel.style.display = 'block';
+        positionTokenMonitor();   // centre on the chat bar before it animates in
+        requestAnimationFrame(() => panel.classList.add('tm-open'));
+        panel.setAttribute('aria-hidden', 'false');
+        if (btn) { btn.style.borderColor = '#1cff9a'; btn.style.color = '#1cff9a'; }
+        refreshTokenMonitor();
+      } else {
+        panel.classList.remove('tm-open');
+        panel.setAttribute('aria-hidden', 'true');
+        setTimeout(() => { if (!panel.classList.contains('tm-open')) panel.style.display = 'none'; }, 220);
+        if (btn) { btn.style.borderColor = '#555'; btn.style.color = '#ccc'; }
+      }
+      try { localStorage.setItem('hwui_token_monitor_open', open ? '1' : '0'); } catch (e) {}
+    }
+    window.toggleTokenMonitor = toggleTokenMonitor;
+
+    // Restore last open/closed state on load; seed the figures from /props.
+    window.addEventListener('DOMContentLoaded', () => {
+      let pref = '0';
+      try { pref = localStorage.getItem('hwui_token_monitor_open') || '0'; } catch (e) {}
+      if (pref === '1') toggleTokenMonitor(true);
+    });
+  </script>
+
   <!-- Layout -->
   <div id="app">
     <!-- Sidebar -->
@@ -375,6 +572,17 @@
                 <svg id="tts-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M11 5L6 9H2v6h4l5 4V5z"/>
                   <path id="tts-waves" d="M15.54 8.46a5 5 0 0 1 0 7.07M18.36 5.64a9 9 0 0 1 0 12.73"/>
+                </svg>
+              </button>
+
+              <!-- Token monitor toggle — opens the retro TOKEN MONITOR readout
+                   that shows prompt/context headroom for the last turn. -->
+              <button id="token-monitor-btn" onclick="toggleTokenMonitor()" title="Token monitor"
+                style="display:flex;align-items:center;justify-content:center;width:34px;height:34px;min-width:34px;border-radius:50%;border:1px solid #555;background:rgba(255,255,255,0.08);color:#ccc;padding:0;margin:0;cursor:pointer;flex-shrink:0;box-sizing:border-box;line-height:1;">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="2" y="3" width="20" height="14" rx="2"/>
+                  <line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/>
+                  <polyline points="6 8 9 11 6 14" /><line x1="12" y1="14" x2="16" y2="14"/>
                 </svg>
               </button>
 
@@ -691,31 +899,65 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
   let lastPrompt = localStorage.getItem('lastPrompt') || '';
   let isCreatingNewChat = false;
 
+  // ── Chat-sync stale-write guard (June 10 2026) ──────────────────────────
+  // _chatDirty: has THIS tab mutated window.loadedChat since it last loaded
+  // from / saved to disk? The pagehide beacon only flushes when true — a
+  // passive tab (e.g. desktop refreshed after the chat continued on mobile)
+  // must NOT overwrite the file with its stale in-memory copy.
+  // _chatBaseCount: how many messages this tab believes are on disk; sent as
+  // base_count with every /chats/save so the server can reject stale writes
+  // even from a dirty-but-behind tab.
+  window._chatDirty = false;
+  window._chatBaseCount = 0;
+
 // ================================================
 // IMAGE ATTACH SYSTEM
 // ================================================
 window.attachedImages = []; // array of {base64, mimeType, previewUrl}
 
 async function handleImageAttach(input) {
-  const files = Array.from(input.files);
+  await attachImageFiles(input.files);
+  // Reset input so same file can be re-attached if needed
+  input.value = '';
+}
+
+// Shared image-attach path used by BOTH the file picker (handleImageAttach) and
+// clipboard paste (the #user-input paste listener). Filters to image files,
+// runs the vision-capability guard, then reads each as a data URL and pushes it
+// onto window.attachedImages + renders the preview strip.
+async function attachImageFiles(fileList) {
+  const files = Array.from(fileList || []).filter(f => f && f.type && f.type.startsWith('image/'));
   if (!files.length) return;
 
-  // Vision-capability guard — block attaching images to a text-only model
-  // (no mmproj loaded). The backend rejects them anyway; this gives the user
-  // the reason up front instead of a failed send. Fails open if the check
-  // itself errors — the backend guard is the real safety net.
+  // Vision-capability guard — block attaching images to a text-only LOCAL model
+  // (no mmproj loaded). This ONLY applies in local backend mode: in cloud API
+  // mode (anthropic/openai) the provider does the vision, so no local mmproj is
+  // needed and image turns are routed to the cloud branches (see changes.md —
+  // cloud image vision). We read the current backend_mode from /cloud_api_enabled
+  // (authoritative on-disk value) and skip the mmproj check entirely in cloud
+  // mode. Fails open if the check itself errors — the backend guard is the real
+  // safety net. (On a backend_mode read error we default to 'local' so the local
+  // guard stays active — local behaviour is unchanged.)
   try {
-    const mres = await fetch('/get_model');
-    if (mres.ok) {
-      const mdata = await mres.json();
-      if (!mdata.vision_active) {
-        hwuiToast('⚠️ The loaded model has no vision support (no mmproj file).\n\n'
-            + 'Load a vision-capable model before attaching images — otherwise '
-            + 'the image cannot be read.', 'error');
-        input.value = '';
-        return;
+    let backendMode = 'local';
+    try {
+      const cres = await fetch('/cloud_api_enabled');
+      if (cres.ok) backendMode = (await cres.json()).backend_mode || 'local';
+    } catch (e) { /* default 'local' — keeps the local mmproj guard active */ }
+
+    if (backendMode === 'local') {
+      const mres = await fetch('/get_model');
+      if (mres.ok) {
+        const mdata = await mres.json();
+        if (!mdata.vision_active) {
+          hwuiToast('⚠️ The loaded model has no vision support (no mmproj file).\n\n'
+              + 'Load a vision-capable model before attaching images — otherwise '
+              + 'the image cannot be read.', 'error');
+          return;
+        }
       }
     }
+    // Cloud modes (anthropic/openai): no local mmproj needed — fall through and attach.
   } catch (e) {
     console.warn('Vision-capability check failed, allowing attach:', e);
   }
@@ -732,10 +974,32 @@ async function handleImageAttach(input) {
     };
     reader.readAsDataURL(file);
   });
-
-  // Reset input so same file can be re-attached if needed
-  input.value = '';
 }
+
+// Clipboard image paste — paste a screenshot (e.g. Lightshot) straight into the
+// chat bar with Ctrl+V. Routes through the same attachImageFiles() path as the
+// file picker (vision guard + preview strip). Only acts when the clipboard holds
+// an image; normal text paste is left to the browser's default behaviour.
+(function initImagePaste() {
+  const ui = document.getElementById('user-input');
+  if (!ui) return;
+  ui.addEventListener('paste', function(e) {
+    const cd = e.clipboardData || window.clipboardData;
+    if (!cd || !cd.items) return;
+    const imgs = [];
+    for (const item of cd.items) {
+      if (item.kind === 'file' && item.type && item.type.startsWith('image/')) {
+        const f = item.getAsFile();
+        if (f) imgs.push(f);
+      }
+    }
+    if (imgs.length) {
+      e.preventDefault();   // don't also drop the raw file path/blob into the textarea as text
+      attachImageFiles(imgs);
+      if (typeof showToast === 'function') showToast('📋 Image pasted');
+    }
+  });
+})();
 
 function renderImagePreviews() {
   const strip = document.getElementById('image-preview-strip');
@@ -1020,11 +1284,34 @@ if (typeof marked === "undefined") {
       if (!txt) return '';
 
       function parseInline(text) {
-        return text
+        // Markdown links FIRST (before emphasis) so URL contents (underscores/
+        // asterisks) and the link text aren't mangled by the bold/italic rules.
+        // Each valid link is swapped for an inert placeholder and restored after.
+        // ⚠️ Hardening — output goes straight into innerHTML with no sanitiser:
+        //   • http/https ONLY; any other scheme (javascript:/data:/file:…) is left
+        //     as literal text, never turned into an anchor;
+        //   • every anchor gets target="_blank" rel="noopener noreferrer";
+        //   • the href is HTML-escaped to prevent attribute breakout.
+        // The wrapped form ([text](url)) keeps its outer parens literal — the
+        // regex matches only the inner [text](url).
+        var _links = [];
+        text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, function(m, label, url) {
+          url = url.trim();
+          if (!/^https?:\/\//i.test(url)) return m;   // non-http(s) → leave as-is (blocks javascript: etc.)
+          var href = url.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          var ph = '\x00LINK' + _links.length + '\x00';
+          _links.push('<a href="' + href + '" target="_blank" rel="noopener noreferrer">' + label + '</a>');
+          return ph;
+        });
+        text = text
           .replace(/\*\*\*([\s\S]*?)\*\*\*/g, '<strong><em>$1</em></strong>')
           .replace(/\*\*([\s\S]*?)\*\*/g, '<strong>$1</strong>')
           .replace(/\*([^\n*]+?)\*/g, '<em>$1</em>')
           .replace(/`([^`]+)`/g, '<code>$1</code>');
+        if (_links.length) {
+          text = text.replace(/\x00LINK(\d+)\x00/g, function(_, i){ return _links[+i]; });
+        }
+        return text;
       }
 
       // Pre-process: isolate --- / *** / ___ lines so they always become their own block
@@ -2094,7 +2381,13 @@ function persistChatState() {
           }
           
           console.log('✅ Chat duplicated:', result.new_filename);
-          
+
+          // Inherit the source chat's colour on the new (duplicated) chat
+          const _dupColors = getChatColors();
+          if (_dupColors[chat.filename]) {
+            setChatColor(result.new_filename, _dupColors[chat.filename]);
+          }
+
           await loadChats();
           await openChat(result.new_filename);
           
@@ -2221,6 +2514,7 @@ function persistChatState() {
       // Update loadedChat
       if (window.loadedChat && window.loadedChat[messageIndex]) {
         window.loadedChat[messageIndex].content = newContent;
+        window._chatDirty = true;  // stale-write guard: tab has local changes
       }
 
       // 🔥 ONLY a USER edit rewrites history. Editing a user message makes the
@@ -2673,9 +2967,14 @@ async function openChat(filename) {
       return mapped;
     });
 
+    // Fresh from disk — this tab is clean and disk holds exactly this many
+    // messages. (Stale-write guard, June 10 2026.)
+    window._chatDirty = false;
+    window._chatBaseCount = window.loadedChat.length;
+
     // Render from normalised loadedChat so avatar lookup gets the real name, not "User"
     renderChatMessages(window.loadedChat);
-    
+
     console.log('💾 Loaded ' + window.loadedChat.length + ' messages into context');
     
     document.querySelectorAll(".chat-item").forEach(function(i) {
@@ -3234,12 +3533,22 @@ async function openChat(filename) {
     } else {
       window.loadedChat.push({ role: "user", content: modelText, speaker: activeUserName, timestamp: new Date().toISOString() });
     }
+    window._chatDirty = true;  // stale-write guard: user turn added locally
 
     // Clear attached documents after sending — one-shot, now in this turn's content
     if (hasDocs) {
       window.attachedDocuments = [];
       renderDocumentPreviews();
     }
+
+    // ⚠️ Persist the user turn IMMEDIATELY on send — BEFORE generation starts —
+    // so it survives navigation even if the response never completes. Covers both
+    // the image-path push (~L3254) and the text-path push (~L3268) in one call,
+    // since both branches have run by here. The completion-time autoSaveCurrentChat()
+    // still runs as the normal-path save once the assistant reply lands.
+    // DO NOT remove: save-on-completion-only was the root cause of in-flight turns
+    // vanishing on navigation. See changes.md (June 6 2026).
+    await autoSaveCurrentChat();
 
     let contextMessages = window.loadedChat;
     
@@ -3263,7 +3572,7 @@ async function openChat(filename) {
   // Returns true = honour (show the bar), false = suppress.
   function memoryIntentGate(userMsg) {
     if (!userMsg || typeof userMsg !== 'string') return false;
-    const MEMORY_INTENT_RE = /\b(?:remember (?:this|that|to)|save (?:this|that)(?: to memory)?|(?:make|take) a note|don['’]?t forget|for (?:future|later) reference|add to memory|note this down|keep (?:this|that) in mind|save to memory)\b/i;
+    const MEMORY_INTENT_RE = /\b(?:remember (?:this|that|to)|save (?:this|that)(?: to memory)?|(?:make|take) a note|don['’]?t forget|for (?:future|later) reference|add to memory|note this down|keep (?:this|that) in mind|save to memory|put (?:it |this |that )?in(?:to)? (?:your )?memory|(?:can you )?memorize (?:this|that|it)|keep a record|log (?:this|that|it)|store (?:this|that|it)(?: in memory)?|jot (?:this|that|it) down|note (?:this|that|it) down|(?:please )?save (?:this|that|it))\b/i;
     return MEMORY_INTENT_RE.test(userMsg);
   }
 
@@ -3437,6 +3746,7 @@ async function openChat(filename) {
         
         if (!isDuplicate) {
           window.loadedChat.push({ role: "assistant", content: message, speaker: currentCharacter?.name || charName, timestamp: new Date().toISOString() });
+          window._chatDirty = true;  // stale-write guard
           console.log('✅ Added non-streaming response to loadedChat');
         } else {
           console.warn('⚠️ Skipped duplicate non-streaming response');
@@ -3529,6 +3839,11 @@ async function openChat(filename) {
       let cleanedFull   = "";     // stripChatML(fullMessage) — refreshed per chunk by the reader
       let revealedCount = 0;      // chars of cleanedFull currently shown
       let streamDone    = false;  // reader loop finished (done / error / cancel)
+      // Mirror of the in-flight cleaned text, exposed globally so the pagehide
+      // beacon can capture a PARTIAL assistant reply if the user navigates away
+      // mid-stream (the assistant turn isn't in window.loadedChat yet). Cleared
+      // in the finally block. See changes.md (June 6 2026 — pagehide beacon).
+      window._streamingPartial = "";
 
       function renderRevealed(isFinal) {
         const slice = cleanedFull.slice(0, revealedCount);
@@ -3615,6 +3930,7 @@ async function openChat(filename) {
 
         // Refresh the cleaned text the drip reveals from (same cleaning as before).
         cleanedFull = stripChatMLOutsideCodeBlocks(fullMessage, charName, userName).trim();
+        window._streamingPartial = cleanedFull;   // expose for the pagehide beacon
       }
 
       // Signal the drip we're done; it flushes the remainder on its next tick.
@@ -3669,6 +3985,7 @@ async function openChat(filename) {
       
       if (!isDuplicate) {
         window.loadedChat.push({ role: "assistant", content: finalText, speaker: currentCharacter?.name || charName, timestamp: new Date().toISOString() });
+        window._chatDirty = true;  // stale-write guard
         console.log('✅ Added assistant response to loadedChat. Total messages:', window.loadedChat.length);
       } else {
         console.warn('⚠️ Skipped duplicate assistant response - already in loadedChat');
@@ -3704,6 +4021,12 @@ async function openChat(filename) {
       const stopBtn = document.getElementById('stop-btn');
       if (stopBtn) stopBtn.style.display = 'none';
       window.isSending = false;
+      // Stream is over (completed, errored, or aborted) — the assistant turn is
+      // now in window.loadedChat (or was empty), so drop the partial mirror so a
+      // later pagehide doesn't re-append stale text.
+      window._streamingPartial = "";
+      // Refresh the token monitor with this turn's budget (no-op if closed).
+      if (window.refreshTokenMonitor) window.refreshTokenMonitor();
     }
   }
 
@@ -3801,26 +4124,37 @@ async function openChat(filename) {
         }
       }
       
-      // 🔥 DEDUPLICATE loadedChat before saving
-      const seen = new Set();
+      // 🔥 DEDUPLICATE loadedChat before saving — ADJACENT-ONLY.
+      // ⚠️ DO NOT make this a global seen-set dedup again. A global dedup removes
+      // ANY turn whose role:content matches an earlier one ANYWHERE in the array,
+      // which silently destroys legitimately-repeated messages — "continue",
+      // "yes", a re-asked question — mid-chat, collapsing whole user+assistant
+      // pairs. That was the root cause of regenerate "skipping back" (regenerate
+      // forces a save, which is when the damage surfaced). Repeated messages are
+      // VALID; only an accidental exact double-push is a real duplicate, and that
+      // is ALWAYS adjacent. So we only drop a turn that is identical (same role
+      // AND same content) to the turn IMMEDIATELY before it. See changes.md
+      // (June 6 2026 — regenerate strip-too-far).
       const dedupedChat = [];
-      
+      let prevKey = null;
+
       for (let i = 0; i < window.loadedChat.length; i++) {
         const msg = window.loadedChat[i];
-        // Handle multimodal content — extract text for dedup key
+        // Handle multimodal content — extract text for dedup key (same as before)
         const contentKey = Array.isArray(msg.content)
           ? msg.content.filter(p => p.type === 'text').map(p => p.text).join(' ')
           : msg.content;
         const key = `${msg.role}:${contentKey}`;
-        
-        if (!seen.has(key)) {
-          seen.add(key);
-          dedupedChat.push(msg);
-        } else {
-          console.warn('⚠️ DUPLICATE DETECTED AND REMOVED:', msg);
+
+        if (key === prevKey) {
+          // Identical to the turn directly before it → accidental double-push.
+          console.warn('⚠️ ADJACENT DUPLICATE REMOVED:', msg);
+          continue;
         }
+        dedupedChat.push(msg);
+        prevKey = key;
       }
-      
+
       console.log(`📊 Original: ${window.loadedChat.length}, Deduped: ${dedupedChat.length}`);
       
       // Replace loadedChat with deduped version
@@ -3852,12 +4186,25 @@ async function openChat(filename) {
         body: JSON.stringify({
           filename: currentChatFilename,
           messages: messages,
-          character: charName
+          character: charName,
+          base_count: window._chatBaseCount
         })
       });
-      
+
       if (res.ok) {
         console.log('✅ Messages auto-saved');
+        // What we just wrote IS the disk copy now — tab is clean.
+        // (messages.length, not loadedChat.length: hidden turns are filtered
+        // out of the file, and base_count must mirror the on-disk count.)
+        window._chatDirty = false;
+        window._chatBaseCount = messages.length;
+      } else if (res.status === 409) {
+        // Disk is newer than this tab (chat continued on another device).
+        // Don't fight over it — drop our stale copy and reload from disk.
+        let staleInfo = null;
+        try { staleInfo = await res.json(); } catch (e) {}
+        console.warn('⚠️ Stale save rejected by server (disk is newer) — reloading from disk:', staleInfo);
+        if (currentChatFilename) await openChat(currentChatFilename);
       } else {
         console.error('❌ Auto-save failed:', res.status);
       }
@@ -3905,7 +4252,14 @@ async function openChat(filename) {
     const continuePrefix = fullPrevContent.length > 200
       ? fullPrevContent.slice(-200)
       : fullPrevContent;
+    // Preserve the head of the truncated message (everything before the 200-char
+    // prefix). Only the prefix is sent to the model (EOS-avoidance, above), but
+    // the head must be retained so the original text isn't lost on continue.
+    const retainedHead = fullPrevContent.length > 200
+      ? fullPrevContent.slice(0, -200)
+      : "";
     window.loadedChat.splice(lastAssistantIdx, 1);
+    window._chatDirty = true;  // stale-write guard: continue mutates history
 
     // Keep existing bubble — stream directly into it
     const wrappers = chat.querySelectorAll('.model-wrapper');
@@ -3981,8 +4335,11 @@ async function openChat(filename) {
       }
       chat.scrollTop = chat.scrollHeight;
 
-      // Stream raw chunks — same format as main parser
-      let rawFull = continuePrefix;
+      // Stream raw chunks — same format as main parser.
+      // Seed with retainedHead + continuePrefix so the bubble shows the WHOLE
+      // original message (not just the 200-char prefix) and the final save below
+      // persists head + prefix + new tokens — i.e. the original text is never lost.
+      let rawFull = retainedHead + continuePrefix;
       const userName = activeUserName || 'User';
       streamEl.innerHTML = typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(rawFull)) : rawFull;
 
@@ -4007,6 +4364,7 @@ async function openChat(filename) {
       renderModelHTML(streamEl, typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(finalText)) : finalText);
       addCodeCopyButtons(streamEl.parentNode || streamEl);
       window.loadedChat.push({ role: 'assistant', content: finalText, speaker: currentCharacter?.name || charName, timestamp: new Date().toISOString() });
+      window._chatDirty = true;  // stale-write guard
       console.log('\u2705 Continue: complete');
       await autoSaveCurrentChat();
 
@@ -4016,6 +4374,8 @@ async function openChat(filename) {
     } finally {
       window.isSending = false;
       if (stopBtn) stopBtn.style.display = 'none';
+      // Refresh the token monitor with this turn's budget (no-op if closed).
+      if (window.refreshTokenMonitor) window.refreshTokenMonitor();
     }
   }
 
@@ -4050,9 +4410,12 @@ async function openChat(filename) {
     let lastUserMessage = null;
     let lastUserIndex = -1;
     
-    // Find the LAST user message
+    // Find the LAST VISIBLE user message. Skip hidden turns (e.g. the
+    // memory-confirm trigger pushed with hidden:true, ~L5319) — they aren't
+    // rendered as bubbles, so anchoring on one would misalign the array splice
+    // against the DOM removal below (which only sees visible wrappers).
     for (let i = window.loadedChat.length - 1; i >= 0; i--) {
-      if (window.loadedChat[i].role === 'user') {
+      if (window.loadedChat[i].role === 'user' && !window.loadedChat[i].hidden) {
         lastUserMessage = window.loadedChat[i].content;
         lastUserIndex = i;
         break;
@@ -4069,6 +4432,7 @@ async function openChat(filename) {
     
     // 2. DELETE EVERYTHING after the last user message in window.loadedChat
     window.loadedChat.splice(lastUserIndex + 1);
+    window._chatDirty = true;  // stale-write guard: regenerate mutates history
     
     console.log('📦 loadedChat after deletion:', window.loadedChat);
     
@@ -4317,18 +4681,33 @@ async function stopGeneration() {
     if (!await hwuiConfirm('Clear this chat completely? This will delete all messages from the file.')) return;
     
     try {
-      // Clear the file by sending empty messages array
+      // Clear the file by sending empty messages array.
+      // base_count makes the server's stale-write guard apply here too — a
+      // clear is a blind overwrite-to-empty, so a stale tab must not be able
+      // to wipe a chat that grew on another device. (June 10 2026.)
       const res = await fetch('/chats/update', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           filename: currentChatFilename,
-          messages: []  // Empty array = empty file
+          messages: [],  // Empty array = empty file
+          base_count: window._chatBaseCount
         })
       });
-      
+
+      // Disk is newer than this tab (chat continued elsewhere) — don't clobber
+      // it. Reload from disk so the user sees the real state before deciding to
+      // clear again. Mirrors the autoSaveCurrentChat 409 handler.
+      if (res.status === 409) {
+        let staleInfo = null;
+        try { staleInfo = await res.json(); } catch (e) {}
+        console.warn('⚠️ Clear rejected by server (disk is newer) — reloading from disk:', staleInfo);
+        if (currentChatFilename) await openChat(currentChatFilename);
+        return;
+      }
+
       const result = await res.json();
-      
+
       if (!result.success) {
         throw new Error(result.error || 'Failed to clear chat');
       }
@@ -4730,7 +5109,8 @@ async function stopGeneration() {
   
   // Remove from loadedChat array
   window.loadedChat.splice(messageIndex, 1);
-  
+  window._chatDirty = true;  // stale-write guard: delete mutates history
+
   // Re-render the entire chat
   renderChatMessages(window.loadedChat);
   
@@ -4762,6 +5142,13 @@ async function branchMessage(assistantIndex) {
     });
     const data = await res.json();
     if (data.error) { hwuiToast('Branch failed: ' + data.error, 'error'); return; }
+
+    // Inherit the source chat's colour on the new (branched) chat
+    const _branchColors = getChatColors();
+    if (_branchColors[currentChatFilename]) {
+      setChatColor(data.new_filename, _branchColors[currentChatFilename]);
+    }
+
     await loadChats();
     openChat(data.new_filename);
   } catch (e) {
@@ -4775,6 +5162,72 @@ async function branchMessage(assistantIndex) {
   window.addEventListener("DOMContentLoaded", async function() {
 
     console.log('🟢 DOMContentLoaded fired');
+
+    // ── Belt-and-braces save on page teardown (pagehide beacon) ────────────
+    // The completion-time autoSaveCurrentChat() is the normal-path save. But if
+    // the user navigates away (e.g. to /config) mid-turn — before the assistant
+    // reply completes — that save never fires. A normal fetch() is killed during
+    // page teardown, so we use navigator.sendBeacon(), which the browser
+    // guarantees to deliver even as the page unloads. The body is a Blob tagged
+    // application/json so /chats/save (request.get_json) parses it cleanly.
+    //
+    // If a stream is mid-flight the assistant turn isn't in window.loadedChat
+    // yet, so we append window._streamingPartial (the live cleaned text) — an
+    // interrupted reply is preserved rather than lost.
+    //
+    // ⚠️ DO NOT remove: save-on-completion-only was the root cause of in-flight
+    // turns vanishing on navigation. See changes.md (June 6 2026).
+    function _beaconFlushChat() {
+      try {
+        if (!currentChatFilename) return;
+        if (!window.loadedChat || !Array.isArray(window.loadedChat) || window.loadedChat.length === 0) return;
+
+        // ── Stale-tab guard (June 10 2026) ──────────────────────────────
+        // pagehide fires on a plain refresh too. A tab that hasn't mutated
+        // the chat since it loaded/saved has nothing the disk doesn't — and
+        // may be STALE (chat continued on mobile); flushing it here was
+        // overwriting the newer mobile messages. So a clean tab does nothing.
+        // An in-flight stream still counts as dirty: the partial isn't in
+        // loadedChat yet, and preserving it is this beacon's whole purpose
+        // (June 6 2026) — that protection must survive the dirty check.
+        var _inFlightPartial = window.isSending && window._streamingPartial && window._streamingPartial.trim().length > 0;
+        if (!window._chatDirty && !_inFlightPartial) return;
+
+        var charName = extractCharacterFromFilename(currentChatFilename) || 'Assistant';
+        var activeUserNameFallback = localStorage.getItem('activeUserName') || activeUserName;
+
+        // Same payload shape autoSaveCurrentChat() builds: drop hidden turns,
+        // flatten multimodal content to text (+ [image] marker), keep speaker /
+        // is_opening_line / timestamp.
+        var msgs = window.loadedChat.filter(function(m){ return !m.hidden; }).map(function(m){
+          return {
+            role: m.role,
+            content: Array.isArray(m.content)
+              ? (m.content.filter(function(p){ return p.type === 'text'; }).map(function(p){ return p.text; }).join(' ').trim() + ' [image]').trim()
+              : m.content,
+            speaker: m.speaker || (m.role === 'user' ? activeUserNameFallback : charName),
+            ...(m.is_opening_line ? { is_opening_line: true } : {}),
+            ...(m.timestamp ? { timestamp: m.timestamp } : {})
+          };
+        });
+
+        // Stream in progress → the assistant turn isn't pushed yet; preserve the
+        // partial text so an interrupted reply survives the navigation.
+        if (window.isSending && window._streamingPartial && window._streamingPartial.trim().length > 0) {
+          msgs.push({ role: 'assistant', content: window._streamingPartial, speaker: charName, timestamp: new Date().toISOString() });
+        }
+
+        // base_count lets the server reject this flush if the disk has moved
+        // past what this tab knew (second line of defence — a beacon can't
+        // see the 409, but the newer disk copy survives).
+        var payload = JSON.stringify({ filename: currentChatFilename, messages: msgs, character: charName, base_count: window._chatBaseCount });
+        var blob = new Blob([payload], { type: 'application/json' });
+        navigator.sendBeacon('/chats/save', blob);
+      } catch (e) {
+        // Page is tearing down — never throw out of an unload handler.
+      }
+    }
+    window.addEventListener('pagehide', _beaconFlushChat);
 
     // ── Keyboard-focus the chat input on load + on window refocus ──────────
     // The Electron renderer can hold focus while the caret sits on <body>
@@ -4872,7 +5325,10 @@ async function branchMessage(assistantIndex) {
     loadModelDisplay(); // fire and forget — non-critical
     checkOpenAIIndicator(); // show/hide OpenAI status dot
     checkAnthropicIndicator(); // show/hide Anthropic status dot
-    
+    // Poll connection state every 5s so the top-right pill reflects connect/
+    // disconnect done on the config page without needing a refresh. (changes.md.)
+    setInterval(() => { checkOpenAIIndicator(); checkAnthropicIndicator(); }, 5000);
+
     // Set up character dropdown change handler
     // Set up character dropdown change handler
     document.getElementById('character-select').addEventListener('change', async function() {
@@ -5071,6 +5527,7 @@ async function displayRpOpenerInChat() {
     };
 
     window.loadedChat.push(openerMessage);
+    window._chatDirty = true;  // stale-write guard: opener added locally
     renderChatMessages(window.loadedChat);
     autoSaveCurrentChat();
 
@@ -5091,7 +5548,8 @@ async function loadProjects() {
   try {
     const [res, groupRes] = await Promise.all([
       fetch('/projects/list'),
-      fetch('/projects/groups')
+      fetch('/projects/groups'),
+      fetchProjectColors()
     ]);
     const data = await res.json();
     const groups = await groupRes.json(); // { groupName: [projectName, ...] }
@@ -5728,8 +6186,129 @@ function applyChatColors() {
   });
   menu.appendChild(clearBtn);
 
+  // Change-character (dev/testing): reassign this chat to a different character.
+  // The character is encoded in the filename, so this renames the file to swap
+  // the character prefix (see reassignChatCharacter). Opens a character picker.
+  const changeCharBtn = document.createElement('div');
+  changeCharBtn.className = 'color-clear';
+  changeCharBtn.textContent = '🔀 Change character';
+  changeCharBtn.addEventListener('click', (e) => {
+    // Stop this click reaching the document-level click-away listener that
+    // showCharacterMenu installs — otherwise the same click that opens the
+    // picker bubbles up and immediately hides it ("nothing happens").
+    e.stopPropagation();
+    const filename = menu.dataset.filename;
+    const x = parseInt(menu.style.left) || 100;
+    const y = parseInt(menu.style.top) || 100;
+    hideColorMenu();
+    if (filename) showCharacterMenu(filename, x, y);
+  });
+  menu.appendChild(changeCharBtn);
+
   document.body.appendChild(menu);
 })();
+
+// ── Change-character menu + reassignment ──────────────────────────────────
+// A chat's character is derived from its filename ("Character - Title - Date.txt",
+// re-parsed by extractCharacterFromFilename on every open — which is why editing
+// names inside the .txt reverts). To move a chat to another character we rename
+// the file, swapping only the character prefix and keeping the title + date.
+// Historical bubbles keep their stored per-message speaker (they record who
+// actually spoke); only future turns use the newly-assigned character.
+function showCharacterMenu(filename, x, y) {
+  let menu = document.getElementById('chat-char-menu');
+  if (!menu) {
+    menu = document.createElement('div');
+    menu.id = 'chat-char-menu';
+    menu.style.cssText = 'position:fixed; z-index:3000; display:none; min-width:200px; max-width:230px;'
+      + ' background:var(--modal-bg,#1a1f2a); border:1px solid var(--modal-border,#2d394b);'
+      + ' border-radius:10px; box-shadow:0 8px 32px rgba(0,0,0,0.55); padding:6px; box-sizing:border-box;'
+      + ' font-size:13px; color:#ccc;';
+    document.body.appendChild(menu);
+    document.addEventListener('click', (e) => {
+      if (menu && menu.style.display === 'block' && !menu.contains(e.target)) menu.style.display = 'none';
+    });
+  }
+  const cache = JSON.parse(localStorage.getItem('characterListCache') || '[]');
+  menu.innerHTML = '';
+  const label = document.createElement('div');
+  label.className = 'color-menu-label';
+  label.textContent = 'Change character';
+  menu.appendChild(label);
+
+  if (!cache.length) {
+    const none = document.createElement('div');
+    none.className = 'char-menu-item';
+    none.style.color = '#888';
+    none.textContent = '(no characters cached — open one first)';
+    menu.appendChild(none);
+  } else {
+    const listWrap = document.createElement('div');
+    listWrap.style.cssText = 'max-height:260px; overflow-y:auto;';
+    cache.slice().sort((a, b) => a.localeCompare(b)).forEach(c => {
+      const item = document.createElement('div');
+      item.className = 'char-menu-item';
+      item.textContent = c;
+      item.style.cssText = 'padding:6px 9px; border-radius:6px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
+      item.addEventListener('mouseenter', () => { item.style.background = 'var(--sidebar-button-hover,#2D3E4F)'; });
+      item.addEventListener('mouseleave', () => { item.style.background = 'transparent'; });
+      item.addEventListener('click', () => { menu.style.display = 'none'; reassignChatCharacter(filename, c); });
+      listWrap.appendChild(item);
+    });
+    menu.appendChild(listWrap);
+  }
+  menu.style.left = Math.min(x, window.innerWidth - 230) + 'px';
+  menu.style.top = Math.min(y, window.innerHeight - 320) + 'px';
+  menu.style.display = 'block';
+}
+
+async function reassignChatCharacter(filename, newChar) {
+  const nameWithoutExt = filename.replace(/\.txt$/, '');
+
+  // Strip the current character prefix using the cached character list
+  // (longest-first, exactly like startRename / extractCharacterFromFilename).
+  const cache = JSON.parse(localStorage.getItem('characterListCache') || '[]');
+  const sorted = cache.slice().sort((a, b) => b.length - a.length);
+  let remaining = nameWithoutExt;
+  for (const c of sorted) {
+    if (nameWithoutExt.startsWith(c + ' - ')) { remaining = nameWithoutExt.substring((c + ' - ').length); break; }
+  }
+  // Fallback: no known prefix matched → treat everything after the first " - " as the rest.
+  if (remaining === nameWithoutExt) {
+    const idx = nameWithoutExt.indexOf(' - ');
+    if (idx !== -1) remaining = nameWithoutExt.substring(idx + 3);
+  }
+
+  const newName = newChar + ' - ' + remaining;
+  if (newName === nameWithoutExt) { hwuiToast('Already assigned to ' + newChar, 'info'); return; }
+
+  try {
+    const res = await fetch('/chats/rename', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ old_filename: filename, new_name: newName })
+    });
+    const data = await res.json();
+    if (data.error) { hwuiToast('Change failed: ' + data.error, 'error'); return; }
+
+    // Migrate the colour key from old → new filename (mirrors startRename).
+    const colors = getChatColors();
+    if (colors[filename]) {
+      colors[data.new_filename] = colors[filename];
+      delete colors[filename];
+      localStorage.setItem('chatColors', JSON.stringify(colors));
+    }
+
+    const wasOpen = (currentChatFilename === filename);
+    if (wasOpen) currentChatFilename = data.new_filename;
+    await loadChats();
+    if (wasOpen) await openChat(data.new_filename);  // re-open → resolves to the new character
+    hwuiToast('Character changed to ' + newChar, 'info');
+  } catch (err) {
+    console.error('Change-character error:', err);
+    hwuiToast('Failed to change character.', 'error');
+  }
+}
 
 function showColorMenu(e, filename) {
   e.preventDefault();
@@ -5756,6 +6335,8 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     hideColorMenu();
     hideProjectColorMenu();
+    const _ccm = document.getElementById('chat-char-menu');
+    if (_ccm) _ccm.style.display = 'none';
     closeAvatarLightbox();
     var pasteModal = document.getElementById('paste-transcript-modal');
     if (pasteModal && pasteModal.style.display === 'flex') closePasteTranscriptModal();
@@ -5914,9 +6495,9 @@ async function checkOpenAIIndicator() {
     const data = await res.json();
     const dot  = document.getElementById('openai-indicator');
     if (!dot) return;
-    if (data.backend_mode === 'openai' && data.openai_api_key) {
+    if (data.backend_mode === 'openai' && data.openai_api_key && data.cloud_api_enabled) {
       dot.style.display = 'flex';
-      dot.title = 'OpenAI active — ' + (data.openai_model || 'gpt-4o');
+      dot.title = 'Connected to OpenAI — ' + (data.openai_model || 'gpt-4o');
       const modelSpan = document.getElementById('openai-indicator-model');
       if (modelSpan) modelSpan.textContent = data.openai_model || 'gpt-4o';
     } else {
@@ -5934,9 +6515,9 @@ async function checkAnthropicIndicator() {
     const data = await res.json();
     const dot  = document.getElementById('anthropic-indicator');
     if (!dot) return;
-    if (data.backend_mode === 'anthropic' && data.anthropic_api_key) {
+    if (data.backend_mode === 'anthropic' && data.anthropic_api_key && data.cloud_api_enabled) {
       dot.style.display = 'flex';
-      dot.title = 'Anthropic active — ' + (data.anthropic_model || 'claude');
+      dot.title = 'Connected to Anthropic — ' + (data.anthropic_model || 'claude');
       const modelSpan = document.getElementById('anthropic-indicator-model');
       if (modelSpan) modelSpan.textContent = data.anthropic_model || 'claude';
     } else {
@@ -5949,18 +6530,55 @@ async function checkAnthropicIndicator() {
 // =====================================================
 // PROJECT FOLDER COLOUR CODING
 // =====================================================
+// Project folder colours are persisted server-side (project_colours.json via
+// /projects/colours) instead of localStorage, so they survive switching between
+// http/https, the Electron launcher, and browser-storage clears. The cache below
+// is hydrated by fetchProjectColors() (called from loadProjects) so the apply +
+// menu paths can read it synchronously.
+let _projectColorsCache = {};
+
+async function fetchProjectColors() {
+  try {
+    const res = await fetch('/projects/colours');
+    if (res.ok) {
+      const server = await res.json();
+      _projectColorsCache = (server && typeof server === 'object') ? server : {};
+    }
+  } catch (e) { /* keep whatever is cached — non-critical */ }
+
+  // One-time migration: if the server has no colours yet but a legacy
+  // localStorage map exists, adopt it and push it up so it persists going forward.
+  if (Object.keys(_projectColorsCache).length === 0) {
+    try {
+      const legacy = JSON.parse(localStorage.getItem('projectColors') || '{}');
+      if (legacy && Object.keys(legacy).length > 0) {
+        _projectColorsCache = legacy;
+        saveProjectColorsToServer();
+      }
+    } catch (e) { /* ignore malformed legacy data */ }
+  }
+  return _projectColorsCache;
+}
+
+function saveProjectColorsToServer() {
+  return fetch('/projects/colours/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ colours: _projectColorsCache })
+  }).catch(e => console.error('Failed to save project colours:', e));
+}
+
 function getProjectColors() {
-  try { return JSON.parse(localStorage.getItem('projectColors') || '{}'); } catch { return {}; }
+  return _projectColorsCache || {};
 }
 
 function setProjectColor(name, color) {
-  const colors = getProjectColors();
   if (color) {
-    colors[name] = color;
+    _projectColorsCache[name] = color;
   } else {
-    delete colors[name];
+    delete _projectColorsCache[name];
   }
-  localStorage.setItem('projectColors', JSON.stringify(colors));
+  saveProjectColorsToServer();
 }
 
 function applyProjectColors() {
@@ -6038,6 +6656,40 @@ document.addEventListener('click', (e) => {
   const menu = document.getElementById('project-color-menu');
   if (menu && !menu.contains(e.target)) hideProjectColorMenu();
 });
+
+// Cloud connect/disconnect lives on the config page (below the backend-mode
+// selector). The top-right pill below reflects connection state and polls
+// every 5s (see checkOpenAIIndicator / checkAnthropicIndicator). No connect
+// button on the chat toolbar. (changes.md.)
+
+// ── Brave key status indicator ───────────────────────────────────────────
+// On load, check whether a Brave Search key is configured (/get_brave_api_key).
+// If not, mark the button that opens the Brave key modal with an orange ⚠️ so
+// the unconfigured state is visible WITHOUT having to trigger a search first.
+// Build-agnostic: the opener button is matched by its onclick referencing
+// "BraveKey" (the naming convention this modal's buttons use). Safe no-op if no
+// such button exists in this build. (changes.md.)
+(async function checkBraveKeyIndicator() {
+  try {
+    const res = await fetch('/get_brave_api_key');
+    if (!res.ok) return;
+    const data = await res.json();
+    const configured = !!(data && data.brave_api_key && String(data.brave_api_key).trim());
+    if (configured) return;
+    const btns = document.querySelectorAll(
+      '[onclick*="BraveKey"], [onclick*="brave-key-modal"], #brave-key-btn'
+    );
+    btns.forEach((b) => {
+      if (b.dataset.braveWarned) return;
+      b.dataset.braveWarned = '1';
+      b.insertAdjacentHTML(
+        'beforeend',
+        ' <span class="brave-key-warn" title="No Brave Search key configured — web search results will be limited until you add a key"' +
+        ' style="color:#ff9800;">⚠️</span>'
+      );
+    });
+  } catch (e) { /* non-fatal — indicator is best-effort */ }
+})();
 
 </script>
 </body>

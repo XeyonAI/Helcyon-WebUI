@@ -303,7 +303,8 @@ async function displayOpeningLineInChat() {
     
     // Add to chat history
     window.loadedChat.push(openingMessage);
-    
+    window._chatDirty = true;  // stale-write guard: opener added locally
+
     // Render in chat UI
     renderChatMessages(window.loadedChat);
     
@@ -623,6 +624,30 @@ function stripCodeForTTS(chunk) {
 }
 
 
+// Remove links so TTS never speaks a URL or a bare-domain citation.
+// ⚠️ Must run BEFORE any "(" → ". " paren-to-pause conversion — otherwise the
+// wrapped citation's parens are gone before we can recognise the form, and the
+// bare domain inside leaks through and gets read aloud.
+//   • Citation links from search-preview models look like ([openai.com](https://…)) —
+//     the whole wrapped form (outer parens included) is dropped.
+//   • A plain [text](url): if the visible text is a bare domain (no spaces, has a
+//     dotted TLD) it's dropped ENTIRELY — reading "openai.com" mid-sentence is
+//     noise. Real prose labels ("the documentation") or a plain word ("OpenAI",
+//     no dot) are KEPT, since speaking them is useful.
+function stripLinksForTTS(text) {
+  if (!text) return text;
+  var _isDomain = function (t) { return /^\s*[^\s]+\.[a-z]{2,}[^\s]*\s*$/i.test(t); };
+  return text
+    .replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi, '')                 // full <a>…</a> blocks
+    .replace(/\s*\(\s*\[[^\]]+\]\([^)]*\)\s*\)/g, '')         // wrapped citation ([text](url)) → drop whole
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, function (_, t) { return _isDomain(t) ? '' : t; })   // [text](url)
+    .replace(/\[([^\]]+)\]\([^)]*$/g, function (_, t) { return _isDomain(t) ? '' : t; })    // unclosed (chunk split mid-URL)
+    .replace(/\]\([^)]*\)/g, '')                              // orphaned ](url) fragment
+    .replace(/https?:\/\/[^\s\])"'>]+/g, '')                  // bare URLs
+    .replace(/www\.[^\s\])"'>]+/g, '')                        // bare www URLs
+    .replace(/[\u{1F517}🔗]/gu, '');               // link emoji (all variants)
+}
+
 // --- Called from streaming loop for each chunk ---
 function bufferTextForTTS(chunk) {
   if (!ttsEnabled || !chunk) return;
@@ -642,9 +667,10 @@ function bufferTextForTTS(chunk) {
   chunk = stripCodeForTTS(chunk);
   if (!chunk) return;
 
-  // Strip source links and HTML before anything else
-  // Must run BEFORE HTML tag stripping so the full <a>...</a> block is caught
-  chunk = chunk.replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi, '')  // entire <a> tags incl. content
+  // Strip links FIRST via the shared helper (wrapped citations, bare-domain link
+  // text, <a> tags, bare URLs) — MUST run before the "(" → ". " conversion below,
+  // else a citation's parens vanish and the bare domain leaks into speech.
+  chunk = stripLinksForTTS(chunk)
                .replace(/\n*[\u{1F517}\uD83D\uDD17]*\s*Source:[^\n]*/gu, '') // Source: lines (all emoji variants)
                .replace(/<[^>]+>/g, ' ')                    // remaining HTML tags
                .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')    // markdown links [text](url) → text only
@@ -714,9 +740,10 @@ async function initTTSEngine() {
 }
 
 function splitAndQueue(text) {
-  // Strip links and source lines before any TTS processing
-  text = text.replace(/<[^>]+>/g, ' ')                          // HTML tags
-             .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')     // markdown links → text
+  // Strip links and source lines before any TTS processing. stripLinksForTTS runs
+  // FIRST so wrapped citations / bare-domain link text never reach speech.
+  text = stripLinksForTTS(text)                                 // links via shared helper
+             .replace(/<[^>]+>/g, ' ')                          // remaining HTML tags
              .replace(/\n*[\u{1F517}\*]*\s*Source:[^\n]*/gu, '') // Source: lines
              .replace(/https?:\/\/\S+/g, '')                 // bare URLs
              .replace(/[\u{1F517}]/gu, '');                    // link emoji
@@ -1264,7 +1291,7 @@ function replayLastAudio() {
 
   replayTimeout = setTimeout(() => {
     replayTimeout = null;
-    const text = lastAssistant.content
+    const text = stripLinksForTTS(lastAssistant.content)   // strip links BEFORE the "(" → ". " conversion below
       .replace(/\u{1F4AF}/gu, 'one hundred percent')
       .replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '$1.')
       .replace(/(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '')

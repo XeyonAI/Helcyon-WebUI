@@ -11,6 +11,22 @@ const marked={parse:function(txt){
   if(!txt)return '';
   function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
   function inline(s){
+    // Markdown links FIRST (before esc/emphasis) so URL contents (underscores/
+    // asterisks) and the link text survive intact. ⚠️ Hardening — output goes
+    // straight into innerHTML with no sanitiser: http/https ONLY (any other
+    // scheme is left as literal text, blocking javascript:/data:/file:), every
+    // anchor gets target="_blank" rel="noopener noreferrer", and href + label are
+    // HTML-escaped. The wrapped form ([text](url)) keeps its outer parens literal
+    // — the regex matches only the inner [text](url).
+    const _links=[];
+    s=s.replace(/\[([^\]]+)\]\(([^)]+)\)/g,function(m,label,url){
+      url=url.trim();
+      if(!/^https?:\/\//i.test(url))return m;
+      const href=url.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const ph='\x00LINK'+_links.length+'\x00';
+      _links.push('<a href="'+href+'" target="_blank" rel="noopener noreferrer">'+esc(label)+'</a>');
+      return ph;
+    });
     // Preserve <br> tags before escaping, restore after
     const brPlaceholder='\x00BR\x00';
     s=s.replace(/<br\s*\/?>/gi,brPlaceholder);
@@ -20,6 +36,24 @@ const marked={parse:function(txt){
     s=s.replace(/[*][*]([^*\n]+)[*][*]/g,'<strong>$1</strong>');
     s=s.replace(/[*]([^*\n]+)[*]/g,'<em>$1</em>');
     s=s.replace(/`([^`]+)`/g,'<code>$1</code>');
+    // Autolink bare http(s) URLs (GFM-style), matching desktop marked gfm:true.
+    // Runs on escaped text; markdown links are already placeholdered out above,
+    // so this only touches raw URLs the model/search results emitted unwrapped.
+    // Same hardening as the wrapped form: http/https only, target/rel set.
+    s=s.replace(/https?:\/\/[^\s<]+/gi,function(url){
+      // Trailing sentence punctuation isn't part of the URL — leave it literal.
+      let trail='';
+      const tm=url.match(/[)\]}.,;:!?'"]+$/);
+      if(tm){trail=tm[0];url=url.slice(0,-trail.length);}
+      // GFM paren-balancing: a ')' belongs to the URL if it matches an unbalanced
+      // '(' inside it (e.g. Wikipedia "..._(disambiguation)" links).
+      while(trail.charAt(0)===')'&&(url.split('(').length>url.split(')').length)){
+        url+=')';trail=trail.slice(1);
+      }
+      const href=url.replace(/"/g,'&quot;');
+      return '<a href="'+href+'" target="_blank" rel="noopener noreferrer">'+url+'</a>'+trail;
+    });
+    if(_links.length){s=s.replace(/\x00LINK(\d+)\x00/g,function(_,i){return _links[+i];});}
     return s;
   }
   // Handle fenced code blocks before splitting into paragraphs
@@ -143,7 +177,7 @@ const marked={parse:function(txt){
         <div id="header-name">Helcyon</div>
         <div id="header-status">Ready</div>
       </div>
-      <button id="mobile-openai-btn" onclick="toggleMobileOpenAI()" title="Toggle OpenAI backend" style="flex-shrink:0;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:6px 9px;color:var(--text-dim);font-size:15px;cursor:pointer;line-height:1;">☁️</button>
+      <button id="mobile-backend-btn" onclick="openBackendPicker()" title="Choose backend (Local / OpenAI / Anthropic)" style="flex-shrink:0;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:6px 9px;color:var(--text-dim);font-size:15px;cursor:pointer;line-height:1;">🔌</button>
       <button id="tts-toggle" onclick="toggleTTS()">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07M18.36 5.64a9 9 0 0 1 0 12.73"/></svg>
         <span id="tts-label">TTS</span>
@@ -161,14 +195,15 @@ const marked={parse:function(txt){
       </select>
     </div>
   </div>
-  <!-- OpenAI active banner — sits between header and chat -->
-  <div id="mobile-openai-banner" style="display:none;background:rgba(0,180,100,0.15);border-bottom:1px solid rgba(0,200,100,0.3);padding:5px 14px;align-items:center;justify-content:space-between;gap:8px;flex-shrink:0;">
+  <!-- Active cloud-backend banner — sits between header and chat. Colour/label
+       adapt to the active provider (OpenAI green / Anthropic amber) in JS. -->
+  <div id="mobile-cloud-banner" style="display:none;border-bottom:1px solid transparent;padding:5px 14px;align-items:center;justify-content:space-between;gap:8px;flex-shrink:0;">
     <div style="display:flex;align-items:center;gap:7px;">
-      <span style="width:7px;height:7px;border-radius:50%;background:#00e87a;display:inline-block;box-shadow:0 0 6px #00e87a;flex-shrink:0;"></span>
-      <span style="font-size:12px;color:#4dffaa;font-weight:600;">☁️ OpenAI</span>
-      <span id="mobile-openai-model" style="font-size:11px;color:#2aaa66;"></span>
+      <span id="mobile-cloud-dot" style="width:7px;height:7px;border-radius:50%;display:inline-block;flex-shrink:0;"></span>
+      <span id="mobile-cloud-label" style="font-size:12px;font-weight:600;"></span>
+      <span id="mobile-cloud-model" style="font-size:11px;"></span>
     </div>
-    <button onclick="toggleMobileOpenAI()" style="background:rgba(200,50,50,0.25);border:1px solid rgba(200,80,80,0.4);color:#e88;border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;">Disconnect</button>
+    <button onclick="disconnectMobileCloud()" style="background:rgba(200,50,50,0.25);border:1px solid rgba(200,80,80,0.4);color:#e88;border-radius:6px;padding:2px 8px;font-size:11px;cursor:pointer;">Disconnect</button>
   </div>
   <div id="chat"><div id="typing-indicator"><span></span><span></span><span></span></div></div>
   <div id="input-area">
@@ -208,14 +243,35 @@ const marked={parse:function(txt){
 </div>
 
 <!-- OpenAI Confirmation Modal -->
-<div id="mobile-openai-modal" style="display:none;position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,0.75);align-items:center;justify-content:center;">
+<!-- Backend picker bottom-sheet: Local / OpenAI / Anthropic -->
+<div id="mobile-backend-modal" style="display:none;position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,0.75);align-items:flex-end;justify-content:center;" onclick="if(event.target===this)closeBackendPicker()">
+  <div style="background:var(--surface);border:1px solid var(--border);border-top-left-radius:16px;border-top-right-radius:16px;padding:16px 14px calc(20px + env(safe-area-inset-bottom));width:100%;max-width:520px;box-shadow:0 -8px 32px rgba(0,0,0,0.6);">
+    <div style="font-size:12px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.6px;margin-bottom:12px;text-align:center;">Choose backend</div>
+    <button onclick="selectMobileBackend('local')" style="display:flex;align-items:center;justify-content:space-between;width:100%;padding:13px 14px;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:15px;cursor:pointer;">
+      <span>🖥️ Local <small style="color:var(--text-dim);font-size:11px;">llama.cpp</small></span>
+      <span id="backend-check-local" style="color:#6f6;font-weight:bold;"></span>
+    </button>
+    <button onclick="selectMobileBackend('openai')" style="display:flex;align-items:center;justify-content:space-between;width:100%;padding:13px 14px;margin-bottom:8px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:15px;cursor:pointer;">
+      <span>☁️ OpenAI</span>
+      <span id="backend-check-openai" style="color:#4dffaa;font-weight:bold;"></span>
+    </button>
+    <button onclick="selectMobileBackend('anthropic')" style="display:flex;align-items:center;justify-content:space-between;width:100%;padding:13px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:15px;cursor:pointer;">
+      <span>🧠 Anthropic</span>
+      <span id="backend-check-anthropic" style="color:#e0a060;font-weight:bold;"></span>
+    </button>
+    <button onclick="closeBackendPicker()" style="width:100%;padding:11px 0;margin-top:12px;background:transparent;border:none;color:var(--text-dim);font-size:13px;cursor:pointer;">Cancel</button>
+  </div>
+</div>
+
+<!-- Cloud-connect data-warning confirm (shared by OpenAI + Anthropic) -->
+<div id="mobile-cloud-confirm" style="display:none;position:fixed;inset:0;z-index:9600;background:rgba(0,0,0,0.75);align-items:center;justify-content:center;">
   <div style="background:var(--surface);border:1px solid #3a5a7a;border-radius:14px;padding:24px 20px;max-width:300px;width:88%;box-shadow:0 8px 32px rgba(0,0,0,0.6);">
     <div style="font-size:24px;text-align:center;margin-bottom:10px;">⚠️</div>
-    <div style="font-size:15px;color:var(--text);text-align:center;margin-bottom:8px;font-weight:bold;">Switch to OpenAI?</div>
-    <div style="font-size:13px;color:var(--text-dim);text-align:center;margin-bottom:20px;line-height:1.5;">Your conversations will be sent to <span style="color:#7ab4f5;">OpenAI's servers</span>. Make sure you're comfortable with that.</div>
+    <div id="mobile-cloud-confirm-title" style="font-size:15px;color:var(--text);text-align:center;margin-bottom:8px;font-weight:bold;">Switch to cloud?</div>
+    <div style="font-size:13px;color:var(--text-dim);text-align:center;margin-bottom:20px;line-height:1.5;">Your conversations will be sent to <span id="mobile-cloud-confirm-provider" style="color:#7ab4f5;">an external server</span>. Make sure you're comfortable with that.</div>
     <div style="display:flex;gap:8px;">
-      <button onclick="closeMobileOpenAIModal()" style="flex:1;padding:10px 0;background:#2a1a1a;border:1px solid #6a2a2a;color:#e88;border-radius:8px;font-size:14px;cursor:pointer;">✕ Cancel</button>
-      <button onclick="confirmMobileOpenAI()" style="flex:1;padding:10px 0;background:#1a2a4a;border:1px solid #2a4a8a;color:#7ab4f5;border-radius:8px;font-size:14px;cursor:pointer;font-weight:bold;">☁️ Connect</button>
+      <button onclick="closeMobileCloudConfirm()" style="flex:1;padding:10px 0;background:#2a1a1a;border:1px solid #6a2a2a;color:#e88;border-radius:8px;font-size:14px;cursor:pointer;">✕ Cancel</button>
+      <button onclick="confirmMobileCloud()" style="flex:1;padding:10px 0;background:#1a2a4a;border:1px solid #2a4a8a;color:#7ab4f5;border-radius:8px;font-size:14px;cursor:pointer;font-weight:bold;">Connect</button>
     </div>
   </div>
 </div>
@@ -277,7 +333,7 @@ fixViewport();
 window.addEventListener('DOMContentLoaded',async()=>{
   await loadUserName();await loadCharacterList();await loadProjects();loadTTSPrefs();
   initTTSEngine();
-  checkMobileOpenAI();
+  checkMobileBackend();
   // Push initial state so back button has somewhere to go
   history.replaceState({view:'chatlist'},'');
   await openChatList();
@@ -1637,73 +1693,147 @@ async function continueResponse() {
 let toastTimer=null;
 function showToast(msg,dur=2800){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.remove('show'),dur);}
 
-// ── OpenAI Mobile Backend ────────────────────────────────────────
-async function checkMobileOpenAI() {
+// ── Mobile Cloud Backend (Local / OpenAI / Anthropic picker) ─────
+// Connecting a cloud provider is a TWO-step persist: save the provider's
+// backend_mode (carrying its existing key/model/base_url so they aren't wiped),
+// THEN flip cloud_api_enabled=true so the /chat cloud gate lets it through.
+// Saving the mode alone forces cloud_api_enabled=false, which the gate blocks.
+// Local persists via /save_backend_mode (which also clears cloud_api_enabled).
+let _mobileBackend = {
+  mode: 'local', cloud: false,
+  openai:    { key: '', model: '', base: '' },
+  anthropic: { key: '', model: '', base: '' },
+};
+let _pendingCloudMode = null;
+
+async function checkMobileBackend() {
   try {
-    const res  = await fetch('/get_openai_settings');
-    const data = await res.json();
-    updateMobileOpenAIUI(data.backend_mode === 'openai' && !!data.openai_api_key, data.openai_model || '');
+    const [oa, an] = await Promise.all([
+      fetch('/get_openai_settings').then(r => r.json()),
+      fetch('/get_anthropic_settings').then(r => r.json()),
+    ]);
+    _mobileBackend.mode  = oa.backend_mode || 'local';
+    _mobileBackend.cloud = !!oa.cloud_api_enabled;
+    _mobileBackend.openai    = { key: oa.openai_api_key || '',    model: oa.openai_model || '',    base: oa.openai_base_url || '' };
+    _mobileBackend.anthropic = { key: an.anthropic_api_key || '', model: an.anthropic_model || '', base: an.anthropic_base_url || '' };
   } catch(e) { /* silent */ }
+  renderMobileBackend();
 }
 
-function updateMobileOpenAIUI(active, model) {
-  const btn    = document.getElementById('mobile-openai-btn');
-  const banner = document.getElementById('mobile-openai-banner');
-  const modelSpan = document.getElementById('mobile-openai-model');
-  if (active) {
-    if (btn)    { btn.style.background = 'rgba(0,180,100,0.25)'; btn.style.borderColor = 'rgba(0,200,100,0.5)'; btn.style.color = '#4dffaa'; }
-    if (banner) { banner.style.display = 'flex'; }
-    if (modelSpan) modelSpan.textContent = model;
-  } else {
-    if (btn)    { btn.style.background = 'var(--surface2)'; btn.style.borderColor = 'var(--border)'; btn.style.color = 'var(--text-dim)'; }
-    if (banner) { banner.style.display = 'none'; }
-  }
-}
+function renderMobileBackend() {
+  const mode = _mobileBackend.mode;
+  const cloudActive = (mode === 'openai' || mode === 'anthropic') && _mobileBackend.cloud;
+  const isOA = mode === 'openai';
 
-function toggleMobileOpenAI() {
-  // If already in OpenAI mode, disconnect immediately
-  fetch('/get_openai_settings').then(r=>r.json()).then(data => {
-    if (data.backend_mode === 'openai') {
-      // Switch back to local
-      fetch('/save_openai_settings', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({backend_mode: 'local', openai_api_key: data.openai_api_key, openai_model: data.openai_model})
-      }).then(() => {
-        updateMobileOpenAIUI(false, '');
-        showToast('🖥️ Switched to local');
-      });
+  // Header button: icon reflects mode, lights up when a cloud backend is live.
+  const btn = document.getElementById('mobile-backend-btn');
+  if (btn) {
+    btn.textContent = isOA ? '☁️' : (mode === 'anthropic' ? '🧠' : '🔌');
+    if (cloudActive) {
+      const c = isOA ? ['rgba(0,180,100,0.25)','rgba(0,200,100,0.5)','#4dffaa']
+                     : ['rgba(200,140,60,0.25)','rgba(220,160,80,0.5)','#e0a060'];
+      btn.style.background = c[0]; btn.style.borderColor = c[1]; btn.style.color = c[2];
     } else {
-      // Show confirmation modal
-      if (data.openai_api_key) {
-        document.getElementById('mobile-openai-modal').style.display = 'flex';
-      } else {
-        showToast('⚠️ No API key set — configure in desktop config page');
-      }
+      btn.style.background = 'var(--surface2)'; btn.style.borderColor = 'var(--border)'; btn.style.color = 'var(--text-dim)';
     }
-  }).catch(e => showToast('⚠️ Could not reach server'));
-}
-
-function closeMobileOpenAIModal() {
-  document.getElementById('mobile-openai-modal').style.display = 'none';
-}
-
-async function confirmMobileOpenAI() {
-  closeMobileOpenAIModal();
-  try {
-    const res  = await fetch('/get_openai_settings');
-    const data = await res.json();
-    await fetch('/save_openai_settings', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({backend_mode: 'openai', openai_api_key: data.openai_api_key, openai_model: data.openai_model})
-    });
-    updateMobileOpenAIUI(true, data.openai_model || 'gpt-4o');
-    showToast('☁️ Connected to OpenAI — ' + (data.openai_model || 'gpt-4o'));
-  } catch(e) {
-    showToast('⚠️ Failed to connect');
   }
+
+  // Active-cloud banner.
+  const banner = document.getElementById('mobile-cloud-banner');
+  if (banner) {
+    if (cloudActive) {
+      const model = isOA ? _mobileBackend.openai.model : _mobileBackend.anthropic.model;
+      banner.style.display = 'flex';
+      banner.style.background = isOA ? 'rgba(0,180,100,0.15)' : 'rgba(200,140,60,0.15)';
+      banner.style.borderBottomColor = isOA ? 'rgba(0,200,100,0.3)' : 'rgba(220,160,80,0.35)';
+      const dot = document.getElementById('mobile-cloud-dot');
+      dot.style.background = isOA ? '#00e87a' : '#f0b060';
+      dot.style.boxShadow  = '0 0 6px ' + (isOA ? '#00e87a' : '#f0b060');
+      const lab = document.getElementById('mobile-cloud-label');
+      lab.textContent = isOA ? '☁️ OpenAI' : '🧠 Anthropic';
+      lab.style.color = isOA ? '#4dffaa' : '#e0a060';
+      const mod = document.getElementById('mobile-cloud-model');
+      mod.textContent = model || '';
+      mod.style.color = isOA ? '#2aaa66' : '#b07a40';
+    } else {
+      banner.style.display = 'none';
+    }
+  }
+
+  // Picker checkmarks.
+  ['local','openai','anthropic'].forEach(m => {
+    const c = document.getElementById('backend-check-' + m);
+    if (c) c.textContent = (m === mode) ? '✓' : '';
+  });
 }
+
+function openBackendPicker() { renderMobileBackend(); document.getElementById('mobile-backend-modal').style.display = 'flex'; }
+function closeBackendPicker() { document.getElementById('mobile-backend-modal').style.display = 'none'; }
+
+async function selectMobileBackend(mode) {
+  if (mode === 'local') {
+    closeBackendPicker();
+    try {
+      const res  = await fetch('/save_backend_mode', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ backend_mode:'local' }) });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.backend_mode === 'local') {
+        _mobileBackend.mode = 'local'; _mobileBackend.cloud = false;
+        renderMobileBackend(); showToast('🖥️ Switched to local');
+      } else { showToast('⚠️ Failed to switch to local'); }
+    } catch(e) { showToast('⚠️ Could not reach server'); }
+    return;
+  }
+
+  // Cloud provider — require a key, then confirm the data-sharing warning.
+  const key = (mode === 'openai') ? _mobileBackend.openai.key : _mobileBackend.anthropic.key;
+  if (!key) {
+    showToast('⚠️ No ' + (mode === 'openai' ? 'OpenAI' : 'Anthropic') + ' API key — set it in the desktop config page');
+    return;
+  }
+  // Tapping the already-connected provider disconnects back to local.
+  if (_mobileBackend.mode === mode && _mobileBackend.cloud) { closeBackendPicker(); selectMobileBackend('local'); return; }
+
+  _pendingCloudMode = mode;
+  closeBackendPicker();
+  const isOA = mode === 'openai';
+  document.getElementById('mobile-cloud-confirm-title').textContent = 'Switch to ' + (isOA ? 'OpenAI' : 'Anthropic') + '?';
+  const prov = document.getElementById('mobile-cloud-confirm-provider');
+  prov.textContent = isOA ? "OpenAI's servers" : "Anthropic's servers";
+  prov.style.color = isOA ? '#7ab4f5' : '#e0a060';
+  document.getElementById('mobile-cloud-confirm').style.display = 'flex';
+}
+
+function closeMobileCloudConfirm() { _pendingCloudMode = null; document.getElementById('mobile-cloud-confirm').style.display = 'none'; }
+
+async function confirmMobileCloud() {
+  const mode = _pendingCloudMode;
+  document.getElementById('mobile-cloud-confirm').style.display = 'none';
+  if (!mode) return;
+  try {
+    // 1) Persist provider mode, carrying existing key/model/base so saving
+    //    doesn't reset them (the save route rewrites all of its own fields).
+    if (mode === 'openai') {
+      await fetch('/save_openai_settings', { method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ backend_mode:'openai', openai_api_key:_mobileBackend.openai.key, openai_model:_mobileBackend.openai.model, openai_base_url:_mobileBackend.openai.base }) });
+    } else {
+      await fetch('/save_anthropic_settings', { method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ backend_mode:'anthropic', anthropic_api_key:_mobileBackend.anthropic.key, anthropic_model:_mobileBackend.anthropic.model, anthropic_base_url:_mobileBackend.anthropic.base }) });
+    }
+    // 2) Enable the cloud master switch so the /chat gate passes.
+    const res  = await fetch('/cloud_api_enabled', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ enabled:true }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.cloud_api_enabled) { showToast('⚠️ Failed to connect'); await checkMobileBackend(); _pendingCloudMode = null; return; }
+    _mobileBackend.mode = mode; _mobileBackend.cloud = true;
+    renderMobileBackend();
+    const m = (mode === 'openai') ? (_mobileBackend.openai.model || 'gpt-4o') : (_mobileBackend.anthropic.model || 'claude');
+    showToast((mode === 'openai' ? '☁️ Connected to OpenAI — ' : '🧠 Connected to Anthropic — ') + m);
+  } catch(e) {
+    showToast('⚠️ Failed to connect'); await checkMobileBackend();
+  }
+  _pendingCloudMode = null;
+}
+
+async function disconnectMobileCloud() { await selectMobileBackend('local'); }
 </script>
 </body>
 </html>

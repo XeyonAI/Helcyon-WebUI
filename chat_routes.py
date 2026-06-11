@@ -153,31 +153,29 @@ def check_chat_exists():
     return jsonify({"status": "ok", "filename": filename})
 
 
-@chat_bp.route("/chats/open/<filename>")
-def open_chat(filename):
-    chats_dir = get_chats_dir()
-    filepath = os.path.join(chats_dir, filename)
-    
-    if not os.path.exists(filepath):
-        return jsonify({"error": "Chat not found"}), 404
-    
+def _parse_chat_file(filepath, filename, verbose=True):
+    """Parse an on-disk chat file into the message list /chats/open returns.
+
+    Extracted from open_chat() so the /chats/save and /chats/update
+    stale-write guard can count on-disk messages with EXACTLY the parser the
+    client's base_count was derived from — any drift between two parsers
+    would make the count comparison meaningless. verbose=False silences the
+    per-line speaker logging (the guard runs on every autosave).
+    """
     with open(filepath, "r", encoding="utf-8") as f:
         raw_text = f.read()
-    
-    print(f"\n{'='*60}")
-    print(f"📂 Loading: {filename}")
-    print(f"   From: {chats_dir}")
-    print(f"{'='*60}\n")
-    
+
     # Load list of known characters
     available_characters = []
     try:
         char_index_path = os.path.join(os.getcwd(), "characters", "index.json")
         with open(char_index_path, "r", encoding="utf-8") as f:
             available_characters = json.load(f)
-            print(f"📋 Known characters: {available_characters}")
+            if verbose:
+                print(f"📋 Known characters: {available_characters}")
     except Exception as e:
-        print(f"⚠️ Could not load character list: {e}")
+        if verbose:
+            print(f"⚠️ Could not load character list: {e}")
 
     # ✅ The chat filename prefix is the authoritative source for which
     # character this chat belongs to (save side uses the same prefix: see
@@ -202,7 +200,8 @@ def open_chat(filename):
         filename_char = parts[0]
     if filename_char and filename_char not in available_characters:
         available_characters = list(available_characters) + [filename_char]
-        print(f"📋 Added filename-derived character to recognition list: {filename_char!r}")
+        if verbose:
+            print(f"📋 Added filename-derived character to recognition list: {filename_char!r}")
     
     # ✅ Load list of valid user personas dynamically
     valid_users = []
@@ -210,9 +209,11 @@ def open_chat(filename):
         user_index_path = os.path.join(os.getcwd(), "users", "index.json")
         with open(user_index_path, "r", encoding="utf-8") as f:
             valid_users = json.load(f)
-            print(f"👤 Valid users: {valid_users}")
+            if verbose:
+                print(f"👤 Valid users: {valid_users}")
     except Exception as e:
-        print(f"⚠️ Could not load user list: {e}")
+        if verbose:
+            print(f"⚠️ Could not load user list: {e}")
     
     lines = raw_text.split('\n')
     messages = []
@@ -271,10 +272,12 @@ def open_chat(filename):
 
                 if is_known_character:
                     current_role = "assistant"
-                    print(f"✅ Recognized assistant: {potential_speaker}")
+                    if verbose:
+                        print(f"✅ Recognized assistant: {potential_speaker}")
                 else:
                     current_role = "user"
-                    print(f"✅ Recognized user: {potential_speaker}")
+                    if verbose:
+                        print(f"✅ Recognized user: {potential_speaker}")
 
                 current_content = [content_after_colon] if content_after_colon else []
 
@@ -312,6 +315,56 @@ def open_chat(filename):
             entry["timestamp"] = current_timestamp
         messages.append(entry)
     
+    return messages
+
+
+def _check_stale_save(filepath, filename, incoming_count, base_count):
+    """Stale-write guard for /chats/save and /chats/update (June 10 2026).
+
+    Bug this prevents: a chat continued on mobile, then a still-open (stale)
+    desktop tab refreshes — its pagehide beacon flushes the tab's OLD
+    in-memory copy and blindly overwrites the newer on-disk messages.
+
+    base_count is the message count the client believed was on disk when it
+    loaded / last saved. Reject only when the disk has grown PAST base_count
+    (someone else saved since this client synced) AND the incoming array is
+    no longer than disk (the writer is behind, not bringing new turns —
+    deletes/regenerates against a current base still pass because then
+    disk_count == base_count).
+
+    Returns the disk message count if the save must be rejected, else None.
+    base_count absent (legacy/manual callers) → never reject.
+    """
+    if not isinstance(base_count, int) or isinstance(base_count, bool):
+        return None
+    if not os.path.exists(filepath):
+        return None
+    try:
+        disk_count = len(_parse_chat_file(filepath, filename, verbose=False))
+    except Exception as e:
+        # Guard must never block saves on its own failure — fall through.
+        print(f"⚠️ Stale-check parse failed for {filename}: {e} — allowing write")
+        return None
+    if disk_count > base_count and incoming_count <= disk_count:
+        return disk_count
+    return None
+
+
+@chat_bp.route("/chats/open/<filename>")
+def open_chat(filename):
+    chats_dir = get_chats_dir()
+    filepath = os.path.join(chats_dir, filename)
+
+    if not os.path.exists(filepath):
+        return jsonify({"error": "Chat not found"}), 404
+
+    print(f"\n{'='*60}")
+    print(f"📂 Loading: {filename}")
+    print(f"   From: {chats_dir}")
+    print(f"{'='*60}\n")
+
+    messages = _parse_chat_file(filepath, filename)
+
     print(f"📊 Loaded {len(messages)} messages")
     return jsonify({"filename": filename, "messages": messages})
 
@@ -562,7 +615,12 @@ def delete_chat(filename):
 def save_chat_messages():
     """Overwrite chat file with complete message history (atomic)."""
     try:
-        data = request.get_json()
+        # Accept both normal JSON posts AND navigator.sendBeacon() pagehide
+        # flushes. The beacon sends a Blob; even though the client tags it
+        # application/json, force=True parses the body regardless of content
+        # type and silent=True means a malformed teardown beacon returns {}
+        # instead of 500-ing. See changes.md (June 6 2026 — pagehide beacon).
+        data = request.get_json(force=True, silent=True) or {}
         filename = data.get("filename")
         messages = data.get("messages")
 
@@ -573,6 +631,14 @@ def save_chat_messages():
 
         chats_dir = get_chats_dir()
         filepath = os.path.join(chats_dir, filename)
+
+        # Stale-write guard — see _check_stale_save. Clients send base_count
+        # (the count they believe is on disk); legacy callers omit it and
+        # write as before.
+        stale_disk_count = _check_stale_save(filepath, filename, len(messages), data.get("base_count"))
+        if stale_disk_count is not None:
+            print(f"⛔ Stale save REJECTED for {filename}: disk={stale_disk_count}, base={data.get('base_count')}, incoming={len(messages)}")
+            return jsonify({"status": "stale", "disk_count": stale_disk_count}), 409
 
         # Character name fallback: parse from filename prefix
         char_name = "Assistant"
@@ -637,6 +703,12 @@ def update_chat():
 
         chats_dir = get_chats_dir()
         filepath = os.path.join(chats_dir, filename)
+
+        # Stale-write guard — same as /chats/save (see _check_stale_save).
+        stale_disk_count = _check_stale_save(filepath, filename, len(messages), data.get("base_count"))
+        if stale_disk_count is not None:
+            print(f"⛔ Stale update REJECTED for {filename}: disk={stale_disk_count}, base={data.get('base_count')}, incoming={len(messages)}")
+            return jsonify({"status": "stale", "disk_count": stale_disk_count}), 409
 
         char_name = "Assistant"
         if " - " in filename:

@@ -477,6 +477,45 @@ def save_groups_route():
 
 
 # --------------------------------------------------
+# Project folder colours (server-side persistence)
+# project_colours.json: { "projectName": "#hexcolour", ... }
+# --------------------------------------------------
+# Stored server-side (not in localStorage) so folder colours survive switching
+# between http/https, the Electron launcher, and browser-storage clears.
+PROJECT_COLOURS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "project_colours.json")
+
+
+def load_project_colours():
+    if os.path.exists(PROJECT_COLOURS_FILE):
+        try:
+            with open(PROJECT_COLOURS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"⚠️ Failed to read project colours: {e}")
+    return {}
+
+
+@project_bp.route("/projects/colours", methods=["GET"])
+def get_project_colours():
+    return jsonify(load_project_colours())
+
+
+@project_bp.route("/projects/colours/save", methods=["POST"])
+def save_project_colours():
+    data = request.json or {}
+    colours = data.get("colours", {})
+    if not isinstance(colours, dict):
+        return jsonify({"error": "colours must be an object"}), 400
+    try:
+        with open(PROJECT_COLOURS_FILE, "w", encoding="utf-8") as f:
+            json.dump(colours, f, indent=2, ensure_ascii=False)
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+    print(f"🎨 Project colours saved: {list(colours.keys())}")
+    return jsonify({"success": True})
+
+
+# --------------------------------------------------
 # Global Documents — UI for the global_documents/ folder
 # --------------------------------------------------
 # These documents are keyword-matched and injected by load_global_documents()

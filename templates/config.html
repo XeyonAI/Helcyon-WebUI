@@ -64,7 +64,7 @@
          browser (no frameless chrome there, and F5 already works). Marked
          no-drag so it stays clickable regardless of any title-bar drag region. -->
     <button id="electron-reload-btn" onclick="location.reload()" title="Reload HWUI"
-      style="display:none; position:fixed; top:3px; right:150px; z-index:2000;
+      style="display:none; position:fixed; top:173px; right:12px; z-index:1001;
              width:26px; height:26px; align-items:center; justify-content:center;
              border-radius:6px; border:1px solid var(--modal-border,#2d394b);
              background:rgba(255,255,255,0.06); color:#e8e8e8; cursor:pointer;
@@ -83,22 +83,87 @@
       }
     </script>
 
-    <a id="settings-link" href="/">
+    <a id="settings-link" href="/" style="position:fixed; top:135px; right:12px; z-index:1001; margin:0;">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
         <polyline points="9 22 9 12 15 12 15 22"></polyline>
       </svg>
     </a>
+
+    <!-- Model selector — ported from index.html so config matches it. Fixed,
+         right-aligned at top:72px so it sits directly above the home/refresh
+         stack (135/173) and fills the gap. Same ids/behaviour as index. -->
+    <div style="position:fixed; top:72px; right:12px; z-index:999; display:flex; align-items:center; gap:8px;">
+      <div id="openai-indicator" title="OpenAI backend active" style="display:none; align-items:center; gap:7px; background:rgba(0,180,100,0.12); border:1px solid rgba(0,200,100,0.35); border-radius:20px; padding:6px 14px; white-space:nowrap;">
+        <span style="width:8px; height:8px; border-radius:50%; background:#00e87a; display:inline-block; box-shadow:0 0 6px #00e87a; flex-shrink:0;"></span>
+        <div style="display:flex; flex-direction:column; line-height:1.3;">
+          <span style="font-size:12px; color:#4dffaa; font-weight:600;">☁️ OpenAI</span>
+          <span id="openai-indicator-model" style="font-size:10px; color:#2aaa66;">gpt-4o</span>
+        </div>
+      </div>
+      <div id="anthropic-indicator" title="Anthropic backend active" style="display:none; align-items:center; gap:7px; background:rgba(0,180,100,0.12); border:1px solid rgba(0,200,100,0.35); border-radius:20px; padding:6px 14px; white-space:nowrap;">
+        <span style="width:8px; height:8px; border-radius:50%; background:#00e87a; display:inline-block; box-shadow:0 0 6px #00e87a; flex-shrink:0;"></span>
+        <div style="display:flex; flex-direction:column; line-height:1.3;">
+          <span style="font-size:12px; color:#4dffaa; font-weight:600;">🧠 Anthropic</span>
+          <span id="anthropic-indicator-model" style="font-size:10px; color:#2aaa66;">claude</span>
+        </div>
+      </div>
+      <button id="model-display" onclick="toggleModelPicker()" title="Switch model" style="
+        background: transparent; border: 1px solid var(--modal-border, #2d394b);
+        border-radius: 20px; padding: 7px 16px 7px 14px; font-size: 14px; color: #ccc;
+        cursor: pointer; display: flex; align-items: center; gap: 7px; white-space: nowrap;
+        max-width: 280px; transition: border-color 0.15s, background 0.15s;
+      " onmouseover="this.style.borderColor='#4a6a8a'; this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.borderColor='var(--modal-border, #2d394b)'; this.style.background='transparent'">
+        <span id="model-display-name" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Loading...</span>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="flex-shrink:0; opacity:0.45;"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      </button>
+    </div>
+
+    <!-- Model Picker Dropdown -->
+    <div id="model-picker" style="display: none; position: fixed; top: 110px; right: 12px;
+      background: var(--modal-bg, #1a1f2a); border: 1px solid var(--modal-border, #2d394b);
+      border-radius: 10px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); z-index: 2000; width: 220px; overflow: hidden;">
+      <div id="model-picker-list" style="padding: 6px 0; overflow-y: auto; max-height: 70vh;"></div>
+      <div id="model-picker-status" style="display:none; padding:8px 14px; border-top:1px solid var(--modal-border, #2d394b); color:#8ab4d4; font-size:12px; text-align:center;"></div>
+      <div id="picker-actual-model" style="padding:5px 12px 5px 12px; border-top:1px solid var(--modal-border, #2d394b); color:#555; font-size:10px; font-family:monospace; word-break:break-all; line-height:1.4;"></div>
+      <div style="padding: 8px 10px; border-top: 1px solid var(--modal-border, #2d394b); display:flex; gap:6px; justify-content:flex-end;">
+        <button onclick="unloadModel()" style="background:rgba(100,30,30,0.4); border:1px solid #6a2a2a; color:#e88; border-radius:6px; padding:3px 10px; font-size:11px; cursor:pointer; margin:0;">⏹ Unload</button>
+        <button onclick="closeModelPicker()" style="background:transparent; border:1px solid var(--modal-border, #2d394b); color:#aaa; border-radius:6px; padding:3px 10px; font-size:11px; cursor:pointer; margin:0;">Close</button>
+      </div>
+    </div>
   </div>
 
   <div id="main">
     <!-- Left Sidebar: Sampling Settings -->
     <div id="sampling-sidebar">
-      <h3>Sampling Settings</h3>
-
-      <div style="font-size:11px; color:#9aa; background:rgba(40,80,128,0.12); border:1px solid #245080; border-radius:5px; padding:6px 9px; margin-bottom:10px; line-height:1.4;">
-        ℹ️ Anthropic Opus 4.7+ models ignore sampling parameters — they're filtered out automatically. Use prompting and the effort setting instead.
-      </div>
+      <style>
+        /* Hover/focus info bubble — replaces the old always-on sampling banner. */
+        .sampling-info-icon {
+          position: relative; display: inline-flex; align-items: center; justify-content: center;
+          width: 16px; height: 16px; border-radius: 50%; font-size: 12px; line-height: 1;
+          color: #7ab4f5; cursor: help; font-style: normal; font-weight: normal; opacity: 0.75;
+          transition: opacity .15s ease;
+        }
+        .sampling-info-icon:hover, .sampling-info-icon:focus { opacity: 1; outline: none; }
+        .sampling-info-tip {
+          position: absolute; top: calc(100% + 8px); left: 0; z-index: 60;
+          width: 248px; padding: 9px 11px; font-size: 11px; line-height: 1.5;
+          font-weight: normal; letter-spacing: 0.2px; text-transform: none;
+          color: #cdd6e0; background: #141b27; border: 1px solid #245080; border-radius: 6px;
+          box-shadow: 0 6px 22px rgba(0,0,0,0.55);
+          opacity: 0; visibility: hidden; transform: translateY(-4px);
+          transition: opacity .15s ease, transform .15s ease, visibility .15s;
+          pointer-events: none; white-space: normal;
+        }
+        .sampling-info-icon:hover .sampling-info-tip,
+        .sampling-info-icon:focus .sampling-info-tip {
+          opacity: 1; visibility: visible; transform: translateY(0);
+        }
+      </style>
+      <h3 style="display:flex; align-items:center; gap:6px;">
+        Sampling Settings
+        <span class="sampling-info-icon" tabindex="0" role="button" aria-label="About sampling parameters">ⓘ<span class="sampling-info-tip">Some cloud reasoning models ignore sampling parameters and filter them out automatically — Anthropic Opus 4.7+ and OpenAI's o-series / GPT-5-class models. Use prompting and the effort / reasoning setting instead.</span></span>
+      </h3>
 
       <label>Temperature:</label>
       <input type="number" id="temperature" step="0.05" min="0" max="2" />
@@ -187,6 +252,14 @@
         <button onclick="autoDetectMmproj()" title="Scan the Models Folder and its subfolders for a matching mmproj file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">🔍 Auto-Detect</button>
       </div>
 
+      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">LoRA <span style="color:#777;">(optional — adapter applied on next llama.cpp launch)</span></label>
+      <div style="display:flex; align-items:center; gap:6px; margin-bottom:12px;">
+        <input id="llama-lora-path" type="text" placeholder="C:\path\to\adapter.gguf" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
+        <button onclick="browseFile('llama-lora-path','lora',document.getElementById('llama-models-dir').value.trim())" title="Browse for a LoRA adapter .gguf file (starts in the configured Models Folder)" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">📁</button>
+        <button onclick="attachLora()" title="Save the LoRA path (applied on next llama.cpp launch)" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Attach</button>
+        <button onclick="detachLora()" title="Clear the LoRA path" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Detach</button>
+      </div>
+
       <label style="font-size:11px; color:#aaa; display:block; margin-bottom:6px; font-weight:600;">Launch Arguments</label>
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px 10px; margin-bottom:10px;">
         <div>
@@ -245,29 +318,42 @@
       <h3>☁️ Cloud Backend</h3>
       <label style="font-size:11px; color:#aaa; display:block; margin-bottom:6px;">Backend Mode</label>
       <div style="display:flex; gap:0; margin-bottom:10px; border:1px solid #333; border-radius:4px; overflow:hidden;">
-        <button id="mode-local-btn" onclick="setBackendMode('local')"
+        <button id="mode-local-btn" onclick="selectLocalMode()"
           style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#1a3a2a; color:#6f6; font-weight:bold;">
           🖥️ Local
         </button>
-        <button id="mode-openai-btn" onclick="confirmCloudSwitch('openai')"
+        <button id="mode-openai-btn" onclick="setBackendMode('openai')"
           style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#111; color:#888;">
           ☁️ OpenAI
         </button>
-        <button id="mode-anthropic-btn" onclick="confirmCloudSwitch('anthropic')"
+        <button id="mode-anthropic-btn" onclick="setBackendMode('anthropic')"
           style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#111; color:#888;">
           🧠 Anthropic
         </button>
       </div>
 
-      <!-- Cloud switch confirmation modal (shared OpenAI / Anthropic) -->
+      <!-- Cloud connect — ALWAYS visible, directly under the selector. Greyed +
+           disabled when Local; green "🌐 Connect" when a cloud provider is
+           selected and disconnected; red "🔴 Disconnect" when connected.
+           Connecting confirms first; disconnecting is immediate. Only this
+           button connects — saving provider settings just saves the preference.
+           (changes.md.) -->
+      <button id="cloud-connect-btn" onclick="onCloudConnectClick()"
+        style="width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; font-weight:bold; margin-bottom:10px; background:#1a3a2a; border:1px solid #2a6a4a; color:white;">
+        🌐 Connect
+      </button>
+
+      <!-- Cloud CONNECT confirmation modal — same slick style as the old mode-
+           switch modal (now repurposed; the selector switches silently). Opened
+           by the Connect button. (changes.md.) -->
       <div id="cloud-confirm-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:9999; align-items:center; justify-content:center;">
         <div style="background:#1a1f2a; border:1px solid #3a5a7a; border-radius:10px; padding:24px 20px; max-width:300px; width:90%; box-shadow:0 8px 32px rgba(0,0,0,0.6);">
           <div style="font-size:22px; text-align:center; margin-bottom:10px;">⚠️</div>
-          <div id="cloud-confirm-title" style="font-size:14px; color:#ddd; text-align:center; margin-bottom:8px; font-weight:bold;">Switch to cloud?</div>
-          <div style="font-size:12px; color:#999; text-align:center; margin-bottom:20px; line-height:1.5;">Your conversations will be sent to <span id="cloud-confirm-provider" style="color:#7ab4f5;">this provider's servers</span>. Make sure you're comfortable with that before continuing.</div>
+          <div id="cloud-confirm-title" style="font-size:14px; color:#ddd; text-align:center; margin-bottom:8px; font-weight:bold;">Connect to cloud?</div>
+          <div id="cloud-confirm-message" style="font-size:12px; color:#999; text-align:center; margin-bottom:20px; line-height:1.5;">You are about to connect to this provider. Your messages will be sent to an external server. Continue?</div>
           <div style="display:flex; gap:8px;">
-            <button onclick="cancelCloudSwitch()" style="flex:1; padding:8px 0; background:#2a1a1a; border:1px solid #6a2a2a; color:#e88; border-radius:6px; font-size:13px; cursor:pointer;">✕ Cancel</button>
-            <button onclick="confirmCloudSwitchOK()" style="flex:1; padding:8px 0; background:#1a2a4a; border:1px solid #2a4a8a; color:#7ab4f5; border-radius:6px; font-size:13px; cursor:pointer; font-weight:bold;">☁️ Connect</button>
+            <button onclick="cancelCloudConnect()" style="flex:1; padding:8px 0; background:#2a1a1a; border:1px solid #6a2a2a; color:#e88; border-radius:6px; font-size:13px; cursor:pointer;">✕ Cancel</button>
+            <button onclick="confirmCloudConnectOK()" style="flex:1; padding:8px 0; background:#1a2a4a; border:1px solid #2a4a8a; color:#7ab4f5; border-radius:6px; font-size:13px; cursor:pointer; font-weight:bold;">☁️ Connect</button>
           </div>
         </div>
       </div>
@@ -326,7 +412,7 @@
         <button class="config-tab" onclick="switchConfigTab('character', this)">🧑 Character</button>
         <button class="config-tab" onclick="switchConfigTab('create-char', this)">✨ New Character</button>
         <button class="config-tab" onclick="switchConfigTab('user-persona', this)">👤 User Persona</button>
-        <button class="config-tab" disabled title="Theme customisation — Pro Version" style="opacity:0.4; cursor:not-allowed;">🎨 Appearance ⭐</button>
+        <button class="config-tab" onclick="switchConfigTab('appearance', this)">🎨 Appearance</button>
       </div>
 
       <!-- ===== TAB: SYSTEM PROMPT ===== -->
@@ -871,19 +957,14 @@
       if (data.status === 'ok') {
         refreshActiveSpIndicator(filename);
         await loadSystemPromptList();
-        // Bind this template to the current character card
-        const charName = document.getElementById('character-select').value;
-        if (charName) {
-          await fetch(`/character_system_prompt/${encodeURIComponent(charName)}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ system_prompt: filename })
-          });
-          updateBindIndicator(true);
-          hwuiToast('✅ Active prompt set to: ' + filename + '\n💾 Bound to character: ' + charName, 'success');
-        } else {
-          hwuiToast('✅ Active prompt set to: ' + filename, 'success');
-        }
+        // Activate ONLY sets the global default in settings.json. It must NOT
+        // bind the template to the loaded character — that silent rebind was
+        // clobbering explicit per-character bindings (e.g. activating GPT-4o
+        // while editing a Nebula-bound character reverted it to GPT-4o). This is
+        // exactly the silent-binding bug the Bind/Activate split below was meant
+        // to prevent. Per-character binding is done explicitly via the Bind
+        // button (bindSystemPromptToCharacter). (changes.md.)
+        hwuiToast('✅ Active prompt set to: ' + filename, 'success');
       } else {
         hwuiToast('❌ Failed: ' + (data.error || 'Unknown'), 'error');
       }
@@ -1104,17 +1185,21 @@
       updateImagePreview();
       renderExtraImages(data.images || [], data.image || "");
 
-      // Auto-load character's paired system prompt + example dialog if set
-      if (data.system_prompt) {
-        const spSelect = document.getElementById('system-prompt-file-select');
-        if (spSelect) spSelect.value = data.system_prompt;
-        refreshActiveSpIndicator(data.system_prompt);
-        await loadSelectedSystemPrompt(data.system_prompt);
-        updateBindIndicator(true);
-        console.log(`🎭 Auto-loaded system prompt for ${name}: ${data.system_prompt}`);
-      } else {
-        updateBindIndicator(false);
-      }
+      // Auto-load the character's resolved system prompt so the SP tab matches
+      // what the character actually uses at chat time. Resolution mirrors the
+      // backend: per-character bound template → DEFAULT template ('default.txt').
+      // An UNBOUND character resolves to default.txt — NOT whatever template is
+      // globally "active" (that's why an unbound character used to show Claude's
+      // prompt here). Keep this in sync with resolve_character_prompt_files.
+      const DEFAULT_SP = 'default.txt';
+      const resolvedSp = data.system_prompt || DEFAULT_SP;
+      const isBound = !!data.system_prompt;
+      const spSelect = document.getElementById('system-prompt-file-select');
+      if (spSelect) spSelect.value = resolvedSp;
+      refreshActiveSpIndicator(resolvedSp);
+      await loadSelectedSystemPrompt(resolvedSp);
+      updateBindIndicator(isBound);
+      console.log(`🎭 Resolved system prompt for ${name}: ${resolvedSp}` + (isBound ? '' : ' (unbound → default)'));
     } catch (err) {
       console.error("Error loading character:", err);
     }
@@ -1263,7 +1348,12 @@
       example_dialogue: document.getElementById("example-dialog").value,
       image: document.getElementById("image").value,
       images: (currentCharacter && currentCharacter.images) ? currentCharacter.images : undefined,
-      system_prompt: (currentCharacter && currentCharacter.system_prompt) ? currentCharacter.system_prompt : undefined,
+      // system_prompt is NOT sent here — the editor has no SP control, and the
+      // value held in currentCharacter goes stale the moment you Bind a new
+      // template (Bind writes disk but not this object). Sending it would
+      // clobber an explicit bind back to the stale value. The SP binding is
+      // owned by the Bind button (/character_system_prompt); the server
+      // preserves the on-disk value when this key is omitted. (changes.md.)
     };
     try {
       const res = await fetch(`/characters/${name}.json`, {
@@ -1686,13 +1776,14 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     // ⚠️ The three SP fields (#global-system-prompt / -example-dialog /
     // -post-history) are written by BOTH loadGlobalSystemPrompt (the globally
     // ACTIVE template) and loadCharacterList → loadCharacter (the auto-loaded
-    // character's BOUND template). Firing both un-awaited let them race: the
+    // character's RESOLVED template). Firing both un-awaited let them race: the
     // last async write won, so when the character's template had no paired
     // example/post-history files (route returns ''), the fields would blank
     // out non-deterministically. Run them sequentially — global first to
-    // establish the active-template defaults, character second so a bound
-    // character's template wins (its no-binding path leaves the fields
-    // untouched). This is the same single-loader rule as changes.md May 19.
+    // establish the active-template defaults, character second so the
+    // character's resolved template always wins (bound template → else the
+    // DEFAULT template 'default.txt'; an unbound character no longer leaves
+    // the global-active template showing). Single-loader rule, changes.md May 19.
     (async () => {
       await loadGlobalSystemPrompt();
       await loadCharacterList();
@@ -2651,6 +2742,11 @@ async function loadLlamaConfig() {
     document.getElementById('llama-models-dir').value = data.models_dir || '';
     document.getElementById('llama-mmproj-path').value = data.mmproj_path || '';
     document.getElementById('llama-show-console').checked = data.show_console || false;
+    // LoRA path — loaded via its own GET endpoint (independent of llama config save).
+    try {
+      const lr = await (await fetch('/get_lora_path')).json();
+      document.getElementById('llama-lora-path').value = lr.lora_path || '';
+    } catch(e) { /* non-fatal — leave field blank */ }
     const a = data.args || {};
     document.getElementById('llama-gpu-layers').value = a.n_gpu_layers ?? 44;
     document.getElementById('llama-ctx-size').value = a.ctx_size ?? 16384;
@@ -2698,14 +2794,63 @@ async function saveLlamaConfig() {
 // ==================================================
 // BROWSE FILE / FOLDER DIALOGS
 // ==================================================
-async function browseFile(targetId, filter) {
-  // filter: optional file-type filter for the native picker ('gguf', 'exe', …).
-  // Omitted → backend default ('exe'), so existing callers are unaffected.
+async function browseFile(targetId, filter, initialdir) {
+  // filter: optional file-type filter for the native picker ('gguf', 'lora', 'exe', …).
+  // initialdir: optional starting folder. Both omitted → backend defaults, so
+  // existing callers are unaffected.
   try {
-    const res = await fetch('/browse_file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(filter ? { filter: filter } : {}) });
+    const body = {};
+    if (filter) body.filter = filter;
+    if (initialdir) body.initialdir = initialdir;
+    const res = await fetch('/browse_file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const data = await res.json();
     if (data.path) document.getElementById(targetId).value = data.path;
   } catch(e) { hwuiToast('Browse failed: ' + e, 'error'); }
+}
+
+// ==================================================
+// LoRA ATTACH / DETACH
+// ==================================================
+// This build can't hot-attach a LoRA (its /lora-adapters endpoint only
+// re-scales adapters loaded at launch via --lora). So attach/detach persist the
+// path, then reload the current model via /load_model — the same route the
+// picker uses — which restarts llama.cpp and picks up the new --lora arg, making
+// the change live without a manual restart.
+async function _reloadModelForLora(savedMsg, activeMsg) {
+  // Subfolder-relative current-model filename as set by the picker (line ~4611).
+  // /get_model only returns a display basename, so this is the reliable source
+  // for a /load_model payload. No model known → fall back to manual-restart.
+  const currentModel = localStorage.getItem('llama_last_model');
+  if (!currentModel) { hwuiToast(savedMsg + ' — restart llama.cpp to apply', 'info'); return; }
+  hwuiToast('💾 ' + savedMsg + ' — reloading model...', 'info');
+  try {
+    const res = await fetch('/load_model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: currentModel }) });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      hwuiToast(activeMsg, 'success');
+      if (typeof loadModelDisplay === 'function') loadModelDisplay();
+    } else {
+      hwuiToast('⚠️ LoRA saved but reload failed — restart manually', 'error');
+    }
+  } catch(e) { hwuiToast('⚠️ LoRA saved but reload failed — restart manually', 'error'); }
+}
+async function attachLora() {
+  const path = document.getElementById('llama-lora-path').value.trim();
+  try {
+    const res = await fetch('/save_lora_path', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lora_path: path }) });
+    const data = await res.json();
+    if (data.status === 'ok') await _reloadModelForLora('LoRA saved', '✅ LoRA active');
+    else hwuiToast('❌ ' + (data.error || 'Save failed'), 'error');
+  } catch(e) { hwuiToast('Attach failed: ' + e, 'error'); }
+}
+async function detachLora() {
+  document.getElementById('llama-lora-path').value = '';
+  try {
+    const res = await fetch('/save_lora_path', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lora_path: '' }) });
+    const data = await res.json();
+    if (data.status === 'ok') await _reloadModelForLora('LoRA detached', '✅ LoRA detached');
+    else hwuiToast('❌ ' + (data.error || 'Save failed'), 'error');
+  } catch(e) { hwuiToast('Detach failed: ' + e, 'error'); }
 }
 
 // Scan the configured Models Folder for an mmproj .gguf file via the existing
@@ -3894,33 +4039,60 @@ function previewThemeVar(varName, value) {
 
   // ── OpenAI Backend Settings ──────────────────────────────────────
   let _currentBackendMode = 'local';
-  let _pendingCloudMode = null;
 
-  // Shared confirm modal for any cloud provider (OpenAI / Anthropic). Local
-  // never needs confirmation — only cloud switches warn that data leaves the box.
-  function confirmCloudSwitch(mode) {
-    if (_currentBackendMode === mode) return;
-    _pendingCloudMode = mode;
-    const isOpenAI = (mode === 'openai');
+  // The mode selector (Local/OpenAI/Anthropic) now switches SILENTLY — no
+  // confirmation. The confirmation is shown only when CONNECTING, via the
+  // repurposed cloud-confirm-modal below (same slick style). (changes.md.)
+  function _openConnectConfirm() {
+    if (_currentBackendMode === 'local') return;
+    const provider = (_currentBackendMode === 'openai') ? 'OpenAI' : 'Anthropic';
     const titleEl = document.getElementById('cloud-confirm-title');
-    const provEl  = document.getElementById('cloud-confirm-provider');
-    if (titleEl) titleEl.textContent = isOpenAI ? 'Switch to OpenAI?' : 'Switch to Anthropic?';
-    if (provEl)  provEl.textContent  = isOpenAI ? "OpenAI's servers" : "Anthropic's servers";
+    const msgEl   = document.getElementById('cloud-confirm-message');
+    if (titleEl) titleEl.textContent = 'Connect to ' + provider + '?';
+    if (msgEl)   msgEl.textContent =
+      'You are about to connect to ' + provider +
+      '. Your messages will be sent to an external server. Continue?';
     const modal = document.getElementById('cloud-confirm-modal');
     if (modal) modal.style.display = 'flex';
   }
 
-  function cancelCloudSwitch() {
-    _pendingCloudMode = null;
+  function cancelCloudConnect() {
     const modal = document.getElementById('cloud-confirm-modal');
     if (modal) modal.style.display = 'none';
   }
 
-  function confirmCloudSwitchOK() {
+  async function confirmCloudConnectOK() {
     const modal = document.getElementById('cloud-confirm-modal');
     if (modal) modal.style.display = 'none';
-    if (_pendingCloudMode) setBackendMode(_pendingCloudMode);
-    _pendingCloudMode = null;
+    if (_currentBackendMode === 'local') return;
+    const provider = (_currentBackendMode === 'openai') ? 'OpenAI' : 'Anthropic';
+    try {
+      // Send the SELECTED backend_mode along with the connect — setBackendMode()
+      // is UI-only, so without this the mode never reaches disk and the pill /
+      // chat-gate (which read disk backend_mode) stay disconnected. The server
+      // persists both atomically. (changes.md.)
+      const res = await fetch('/cloud_api_enabled', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: true, backend_mode: _currentBackendMode })
+      });
+      const d = res.ok ? await res.json().catch(() => null) : null;
+      // Only flip to connected once the SERVER confirms the value is persisted.
+      // fetch does not reject on HTTP 500, so we must check res.ok + the
+      // returned cloud_api_enabled. (changes.md.)
+      if (!res.ok || !d || d.cloud_api_enabled !== true) {
+        await refreshCloudConnect();                 // resync button to true server state
+        checkOpenAIIndicator(); checkAnthropicIndicator();  // resync pill
+        if (typeof hwuiToast === 'function') hwuiToast('Connect failed — server did not confirm', 'error');
+        return;
+      }
+      _cloudConnected = true;
+      _renderCloudConnectBtn();
+      checkOpenAIIndicator(); checkAnthropicIndicator();    // update the pill immediately
+      if (typeof hwuiToast === 'function') hwuiToast('🌐 Connected to ' + provider, 'success');
+    } catch (e) {
+      await refreshCloudConnect();
+      if (typeof hwuiToast === 'function') hwuiToast('Connect failed', 'error');
+    }
   }
 
   function setBackendMode(mode) {
@@ -3946,6 +4118,116 @@ function previewThemeVar(varName, value) {
     const _cloud = (mode !== 'local');
     if (localParams) { localParams.style.opacity = _cloud ? '0.3' : '1'; localParams.style.pointerEvents = _cloud ? 'none' : 'auto'; }
     if (localNote)   { localNote.style.display = _cloud ? 'block' : 'none'; }
+
+    // Show the Connect button only for cloud providers; refresh its state.
+    if (typeof _renderCloudConnectBtn === 'function') _renderCloudConnectBtn();
+  }
+
+  // Clicking the Local button must persist immediately — Local has no Save
+  // button, so without this the choice never reaches settings.json and the
+  // cloud master gate blocks all chat after a restart. (changes.md.)
+  // setBackendMode stays UI-only so the many programmatic/load-time calls do
+  // NOT write to disk; only this user-click handler persists.
+  async function selectLocalMode() {
+    setBackendMode('local');
+    try {
+      const res = await fetch('/save_backend_mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ backend_mode: 'local' }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.backend_mode === 'local') {
+        if (typeof hwuiToast === 'function') hwuiToast('✅ Local backend saved', 'success');
+      } else {
+        if (typeof hwuiToast === 'function') hwuiToast('❌ Failed to save Local mode — check server.', 'error');
+        console.error('save_backend_mode failed', data);
+      }
+    } catch (e) {
+      if (typeof hwuiToast === 'function') hwuiToast('❌ Failed to save Local mode — check server.', 'error');
+      console.error('save_backend_mode error', e);
+    }
+  }
+
+  // ── Cloud connect / disconnect (sits under the backend-mode selector) ────
+  // Connecting flips cloud_api_enabled=true (after a confirm); disconnecting
+  // flips it false (immediate). It NEVER changes backend_mode — selecting a
+  // provider and saving just saves the preference. (changes.md.)
+  let _cloudConnected = false;
+
+  function _renderCloudConnectBtn() {
+    const btn = document.getElementById('cloud-connect-btn');
+    if (!btn) return;
+    if (_currentBackendMode === 'local') {
+      // Always visible, but disabled + greyed when Local is selected.
+      btn.disabled = true;
+      btn.textContent = '🌐 Connect';
+      btn.style.cursor = 'not-allowed';
+      btn.style.opacity = '0.5';
+      btn.style.background = '#1a1a1a'; btn.style.borderColor = '#333'; btn.style.color = '#666';
+      btn.title = 'Select a cloud provider (OpenAI/Anthropic) to connect.';
+      return;
+    }
+    btn.disabled = false;
+    btn.style.cursor = 'pointer';
+    btn.style.opacity = '1';
+    if (_cloudConnected) {
+      // Match the red "Clear Key" button in this section.
+      btn.textContent = '🔴 Disconnect';
+      btn.style.background = '#3a1a1a'; btn.style.borderColor = '#6a2a2a'; btn.style.color = '#e88';
+      btn.title = 'Connected — click to disconnect.';
+    } else {
+      // Match the green "Save Search Key" button in this section.
+      btn.textContent = '🌐 Connect';
+      btn.style.background = '#1a3a2a'; btn.style.borderColor = '#2a6a4a'; btn.style.color = 'white';
+      btn.title = 'Click to connect to the selected cloud provider.';
+    }
+  }
+
+  async function refreshCloudConnect() {
+    try {
+      const res = await fetch('/cloud_api_enabled');
+      if (res.ok) {
+        const d = await res.json();
+        _cloudConnected = !!d.cloud_api_enabled;
+        // Sync the selector + button to the persisted backend_mode so that, on
+        // page load, the Connect button is already visible/active when OpenAI or
+        // Anthropic is the saved mode — no need to click the selector first.
+        if (d.backend_mode) setBackendMode(d.backend_mode);
+      }
+    } catch (e) { /* non-fatal */ }
+    _renderCloudConnectBtn();
+  }
+
+  async function onCloudConnectClick() {
+    if (_currentBackendMode === 'local') return;  // button hidden anyway
+    if (_cloudConnected) {
+      // Disconnect — immediate, no confirmation. Only flip after the server
+      // confirms the value is persisted (res.ok + returned cloud_api_enabled).
+      try {
+        const res = await fetch('/cloud_api_enabled', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: false })
+        });
+        const d = res.ok ? await res.json().catch(() => null) : null;
+        if (!res.ok || !d || d.cloud_api_enabled !== false) {
+          await refreshCloudConnect();
+          checkOpenAIIndicator(); checkAnthropicIndicator();
+          if (typeof hwuiToast === 'function') hwuiToast('Disconnect failed — server did not confirm', 'error');
+          return;
+        }
+        _cloudConnected = false;
+        _renderCloudConnectBtn();
+        checkOpenAIIndicator(); checkAnthropicIndicator();
+        if (typeof hwuiToast === 'function') hwuiToast('🔒 Disconnected — local only', 'info');
+      } catch (e) {
+        await refreshCloudConnect();
+        if (typeof hwuiToast === 'function') hwuiToast('Disconnect failed', 'error');
+      }
+      return;
+    }
+    // Connect — open the styled confirm modal (POST happens in confirmCloudConnectOK).
+    _openConnectConfirm();
   }
 
   function _setOpenAIModelSelect(savedModel) {
@@ -4008,9 +4290,17 @@ function previewThemeVar(varName, value) {
       _setOpenAIModelSelect(data.openai_model || 'gpt-4o');
       const status = document.getElementById('openai-status');
       if (status) {
-        if (data.backend_mode === 'openai' && data.openai_api_key) {
-          status.textContent = '✅ OpenAI active — ' + (data.openai_model || 'gpt-4o');
+        if (data.backend_mode === 'openai' && data.openai_api_key && data.cloud_api_enabled) {
+          status.textContent = '✅ OpenAI connected — ' + (data.openai_model || 'gpt-4o');
           status.style.color = '#6f6';
+        } else if (data.backend_mode === 'openai' && data.openai_api_key) {
+          // Selected + keyed but NOT connected (cloud master switch off — e.g.
+          // after a Flask restart, which force-resets cloud_api_enabled). Must
+          // NOT read "active": the pill is hidden and chat() refuses cloud until
+          // you click Connect. Kept in lockstep with checkOpenAIIndicator's gate
+          // so the status text and the pill never disagree. (changes.md.)
+          status.textContent = '⚪ OpenAI selected — not connected (click Connect)';
+          status.style.color = '#fa4';
         } else if (data.backend_mode === 'openai') {
           status.textContent = '⚠️ OpenAI mode set but no API key';
           status.style.color = '#fa4';
@@ -4121,9 +4411,14 @@ function previewThemeVar(varName, value) {
       _setAnthropicModelSelect(data.anthropic_model || 'claude-sonnet-4-5');
       const status = document.getElementById('anthropic-status');
       if (status) {
-        if (data.backend_mode === 'anthropic' && data.anthropic_api_key) {
-          status.textContent = '✅ Anthropic active — ' + (data.anthropic_model || 'claude-sonnet-4-5');
+        if (data.backend_mode === 'anthropic' && data.anthropic_api_key && data.cloud_api_enabled) {
+          status.textContent = '✅ Anthropic connected — ' + (data.anthropic_model || 'claude-sonnet-4-5');
           status.style.color = '#6f6';
+        } else if (data.backend_mode === 'anthropic' && data.anthropic_api_key) {
+          // Selected + keyed but NOT connected — same cloud_api_enabled gate as
+          // the pill (see loadOpenAISettings note). (changes.md.)
+          status.textContent = '⚪ Anthropic selected — not connected (click Connect)';
+          status.style.color = '#fa4';
         } else if (data.backend_mode === 'anthropic') {
           status.textContent = '⚠️ Anthropic mode set but no API key';
           status.style.color = '#fa4';
@@ -4175,6 +4470,235 @@ function previewThemeVar(varName, value) {
 
   loadOpenAISettings();
   loadAnthropicSettings();
+  refreshCloudConnect();  // set Connect/Disconnect button to current state
+
+  // Re-sync the Connect/Disconnect button whenever the tab regains
+  // focus/visibility. Without this, restarting Flask while this tab stays open
+  // leaves the button's in-memory _cloudConnected stale (still showing
+  // "Disconnect"), even though startup force-reset cloud_api_enabled=false on
+  // disk — so clicking it would disconnect instead of connect. refreshCloudConnect
+  // only re-reads /cloud_api_enabled and restyles the button/selector (no input
+  // fields touched), so it's safe and cheap to call on return. (changes.md.)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') refreshCloudConnect();
+  });
+  window.addEventListener('focus', refreshCloudConnect);
+</script>
+
+<!-- Model selector logic — ported verbatim from index.html so config behaves
+     identically. Self-contained: only touches model-picker DOM ids + server
+     routes (/get_model, /list_models, /load_model, /save_model_label,
+     /unload_model, /get_openai_settings, /get_anthropic_settings). -->
+<script>
+  async function loadModelDisplay() {
+    const el = document.getElementById('model-display');
+    if (!el) return;
+    try {
+      const res = await fetch('/get_model');
+      const data = await res.json();
+      const name = data.model || 'No model loaded';
+      const label = data.label || name;
+      const noModel = name === 'No model loaded';
+      const nameSpan = document.getElementById('model-display-name');
+      if (nameSpan) { nameSpan.textContent = noModel ? 'No model loaded' : label; nameSpan.style.color = noModel ? '#a05050' : '#ccc'; }
+      const actualEl = document.getElementById('picker-actual-model');
+      if (actualEl) {
+        actualEl.textContent = noModel ? '' : (data.model || '');
+        actualEl.style.display = noModel ? 'none' : 'block';
+      }
+    } catch(e) {
+      const nameSpanE = document.getElementById('model-display-name');
+      if (nameSpanE) { nameSpanE.textContent = '⚠️ Model unknown'; nameSpanE.style.color = '#a05050'; }
+    }
+  }
+
+  async function toggleModelPicker() {
+    const picker = document.getElementById('model-picker');
+    if (picker.style.display !== 'none') { closeModelPicker(); return; }
+    picker.style.display = 'block';
+    const list = document.getElementById('model-picker-list');
+    list.innerHTML = '<div style="padding:12px 14px; color:#666; font-size:12px;">Loading models...</div>';
+    try {
+      const res = await fetch('/list_models');
+      const data = await res.json();
+      if (data.error) { list.innerHTML = `<div style="padding:12px 14px; color:#e88; font-size:12px;">⚠️ ${data.error}</div>`; return; }
+      if (!data.models.length) { list.innerHTML = '<div style="padding:12px 14px; color:#666; font-size:12px;">No .gguf files found in models folder.</div>'; return; }
+      const currentNameEl = document.getElementById('model-display-name');
+      const currentName = currentNameEl ? currentNameEl.textContent.trim() : '';
+      const labels = data.labels || {};
+      list.innerHTML = '';
+      const groups = data.groups || [{ folder: null, models: data.models }];
+      groups.forEach(group => {
+        if (group.folder) {
+          const header = document.createElement('div');
+          header.style.cssText = 'padding:8px 12px 3px 12px; font-size:10px; font-weight:600; letter-spacing:0.8px; text-transform:uppercase; color:#666; margin:0;';
+          header.textContent = group.folder;
+          list.appendChild(header);
+        }
+        group.models.forEach(m => {
+          const fullPath = group.folder ? group.folder + '/' + m : m;
+          const stem = m.replace(/\.gguf$/i, '');
+          const label = labels[m] || stem;
+          const isActive = label === currentName || stem === currentName;
+          const row = document.createElement('div');
+          row.title = stem;
+          row.style.cssText = 'padding:4px 10px 4px ' + (group.folder ? '20px' : '12px') + '; margin:0; font-size:13px; cursor:pointer; color:' + (isActive ? '#6dbf8a' : '#ccc') + '; background:' + (isActive ? 'rgba(40,80,50,0.25)' : 'transparent') + '; display:flex; align-items:center; gap:6px; transition:background 0.12s; line-height:1.4;';
+          const editBtn = document.createElement('button');
+          editBtn.className = 'model-edit-btn';
+          editBtn.title = 'Rename';
+          editBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>';
+          editBtn.style.cssText = 'background:transparent; border:none; color:rgba(255,255,255,0.4); cursor:pointer; padding:0; width:28px; height:28px; border-radius:4px; opacity:0; transition:opacity 0.1s, background 0.1s; flex-shrink:0; line-height:1; margin:0; display:flex; align-items:center; justify-content:center;';
+          editBtn.onmouseover = (e) => { e.stopPropagation(); editBtn.style.color='#fff'; editBtn.style.background='rgba(255,255,255,0.12)'; editBtn.style.opacity='1'; };
+          editBtn.onmouseout  = (e) => { e.stopPropagation(); editBtn.style.color='rgba(255,255,255,0.4)'; editBtn.style.background='transparent'; editBtn.style.opacity='0'; };
+          editBtn.onclick = (e) => { e.stopPropagation(); startModelRename(row, labelSpan, m, label); };
+          row.onmouseover = () => { row.style.background = isActive ? 'rgba(40,80,50,0.35)' : 'var(--sidebar-button-hover, #2D3E4F)'; editBtn.style.opacity = '1'; };
+          row.onmouseout  = () => { row.style.background = isActive ? 'rgba(40,80,50,0.25)' : 'transparent'; editBtn.style.opacity = '0'; };
+          const tick = document.createElement('span');
+          tick.style.cssText = 'width:14px; flex-shrink:0; font-size:11px; color:#6dbf8a;';
+          tick.textContent = isActive ? '✓' : '';
+          const labelSpan = document.createElement('span');
+          labelSpan.textContent = label;
+          labelSpan.style.cssText = 'flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
+          row.onclick = (e) => { if (e.target.closest('.model-edit-btn')) return; loadModel(fullPath); };
+          row.appendChild(tick); row.appendChild(labelSpan); row.appendChild(editBtn);
+          list.appendChild(row);
+        });
+      });
+    } catch(e) {
+      list.innerHTML = `<div style="padding:12px 14px; color:#e88; font-size:12px;">⚠️ Failed to load models: ${e}</div>`;
+    }
+    setTimeout(() => document.addEventListener('click', outsideModelPickerClick), 50);
+  }
+
+  function outsideModelPickerClick(e) {
+    const picker = document.getElementById('model-picker');
+    const display = document.getElementById('model-display');
+    if (picker && !picker.contains(e.target) && e.target !== display) closeModelPicker();
+  }
+
+  function closeModelPicker() {
+    const picker = document.getElementById('model-picker');
+    if (picker) picker.style.display = 'none';
+    document.removeEventListener('click', outsideModelPickerClick);
+  }
+
+  function startModelRename(row, labelSpan, filename, currentLabel) {
+    if (row.querySelector('.model-rename-input')) return;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = currentLabel;
+    input.className = 'model-rename-input';
+    input.style.cssText = 'flex: 1; background: var(--field-bg, #111); border: 1px solid var(--field-border, #444); border-radius: 4px; color: #eee; font-size: 13px; padding: 2px 7px; outline: none; min-width: 0;';
+    input.onclick = (e) => e.stopPropagation();
+    labelSpan.replaceWith(input);
+    input.focus(); input.select();
+    let saved = false;
+    const save = async () => {
+      if (saved) return;
+      saved = true;
+      const newLabel = input.value.trim();
+      input.replaceWith(labelSpan);
+      if (!newLabel || newLabel === currentLabel) return;
+      labelSpan.textContent = newLabel;
+      try {
+        await fetch('/save_model_label', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ filename, label: newLabel }) });
+        const nameSpan = document.getElementById('model-display-name');
+        if (nameSpan && (nameSpan.textContent === currentLabel)) nameSpan.textContent = newLabel;
+      } catch(e) { console.error('Failed to save model label:', e); }
+    };
+    input.addEventListener('blur', save);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') input.blur();
+      if (e.key === 'Escape') { saved = true; input.replaceWith(labelSpan); }
+    });
+  }
+
+  async function loadModel(filename) {
+    const status = document.getElementById('model-picker-status');
+    const list = document.getElementById('model-picker-list');
+    status.style.display = 'block';
+    status.textContent = `⏳ Loading ${filename.replace(/\.gguf$/i,'')}...`;
+    list.style.opacity = '0.4';
+    list.style.pointerEvents = 'none';
+    const nameSpanL = document.getElementById('model-display-name');
+    if (nameSpanL) { nameSpanL.textContent = 'Loading...'; nameSpanL.style.color = '#8ab4d4'; }
+    try {
+      const res = await fetch('/load_model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: filename }) });
+      const data = await res.json();
+      if (data.status === 'ok') {
+        localStorage.setItem('llama_last_model', filename);
+        status.textContent = `✅ Loaded: ${data.model}`;
+        list.style.opacity = '1'; list.style.pointerEvents = 'all';
+        await loadModelDisplay();
+        setTimeout(() => closeModelPicker(), 1200);
+      } else {
+        status.style.color = '#e88';
+        status.textContent = `❌ ${data.error}`;
+        const nameSpanF = document.getElementById('model-display-name');
+        if (nameSpanF) { nameSpanF.textContent = 'Load failed'; nameSpanF.style.color = '#a05050'; }
+        list.style.opacity = '1'; list.style.pointerEvents = 'all';
+      }
+    } catch(e) {
+      status.style.color = '#e88';
+      status.textContent = `❌ Request failed: ${e}`;
+      list.style.opacity = '1'; list.style.pointerEvents = 'all';
+    }
+  }
+
+  async function unloadModel() {
+    const status = document.getElementById('model-picker-status');
+    status.style.display = 'block';
+    status.style.color = '#8ab4d4';
+    status.textContent = '⏳ Unloading...';
+    try {
+      await fetch('/unload_model', { method: 'POST' });
+      const nameSpanU = document.getElementById('model-display-name');
+      if (nameSpanU) { nameSpanU.textContent = 'No model loaded'; nameSpanU.style.color = '#a05050'; }
+      const actualElU = document.getElementById('picker-actual-model');
+      if (actualElU) { actualElU.textContent = ''; actualElU.style.display = 'none'; }
+      status.textContent = '✅ Unloaded';
+      setTimeout(() => closeModelPicker(), 1000);
+    } catch(e) { status.textContent = `❌ Failed: ${e}`; }
+  }
+
+  async function checkOpenAIIndicator() {
+    try {
+      const res = await fetch('/get_openai_settings');
+      const data = await res.json();
+      const dot = document.getElementById('openai-indicator');
+      if (!dot) return;
+      // Gate on cloud_api_enabled (CONNECTION state) — identical condition to
+      // index.html's pill, so the two never disagree. (changes.md.)
+      if (data.backend_mode === 'openai' && data.openai_api_key && data.cloud_api_enabled) {
+        dot.style.display = 'flex';
+        dot.title = 'Connected to OpenAI — ' + (data.openai_model || 'gpt-4o');
+        const modelSpan = document.getElementById('openai-indicator-model');
+        if (modelSpan) modelSpan.textContent = data.openai_model || 'gpt-4o';
+      } else { dot.style.display = 'none'; }
+    } catch(e) {}
+  }
+
+  async function checkAnthropicIndicator() {
+    try {
+      const res = await fetch('/get_anthropic_settings');
+      const data = await res.json();
+      const dot = document.getElementById('anthropic-indicator');
+      if (!dot) return;
+      // Gate on cloud_api_enabled (CONNECTION state) — identical condition to
+      // index.html's pill, so the two never disagree. (changes.md.)
+      if (data.backend_mode === 'anthropic' && data.anthropic_api_key && data.cloud_api_enabled) {
+        dot.style.display = 'flex';
+        dot.title = 'Connected to Anthropic — ' + (data.anthropic_model || 'claude');
+        const modelSpan = document.getElementById('anthropic-indicator-model');
+        if (modelSpan) modelSpan.textContent = data.anthropic_model || 'claude';
+      } else { dot.style.display = 'none'; }
+    } catch(e) {}
+  }
+
+  // Init on load (fire-and-forget, non-critical).
+  loadModelDisplay();
+  checkOpenAIIndicator();
+  checkAnthropicIndicator();
 </script>
 </body>
 </html>

@@ -14,12 +14,15 @@ import re as _re
 TRANSCRIPT_FIXES = [
     # Helcyon — fuzzy phonetic catch-all (covers the vast majority of Whisper variants)
     # Matches hel/hil/heel/hul + any middle consonants + sibilant/c/th + ion/ian/in/on/an endings
-    (r'\bh(?:el|il|eel|ul)[a-z]*?(?:sh?|c|th?)[iy]?(?:on|an|en|in|ion|yan)\b', 'Helcyon'),
+    # Fuzzy catch-all — also handles possessive (Helcyon's, helcion's etc.)
+    (r'\bh(?:el|il|eel|ul)[a-z]*?(?:sh?|c|th?)[iy]?(?:on|an|en|in|ion|yan)(?:\'s)?\b',
+     lambda m: "Helcyon's" if m.group(0).endswith("'s") or m.group(0).endswith("'S") else 'Helcyon'),
     # Outliers too phonetically distant for the fuzzy pattern
     (r'\bhouse\s*shun\b', 'Helcyon'),
     (r'\bhoseon\b', 'Helcyon'),
     (r'\bheathsin\b', 'Helcyon'),
-    (r'\bhelsy\s*and\b', 'Helcyon'),
+    (r"\bHelsing's\b", "Helcyon's"),  # Whisper hears Helcyon's as Helsing's
+    (r'\bhelsy\s*(?:and|on)\b', 'Helcyon'),
     (r'\bhealthy\s*and\b', 'Helcyon'),
     (r'\bhealthy\s*on\b', 'Helcyon'),
     # Helcyon WebUI — combined pattern must come BEFORE the standalone Helcyon pattern

@@ -17,7 +17,12 @@ SYSTEM_BUFFER      = 200    # small safety margin for ChatML overhead tokens
 # this threshold eliminates the cutoff. llama.cpp still runs with full ctx_size
 # for KV cache headroom — this only governs how much history HWUI sends.
 # DO NOT raise above 8500 without retesting long conversations first.
-MAX_PROMPT_TOKENS  = 12000
+# ⚠️ DO NOT REVERT to 12000 (or any value ≥ ~10000): Mistral Nemo emits EOS
+# mid-response once tokens_evaluated approaches the ~10,000-10,500 cliff, which
+# surfaces as the model cutting off mid-word/mid-number in long chats. 8500 is
+# the documented safe ceiling — it keeps the real prompt comfortably below the
+# cliff after TOKEN_FUDGE. Raising it re-opens the mid-response truncation bug.
+MAX_PROMPT_TOKENS  = 8500
 TOKEN_FUDGE        = 1.4    # rough_token_count undercounts BPE by ~35-40% on
                             # emoji/separator/ChatML-heavy prompts (measured:
                             # 35516-char prompt → rough=7245, real=~10000 →

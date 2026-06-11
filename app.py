@@ -1,12 +1,130 @@
 from flask import Flask, request, jsonify, send_from_directory, render_template, Response
 from flask_cors import CORS
-import requests, os, json, re, hashlib, time, subprocess
+import requests, os, json, re, hashlib, time, subprocess, sys
 import psutil
 from datetime import datetime, timedelta
 from truncation import trim_chat_history, rough_token_count
 from tts_routes import tts_bp
 from utils.session_handler import get_system_prompt, get_instruction_layer, get_tone_primer
 from whisper_routes import whisper_bp
+
+# ============================================================================
+# Persistent rotating console logs  (added 2026-06-04)
+# ----------------------------------------------------------------------------
+# The app runs inside an Electron wrapper where the live Flask console isn't
+# visible. To capture everything the existing bare print() calls emit WITHOUT
+# rewriting a single print statement, sys.stdout / sys.stderr are tee'd: every
+# write still goes to the real console (StreamHandler-equivalent) AND is
+# mirrored, line by line, into rotating logfiles under logs/.
+#
+#   logs/hwui_full.log    — everything (RotatingFileHandler, ~10 MB x 5 backups)
+#   logs/stop_reasons.log — only the 🩺/⏱️/⚠️ stop-reason lines, append-forever
+#
+# CRITICAL: every handler is encoding='utf-8' so the emoji markers (🩺 🔬 🧼 🚀)
+# don't raise UnicodeEncodeError under Windows' default cp1252 console codec.
+import logging
+from logging.handlers import RotatingFileHandler
+import threading
+
+_LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+os.makedirs(_LOG_DIR, exist_ok=True)
+
+# Full rotating log — faithful mirror of the console (no added prefix).
+_hwui_full_logger = logging.getLogger("hwui.full")
+_hwui_full_logger.setLevel(logging.INFO)
+_hwui_full_logger.propagate = False
+_full_handler = RotatingFileHandler(
+    os.path.join(_LOG_DIR, "hwui_full.log"),
+    maxBytes=10 * 1024 * 1024,   # ~10 MB per file
+    backupCount=5,               # keep last 5 backups
+    encoding="utf-8",
+)
+_full_handler.setFormatter(logging.Formatter("%(message)s"))
+_hwui_full_logger.addHandler(_full_handler)
+
+# Stop-reason log — tiny lines, append forever (no rotation), timestamp prefix.
+_hwui_stop_logger = logging.getLogger("hwui.stop")
+_hwui_stop_logger.setLevel(logging.INFO)
+_hwui_stop_logger.propagate = False
+_stop_handler = logging.FileHandler(
+    os.path.join(_LOG_DIR, "stop_reasons.log"),
+    encoding="utf-8",
+)
+_stop_handler.setFormatter(logging.Formatter("%(asctime)s  %(message)s"))
+_hwui_stop_logger.addHandler(_stop_handler)
+
+# Lines routed to the dedicated stop-reason log (substring match, emoji-safe).
+_STOP_MARKERS = ("🩺 STOP REASON", "⏱️ TEMP STOP", "PREMATURE EOS")
+
+
+class _TeeStream:
+    """Wrap a console stream so every write is mirrored into the rotating full
+    log, with stop-reason marker lines also copied to stop_reasons.log. The
+    original stream is left fully functional, so existing print() calls keep
+    showing on the console exactly as before."""
+
+    def __init__(self, stream):
+        self._stream = stream
+        self._buf = ""
+        self._lock = threading.Lock()
+
+    def write(self, data):
+        with self._lock:
+            # Mirror to the rotating/stop logs FIRST so a console that can't
+            # render an emoji (e.g. a cp1252 pipe) never costs us the logfile
+            # copy — the UTF-8 file handlers always get the real characters.
+            self._buf += data
+            while "\n" in self._buf:
+                line, self._buf = self._buf.split("\n", 1)
+                self._emit(line)
+            # Then write to the real console. Tolerate a narrow console codec
+            # so an un-encodable emoji can never take the app down.
+            if self._stream is not None:
+                try:
+                    self._stream.write(data)
+                except UnicodeEncodeError:
+                    try:
+                        enc = getattr(self._stream, "encoding", None) or "utf-8"
+                        self._stream.write(data.encode(enc, "replace").decode(enc))
+                    except Exception:
+                        pass
+        return len(data)
+
+    def _emit(self, line):
+        if not line:
+            return
+        try:
+            _hwui_full_logger.info(line)
+            if any(m in line for m in _STOP_MARKERS):
+                _hwui_stop_logger.info(line)
+        except Exception:
+            # Logging must never take the request thread down.
+            pass
+
+    def flush(self):
+        if self._stream is not None:
+            self._stream.flush()
+
+    def __getattr__(self, name):
+        # Delegate isatty(), encoding, fileno(), etc. to the real stream.
+        return getattr(self._stream, name)
+
+
+# Best-effort: make the underlying console UTF-8 too, so the live output can
+# render the emoji markers instead of falling back to replacement chars. Safe
+# no-op on streams that don't support reconfigure() (e.g. a plain pipe).
+for _std in (sys.stdout, sys.stderr):
+    try:
+        _std.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+# Install the tee. Guarded against a None stream (e.g. a windowed pythonw host).
+if sys.stdout is not None:
+    sys.stdout = _TeeStream(sys.stdout)
+if sys.stderr is not None:
+    sys.stderr = _TeeStream(sys.stderr)
+# ============================================================================
 
 print(f"💡 Flask is using: {os.path.abspath(__file__)}")
 
@@ -79,9 +197,32 @@ def serve_utils(filename):
 from extra_routes import extra
 from chat_routes import chat_bp
 from project_routes import project_bp
+from theme_routes import theme_bp
+from sampling_routes import sampling_bp
+from system_prompt_routes import sysprompt_bp
+from situation_routes import situation_bp
+from user_routes import user_bp
+from character_routes import character_bp
+from cloud_api_routes import cloud_api_bp
+# get_openai_base_url + get_anthropic_base_url live in cloud_api_routes but are
+# called directly by chat()/continue in this module — import them back.
+from cloud_api_routes import get_openai_base_url, get_anthropic_base_url
+# These system-prompt helpers live in system_prompt_routes but are also called
+# directly by chat()/continue and other routes in this module — import them back.
+from system_prompt_routes import (
+    get_system_prompts_dir, get_active_prompt_filename,
+    set_active_prompt_filename, resolve_character_prompt_files,
+)
 app.register_blueprint(extra)
 app.register_blueprint(chat_bp)
 app.register_blueprint(project_bp)
+app.register_blueprint(theme_bp)
+app.register_blueprint(sampling_bp)
+app.register_blueprint(sysprompt_bp)
+app.register_blueprint(situation_bp)
+app.register_blueprint(user_bp)
+app.register_blueprint(character_bp)
+app.register_blueprint(cloud_api_bp)
 app.register_blueprint(tts_bp, url_prefix='/api/tts')
 app.register_blueprint(whisper_bp)
 
@@ -641,6 +782,37 @@ with open('settings.json', 'r') as f:
         print("    in settings.json unless you know what you're doing.", flush=True)
         print("!" * 70 + "\n", flush=True)
 
+# ── Startup safety: force cloud OFF and backend_mode → local on every launch ─
+# The cloud master switch must never persist across restarts. A crash or
+# force-quit while connected must NOT leave cloud (paid, external) API enabled
+# on the next launch — so actively reset it to false here on EVERY Flask start,
+# not just as a default. Re-enable is an explicit action via the chat page's
+# Connect button. (changes.md.)
+#
+# backend_mode is reset to 'local' for the same reason: if the previous session
+# was on a cloud backend (openai/anthropic), that selection would survive the
+# restart while cloud_api_enabled (above) is forced false — so the first message
+# hits the cloud master gate and returns "Local backend unavailable / Cloud API
+# disabled" even though llama.cpp is running. A fresh launch must always start on
+# the local model; switching back to cloud is an explicit Connect action.
+try:
+    _cae_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.json')
+    with open(_cae_path, 'r', encoding='utf-8') as _caef:
+        _cae = json.load(_caef)
+    _cae_was = _cae.get('cloud_api_enabled', False)
+    _bm_was = _cae.get('backend_mode', 'local')
+    _cae['cloud_api_enabled'] = False
+    _cae['backend_mode'] = 'local'
+    import tempfile as _caetmp, shutil as _caesh
+    _cae_tmpf = _cae_path + '.tmp'
+    with open(_cae_tmpf, 'w', encoding='utf-8') as _caef2:
+        json.dump(_cae, _caef2, indent=2)
+    _caesh.move(_cae_tmpf, _cae_path)
+    print(f"🔒 Startup: cloud_api_enabled forced to false (was {_cae_was}), "
+          f"backend_mode reset to 'local' (was {_bm_was!r}).", flush=True)
+except Exception as _caee:
+    print(f"⚠️ Startup cloud/backend reset failed: {_caee!r}", flush=True)
+
 def real_token_count(text):
     """Exact BPE token count via llama-server's /tokenize endpoint.
 
@@ -697,6 +869,18 @@ def neutralize_chatml_tokens(text):
 
 CURRENT_MODEL = None
 
+# ── Live token monitor ────────────────────────────────────────────────────
+# Snapshot of the LAST local-model turn's token budget, surfaced to the index
+# page via GET /token_stats and drawn by the on-screen "TOKEN MONITOR" readout.
+# Two writers, both on the raw (local llama.cpp) path:
+#   • prompt-side fields written in chat() right after the n_predict budget calc
+#     (exact /tokenize count, ctx, n_predict, history kept/dropped, model);
+#   • reply-side fields written in stream_model_response() at end-of-stream
+#     (tokens_predicted / tokens_evaluated / stop reason from the final SSE event).
+# Plain module global — single-process dev server, read-mostly, last-writer-wins
+# is fine (we only ever want the most recent turn).
+_LAST_TOKEN_STATS = {}
+
 print("--------------------------------------------------")
 print("🚀 Helcyon UI Flask Server Starting...")
 print("--------------------------------------------------\n")
@@ -736,6 +920,7 @@ def auto_launch_llama():
         models_dir = s.get('llama_models_dir', '')
         args = s.get('llama_args', {})
         mmproj_path = s.get('mmproj_path', '')
+        lora_path = s.get('lora_path', '')
         if not last_model or not exe or not models_dir:
             print("⚠️ No last model or llama config set — skipping auto-launch. Set paths in config page.")
             return
@@ -758,12 +943,26 @@ def auto_launch_llama():
             "--timeout", str(args.get("timeout", 0)),
             "--parallel", str(args.get("parallel", 1)),
         ]
+        # Flash attention — this build takes a value: --flash-attn [on|off|auto].
+        # Enable only when flash_attn is truthy in llama_args; absent/false/"off"
+        # → omit (preserves prior behaviour). Quantized KV cache (cache_type_v)
+        # depends on this. ⚠️ DO NOT revert. (See CHANGES.md.)
+        _fa = args.get("flash_attn", False)
+        _fa = "on" if _fa is True else str(_fa).strip().lower()
+        if _fa in ("on", "auto", "true", "1"):
+            cmd += ["--flash-attn", "auto" if _fa == "auto" else "on"]
         if _startup_template not in ('jinja', 'qwen', ''):
             cmd += ["--chat-template", _startup_template]
 
         if mmproj_path and os.path.isfile(mmproj_path):
             cmd += ["--mmproj", mmproj_path]
             print(f"🖼️ Vision mode: mmproj loaded from {mmproj_path}")
+        # LoRA adapter — applied only at launch. This build's /lora-adapters
+        # endpoint can re-scale launch-loaded adapters but cannot load a new one
+        # by path at runtime, so the adapter must be passed here via --lora.
+        if lora_path and os.path.isfile(lora_path):
+            cmd += ["--lora", lora_path]
+            print(f"🧬 LoRA adapter loaded from {lora_path}")
         show_console = s.get('llama_show_console', False)
         llama_process = subprocess.Popen(
             cmd,
@@ -812,7 +1011,6 @@ from flask import stream_with_context
 import requests, sys
 
 
-
 from flask import stream_with_context
 import requests, sys
 
@@ -852,6 +1050,23 @@ def get_stop_tokens():
         return ["<|im_end|>", "<|im_start|>"]
 
 
+# Hard ban on the Tekken reserved special-token dead zone. Ids 14–999 ALL
+# detokenize to <SPECIAL_14>..<SPECIAL_999> — reserved, untrained control
+# tokens (verified id-by-id via a /detokenize sweep of ids 0–1099, Jun 10
+# 2026; ids 0–13 are the named specials <unk>/<s>/</s>/[INST]/…/<pad>/FIM,
+# ids 1000+ are real byte/text vocab). The model sometimes samples these at
+# stop-points: full-context repeat_penalty + DRY penalize every text token
+# already used, the never-in-context specials get a relative boost past
+# min_p, and the result is an empty-decoding garbage tail with
+# stop_type=None. Python False → JSON false → -inf in llama.cpp b8994
+# (server-task.cpp:362–419), i.e. a true hard ban. Id 2 (</s> EOS) is NOT
+# in the range (it starts at 14), so EOS stays sampleable; <|im_end|> /
+# <|im_start|> are plain strings (not vocab ids), so stop-string matching
+# is unaffected. ⚠️ DO NOT revert — reopens the <SPECIAL_*> garbage-tail
+# bug (see CHANGES.md, Jun 10 2026).
+RESERVED_SPECIAL_BAN = [[i, False] for i in range(14, 1000)]
+
+
 def strip_chatml_leakage(text):
     """Remove any leaked or partial ChatML stop tokens from generated text."""
     import re
@@ -877,6 +1092,18 @@ def strip_chatml_leakage(text):
     text = re.sub(r"(?<![<|])_start\|?\w*", "", text)
     # Bare "end|>" fragment — left behind when "<|im_" was stripped from previous chunk
     text = re.sub(r"\bend\|?>", "", text)
+    # Orphan boundary fragment from a cross-chunk <|im_end|> split: the "<|im_end"
+    # head is stripped (this chunk or the previous one), and the "|>" tail arrives
+    # as its OWN chunk that matches no other rule — it would otherwise pass through
+    # _filtered_stream and leak to the UI verbatim after an otherwise-complete reply.
+    # Drop it ONLY when the bare fragment is the ENTIRE (whitespace-trimmed) chunk,
+    # so "|>" embedded in real text or code is never touched. A lone "|" or ">"
+    # chunk is deliberately NOT stripped — far more likely legitimate content
+    # (markdown table separator, blockquote, operator); the _tail backstop in
+    # _filtered_stream catches those boundary-split cases instead.
+    # ⚠️ DO NOT revert — see CHANGES.md (|> trailing-fragment streaming fix).
+    if text.strip() == "|>":
+        text = ""
     # ">user" / ">assistant" — left when "<|im_start|>" stripped, leaving ">user\n"
     # Strip role header tokens only — NOT [\s\S]*$ which wipes real content mid-chunk
     # ⚠️ These run per-chunk on a live stream. [\s\S]*$ on a chunk like "\nassistant\nHello"
@@ -1144,34 +1371,35 @@ def _search_intent_gate(user_msg):
     (False, "") — because the problem being solved is false-positive searches,
     so a missed gate should suppress rather than search.
     """
-    _instructions = (
-        "You are a routing classifier for a chat assistant. You are shown one "
-        "message the user sent. Decide whether answering it well genuinely "
-        "needs a live web search RIGHT NOW.\n\n"
-        "Answer SEARCH only if the message asks for factual, external, or "
-        "current information — news, prices, dates, statistics, events, "
-        "product/person/place facts, how-to steps — or explicitly asks to "
-        "search the web.\n"
-        "Answer NO_SEARCH for everything else: feelings, personal or emotional "
-        "talk, reminiscing about the past, opinions, roleplay, small talk, or "
-        "anything about the user's own life that the web cannot answer.\n\n"
-        "Reply with EXACTLY one line and nothing else:\n"
-        "NO_SEARCH\n"
-        "or\n"
-        "SEARCH: <query>\n"
-        "where <query> is a concise web query of a few plain keywords — the "
-        "topic only, with no verbs like 'search' or 'find out'."
-    )
     try:
         r = requests.post(
             f"{API_URL}/v1/chat/completions",
             json={
                 "messages": [
-                    {"role": "system", "content": _instructions},
+                    {"role": "system", "content":
+                        "You are a routing classifier. You receive ONE user message and you reply with EXACTLY one line. "
+                        "Never answer the question. Never have a conversation. Only classify. "
+                        "Reply NO_SEARCH, or SEARCH: <short keyword query>."},
+                    {"role": "user", "content": "How are you doing today?"},
+                    {"role": "assistant", "content": "NO_SEARCH"},
+                    {"role": "user", "content": "What's the current bitcoin price?"},
+                    {"role": "assistant", "content": "SEARCH: bitcoin price today"},
+                    {"role": "user", "content": "I'm feeling really down today."},
+                    {"role": "assistant", "content": "NO_SEARCH"},
+                    {"role": "user", "content": "What's the name of that medication people take for high cholesterol?"},
+                    {"role": "assistant", "content": "SEARCH: medication for high cholesterol"},
+                    {"role": "user", "content": "How does photosynthesis work?"},
+                    {"role": "assistant", "content": "NO_SEARCH"},
+                    {"role": "user", "content": "Who won the F1 race yesterday?"},
+                    {"role": "assistant", "content": "SEARCH: F1 race result yesterday"},
+                    {"role": "user", "content": "What's the best way to feel grateful?"},
+                    {"role": "assistant", "content": "NO_SEARCH"},
+                    {"role": "user", "content": "What's that nice BBQ sauce served with Hunters Chicken?"},
+                    {"role": "assistant", "content": "SEARCH: Hunters Chicken BBQ sauce"},
                     {"role": "user", "content": (user_msg or "")[:2000]},
                 ],
                 "temperature": 0,
-                "max_tokens": 32,
+                "max_tokens": 16,
                 "stream": False,
             },
             timeout=20,
@@ -1383,59 +1611,9 @@ def get_brave_api_key():
         return ""
 
 
-def get_openai_base_url():
-    """Read the OpenAI-compatible base URL from settings.json.
-
-    The OpenAI path is now a generic OpenAI-compatible client — it can hit any
-    provider that speaks /v1/chat/completions (Anthropic, xAI/Grok, OpenRouter,
-    Together, Groq, Mistral, Fireworks, LM Studio, vLLM, …) by setting
-    openai_base_url to e.g. https://api.anthropic.com/v1 or
-    https://openrouter.ai/api/v1.
-
-    Returns the URL up to but NOT including /chat/completions. Falls back to
-    https://api.openai.com/v1 on any of:
-      - field missing from settings.json (older configs)
-      - field present but empty / whitespace
-      - settings.json unreadable / not valid JSON
-
-    Trailing slash is stripped so callers can always append /chat/completions
-    or /models without worrying about doubled slashes.
-
-    ⚠️ Any code that hits an OpenAI-style API MUST go through this helper.
-    Do not reintroduce hardcoded references to api.openai.com — that would
-    silently break every non-OpenAI provider.
-    """
-    _default = "https://api.openai.com/v1"
-    try:
-        with open("settings.json", "r", encoding="utf-8") as f:
-            s = json.load(f)
-        url = (s.get("openai_base_url", "") or "").strip().rstrip("/")
-        return url if url else _default
-    except Exception:
-        return _default
-
-
-def get_anthropic_base_url():
-    """Read the Anthropic base URL from settings.json.
-
-    Unlike get_openai_base_url(), this path speaks Anthropic's NATIVE Messages
-    wire format (x-api-key header, /messages endpoint, top-level `system`, SSE
-    `content_block_delta` events) — it is NOT OpenAI-compatible. Point this at a
-    real Anthropic-format endpoint only (api.anthropic.com or a self-hosted
-    Anthropic-compatible proxy), never an OpenAI-style gateway.
-
-    Returns the URL up to but NOT including /messages (callers append /messages
-    or /models). Trailing slash stripped. Falls back to https://api.anthropic.com/v1
-    when the field is missing/empty or settings.json is unreadable.
-    """
-    _default = "https://api.anthropic.com/v1"
-    try:
-        with open("settings.json", "r", encoding="utf-8") as f:
-            s = json.load(f)
-        url = (s.get("anthropic_base_url", "") or "").strip().rstrip("/")
-        return url if url else _default
-    except Exception:
-        return _default
+# get_openai_base_url() + get_anthropic_base_url() moved to cloud_api_routes.py
+# (alongside the cloud-API settings routes) and imported back at the top of this
+# module — chat()/continue still call them directly.
 
 
 def do_search(query):
@@ -1448,6 +1626,7 @@ def do_search(query):
         print(f"🔍 Using Brave Search for: {query}", flush=True)
         return do_brave_search(query, brave_key)
     else:
+        print("⚠️ No Brave API key configured — falling back to DDG Instant Answer (limited results). Set brave_api_key in settings.json.", flush=True)
         print(f"🔍 Using DDG (no Brave key configured) for: {query}", flush=True)
         return do_web_search(query)
 
@@ -1589,10 +1768,23 @@ _CHAT_SEARCH_VERBS = (
     r'search\s+for|'
     r'find\s+(?:that|the|our|a|me)\s+(?:chat|conversation|message|thread|session)|'
     r'find\s+(?:where|when)\s+(?:we|i|you)|'
-    r'look\s+(?:up|for|through)|'
-    r'dig\s+(?:up|through|out)|'
-    r'(?:i\'?m\s+)?trying\s+to\s+find|'
-    r'(?:can\s+you\s+)?locate|'
+    # ── look / dig / locate: anchored to a chat-object noun (June-6 fix) ──
+    # These three verbs were UNANCHORED — `look for it`, `dig up the garden`,
+    # `locate my keys` all fired a chat search even with no reference to past
+    # conversation (the "look for it" false positive). Anchored here exactly
+    # like the June-3 `trying to find` branch: the same
+    # `(?:that|the|our|a|my)?\s*(?:chat|conversation|…)` noun tail must follow,
+    # with a bounded run of intervening words allowed so a delayed noun still
+    # matches ("dig up what we discussed in our chat"). ⚠️ DO NOT revert these
+    # to the bare verb — it reopens the "look for it" false positive. (changes.md.)
+    r'look\s+(?:up|for|through)\s+(?:\w+\s+){0,6}?(?:that|the|our|a|my)?\s*'
+    r'(?:chat|conversation|message|thread|session|history|logs?)|'
+    r'dig\s+(?:up|through|out)\s+(?:\w+\s+){0,6}?(?:that|the|our|a|my)?\s*'
+    r'(?:chat|conversation|message|thread|session|history|logs?)|'
+    r'(?:i\'?m\s+)?trying\s+to\s+find\s+(?:that|the|our|a|my)?\s*'
+    r'(?:chat|conversation|message|thread|session|history|logs?)|'
+    r'(?:can\s+you\s+)?locate\s+(?:\w+\s+){0,6}?(?:that|the|our|a|my)?\s*'
+    r'(?:chat|conversation|message|thread|session|history|logs?)|'
     r'go\s+back\s+(?:and\s+)?(?:find|check|look)|'
     r'pull\s+up\s+(?:that|the|our)|'
     r'check\s+(?:our\s+)?(?:chats?|history|logs?))'
@@ -1838,6 +2030,16 @@ def stream_model_response(payload):
     # fired" from "ran out of context". ⚠️ DO NOT remove — load-bearing for
     # debugging Helcyon mid-sentence cutoffs in long conversations.
     last_event = {}
+    # 🩺 RAW TOKEN-ID TRAIL — diagnostic only (no behaviour change). This
+    # build (b8994) ships a per-event `tokens` array (the raw sampled token
+    # id[s] for that step) alongside the decoded `content`. We keep the last
+    # ~12 (id, raw-content) pairs so that when a stream ends with stop_type
+    # =None (the "unknown" branch below) we can see EXACTLY what the model
+    # emitted at the tail — whether it fired EOS id 2 (</s>), <|im_end|>
+    # string pieces, or trailing garbage tokens (the "..inside" + junk case).
+    # Pairing the id with that event's own decoded content is exact and free
+    # (one event == one token in stream mode) — no /detokenize round-trip.
+    _recent_tok_trail = []
 
     for line in response.iter_lines(chunk_size=1):
         # Check abort flag
@@ -1862,6 +2064,12 @@ def stream_model_response(payload):
             # ship these on intermediate events with stop=False (no-op).
             if j.get("stop") is True or "stopped_eos" in j or "tokens_predicted" in j:
                 last_event = j
+            # 🩺 diagnostic: record raw (token-id[s], raw decoded content) for
+            # this event before any stripping, keeping only the last 12.
+            if "tokens" in j or "content" in j:
+                _recent_tok_trail.append((j.get("tokens"), j.get("content", "")))
+                if len(_recent_tok_trail) > 12:
+                    del _recent_tok_trail[0]
             chunk = strip_chatml_leakage(j.get("content", ""))
             total_chunks += 1
 
@@ -1878,6 +2086,7 @@ def stream_model_response(payload):
     print(f"\n🎯 DONE: {total_chunks} chunks, {len(''.join(all_text))} chars total", flush=True)
     # 🩺 Log llama.cpp's stop reason — load-bearing diagnostic for cutoffs.
     if last_event:
+        _stop_type   = last_event.get("stop_type", None)
         _stop_eos    = last_event.get("stopped_eos", False)
         _stop_word   = last_event.get("stopped_word", False)
         _stop_limit  = last_event.get("stopped_limit", False)
@@ -1885,6 +2094,18 @@ def stream_model_response(payload):
         _tok_pred    = last_event.get("tokens_predicted", "?")
         _tok_eval    = last_event.get("tokens_evaluated", "?")
         _truncated   = last_event.get("truncated", False)
+        # This llama.cpp build (b8994) reports the stop reason as a STRING
+        # `stop_type` ("eos"/"word"/"limit"/"none") and does NOT emit the legacy
+        # boolean stopped_* flags — so reading the booleans alone mislabelled
+        # every clean stop as "unknown". Read stop_type first and fold it into
+        # the boolean view; fall back to the booleans for older builds. A
+        # genuinely cancelled/preempted stream still lands as "none"/absent →
+        # stays "unknown" and dumps the full event below (the signal we want).
+        if isinstance(_stop_type, str) and _stop_type:
+            _st = _stop_type.lower()
+            _stop_eos   = _stop_eos   or _st == "eos"
+            _stop_word  = _stop_word  or _st == "word"
+            _stop_limit = _stop_limit or _st == "limit"
         # Pick the dominant reason for a single human-readable line
         if _stop_eos:
             _reason = "EOS (model emitted end-of-stream token)"
@@ -1893,11 +2114,30 @@ def stream_model_response(payload):
         elif _stop_limit:
             _reason = "n_predict LIMIT reached"
         else:
-            _reason = "unknown (no stopped_* flag in final event)"
+            _reason = f"unknown (stop_type={_stop_type!r}, no stopped_* flag)"
         print(
             f"🩺 STOP REASON: {_reason} | "
             f"tokens_predicted={_tok_pred} tokens_evaluated={_tok_eval} "
             f"truncated={_truncated}",
+            flush=True,
+        )
+        # Live token monitor — reply-side snapshot (see _LAST_TOKEN_STATS).
+        # tokens_evaluated is the server's own count of prompt tokens it
+        # processed; we keep it alongside our /tokenize estimate as a
+        # cross-check. Best-effort: never let monitor bookkeeping break a stream.
+        try:
+            _LAST_TOKEN_STATS["last_gen"] = _tok_pred if isinstance(_tok_pred, int) else None
+            _LAST_TOKEN_STATS["last_eval"] = _tok_eval if isinstance(_tok_eval, int) else None
+            _LAST_TOKEN_STATS["stop_reason"] = _reason
+        except Exception:
+            pass
+        # ⏱️ TEMP DIAGNOSTIC (remove after EOS-cliff/Continue verification) —
+        # echo the resolved stop_type tagged "⏱️ TEMP" so it correlates per-turn
+        # with the "⏱️ TEMP /chat BUDGET" line emitted at prompt assembly.
+        # truncated=True or stop_type "eos" at high tokens_evaluated == EOS cliff.
+        print(
+            f"⏱️ TEMP STOP: stop_type={_stop_type!r} resolved={_reason!r} "
+            f"tokens_predicted={_tok_pred} tokens_evaluated={_tok_eval} truncated={_truncated}",
             flush=True,
         )
         # When the stop reason is unknown, dump the full final event so we can
@@ -1912,6 +2152,16 @@ def stream_model_response(payload):
                 if k not in ("content", "generation_settings", "prompt")
             }
             print(f"🩺 FINAL EVENT (full): {json.dumps(_safe_event, default=str)[:1500]}", flush=True)
+            # 🩺 RAW TAIL DUMP — only on the unknown/stop_type=None branch.
+            # Shows the last ~12 raw token ids + their decoded pieces so we can
+            # tell whether the tail garbage came with an EOS (id 2 = </s>),
+            # <|im_end|> string fragments, or neither (model just ran on into
+            # foreign-script junk with no stop signal). No behaviour change —
+            # logging only. ⚠️ DO NOT remove until the trailing-junk cutoff is
+            # root-caused.
+            print("🩺 RAW TAIL (last ≤12 events — token_id(s) :: decoded):", flush=True)
+            for _ids, _raw in _recent_tok_trail:
+                print(f"     {_ids!r:>14} :: {_raw!r}", flush=True)
         # Flag the specific failure mode this diagnostic was added to catch:
         # model emits EOS after only a handful of tokens in a long conversation.
         if _stop_eos and isinstance(_tok_pred, int) and _tok_pred < 80:
@@ -2012,16 +2262,23 @@ def stream_openai_response(messages, api_key, model, temperature, max_tokens, to
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    # Per-model payload assembly (see OPENAI_MODEL_RULES / _openai_caps_for).
+    # GPT-5-class & o-series models reject `max_tokens` (need `max_completion_tokens`)
+    # and reject the classic sampling params; older models take the classic set.
+    # ⚠️ DO NOT revert to a flat dict that always sends temperature/top_p/penalties +
+    # max_tokens — that 400s every GPT-5-class model. See changes.md (Jun 06 2026).
+    caps = _openai_caps_for(model)
     payload = {
         "model": model,
         "messages": messages,
-        "temperature": temperature,
-        "max_tokens": max_tokens,
-        "top_p": top_p,
-        "frequency_penalty": frequency_penalty,
-        "presence_penalty": presence_penalty,
         "stream": True,
     }
+    payload[caps["token_param"]] = max_tokens
+    if caps["sampling"]:
+        payload["temperature"] = temperature
+        payload["top_p"] = top_p
+        payload["frequency_penalty"] = frequency_penalty
+        payload["presence_penalty"] = presence_penalty
     _base_url = get_openai_base_url()
     print(f"☁️ OpenAI stream: base={_base_url} model={model}, msgs={len(messages)}", flush=True)
     response = requests.post(
@@ -2066,6 +2323,39 @@ def stream_openai_response(messages, api_key, model, temperature, max_tokens, to
             continue
 
     print(f"\n☁️ OpenAI DONE: {total_chunks} chunks, {len(''.join(all_text))} chars total", flush=True)
+
+
+def _rebuild_search_user_turn(original_content, augmented_text):
+    """Rebuild a web-search-augmented final user turn while PRESERVING any
+    attached image block(s). Shared by both cloud web-search wrappers
+    (_web_search_stream_openai / _web_search_stream_anthropic).
+
+    `original_content` is the last user turn's content *as it already sits in
+    that provider's messages array* — i.e. already in the right wire format for
+    that provider: OpenAI carries {"type":"image_url",…}; the Anthropic path was
+    run through _anthropic_normalize() upstream so it carries {"type":"image",
+    "source":{"type":"base64",…}}. So we do NOT re-convert here — we keep the
+    non-text (image) blocks verbatim and swap the text for the augmented
+    search-context string. This is why no converter call is needed: each wrapper
+    only ever sees its own provider's already-correct image blocks.
+
+    Text-only turns (a plain string, or a list with no image block) collapse
+    back to a plain string, so behaviour is byte-identical to the pre-fix code
+    for the no-image case. The block-array form is returned only when ≥1 image
+    block is actually present.
+
+    ⚠️ DO NOT revert to assigning the bare `augmented_text` string here — that
+    drops the attached image on the post-search follow-up call (the web-search-ON
+    image-drop gap). See changes.md (June 5 2026 — cloud image vision).
+    """
+    if isinstance(original_content, list):
+        _image_blocks = [b for b in original_content
+                         if isinstance(b, dict) and b.get("type") in ("image", "image_url")]
+        if _image_blocks:
+            # Text block first, then the preserved image block(s).
+            return [{"type": "text", "text": augmented_text}] + _image_blocks
+    return augmented_text
+
 
 # --------------------------------------------------
 # OpenAI cloud path — [WEB SEARCH: …] tag wrapper
@@ -2250,7 +2540,13 @@ def _web_search_stream_openai(messages, api_key, model, temperature, max_tokens,
                 search_messages[i] = {"role": "user", "content": content}
 
     if _last_user_idx is not None:
-        search_messages[_last_user_idx] = {"role": "user", "content": augmented_user_msg}
+        # Preserve any attached image block(s) on the augmented turn — rebuild as
+        # a list when the original turn carried an image, else a plain string.
+        _orig_content = search_messages[_last_user_idx].get("content", "")
+        search_messages[_last_user_idx] = {
+            "role": "user",
+            "content": _rebuild_search_user_turn(_orig_content, augmented_user_msg),
+        }
     else:
         search_messages.append({"role": "user", "content": augmented_user_msg})
 
@@ -2331,6 +2627,45 @@ def _anthropic_allow_for(model_id):
     if best:
         return ANTHROPIC_MODEL_SAMPLING_RULES[best]["allow"]
     return DEFAULT_ANTHROPIC_ALLOW
+
+# --------------------------------------------------
+# OpenAI per-model parameter rules — which token param a model wants and whether
+# it accepts classic sampling params. The GPT-5 family and the o-series reasoning
+# models reject `max_tokens` (they require `max_completion_tokens`) and reject the
+# classic sampling params (temperature/top_p/frequency_penalty/presence_penalty).
+# Older models (gpt-4o and earlier) use the classic params. ⚠️ When new GPT-5-class
+# or o-series models launch, add their prefix here — the longest-prefix resolver
+# below means a bare family prefix (e.g. "gpt-5", "o3") already covers dated/variant
+# IDs like "gpt-5.5" or "o3-mini".
+OPENAI_MODEL_RULES = {
+    "gpt-5": {"token_param": "max_completion_tokens", "sampling": False},
+    "o1":    {"token_param": "max_completion_tokens", "sampling": False},
+    "o3":    {"token_param": "max_completion_tokens", "sampling": False},
+    "o4":    {"token_param": "max_completion_tokens", "sampling": False},
+}
+_OPENAI_DEFAULT_RULE = {"token_param": "max_tokens", "sampling": True}
+
+def _openai_caps_for(model_id):
+    """Resolve OpenAI param rules: exact match, then longest prefix, then default."""
+    if not model_id:
+        return _OPENAI_DEFAULT_RULE
+    m = model_id.strip().lower()
+    # Search-preview models (gpt-4o-search-preview, gpt-4o-mini-search-preview,
+    # and dated variants) are gpt-4o-based — they KEEP `max_tokens` but REJECT the
+    # classic sampling params (temperature/top_p/frequency_penalty/presence_penalty),
+    # which 400s the request. "search-preview" is a SUFFIX, not a prefix, so it
+    # doesn't fit the prefix table below — match it by its distinctive substring.
+    # ⚠️ DO NOT remove — reopens the "Model incompatible request arguments" 400 on
+    # gpt-4o*-search-preview. (Same class also covers any future *-search-preview.)
+    if "search-preview" in m:
+        return {"token_param": "max_tokens", "sampling": False}
+    if m in OPENAI_MODEL_RULES:
+        return OPENAI_MODEL_RULES[m]
+    best = None
+    for prefix, rule in OPENAI_MODEL_RULES.items():
+        if m.startswith(prefix) and (best is None or len(prefix) > len(best)):
+            best = prefix
+    return OPENAI_MODEL_RULES[best] if best else _OPENAI_DEFAULT_RULE
 
 # --------------------------------------------------
 # Stream Anthropic API response (cloud backend — NATIVE Messages format)
@@ -2588,7 +2923,14 @@ def _web_search_stream_anthropic(messages, api_key, model, temperature, max_toke
                 search_messages[i] = {"role": "user", "content": content}
 
     if _last_user_idx is not None:
-        search_messages[_last_user_idx] = {"role": "user", "content": augmented_user_msg}
+        # Preserve any attached image block(s) on the augmented turn. These are
+        # already Anthropic base64 image blocks (converted by _anthropic_normalize
+        # upstream), so the shared helper keeps them verbatim — no re-conversion.
+        _orig_content = search_messages[_last_user_idx].get("content", "")
+        search_messages[_last_user_idx] = {
+            "role": "user",
+            "content": _rebuild_search_user_turn(_orig_content, augmented_user_msg),
+        }
     else:
         search_messages.append({"role": "user", "content": augmented_user_msg})
 
@@ -2637,20 +2979,89 @@ def _anthropic_normalize(active_chat):
     """Coerce HWUI's conversation list into an Anthropic-valid messages array.
 
     Anthropic requires: user/assistant roles only (no system entries), a
-    leading user turn, and no two consecutive same-role turns. Flattens list
-    content to text, merges adjacent same-role turns, and drops any leading
-    assistant turns.
+    leading user turn, and no two consecutive same-role turns. Merges adjacent
+    same-role turns and drops any leading assistant turns.
+
+    Multimodal turns (content is a list of parts) are converted to Anthropic's
+    NATIVE content-block array instead of being flattened to text:
+      • text part  {"type":"text","text":…}             → {"type":"text","text":…}
+      • image part (the frontend's OpenAI-style
+        {"type":"image_url","image_url":{"url":"data:<media_type>;base64,<data>"}})
+        → {"type":"image","source":{"type":"base64","media_type":<mt>,"data":<data>}}
+    media_type is validated against image/jpeg|png|webp|gif (with any ;charset
+    etc. stripped); anything else → image/png + a warning. A turn that ends up
+    text-only collapses BACK to a plain string (preserving prior behaviour for
+    text turns); the block-array form is emitted only when at least one image
+    block survived. Malformed data URIs (no comma / empty payload) are skipped
+    and logged — they never crash the request.
+
+    ⚠️ DO NOT re-flatten list content to text here — that silently drops every
+    image and reopens the "Claude can't see attached images" bug. See changes.md
+    (June 5 2026 — cloud image vision).
     """
+    _ALLOWED_IMG_MT = ("image/jpeg", "image/png", "image/webp", "image/gif")
+
+    def _convert_content(content):
+        """Return (value, has_image): value is a plain string (text-only turn)
+        or an Anthropic content-block list (when ≥1 image block is present)."""
+        if not isinstance(content, list):
+            return content, False
+        blocks = []
+        text_only = []
+        has_image = False
+        for p in content:
+            ptype = p.get("type")
+            if ptype == "text":
+                _t = p.get("text", "")
+                blocks.append({"type": "text", "text": _t})
+                text_only.append(_t)
+            elif ptype == "image_url":
+                _url = (p.get("image_url") or {}).get("url", "") or ""
+                # Expect a data URI: data:<media_type>[;charset…];base64,<data>
+                if not _url.startswith("data:") or "," not in _url:
+                    print(f"⚠️ Anthropic image skipped — not a base64 data URI (url prefix={_url[:32]!r})", flush=True)
+                    continue
+                _header, _, _data = _url.partition(",")
+                if not _data:
+                    print("⚠️ Anthropic image skipped — empty base64 payload after comma", flush=True)
+                    continue
+                # _header = "data:<media_type>[;charset=…][;base64]" — take the
+                # media_type token, dropping any ;charset / ;base64 suffixes.
+                _media_type = _header[len("data:"):].split(";")[0].strip().lower()
+                if _media_type not in _ALLOWED_IMG_MT:
+                    print(f"⚠️ Anthropic image: unsupported/empty media_type {_media_type!r} — defaulting to image/png", flush=True)
+                    _media_type = "image/png"
+                blocks.append({
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": _media_type, "data": _data},
+                })
+                has_image = True
+            # Unknown part types are dropped silently (no Anthropic equivalent).
+        if has_image:
+            return blocks, True
+        # No image survived — collapse to plain text (prior behaviour).
+        return " ".join(text_only), False
+
     out = []
     for m in active_chat:
         role = m.get("role", "user")
-        content = m.get("content", "")
-        if isinstance(content, list):
-            content = " ".join(p.get("text", "") for p in content if p.get("type") == "text")
-        if role not in ("user", "assistant") or not content:
+        content, has_image = _convert_content(m.get("content", ""))
+        if role not in ("user", "assistant"):
+            continue
+        # Text turns must be non-empty; image turns are always kept.
+        if not has_image and not content:
             continue
         if out and out[-1]["role"] == role:
-            out[-1]["content"] = (out[-1]["content"] + "\n" + content).strip()
+            # Merge adjacent same-role turns. If either side is a block list,
+            # concatenate as block lists (promote the string side to a text
+            # block); otherwise plain string concat as before.
+            _prev = out[-1]["content"]
+            if isinstance(_prev, list) or isinstance(content, list):
+                _pb = _prev if isinstance(_prev, list) else ([{"type": "text", "text": _prev}] if _prev else [])
+                _cb = content if isinstance(content, list) else ([{"type": "text", "text": content}] if content else [])
+                out[-1]["content"] = _pb + _cb
+            else:
+                out[-1]["content"] = (_prev + "\n" + content).strip()
         else:
             out.append({"role": role, "content": content})
     while out and out[0]["role"] == "assistant":
@@ -2741,6 +3152,37 @@ def load_recent_chat(character_name, max_turns=6):
 # --------------------------------------------------
 # Chat Endpoint (Smart Memory Trigger + Natural Recall + Proper Formatting)
 # --------------------------------------------------
+def _append_current_time(messages):
+
+    if messages and messages[0].get("role") == "system":
+        # Local import: earlier in this function `import datetime` rebinds the
+        # name `datetime` to the *module* in the function's local scope,
+        # shadowing the top-of-file `from datetime import datetime`. Calling
+        # `datetime.now()` here would hit the module and AttributeError.
+        # Use a unique alias to stay independent of which earlier branch ran.
+        import datetime as _dt_now
+        _now_local = _dt_now.datetime.now()
+        _hour_24 = _now_local.hour
+        if 5 <= _hour_24 < 12:
+            _tod = "morning"
+        elif 12 <= _hour_24 < 17:
+            _tod = "afternoon"
+        elif 17 <= _hour_24 < 21:
+            _tod = "evening"
+        else:
+            _tod = "night"
+        _hour_12 = _hour_24 % 12 or 12
+        _ampm = "AM" if _hour_24 < 12 else "PM"
+        _time_str = (
+            f"\n\nCurrent local time: "
+            f"{_now_local.strftime('%A %d %B %Y')}, "
+            f"{_hour_12} {_ampm} ({_tod})."
+        )
+        messages[0]["content"] += _time_str
+        print(f"🕐 Current time appended to system block: "
+              f"{_hour_12} {_ampm} ({_tod})")
+
+
 @app.route("/chat", methods=["POST"])
 def chat():
     print("🔴🔴🔴 CHAT ROUTE HIT - STARTING 🔴🔴🔴")
@@ -2785,6 +3227,12 @@ def chat():
     _diag_verbose = bool(_req_settings.get("diag_verbose", False))
 
     data = request.get_json()
+    # current_chat_filename is referenced later in the model-emitted [CHAT SEARCH:]
+    # re-prompt path (_filtered_stream, ~L6036) regardless of how the conversation
+    # was loaded, but was previously bound ONLY inside the `if not active_chat:`
+    # disk-fallback branch below — so a [CHAT SEARCH:] tag on a request that DID
+    # supply conversation_history raised NameError. Bind it unconditionally here.
+    current_chat_filename = data.get("current_chat_filename", "")
     print(f"🔍 DEBUG: Full request data keys: {data.keys()}")
     
     # Get conversation history from request (more reliable than reading from file)
@@ -2838,24 +3286,7 @@ def chat():
     print(f"🔍 DEBUG: clean_input for memory detection: {clean_input[:100] if clean_input else '(empty)'}")
     
     # 🔥 LOAD USER PERSONA BIO
-    user_bio = ""
-    user_display_name = user_name
-    try:
-        user_file_path = os.path.join(USERS_DIR, f"{user_name}.json")
-        if os.path.exists(user_file_path):
-            with open(user_file_path, "r", encoding="utf-8") as uf:
-                user_data = json.load(uf)
-                user_bio = user_data.get("bio", "")
-                user_display_name = user_data.get("display_name", user_name)
-                print(f"✅ Loaded user persona for {user_name}")
-                print(f"   Display name: {user_display_name}")
-                print(f"   Bio length: {len(user_bio)} chars")
-                if user_bio:
-                    print(f"   Bio preview: {user_bio[:150]}...")
-        else:
-            print(f"⚠️ User persona file not found: {user_file_path}")
-    except Exception as e:
-        print(f"❌ Failed to load user persona: {e}")
+    user_bio, user_display_name = _load_user_persona(user_name)
     
     print(f"🔍 DEBUG: Received conversation_history from frontend:")
     print(f"🔍 DEBUG: Length: {len(active_chat)}")
@@ -2871,44 +3302,7 @@ def chat():
     print(f"📜 Received {len(active_chat)} messages from frontend")
 
     # If not provided, fall back to loading from file
-    if not active_chat:
-        current_chat_filename = data.get("current_chat_filename", "")
-        
-        if current_chat_filename:
-            chat_file_path = os.path.join("chats", current_chat_filename)
-            
-            if os.path.exists(chat_file_path):
-                try:
-                    with open(chat_file_path, "r", encoding="utf-8") as f:
-                        content = f.read()
-                    
-                    lines = content.strip().split('\n')
-                    
-                    for line in lines:
-                        if ':' not in line:
-                            continue
-                        
-                        speaker, message = line.split(':', 1)
-                        speaker = speaker.strip()
-                        message = message.strip()
-                        
-                        if speaker == user_name or speaker == user_display_name:
-                            role = "user"
-                        elif speaker == character_name:
-                            role = "assistant"
-                        else:
-                            continue
-                        
-                        active_chat.append({"role": role, "content": message})
-                    
-                    print(f"📜 Loaded {len(active_chat)} messages from {current_chat_filename} (fallback)")
-                
-                except Exception as e:
-                    print(f"⚠️ Failed to load chat file: {e}")
-            else:
-                print(f"⚠️ Chat file not found: {chat_file_path}")
-        else:
-            print("⚠️ No conversation_history or current_chat_filename provided")
+    active_chat = _load_chat_from_disk(active_chat, data, user_name, user_display_name, character_name)
     
     if not character_name:
         return jsonify({"error": "No character specified"}), 400
@@ -2936,464 +3330,23 @@ def chat():
     # --------------------------------------------------
     # Load Helcyon's core system layer (hardcoded)
     # --------------------------------------------------
-    system_prompt, current_time = get_system_prompt()
-    instruction = get_instruction_layer()
-    tone_primer = get_tone_primer()
-
-    # Suppress tone primer if the character card already defines personality/tone.
-    # The primer is a fallback only — sending it alongside a character card causes
-    # its "favour long, deep responses" instruction to override the character's style.
-    _has_char_personality = bool(
-        char_data.get("main_prompt", "").strip() or
-        char_data.get("description", "").strip() or
-        char_data.get("personality", "").strip()
-    )
-    if _has_char_personality:
-        tone_primer = ""
-        print("🎭 Character has personality defined — tone primer suppressed")
-
-    # Override system prompt with character's bound template if set
-    _char_sp = char_data.get("system_prompt", "").strip()
-    if _char_sp:
-        _char_sp_path = os.path.join(get_system_prompts_dir(), _char_sp)
-        if os.path.exists(_char_sp_path):
-            try:
-                with open(_char_sp_path, "r", encoding="utf-8") as _spf:
-                    _char_sp_content = _spf.read().strip()
-                # Rebuild with same time context prefix
-                import datetime as _dt
-                _time_ctx = f"Current date and time: {current_time}\n\n"
-                system_prompt = _time_ctx + _char_sp_content
-                print(f"🎭 Character system prompt override: {_char_sp}")
-            except Exception as e:
-                print(f"⚠️ Could not load character system prompt '{_char_sp}': {e}")
-        else:
-            print(f"⚠️ Character system prompt not found: {_char_sp_path}")
-
-    print(f"⏰ Time context injected: {current_time}")
+    system_prompt, instruction, tone_primer = _resolve_system_layer(char_data)
     
     # --------------------------------------------------
     # Load Project Instructions & Documents (if in a project)
     # --------------------------------------------------
-    project_instructions = ""
-    project_documents = ""
-    project_rp_mode = False
-    project_rp_opener = ""
-    newly_pinned_doc = None
-
-    try:
-        from project_routes import get_active_project
-        active_project = get_active_project()
-        
-        if active_project:
-            projects_dir = os.path.join(os.path.dirname(__file__), "projects")
-            config_path = os.path.join(projects_dir, active_project, "config.json")
-            
-            # Load project instructions
-            # Kept as raw text — folded into the [REPLY INSTRUCTIONS] depth-0 packet
-            # later in prompt assembly (not the system block at position 0). Heavy
-            # ═══ fencing was removed because the packet has its own framing.
-            if os.path.exists(config_path):
-                with open(config_path, "r", encoding="utf-8") as f:
-                    project_config = json.load(f)
-                    project_instructions = project_config.get("instructions", "").strip()
-                    project_rp_mode = project_config.get("rp_mode", False)
-                    project_rp_opener = project_config.get("rp_opener", "").strip()
-
-                    if project_instructions:
-                        print(f"📁 Loaded project instructions for: {active_project}")
-                        print(f"   Instructions length: {len(project_instructions)} chars")
-            
-            
-            
-            # Load documents - sticky mode or keyword trigger
-            project_documents = ""
-            newly_pinned_doc = None
-            user_input_lower = user_input.lower()
-            sticky_docs = project_config.get("sticky_docs", False) if os.path.exists(config_path) else False
-            sticky_doc_file = project_config.get("sticky_doc_file") if os.path.exists(config_path) else None
-
-            # Helper: load a specific file directly by name (no keyword matching)
-            def load_pinned_doc_direct(proj_name, fname):
-                proj_dir = os.path.join(os.path.dirname(__file__), "projects")
-                fpath = os.path.join(proj_dir, proj_name, "documents", fname)
-                if not os.path.exists(fpath):
-                    print(f"⚠️ Pinned doc not found on disk: {fpath}")
-                    return ""
-                content = _read_doc_content(fpath, max_chars=8000)
-                if not content:
-                    print(f"❌ Failed to read pinned doc {fname}")
-                    return ""
-                prefix, suffix, content = _extract_perspective(content)
-                return (
-                    "\n\n"
-                    "═══════════════════════════════════════════════════════════\n"
-                    "PROJECT DOCUMENTS\n"
-                    "═══════════════════════════════════════════════════════════\n\n"
-                    f"### Document: {fname}\n\n{prefix}{content}{suffix}\n\n"
-                    "═══════════════════════════════════════════════════════════\n"
-                    "END PROJECT DOCUMENTS\n"
-                    "═══════════════════════════════════════════════════════════\n\n"
-                )
-
-            # Helper: check if user is requesting a DIFFERENT doc than the pinned one
-            def user_requesting_different_doc(user_q, current_pinned):
-                """True when the message has doc intent AND no keyword matches the pinned filename."""
-                keywords = _doc_query_keywords(user_q)
-                if not keywords or not current_pinned:
-                    return False
-                pinned_lower = current_pinned.lower().replace('_', ' ').replace('.', ' ')
-                # If any keyword matches the pinned doc name, user is asking for the same one
-                for kw in keywords:
-                    if re.search(r'\b' + re.escape(kw) + r'\b', pinned_lower):
-                        return False
-                # No keyword hits the pinned filename — check for document intent before switching
-                has_intent = (
-                    any(t in user_q.lower() for t in _DOC_STRONG_TRIGGERS) or
-                    bool(_DOC_NOUN_RE.search(user_q))
-                )
-                return has_intent
-
-            if sticky_docs and sticky_doc_file:
-                # Check if user is asking for a DIFFERENT doc than the pinned one
-                if user_requesting_different_doc(user_input, sticky_doc_file):
-                    print(f"📌 Sticky override - user requesting different doc, doing keyword search")
-                    project_documents = load_project_documents(active_project, user_input)
-                    if project_documents:
-                        # Update the pinned doc to the newly loaded one
-                        match = re.search(r'### Document: (.+?)\n', project_documents)
-                        if match:
-                            new_pinned = match.group(1).strip()
-                            try:
-                                with open(config_path, "r", encoding="utf-8") as f:
-                                    cfg = json.load(f)
-                                cfg["sticky_doc_file"] = new_pinned
-                                with open(config_path, "w", encoding="utf-8") as f:
-                                    json.dump(cfg, f, indent=2)
-                                print(f"📌 Pinned doc updated to: {new_pinned}")
-                            except Exception as e:
-                                print(f"⚠️ Could not update pinned doc: {e}")
-                    else:
-                        # Fallback: load the original pinned doc
-                        project_documents = load_pinned_doc_direct(active_project, sticky_doc_file)
-                else:
-                    # Normal sticky load - load pinned doc directly, no keyword matching
-                    project_documents = load_pinned_doc_direct(active_project, sticky_doc_file)
-                    if project_documents:
-                        print(f"📌 Sticky mode - loaded pinned doc: {sticky_doc_file} ({len(project_documents)} chars)")
-                    else:
-                        print(f"📌 Sticky mode - pinned doc missing, clearing pin")
-                        try:
-                            with open(config_path, "r", encoding="utf-8") as f:
-                                cfg = json.load(f)
-                            cfg["sticky_doc_file"] = None
-                            with open(config_path, "w", encoding="utf-8") as f:
-                                json.dump(cfg, f, indent=2)
-                        except Exception:
-                            pass
-
-            elif sticky_docs and not sticky_doc_file:
-                # Sticky ON but no doc pinned yet
-                # First check: if only one doc in folder, auto-load it without needing a trigger
-                docs_dir_check = os.path.join(os.path.dirname(__file__), "projects", active_project, "documents")
-                all_docs = [f for f in os.listdir(docs_dir_check) if os.path.isfile(os.path.join(docs_dir_check, f))] if os.path.exists(docs_dir_check) else []
-                
-                if len(all_docs) == 1:
-                    # Only one doc - just load it, no trigger needed
-                    auto_fname = all_docs[0]
-                    project_documents = load_pinned_doc_direct(active_project, auto_fname)
-                    if project_documents:
-                        print(f"📌 Sticky auto-pinned single doc: {auto_fname}")
-                        try:
-                            with open(config_path, "r", encoding="utf-8") as f:
-                                cfg = json.load(f)
-                            cfg["sticky_doc_file"] = auto_fname
-                            with open(config_path, "w", encoding="utf-8") as f:
-                                json.dump(cfg, f, indent=2)
-                        except Exception as e:
-                            print(f"⚠️ Could not save auto-pin: {e}")
-                elif (any(t in user_input_lower for t in _DOC_STRONG_TRIGGERS) or bool(_DOC_NOUN_RE.search(user_input))):
-                    # Multiple docs - use intent trigger to find and pin one
-                    project_documents = load_project_documents(active_project, user_input)
-                    if project_documents:
-                        print(f"📌 Sticky mode - first trigger, loading and pinning doc")
-                        match = re.search(r'### Document: (.+?)\n', project_documents)
-                        if match:
-                            pinned_filename = match.group(1).strip()
-                            try:
-                                with open(config_path, "r", encoding="utf-8") as f:
-                                    cfg = json.load(f)
-                                cfg["sticky_doc_file"] = pinned_filename
-                                with open(config_path, "w", encoding="utf-8") as f:
-                                    json.dump(cfg, f, indent=2)
-                                print(f"📌 Pinned doc saved: {pinned_filename}")
-                                newly_pinned_doc = pinned_filename
-                            except Exception as e:
-                                print(f"⚠️ Could not save pinned doc: {e}")
-                else:
-                    print(f"📌 Sticky ON, multiple docs, waiting for doc intent")
-
-            elif (any(t in user_input_lower for t in _DOC_STRONG_TRIGGERS) or bool(_DOC_NOUN_RE.search(user_input))):
-                # Non-sticky path: doc intent detected, keyword-match to find the right file
-                project_documents = load_project_documents(active_project, user_input)
-                if project_documents:
-                    print(f"📄 User requested documents - loading {len(project_documents)} chars")
-                    print(f"📄 DOCUMENT CONTENT PREVIEW:\n{project_documents[:1000]}")
-            else:
-                print(f"⭕ Skipped document loading - no doc intent detected")
-            
-    except Exception as e:
-        print(f"⚠️ Failed to load project data: {e}")
-        project_instructions = ""
-        project_documents = ""
-
-    # --------------------------------------------------
-    # Load Global Documents (always, regardless of project)
-    # --------------------------------------------------
-    try:
-        global_docs = load_global_documents(user_input)
-        if global_docs:
-            project_documents = project_documents + global_docs
-            print(f"🌐 Global doc injected ({len(global_docs)} chars)")
-    except Exception as e:
-        print(f"⚠️ Global document load failed: {e}")
-
-    # 📄 An inline attached document is the user's explicit focus. Discard any
-    # project/global documents the retrieval system auto-loaded above so they
-    # cannot bleed into the reply alongside the attached document.
-    if _attached_doc_present and project_documents:
-        print(f"📄 Inline document attached — discarding {len(project_documents)} "
-              f"chars of auto-loaded project/global documents")
-        project_documents = ""
+    project_instructions, project_documents, project_rp_mode, newly_pinned_doc = _load_documents(
+        user_input, _attached_doc_present
+    )
 
     # --------------------------------------------------
     # Load character card and build system_text
     # --------------------------------------------------
-    char_context = ""
-
-    # 🧠 Holds ONLY the hot (most-recent, age <= hot_hours) session summary,
-    # split off from the cold/dormant ones by time decay below. It is NOT
-    # placed in char_context — it is appended at the very END of the system
-    # block (after the time context) for stronger recency weighting.
-    # _recent_session_ts is that summary's timestamp, used to phrase the
-    # relative-time marker. Both initialised before the try so the tail
-    # injection is safe even if character-context assembly raises.
-    _recent_session_summary = ""
-    _recent_session_ts = None
-
-    try:
-        # Helper to strip stray ChatML tokens from any user-supplied text
-        def strip_chatml(text):
-            text = re.sub(r'<\|im_start\|>\w*', '', text)
-            text = re.sub(r'<\|im_end\|>', '', text)
-            return text.strip()
-
-        # Build character context from JSON fields
-        parts = []
-
-        if char_data.get("name"):
-            parts.append(f"Character Name: {char_data['name']}")
-        if char_data.get("description"):
-            parts.append(f"Description: {substitute_placeholders(strip_chatml(char_data['description']), _char_label, _user_label)}")
-        if char_data.get("scenario"):
-            parts.append(f"Scenario: {substitute_placeholders(strip_chatml(char_data['scenario']), _char_label, _user_label)}")
-
-        # 📍 CURRENT SITUATION — semi-global, opt-in per character
-        if char_data.get("use_current_situation"):
-            try:
-                with open("settings.json", "r", encoding="utf-8") as _sf:
-                    _s = json.load(_sf)
-                _situation = _s.get("current_situation", "").strip()
-            except Exception:
-                _situation = ""
-            if _situation:
-                parts.append(
-                    f"═══════════════════════════════════════════════════════════\n"
-                    f"WHAT YOU CURRENTLY KNOW ABOUT {user_display_name.upper() if user_display_name else 'THE USER'}\n"
-                    f"(This is your own awareness — do not say you were told this, just know it)\n"
-                    f"═══════════════════════════════════════════════════════════\n"
-                    f"{strip_chatml(_situation)}\n"
-                    f"═══════════════════════════════════════════════════════════"
-                )
-
-        if char_data.get("main_prompt"):
-            parts.append(substitute_placeholders(strip_chatml(char_data["main_prompt"]), _char_label, _user_label))
-
-        # post_history is no longer added to the system block — it moved to the
-        # [REPLY INSTRUCTIONS] depth-0 packet (folded into the last user turn)
-        # so it sits adjacent to the model's generation point. See the packet
-        # builder near the end of prompt assembly.
-
-        # 🧠 INJECT SESSION SUMMARY — only on fresh chats
-        # A chat is "new" if there are no real assistant replies yet — i.e. no
-        # assistant message that comes AFTER a user message. An assistant at
-        # position 0 of active_chat is structurally an opening-line greeting
-        # (or project RP opener), pre-conversation, not a real exchange.
-        #
-        # Detection uses two signals:
-        #  1. Explicit `is_opening_line` flag — primary signal for in-memory
-        #     sessions (set by displayOpeningLine in utils.js / mobile.html).
-        #  2. Positional fallback — first message of active_chat is assistant.
-        #     ⚠️ Load-bearing. The is_opening_line flag does NOT survive the
-        #     disk round-trip: the on-disk chat-file format
-        #     (chat_routes.py:_format_chat_messages) has no slot for it, and
-        #     /chats/open's line-walking parser can't reconstruct it. Autosave
-        #     writes the file immediately after the greeting displays, so the
-        #     flag is lost on any subsequent reload-from-disk (refresh,
-        #     character switch, reopen). Without the positional check, post-
-        #     reload `_is_new_chat` flips False and session-summary injection
-        #     is silently suppressed, causing the model to confabulate when
-        #     asked "remember what we talked about last time?". Do not remove
-        #     the positional check assuming the flag is sufficient. (changes.md.)
-        #
-        # ⚠️ DO NOT re-add word-count check. The old ≤30-word branch caused
-        # curt replies ("Yeah, fair." / "Mm.") to silently reset the chat into
-        # new-chat state and re-inject the full session summary every turn.
-        assistant_msgs = [m for m in active_chat if m.get("role") == "assistant"]
-        def _is_opening_line_msg(m):
-            return bool(m.get("is_opening_line"))
-
-        _first_msg_is_assistant = bool(active_chat) and active_chat[0].get("role") == "assistant"
-
-        _new_via_no_asst        = len(assistant_msgs) == 0
-        _new_via_explicit_flag  = (
-            len(assistant_msgs) == 1 and _is_opening_line_msg(assistant_msgs[0])
-        )
-        _new_via_positional     = (
-            len(assistant_msgs) == 1
-            and not _new_via_explicit_flag
-            and _first_msg_is_assistant
-        )
-        _is_new_chat = _new_via_no_asst or _new_via_explicit_flag or _new_via_positional
-
-        if _new_via_positional:
-            _is_new_reason = (
-                "True (positional fallback — opening-line flag lost in "
-                "disk round-trip)"
-            )
-        elif _new_via_explicit_flag:
-            _is_new_reason = "True (is_opening_line flag)"
-        elif _new_via_no_asst:
-            _is_new_reason = "True (no assistant messages)"
-        else:
-            _is_new_reason = "False"
-        print(
-            f"🧠 _is_new_chat: {_is_new_reason} "
-            f"({len(assistant_msgs)} assistant msgs in active_chat)"
-        )
-        if _is_new_chat:
-            # Time-decay session memory: the hot summary (single most recent,
-            # age <= hot_hours) is held for the tail-injection slot; cold
-            # summaries (hot_hours < age <= cold_days, plus any non-newest one
-            # still within hot_hours) render in the YOUR OWN MEMORY block here;
-            # dormant summaries (age > cold_days) are not injected at all.
-            # Thresholds come from settings.json:session_memory.
-            # ⚠️ DO NOT move the hot summary back into this block — tail
-            # position is intentional. ⚠️ DO NOT add an on/off toggle on top
-            # of time decay. (changes.md.)
-            _hot_session, _cold_sessions = select_session_summaries(character_name)
-            if _hot_session is not None:
-                _recent_session_ts, _recent_session_summary = _hot_session
-                print(f"🧠 Hot session summary held for tail injection "
-                      f"({len(_recent_session_summary)} chars) — new chat")
-            if _cold_sessions:
-                # Cold summaries joined with the same SESSION_DIVIDER as before.
-                # Framing/wrapping below is unchanged from the prior task.
-                _older_summaries = SESSION_DIVIDER.join(t for _, t in _cold_sessions)
-                parts.append(
-                    f"\n═══════════════════════════════════════════════════════════\n"
-                    f"YOUR OWN MEMORY OF RECENT SESSIONS\n"
-                    f"═══════════════════════════════════════════════════════════\n"
-                    f"This is your own memory of last time — not a briefing, not "
-                    f"notes someone handed you. You know this the way you know "
-                    f"anything else about this person, because you lived through "
-                    f"it. Mention it naturally, early — pick up the thread the way "
-                    f"a friend would when they meet again. Do not recite it; do "
-                    f"not say you were told or shown anything.\n\n"
-                    f"{_older_summaries}\n"
-                    f"═══════════════════════════════════════════════════════════"
-                )
-                print(f"🧠 Cold session summaries injected "
-                      f"({len(_cold_sessions)} entr(y/ies), {len(_older_summaries)} chars) — new chat")
-
-        # character_note and author_note are NOT added here — both are
-        # appended to the system block later (after the restriction anchor,
-        # before the current time injection) wrapped in [OOC: …] labels so
-        # the model treats them as silent instructions rather than content to
-        # echo. They are NOT in the [REPLY INSTRUCTIONS] depth-0 packet —
-        # moving them there cost ~539 tokens per turn and was reverted.
-
-        char_context = "\n\n".join(parts)
-
-        # 🔥 INJECT USER PERSONA CONTEXT
-        # Always inject if we have a user name — bio is optional
-        user_context = ""
-        if user_display_name:
-            _bio_block = f"{substitute_placeholders(user_bio, _char_label, _user_label)}\n\n" if user_bio else ""
-            user_context = (
-                f"\n\n"
-                f"═══════════════════════════════════════════════════════════\n"
-                f"USER CONTEXT - WHO YOU ARE TALKING TO\n"
-                f"═══════════════════════════════════════════════════════════\n\n"
-                f"You are {char_data.get('name', 'the assistant')}.\n"
-                f"You are talking to {user_display_name}.\n\n"
-                f"{_bio_block}"
-                f"When {user_display_name} asks questions using 'I', 'my', or 'me', "
-                f"they are referring to themselves ({user_display_name}), NOT to you.\n"
-                f"You are {char_data.get('name', 'the assistant')}. "
-                f"{user_display_name} is the person you're talking to.\n\n"
-                f"═══════════════════════════════════════════════════════════\n"
-                f"END USER CONTEXT\n"
-                f"═══════════════════════════════════════════════════════════\n\n"
-            )
-            print(f"✅ Injected user persona context for {user_display_name} (bio: {len(user_bio)} chars)")
-        else:
-            print(f"⚠️ No user display name, skipping persona injection")
-
-        # Build the system_text (WITHOUT example_dialogue yet)
-        # Build the system_text (WITHOUT example_dialogue yet)
-        # For jinja/Gemma models: skip instruction layer and tone primer — they're Helcyon-specific
-        # scaffolding that confuses capable models into treating meta-instructions as output format
-        try:
-            with open('settings.json', 'r') as _stf:
-                _sts = json.load(_stf)
-            _st_template = _sts.get('llama_args', {}).get('chat_template', 'chatml').strip().lower()
-        except Exception:
-            _st_template = 'chatml'
-        _st_model = (CURRENT_MODEL or '').lower()
-        _is_jinja_model = _st_template in ('jinja', 'qwen') or 'gemma' in _st_model or 'qwen' in _st_model
-
-        # project_instructions is intentionally NOT in system_text — it moved
-        # to the [REPLY INSTRUCTIONS] depth-0 packet (folded into the last
-        # user turn) for higher behavioural priority.
-        if _is_jinja_model:
-            system_text = (
-                f"{system_prompt}\n\n{char_context}{user_context}{project_documents}"
-            )
-            print("📐 Jinja model: skipping instruction layer + tone primer from system_text")
-        else:
-            system_text = (
-                f"{system_prompt}\n\n{char_context}{user_context}\n\n{instruction}\n\n{tone_primer}{project_documents}"
-            )
-
-        # 📊 LOG SYSTEM MESSAGE SIZE
-        from truncation import rough_token_count
-        system_tokens = rough_token_count(system_text)
-        print(f"📊 SYSTEM MESSAGE SIZE: ~{system_tokens} tokens")
-        if system_tokens > 6000:
-            print(f"🔴 WARNING: System message is very large! May cause context overflow.")
-        elif system_tokens > 4000:
-            print(f"⚠️ CAUTION: System message is getting large.")
-
-        print("=" * 80)
-        print("DEBUG: FULL SYSTEM_TEXT BEING SENT:")
-        print("=" * 80)
-        print(system_text)
-        print("=" * 80)
-
-    except Exception as e:
-        print(f"⚠️ Failed to build character context: {e}")
-        system_text = system_prompt
+    system_text, char_context, user_context, _recent_session_summary, _recent_session_ts, _is_jinja_model = _build_system_text(
+        char_data, _char_label, _user_label, user_display_name, user_bio,
+        active_chat, character_name, system_prompt, instruction, tone_primer,
+        project_documents,
+    )
         
     memory = ""
 
@@ -3535,7 +3488,12 @@ def chat():
         _ex_overhead += _reply_packet_overhead
         print(f"📐 Post-trim overhead (OOC packet + system-block OOC notes): ~{_reply_packet_overhead} tokens (pre-accounted in trim)")
 
+    # ⏱️ TEMP DIAGNOSTIC (remove after EOS-cliff/Continue verification) — capture
+    # the conversation-message count BEFORE trim so the per-turn budget line below
+    # can report included-vs-dropped. System message excluded from the count.
+    _temp_convo_pretrim = len([m for m in messages if m.get("role") != "system"])
     messages = trim_chat_history(messages, extra_system_overhead=_ex_overhead)
+    _temp_convo_posttrim = len([m for m in messages if m.get("role") != "system"])  # ⏱️ TEMP
 
     print(f"🔍 DEBUG: After trimming, {len(messages)} messages remain")
 
@@ -3758,15 +3716,11 @@ def chat():
             # labels so the model treats them as silent instructions rather
             # than content to echo. Without the label, raw text like "Keep a
             # light friendly tone…" was leaking into visible responses.
-            _cn_sys = char_data.get("character_note", "").strip()
-            if _cn_sys:
-                _cn_sys = re.sub(r'<\|im_start\|>\w*', '', _cn_sys)
-                _cn_sys = re.sub(r'<\|im_end\|>', '', _cn_sys).strip()
-                _cn_sys = substitute_placeholders(_cn_sys, _char_label, _user_label)
-                if _cn_sys:
-                    messages[0]["content"] += f"\n\n[OOC: Character note — {_cn_sys}]"
-                    print(f"✅ Character Note appended to system block ({len(_cn_sys)} chars)")
-
+            # character_note is NO LONGER appended to the system block — it moved
+            # to a depth-N user-turn injection just before the prompt flatten
+            # (see "CHARACTER NOTE — depth-N injection" below). author_note stays
+            # in the system block, unchanged. (The comment block above is stale and
+            # is rewritten in Stage 5.)
             _an_sys = data.get("author_note", "").strip() if isinstance(data, dict) else ""
             if _an_sys:
                 _an_sys = re.sub(r'<\|im_start\|>\w*', '', _an_sys)
@@ -3795,33 +3749,7 @@ def chat():
     # cache invalidation problem.
     # Fake example-dialogue turns are inserted into messages[] right after
     # this block (NOT appended to the system message).
-    if messages and messages[0].get("role") == "system":
-        # Local import: earlier in this function `import datetime` rebinds the
-        # name `datetime` to the *module* in the function's local scope,
-        # shadowing the top-of-file `from datetime import datetime`. Calling
-        # `datetime.now()` here would hit the module and AttributeError.
-        # Use a unique alias to stay independent of which earlier branch ran.
-        import datetime as _dt_now
-        _now_local = _dt_now.datetime.now()
-        _hour_24 = _now_local.hour
-        if 5 <= _hour_24 < 12:
-            _tod = "morning"
-        elif 12 <= _hour_24 < 17:
-            _tod = "afternoon"
-        elif 17 <= _hour_24 < 21:
-            _tod = "evening"
-        else:
-            _tod = "night"
-        _hour_12 = _hour_24 % 12 or 12
-        _ampm = "AM" if _hour_24 < 12 else "PM"
-        _time_str = (
-            f"\n\nCurrent local time: "
-            f"{_now_local.strftime('%A %d %B %Y')}, "
-            f"{_hour_12} {_ampm} ({_tod})."
-        )
-        messages[0]["content"] += _time_str
-        print(f"🕐 Current time appended to system block: "
-              f"{_hour_12} {_ampm} ({_tod})")
+    _append_current_time(messages)
 
     # 🧠 MOST-RECENT SESSION SUMMARY — appended as the ABSOLUTE LAST thing in
     # the system block, after the time context and every other system-block
@@ -3835,42 +3763,6 @@ def chat():
     # vars — never hardcoded.
     # ⚠️ DO NOT move the most-recent session summary back into the main system
     # block — tail position is intentional for attention weighting. (changes.md.)
-    if _recent_session_summary and messages and messages[0].get("role") == "system":
-        _rs_user = user_display_name or user_name or "the user"
-        _rs_rel = ""
-        try:
-            # Relative time is computed from the hot summary's own timestamp
-            # (inline ISO stamp, or file-mtime fallback for legacy entries).
-            if _recent_session_ts is not None:
-                import datetime as _dt_rs
-                _rs_days = (_dt_rs.datetime.now(_dt_rs.timezone.utc).date()
-                            - _recent_session_ts.date()).days
-                if _rs_days <= 0:
-                    _rs_rel = "earlier today"
-                elif _rs_days == 1:
-                    _rs_rel = "yesterday"
-                elif _rs_days < 7:
-                    _rs_rel = f"{_rs_days} days ago"
-                elif _rs_days < 14:
-                    _rs_rel = "last week"
-                else:
-                    _rs_rel = f"{_rs_days // 7} weeks ago"
-        except Exception as _rs_e:
-            # No clean way to compute relative time — omit it rather than guess.
-            _rs_rel = ""
-        _rs_header = (
-            f"[Most recent session with {_rs_user}, {_rs_rel}]:"
-            if _rs_rel else
-            f"[Most recent session with {_rs_user}]:"
-        )
-        messages[0]["content"] += (
-            f"\n\n{_rs_header}\n"
-            f"{_recent_session_summary}\n"
-            f"[End of recent session — continue naturally from where you left off]"
-        )
-        print(f"🧠 Most-recent session summary appended to system-block tail "
-              f"({len(_recent_session_summary)} chars, when='{_rs_rel or 'n/a'}')")
-
     # 🎭 INJECT EXAMPLE DIALOGUE AS A DELIMITED, SYSTEM-LEVEL STYLE BLOCK.
     # ⚠️ DO NOT revert to inserting these as live user/assistant turns in the
     # `messages` array. Bare positional turns are byte-identical to real
@@ -3923,6 +3815,64 @@ def chat():
         print("🔄 Continuation detected")
     else:
         print("🆕 New conversation detected - allowing greeting")
+
+    # 🎯 CHARACTER NOTE — depth-N injection (folded into an existing USER turn).
+    # Moved here from the system-block append (was ~L4067) so the note lands NEAR
+    # the generation point with recency pull — per the field-priority rule —
+    # without a per-turn system-block cost. Option B: fold the [OOC: …]-wrapped
+    # note into a user turn's CONTENT, NOT a new system-role message (a mid-list
+    # system message trips the alternation diagnostic + mid-system guard below —
+    # the May 11 EOS-after-15-tokens regression). KEEP the [OOC: …] wrapper —
+    # unwrapped note text leaked into visible output. Done on messages[] (not
+    # prompt_parts) so the structure check below still sees it. Target the user
+    # turn at offset -3 (odd offset = a user turn in S U A U … U); fall back to
+    # the earliest non-last user turn, then to the last user turn only as a last
+    # resort (short/new chats). Token cost is already reserved pre-trim via
+    # _cn_pre (~L3833). Rebinds the slot to a NEW dict so the shared active_chat
+    # message object is never mutated (no OOC leak into persisted history).
+    _cn = char_data.get("character_note", "").strip()
+    if _cn and messages:
+        _cn = re.sub(r'<\|im_start\|>\w*', '', _cn)
+        _cn = re.sub(r'<\|im_end\|>', '', _cn).strip()
+        _cn = substitute_placeholders(_cn, _char_label, _user_label)
+        if _cn:
+            _user_idxs = [i for i, m in enumerate(messages) if m.get("role") == "user"]
+            if _user_idxs:
+                _last_user = _user_idxs[-1]
+                if len(messages) >= 3 and messages[-3].get("role") == "user":
+                    _cn_idx = len(messages) - 3
+                    _cn_where = "depth N=3 (user turn at offset -3)"
+                else:
+                    _non_last = [i for i in _user_idxs if i != _last_user]
+                    if _non_last:
+                        _cn_idx = _non_last[0]
+                        _cn_where = f"fallback: earliest non-last user turn (index {_cn_idx})"
+                    else:
+                        _cn_idx = _last_user
+                        _cn_where = "fallback: only one user turn — placed at last user turn (-1, last resort)"
+                _ooc = f"[OOC: Character note — {_cn}]"
+                _tgt = messages[_cn_idx]
+                _tc = _tgt.get("content", "")
+                if isinstance(_tc, list):
+                    _new_parts = []
+                    _done = False
+                    for _p in _tc:
+                        if not _done and _p.get("type") == "text":
+                            _np = dict(_p)
+                            _np["text"] = _ooc + "\n\n" + _p.get("text", "")
+                            _new_parts.append(_np)
+                            _done = True
+                        else:
+                            _new_parts.append(_p)
+                    if not _done:
+                        _new_parts = [{"type": "text", "text": _ooc}] + _new_parts
+                    _new_content = _new_parts
+                else:
+                    _new_content = _ooc + "\n\n" + (_tc if isinstance(_tc, str) else str(_tc))
+                messages[_cn_idx] = {**_tgt, "content": _new_content}
+                print(f"🎯 Character note folded into user turn — {_cn_where}, OOC-wrapped ({len(_cn)} chars)")
+            else:
+                print("⚠️ Character note set but no user turn found — note not injected this turn")
 
     # Build final ChatML prompt from ALL messages
     prompt_parts = []
@@ -4186,7 +4136,13 @@ def chat():
         prompt = system_block + trimmed_convo
         print(f"✂️ Prompt trimmed: kept system block ({system_words} words) + {len(surviving_turns)} conversation turns (was {len(words)} words total)", flush=True)
     
-    prompt = prompt.strip().replace("\x00", "")
+    # ⚠️ DO NOT revert to a bare .strip() — it eats the \n after the assistant
+    # header and causes token#1 EOS (empty responses / mid-sentence cuts).
+    # The ChatML assistant header MUST keep its terminating newline (line ~4556
+    # deliberately appends it) or the model emits EOS as token #1.
+    prompt = prompt.replace("\x00", "").lstrip().rstrip(" \t\r\n")
+    if not continue_prefix:
+        prompt = prompt + "\n"   # restore assistant-header terminating newline
 
     # ── Scan for embedded ChatML tokens that would cause zero-output ──────
     # Split on the assistant tag — everything before it is the context block.
@@ -4232,7 +4188,23 @@ def chat():
 
     sampling = load_sampling_settings()
 
-    if has_images:
+    # ⚠️ DO NOT REVERT this backend_mode-first check (reopens the "images never
+    # reach cloud" bug). Image-bearing turns must take the LOCAL vision path
+    # ONLY when backend_mode == 'local'. In cloud modes (openai/anthropic) the
+    # local mmproj guard below would either 400 ("model can't see images") or
+    # silently route the image to the local model — so the image would never
+    # reach the cloud provider. Reading backend_mode here lets image turns fall
+    # through to the cloud branches (~OpenAI ~4925 / ~Anthropic ~5039), which now
+    # forward images natively: OpenAI passes the frontend's image_url blocks
+    # through unchanged; Anthropic converts them to base64 image blocks in
+    # _anthropic_normalize(). See changes.md (June 5 2026 — cloud image vision).
+    try:
+        with open('settings.json', 'r', encoding='utf-8') as _bmsf:
+            _backend_mode_for_vision = json.load(_bmsf).get('backend_mode', 'local')
+    except Exception:
+        _backend_mode_for_vision = 'local'
+
+    if has_images and _backend_mode_for_vision == 'local':
         # Vision-capability guard — images only mean anything if the loaded
         # model has an mmproj (vision) file. Without it the image would be
         # silently dropped or error out on the model server, so fail loudly
@@ -4407,6 +4379,22 @@ def chat():
         except Exception:
             _oaist = {}
 
+        # ── Cloud master gate ──────────────────────────────────
+        # Cloud API (OpenAI/Anthropic) must NEVER be used unless cloud_api_enabled
+        # is explicitly true. There is no automatic local→cloud fallback — cloud is
+        # selected via backend_mode — so this gate refuses a cloud backend_mode when
+        # the master switch is off, rather than silently using a paid API. It does
+        # NOT auto-route to local: per spec we surface an error so the operator
+        # knows to start llama.cpp or enable cloud. Toggle via the 🌐 Cloud button
+        # (/cloud_api_enabled) or set cloud_api_enabled in settings.json. (changes.md.)
+        _backend_mode  = _oaist.get('backend_mode', 'local')
+        _cloud_enabled = bool(_oaist.get('cloud_api_enabled', False))
+        if _backend_mode in ('openai', 'anthropic') and not _cloud_enabled:
+            print(f"🚫 Cloud backend '{_backend_mode}' selected but cloud_api_enabled=false "
+                  f"— refusing (cloud disabled).", flush=True)
+            return ("⚠️ Local backend unavailable. Cloud API is disabled. "
+                    "Check that llama.cpp is running.", 503)
+
         if _oaist.get('backend_mode', 'local') == 'openai':
             _oai_key   = _oaist.get('openai_api_key', '').strip()
             _oai_model = _oaist.get('openai_model', 'gpt-4o').strip() or 'gpt-4o'
@@ -4420,7 +4408,19 @@ def chat():
             for _m in active_chat:
                 _role = _m.get("role", "user")
                 _content = _m.get("content", "")
+                # ⚠️ Forward multimodal turns NATIVELY — the frontend already emits
+                # OpenAI's own vision format ({"type":"image_url","image_url":{…}}),
+                # so a turn carrying any image block is passed through unchanged.
+                # DO NOT re-flatten image turns to text here — that silently drops
+                # the image (the bug this fix closes). Only text-only list turns
+                # collapse to a string. See changes.md (June 5 2026 — cloud image
+                # vision). NOTE: with web search ON the follow-up turn is still
+                # rebuilt as a string (_web_search_stream_openai phase 4), so
+                # image+web-search-on remains a known gap — left out of scope.
                 if isinstance(_content, list):
+                    if any(p.get("type") == "image_url" for p in _content):
+                        _oai_messages.append({"role": _role, "content": _content})
+                        continue
                     _content = " ".join(p.get("text", "") for p in _content if p.get("type") == "text")
                 if _content:
                     _oai_messages.append({"role": _role, "content": _content})
@@ -4713,6 +4713,50 @@ def chat():
         else:
             print(f"✅ n_predict={_n_predict} (prompt {_prompt_real_est} real / {_ctx_size_live} ctx)", flush=True)
 
+        # Live token monitor — prompt-side snapshot (see _LAST_TOKEN_STATS).
+        # Written here because every figure the readout needs is final at this
+        # point: exact prompt tokens, the live ctx, the capped n_predict, and
+        # the post-trim history counts. Reply-side fields (last_gen) are filled
+        # in later by stream_model_response. Best-effort, never fatal.
+        try:
+            _mon_kept = _temp_convo_posttrim
+            _mon_dropped = max(0, _temp_convo_pretrim - _temp_convo_posttrim)
+            _LAST_TOKEN_STATS.update({
+                "prompt_tokens": _prompt_real_est,
+                "ctx_size": _ctx_size_live,
+                "n_predict": _n_predict,
+                "convo_kept": _mon_kept,
+                "convo_dropped": _mon_dropped,
+                "model": CURRENT_MODEL,
+                "ts": time.time(),
+                # reply-side fields cleared so a fresh turn doesn't show the
+                # previous turn's generated count until this turn completes.
+                "last_gen": None,
+                "last_eval": None,
+                "stop_reason": None,
+            })
+        except Exception:
+            pass
+
+        # ⏱️ TEMP DIAGNOSTIC (remove after EOS-cliff/Continue verification) —
+        # consolidated per-turn budget line: EXACT prompt tokens (from /tokenize),
+        # how many conversation messages survived trim vs were dropped, and the
+        # active MAX_PROMPT_TOKENS cap. The resulting stop_type is logged
+        # separately by the "⏱️ TEMP STOP" line in stream_model_response (it is
+        # only known after generation completes). Grep "⏱️ TEMP" to see both.
+        try:
+            from truncation import MAX_PROMPT_TOKENS as _temp_cap
+            _temp_dropped = _temp_convo_pretrim - _temp_convo_posttrim
+            print(
+                f"⏱️ TEMP /chat BUDGET: real_prompt_tokens={_prompt_real_est} "
+                f"(ctx={_ctx_size_live}, cap={_temp_cap} real) | n_predict={_n_predict} | "
+                f"convo_msgs kept={_temp_convo_posttrim} dropped={_temp_dropped} "
+                f"(pre-trim={_temp_convo_pretrim})",
+                flush=True,
+            )
+        except Exception as _te:
+            print(f"⏱️ TEMP /chat BUDGET: log failed: {_te!r}", flush=True)
+
         # 🩺 DEBUG: ignore_eos toggle. When settings.json has
         # `"ignore_eos": true`, this turn:
         #   1) sends `ignore_eos: true` to llama.cpp so the real EOS token
@@ -4722,6 +4766,11 @@ def chat():
         # ⚠️ DIAGNOSTIC ONLY — leave off in normal use. Read once at
         # request entry into `_ignore_eos_req`.
         _ignore_eos = _ignore_eos_req
+        # Soft EOS logit bias — curbs mid-sentence truncation where the model
+        # emits the real EOS token (id 2 = </s>) mid-stream. Read alongside the
+        # other sampler params; tunable via settings.json "eos_logit_bias".
+        # ⚠️ DO NOT remove — see CHANGES.md (reopens mid-sentence truncation).
+        _eos_logit_bias = float(sampling.get("eos_logit_bias", 0.0))
         _stop_tokens = get_stop_tokens()
         if _ignore_eos:
             _stop_tokens = [s for s in _stop_tokens if s != "<|im_end|>"]
@@ -4738,12 +4787,46 @@ def chat():
             "min_p": sampling.get("min_p", 0.05),
             "top_k": sampling.get("top_k", 40),
             "repeat_penalty": sampling["repeat_penalty"],
+            # Repetition control — division of labour (see CHANGES.md Jun 1/3/10):
+            # DRY is the distant-verbatim HARD block on this build (b8994):
+            # dry_multiplier>0 + dry_penalty_last_n=-1 (full ctx) blocks long
+            # verbatim copies at any distance — proven by the Jun 3 Harness B
+            # control (DRY off → 100% passage copy EVEN WITH full-context basic
+            # penalty). The basic repeat_penalty (1.1) only handles SHORT-range
+            # looping/stutter, so its window is 256 — full-context (-1) hollowed
+            # the distribution at stop-points (÷1.1 on every token ever used,
+            # boosting untrained vocab past min_p → <SPECIAL_*>/foreign-script
+            # garbage tails). ⚠️ DO NOT set repeat_last_n back to -1 — reopens
+            # the hollowing. ⚠️ DO NOT touch the DRY params — that reopens the
+            # distant-copy bug. (no_repeat_ngram_size was removed — it is NOT a
+            # llama.cpp param and was silently dropped by the server.)
+            "repeat_last_n": sampling.get("repeat_last_n", 256),
+            "dry_multiplier": sampling.get("dry_multiplier", 0.8),
+            "dry_base": sampling.get("dry_base", 1.75),
+            "dry_allowed_length": sampling.get("dry_allowed_length", 10),
+            "dry_penalty_last_n": sampling.get("dry_penalty_last_n", -1),
             "frequency_penalty": sampling.get("frequency_penalty", 0.0),
             "presence_penalty": sampling.get("presence_penalty", 0.0),
             "stream": True,
             "stop": _stop_tokens,
             "ignore_eos": _ignore_eos,
         }
+
+        # Always hard-ban the reserved special-token dead zone (ids 14–999) on
+        # the local /chat path — see RESERVED_SPECIAL_BAN. Unconditional: the
+        # dead tokens are never wanted regardless of EOS-bias/ignore_eos state.
+        # list() copy so the EOS append below never mutates the module constant.
+        payload["logit_bias"] = list(RESERVED_SPECIAL_BAN)
+        # Apply the soft EOS logit bias only when ignore_eos is False — when it
+        # is True the server already drives EOS to -inf (logit_bias would be
+        # redundant). token id 2 = </s> EOS for Mistral-Nemo/Tekken vocab
+        # (confirmed via GGUF metadata + /tokenize). <|im_end|> is NOT a vocab
+        # token (it's a string stop-word), so it is not logit-biasable. Id 2 is
+        # outside the banned 14–999 range, so the ban can never silence EOS.
+        # ⚠️ DO NOT revert — removing this reopens the mid-sentence truncation
+        # bug. Do not "clean up" the logit_bias.
+        if not _ignore_eos and _eos_logit_bias != 0.0:
+            payload["logit_bias"].append([2, _eos_logit_bias])
 
         # 🩺 Unconditional sampling-payload log — diagnostic for the early-EOS
         # cutoff. Shows the exact JSON sent to llama.cpp on every turn. Prompt
@@ -4753,6 +4836,19 @@ def chat():
         # cutoff is root-caused.
         _log_payload = {k: v for k, v in payload.items() if k != "prompt"}
         _log_payload["prompt"] = f"<prompt: {len(payload['prompt'])} chars>"
+        # logit_bias is now always present (986 reserved-special ban entries) —
+        # compact it in the log so the per-turn line stays readable, and surface
+        # the EOS-bias decision explicitly instead of reading [0][1] (index 0 is
+        # a ban entry, not the EOS entry, since the ban list comes first).
+        _log_payload["logit_bias"] = (
+            f"<{len(payload['logit_bias'])} entries: ban ids 14-999 @ false (-inf)"
+            f"{' + [2, ' + str(_eos_logit_bias) + ']' if len(payload['logit_bias']) > len(RESERVED_SPECIAL_BAN) else ''}>"
+        )
+        _log_payload["eos_logit_bias"] = (
+            _eos_logit_bias
+            if (not _ignore_eos and _eos_logit_bias != 0.0)
+            else f"<not applied: ignore_eos={_ignore_eos} bias={_eos_logit_bias}>"
+        )
         print(f"🩺 PAYLOAD → llama.cpp: {json.dumps(_log_payload)}", flush=True)
 
         use_web_search = char_data.get("use_web_search", False)
@@ -4766,6 +4862,26 @@ def chat():
         import re as _csre
         _cs_user_msg = user_input.strip()
 
+        # ── Web-intent bypass — explicit web search ALWAYS beats chat history ──
+        # _CHAT_SEARCH_VERBS includes a bare `search\s+for`, which matched
+        # phrases like "do a web search for X" and pre-empted the web path: this
+        # always-on chat-search block returns before _web_search_stream ever
+        # runs. So when the message carries explicit web-search phrasing, skip
+        # the chat-search classifier entirely and let execution fall through to
+        # the web path below (its own _explicit_pat matches these phrases
+        # correctly). ⚠️ DO NOT revert. (changes.md.)
+        _WEB_INTENT_RE = _csre.compile(
+            r'\b(?:web\s+search|search\s+the\s+web|search\s+online|'
+            r'search\s+(?:the\s+)?internet|google|look\s+it\s+up|look\s+up|'
+            r'find\s+online|do\s+a\s+(?:web\s+)?search|run\s+a\s+(?:web\s+)?search|'
+            r'can\s+you\s+search|search\s+for)\b',
+            _csre.IGNORECASE,
+        )
+        _web_intent_bypass = bool(_WEB_INTENT_RE.search(_cs_user_msg))
+        if _web_intent_bypass:
+            print(f"🌐 Web-intent bypass — skipping chat-search classifier for: "
+                  f"{repr(_cs_user_msg[:80])}", flush=True)
+
         # Chat history search — only fires when an EXPLICIT search verb is present.
         # Uses _classify_chat_search_intent (defined near do_chat_search) so the
         # primary trigger stays in lockstep with the early-memory-skip check above.
@@ -4774,7 +4890,11 @@ def chat():
         # phrasing without a search verb ("remember…last time", "the other day")
         # suppresses — the passive session summary in the system block handles it.
         # ⚠️ Do not revert to the old recall-verb-as-trigger logic. (changes.md.)
-        _should_chat_search, _recall_suppressed_search = _classify_chat_search_intent(_cs_user_msg)
+        # When the web-intent bypass fired, force-skip the classifier (web wins).
+        if _web_intent_bypass:
+            _should_chat_search, _recall_suppressed_search = False, False
+        else:
+            _should_chat_search, _recall_suppressed_search = _classify_chat_search_intent(_cs_user_msg)
         if _recall_suppressed_search and _diag_verbose:
             print(
                 "🧠 Recall phrasing detected, no search verb — suppressing chat search, "
@@ -4976,6 +5096,13 @@ def chat():
                     f"Do not include a source link in your response."
                 )
             else:
+                # No results AND no Brave key → the DDG Instant Answer fallback is
+                # near-useless for general/ambiguous queries (see changes.md). Tell
+                # the user the search backend is unconfigured, not just "nothing
+                # found", so they know to add a key rather than assume the topic
+                # has no info. Only when no key is set — a real Brave miss is genuine.
+                if not get_brave_api_key():
+                    yield "⚠️ *No Brave Search key configured — results may be incomplete. Add your key via the 🔍 Search Key button.*\n\n"
                 augmented_user_msg = (
                     f"{user_input.strip()}\n\n"
                     f"[Web search returned zero results for '{query}'. "
@@ -5124,11 +5251,19 @@ def chat():
                 ).strip()
                 print(f"🔍 Search trigger check on: {repr(_user_msg[:100])}", flush=True)
 
-                # ── Search-trigger detection — two precision tiers ──────────
+                # ── Search-trigger detection — three precision tiers ────────
                 # EXPLICIT triggers are unambiguous imperatives ("search for X",
                 # "google that", "look it up"). They virtually never occur as
                 # narration, so a match fires the search immediately — the
                 # fast-path, no extra model call.
+                #
+                # FACTUAL triggers are unambiguous information-seeking patterns
+                # ("who won X", "what's the price of Y", "where can I buy Z").
+                # These skip the gate and fire directly. The gate is unreliable
+                # for them because the local model trusts its own (confabulated)
+                # knowledge and returns NO_SEARCH. The self-reference filter
+                # still applies, so narration ("I already know who won") is
+                # suppressed.
                 #
                 # AMBIGUOUS triggers recur innocently in ordinary speech ("find
                 # out where she is", "look up his number", "any news on your
@@ -5146,16 +5281,32 @@ def chat():
                     r'check\s+online|look\s+online|search\s+online|find\s+(?:it\s+)?online'
                     r')'
                 )
+                _factual_pat = (
+                    r'\b(?:'
+                    r'who\s+(?:won|wrote|invented|created|discovered|founded|owns|runs|leads|directed|painted|composed|coined|killed|replaced|started|made|built|designed|developed)\b|'
+                    r"who(?:'s| is| was)\s+(?:the\s+)?(?:current|new|next|latest|youngest|oldest|first|best|top|head|lead|chief|CEO|president|prime minister)\b|"
+                    r"what(?:'s| is)\s+(?:the\s+)?(?:name|brand|price|cost|capital|population|height|weight|distance|address|phone number|score|result|winner)\s+(?:of|for)\b|"
+                    r"where\s+(?:can|do|should)\s+(?:you|i|we|one)\s+(?:buy|get|find|order|download)\b"
+                    r')'
+                )
                 _ambiguous_pat = (
                     r'\b(?:'
                     r'look\s+up\s+\w+|'
                     r'find out\s+(?:about|what|who|when|where|why|how|if|whether)\s+\w|'
                     r'any (?:news|updates|info|word) (?:on|about)\b|'
                     r'(?:get|give)\s+me\s+(?:the\s+)?(?:latest|current|up[ -]to[ -]date|fresh)\s+'
-                    r'(?:info|news|status|updates?)?\s*(?:on|about)\b'
+                    r'(?:info|news|status|updates?)?\s*(?:on|about)\b|'
+                    r"what(?:'s| is| are)\s+(?:that|the|a|those|these)\s+\w|"
+                    r'do you know\s+(?:what|who|when|where|why|how|if|whether|the|a|that|anything)\b|'
+                    r'can you find out\b|'
+                    r'(?:any|got an?)\s+(?:idea|clue|thoughts?)\s+(?:what|who|when|where|why|how|if|whether|about|on)\b|'
+                    r'tell me\s+(?:about|what|who|when|where|why|how)\b|'
+                    r"what(?:'s| is)\s+(?:that|the|it)\s+called\b|"
+                    r'when\s+(?:did|does|will|is|was)\s+\w'
                     r')'
                 )
                 _explicit_matches = list(_re.finditer(_explicit_pat, _user_msg, _re.IGNORECASE))
+                _factual_matches = list(_re.finditer(_factual_pat, _user_msg, _re.IGNORECASE))
                 _ambiguous_matches = list(_re.finditer(_ambiguous_pat, _user_msg, _re.IGNORECASE))
 
                 # Clause-scoped self-reference filter. For each trigger match,
@@ -5201,6 +5352,27 @@ def chat():
                         return False  # delegation, not narration
                     return True
 
+                def _is_clause_start(text, pos):
+                    """True if position is at the start of a clause/sentence.
+                    - pos == 0
+                    - everything before pos is whitespace
+                    - immediately preceded by sentence punctuation + whitespace (. ! ? , ; :)
+                    Relative clauses ("the woman who runs", "the place where we met") sit
+                    mid-sentence after a noun antecedent, so they fail this check.
+                    """
+                    if pos == 0:
+                        return True
+                    prefix = text[:pos]
+                    if prefix.strip() == "":
+                        return True
+                    # Walk back through whitespace
+                    i = pos - 1
+                    while i >= 0 and text[i].isspace():
+                        i -= 1
+                    if i < 0:
+                        return True
+                    return text[i] in '.!?,;:'
+
                 _should_search = False
                 _firing_trigger = None
                 _gate_query = None  # set when the intent gate supplies the query
@@ -5213,7 +5385,22 @@ def chat():
                         break
                 if _should_search:
                     print(f"🔍 Explicit search request: {repr(_firing_trigger)}", flush=True)
-                else:
+
+                # 1.5 FACTUAL imperative-strength info-seeking (not self-referential) → search now.
+                if not _should_search:
+                    for _m in _factual_matches:
+                        if _is_self_ref_at(_user_msg, _m.start()):
+                            continue
+                        if not _is_clause_start(_user_msg, _m.start()):
+                            print(f"💬 Factual pattern at non-clause-start (relative clause?), suppressed: {repr(_m.group(0))} in context {repr(_user_msg[max(0,_m.start()-25):_m.start()+25])}", flush=True)
+                            continue
+                        _should_search = True
+                        _firing_trigger = _m.group(0)
+                        break
+                    if _should_search:
+                        print(f"🔍 Factual question pattern: {repr(_firing_trigger)}", flush=True)
+
+                if not _should_search:
                     # 2. AMBIGUOUS phrase (not self-referential) → ask the gate.
                     _amb_hit = next(
                         (_m for _m in _ambiguous_matches
@@ -5432,7 +5619,14 @@ def chat():
                             # can't leak and the detector can't re-fire, then
                             # keep streaming the rest of the reply.
                             _supp_query = _wsm.group(1).strip()
-                            print(f"\U0001f6ab Model-emitted [WEB SEARCH:] SUPPRESSED (gate said no): {_supp_query!r}", flush=True)
+                            print(
+                                "\n========================================================="
+                                "\n\U0001f6ab [WEB SEARCH:] TAG SUPPRESSED (gate said no)"
+                                f"\nUser message: {_user_msg[:200]!r}"
+                                f"\nModel wanted to search for: {_supp_query!r}"
+                                "\n=========================================================",
+                                flush=True,
+                            )
                             _ws_rolling   = _re.sub(r"\[WEB SEARCH:\s*.+?\]", "", _ws_rolling, count=1, flags=_re.IGNORECASE)
                             _post         = _re.sub(r"\[WEB SEARCH:\s*.+?\]", "", _post, flags=_re.IGNORECASE)
                             _post         = _re.sub(r"\[WEB SEARCH:[^\]]*$", "", _post, flags=_re.IGNORECASE)
@@ -5917,6 +6111,24 @@ def chat():
                             _ooc_holdback[0] = ""
                             _ooc_guard_active[0] = False
                         _tail = _re3_inner.sub(r'\n(?:user|assistant|system)\b[^\n]*$', '', _tail, flags=_re3_inner.IGNORECASE)
+                        # Backstop for a ChatML boundary fragment that landed inside
+                        # the final _TAIL_LEN buffer: it is never re-scanned by
+                        # strip_chatml_leakage, so strip it here — but ONLY at the very
+                        # END of _tail (anchored to $), so | or > elsewhere in the
+                        # buffer is left untouched. Covers the cross-chunk split points.
+                        # ⚠️ DO NOT revert — see CHANGES.md (|> trailing-fragment streaming fix).
+                        # Fuzzy terminal-marker net: a sampler-mangled near-miss marker
+                        # (e.g. <|imended|> — DRY swerved off the exact 6-piece <|im_end|>
+                        # sequence) evades BOTH the server stop-string match and every
+                        # exact-spelling rule here and in strip_chatml_leakage. Catch the
+                        # marker SHAPE instead: <|im + word-chars + |>, anchored to $.
+                        # The full <|im…|> envelope is required, so prose/code containing
+                        # <| or |> mid-text is never touched. Runs before the exact-fragment
+                        # rule so a complete <|im_end|> tail is removed whole (the fragment
+                        # alternation alone strips its im_end|> half and leaves <|).
+                        # See CHANGES.md (Jun 10 2026, <|imended|> fuzzy backstop).
+                        _tail = _re3_inner.sub(r'<\|im\w*\|>$', '', _tail)
+                        _tail = _re3_inner.sub(r'(?:<\|im_end|im_end\|>|_end\|>|<\||\|>|<)$', '', _tail)
                         if _tail and not _suppress[0]:
                             yield _tail
                         if _buf and not _suppress[0] and '[WEB SEARCH RESULTS' not in _buf:
@@ -5935,7 +6147,61 @@ def chat():
             except Exception as e:
                 print(f"❌ Chat error: {e}", flush=True)
                 return f"⚠️ Error contacting model: {e}", 500
-        
+
+
+# --------------------------------------------------
+# Live Token Monitor — feeds the on-screen TOKEN MONITOR readout (index page)
+# --------------------------------------------------
+@app.route('/token_stats', methods=['GET'])
+def token_stats():
+    """Return the last local-model turn's token budget plus live config seeds.
+
+    The per-turn actuals (prompt_tokens / n_predict / last_gen / history counts)
+    come from _LAST_TOKEN_STATS, populated on the raw llama.cpp path. The seed
+    fields (ctx_size / gpu_layers / model) come from settings.json so the
+    readout is populated on page load BEFORE the first message and reflects a
+    context-limit / gpu-layers change as soon as the model is relaunched.
+
+    Cloud (OpenAI/Anthropic) turns don't write _LAST_TOKEN_STATS — there's no
+    local KV budget to monitor — so after a cloud turn the readout simply shows
+    the last local turn (or seed-only if there hasn't been one)."""
+    stats = dict(_LAST_TOKEN_STATS)  # shallow copy — never hand out the live dict
+
+    # Seed ctx_size / gpu_layers / model from settings so the gauge works with
+    # no turn yet, and tracks launch-arg changes. Per-turn ctx_size (the live
+    # value actually used) wins when present.
+    ctx_seed, gpu_layers, model_seed = 16384, None, None
+    try:
+        with open(os.path.join(os.path.dirname(__file__), 'settings.json'), 'r', encoding='utf-8') as f:
+            _s = json.load(f)
+        _args = _s.get('llama_args', {}) or {}
+        ctx_seed = int(_args.get('ctx_size', 16384))
+        gpu_layers = _args.get('n_gpu_layers', None)
+        model_seed = _s.get('llama_last_model', None)
+    except Exception:
+        pass
+
+    ctx_size = stats.get('ctx_size') or ctx_seed
+    prompt_tokens = stats.get('prompt_tokens')
+    headroom = (ctx_size - prompt_tokens) if isinstance(prompt_tokens, int) else None
+
+    return jsonify({
+        "ok": True,
+        "has_turn": isinstance(prompt_tokens, int),
+        "prompt_tokens": prompt_tokens,
+        "ctx_size": ctx_size,
+        "headroom": headroom,
+        "n_predict": stats.get('n_predict'),
+        "last_gen": stats.get('last_gen'),
+        "last_eval": stats.get('last_eval'),
+        "stop_reason": stats.get('stop_reason'),
+        "convo_kept": stats.get('convo_kept'),
+        "convo_dropped": stats.get('convo_dropped'),
+        "model": stats.get('model') or model_seed,
+        "gpu_layers": gpu_layers,
+    })
+
+
 # --------------------------------------------------
 # Chat History Persistence (NEW SIDEBAR SYSTEM)
 # --------------------------------------------------
@@ -6001,400 +6267,15 @@ def get_chat_history():
 
 
 # --------------------------------------------------
-# System Prompt Route
+# Character-card routes extracted to character_routes.py
+# (character_bp): /active_character (GET/POST), /list_characters,
+# /create_character, /characters/<filename>, /characters/<n>.json,
+# /character_voice/<n> (GET/POST), /character_system_prompt/<n> (GET/POST),
+# /get_character/<n>. CHARACTERS_DIR + active-character helpers live there.
+# chat() reads characters/<name>.json directly (not via these routes).
 # --------------------------------------------------
-# --------------------------------------------------
-# System Prompt Template Routes
-# --------------------------------------------------
-
-def get_system_prompts_dir():
-    return os.path.join(os.path.dirname(__file__), 'system_prompts')
-
-def get_active_prompt_filename():
-    try:
-        with open('settings.json', 'r', encoding='utf-8') as f:
-            return json.load(f).get('active_system_prompt', 'default.txt')
-    except Exception:
-        return 'default.txt'
-
-def set_active_prompt_filename(filename):
-    try:
-        with open('settings.json', 'r', encoding='utf-8') as f:
-            s = json.load(f)
-    except Exception:
-        s = {}
-    s['active_system_prompt'] = filename
-    with open('settings.json', 'w', encoding='utf-8') as f:
-        json.dump(s, f, indent=2)
 
 
-def resolve_character_prompt_files(char_data):
-    """Resolve the system-prompt + paired example / post-history filenames for
-    a character, applying the canonical resolution chain:
-      per-character bound filename → global active filename.
-
-    char_data may be None or {} — handled gracefully (→ global active).
-    A None-valued or whitespace-only "system_prompt" field also falls back.
-
-    Returns (sp_filename, example_filename, posthistory_filename) as bare
-    filenames (NOT full paths) — callers join with get_system_prompts_dir().
-    The paired files share the SP stem: e.g. GPT-4o.txt → GPT-4o.example.txt,
-    GPT-4o.posthistory.txt.
-
-    ⚠️ Any route that loads a character SP or its paired files MUST call this —
-    do NOT re-inline the resolution chain. Inline duplication is exactly how
-    the /continue route silently drifted to global-only SP. (changes.md.)
-    """
-    char_sp = ((char_data or {}).get("system_prompt") or "").strip()
-    sp_filename = char_sp or get_active_prompt_filename()
-    base = sp_filename.rsplit('.', 1)[0] if '.' in sp_filename else sp_filename
-    return sp_filename, base + '.example.txt', base + '.posthistory.txt'
-
-@app.route('/system_prompts/list', methods=['GET'])
-def list_system_prompts():
-    folder = get_system_prompts_dir()
-    os.makedirs(folder, exist_ok=True)
-    files = sorted([
-        f for f in os.listdir(folder)
-        if f.endswith('.txt')
-        and not f.endswith('.example.txt')
-        and not f.endswith('.posthistory.txt')
-    ])
-    active = get_active_prompt_filename()
-    return jsonify({'files': files, 'active': active})
-
-@app.route('/system_prompts/load/<filename>', methods=['GET'])
-def load_system_prompt_file(filename):
-    if '..' in filename or '/' in filename or os.sep in filename:
-        return jsonify({'error': 'Invalid filename'}), 400
-    folder = get_system_prompts_dir()
-    path = os.path.join(folder, filename)
-    if not os.path.exists(path):
-        return jsonify({'error': 'File not found'}), 404
-    with open(path, 'r', encoding='utf-8') as f:
-        return f.read(), 200, {'Content-Type': 'text/plain; charset=utf-8'}
-
-@app.route('/system_prompts/save/<filename>', methods=['POST'])
-def save_system_prompt_file(filename):
-    if '..' in filename or '/' in filename or os.sep in filename:
-        return jsonify({'error': 'Invalid filename'}), 400
-    folder = get_system_prompts_dir()
-    os.makedirs(folder, exist_ok=True)
-    data = request.get_data(as_text=True)
-    path = os.path.join(folder, filename)
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(data)
-    print(f'✅ Saved system prompt: {filename}')
-    return jsonify({'status': 'saved', 'filename': filename})
-
-@app.route('/system_prompts/activate/<filename>', methods=['POST'])
-def activate_system_prompt(filename):
-    if '..' in filename or '/' in filename or os.sep in filename:
-        return jsonify({'error': 'Invalid filename'}), 400
-    folder = get_system_prompts_dir()
-    path = os.path.join(folder, filename)
-    if not os.path.exists(path):
-        return jsonify({'error': 'File not found'}), 404
-    set_active_prompt_filename(filename)
-    print(f'✅ Active system prompt set to: {filename}')
-    return jsonify({'status': 'ok', 'active': filename})
-
-@app.route('/system_prompts/delete/<filename>', methods=['POST'])
-def delete_system_prompt(filename):
-    if '..' in filename or '/' in filename or os.sep in filename:
-        return jsonify({'error': 'Invalid filename'}), 400
-    folder = get_system_prompts_dir()
-    path = os.path.join(folder, filename)
-    if not os.path.exists(path):
-        return jsonify({'error': 'File not found'}), 404
-    os.remove(path)
-    # Clean up the paired post-history file so it doesn't orphan
-    _base = filename.rsplit('.', 1)[0] if '.' in filename else filename
-    _ph_path = os.path.join(folder, _base + '.posthistory.txt')
-    if os.path.exists(_ph_path):
-        os.remove(_ph_path)
-        print(f'🗑️ Deleted paired post-history: {_base}.posthistory.txt')
-    # If deleted file was active, fall back to default.txt
-    if get_active_prompt_filename() == filename:
-        set_active_prompt_filename('default.txt')
-    print(f'🗑️ Deleted system prompt: {filename}')
-    return jsonify({'status': 'deleted'})
-
-@app.route('/system_prompts/load_example/<filename>', methods=['GET'])
-def load_system_prompt_example(filename):
-    """Load the paired .example.txt for a system prompt template."""
-    if '..' in filename or '/' in filename or os.sep in filename:
-        return jsonify({'error': 'Invalid filename'}), 400
-    # Strip existing extension and add .example.txt
-    base = filename.rsplit('.', 1)[0] if '.' in filename else filename
-    example_filename = base + '.example.txt'
-    folder = get_system_prompts_dir()
-    path = os.path.join(folder, example_filename)
-    if not os.path.exists(path):
-        return '', 200, {'Content-Type': 'text/plain; charset=utf-8'}  # empty = none yet
-    with open(path, 'r', encoding='utf-8') as f:
-        return f.read(), 200, {'Content-Type': 'text/plain; charset=utf-8'}
-
-@app.route('/system_prompts/save_example/<filename>', methods=['POST'])
-def save_system_prompt_example(filename):
-    """Save the paired .example.txt for a system prompt template.
-    If content is empty, deletes the file rather than writing a blank one."""
-    if '..' in filename or '/' in filename or os.sep in filename:
-        return jsonify({'error': 'Invalid filename'}), 400
-    base = filename.rsplit('.', 1)[0] if '.' in filename else filename
-    example_filename = base + '.example.txt'
-    folder = get_system_prompts_dir()
-    os.makedirs(folder, exist_ok=True)
-    data = request.get_data(as_text=True).strip()
-    path = os.path.join(folder, example_filename)
-    if not data:
-        # Empty content — delete the file if it exists, don't create a blank one
-        if os.path.exists(path):
-            os.remove(path)
-            print(f'🗑️ Deleted empty example dialog: {example_filename}')
-        return jsonify({'status': 'saved', 'filename': example_filename})
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(data)
-    print(f'✅ Saved example dialog: {example_filename}')
-    return jsonify({'status': 'saved', 'filename': example_filename})
-
-@app.route('/system_prompts/load_posthistory/<filename>', methods=['GET'])
-def load_system_prompt_posthistory(filename):
-    """Load the paired .posthistory.txt for a system prompt template.
-    This is the SillyTavern-style post-history directive — it rides the [OOC]
-    depth-0 packet (last item, closest to generation) rather than the system
-    block, but it is stored alongside its template so switching templates
-    switches the directive."""
-    if '..' in filename or '/' in filename or os.sep in filename:
-        return jsonify({'error': 'Invalid filename'}), 400
-    base = filename.rsplit('.', 1)[0] if '.' in filename else filename
-    ph_filename = base + '.posthistory.txt'
-    folder = get_system_prompts_dir()
-    path = os.path.join(folder, ph_filename)
-    if not os.path.exists(path):
-        return '', 200, {'Content-Type': 'text/plain; charset=utf-8'}  # empty = none yet
-    with open(path, 'r', encoding='utf-8') as f:
-        return f.read(), 200, {'Content-Type': 'text/plain; charset=utf-8'}
-
-@app.route('/system_prompts/save_posthistory/<filename>', methods=['POST'])
-def save_system_prompt_posthistory(filename):
-    """Save the paired .posthistory.txt for a system prompt template.
-    If content is empty, deletes the file rather than writing a blank one."""
-    if '..' in filename or '/' in filename or os.sep in filename:
-        return jsonify({'error': 'Invalid filename'}), 400
-    base = filename.rsplit('.', 1)[0] if '.' in filename else filename
-    ph_filename = base + '.posthistory.txt'
-    folder = get_system_prompts_dir()
-    os.makedirs(folder, exist_ok=True)
-    data = request.get_data(as_text=True).strip()
-    path = os.path.join(folder, ph_filename)
-    if not data:
-        # Empty content — delete the file if it exists, don't create a blank one
-        if os.path.exists(path):
-            os.remove(path)
-            print(f'🗑️ Deleted empty post-history: {ph_filename}')
-        return jsonify({'status': 'saved', 'filename': ph_filename})
-    with open(path, 'w', encoding='utf-8') as f:
-        f.write(data)
-    print(f'✅ Saved post-history directive: {ph_filename}')
-    return jsonify({'status': 'saved', 'filename': ph_filename})
-
-# Legacy route - kept for backwards compatibility
-@app.route('/system_prompt.txt', methods=['GET', 'POST'])
-def system_prompt():
-    folder = get_system_prompts_dir()
-    active = get_active_prompt_filename()
-    file_path = os.path.join(folder, active)
-
-    if request.method == 'POST':
-        try:
-            os.makedirs(folder, exist_ok=True)
-            data = request.get_data(as_text=True)
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write(data)
-            print(f"✅ Saved active system prompt: {active}")
-            return jsonify({'status': 'saved'})
-        except Exception as e:
-            print(f"❌ System prompt save failed: {e}")
-            return jsonify({'error': str(e)}), 500
-
-    if not os.path.exists(file_path):
-        return jsonify({'error': 'Active system prompt file not found'}), 404
-
-    try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-            return content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
-    except Exception as e:
-        print(f"❌ System prompt load failed: {e}")
-        return jsonify({'error': str(e)}), 500
-        
-# --------------------------------------------------
-# List Characters (for config dropdown)
-# --------------------------------------------------
-# --------------------------------------------------
-# Active Character — server-side shared state (desktop ↔ mobile)
-# Mirrors the active-project pattern (projects/_active_project.json) so the
-# last-used character follows the user across devices instead of living in
-# per-device localStorage. ⚠️ This is intentionally GLOBAL — switching
-# character on one device switches it everywhere. Fine for single-user use.
-# --------------------------------------------------
-def _active_character_state_file():
-    return os.path.join(os.path.dirname(__file__), "characters", "_active_character.json")
-
-
-def get_active_character():
-    """Return the server-side active character name, or None. Never raises."""
-    try:
-        path = _active_character_state_file()
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f).get("active_character")
-    except Exception as e:
-        print(f"⚠️ Failed to read active character: {e}")
-    return None
-
-
-def set_active_character(character_name):
-    """Persist the server-side active character. Mirrors set_active_project()."""
-    try:
-        path = _active_character_state_file()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump({"active_character": character_name}, f, indent=2)
-    except Exception as e:
-        print(f"❌ Failed to set active character: {e}")
-
-
-@app.route("/active_character", methods=["GET"])
-def active_character_get():
-    """Return the shared active character so a client can restore it on load."""
-    return jsonify({"active_character": get_active_character()})
-
-
-@app.route("/active_character", methods=["POST"])
-def active_character_set():
-    """Persist the shared active character (called when a client switches)."""
-    data = request.get_json(silent=True) or {}
-    name = (data.get("active_character") or data.get("character") or "").strip()
-    set_active_character(name or None)
-    return jsonify({"success": True, "active_character": name or None})
-
-
-@app.route("/list_characters", methods=["GET"])
-def list_characters():
-    chars = []
-    char_dir = os.path.join(os.path.dirname(__file__), "characters")
-    if not os.path.exists(char_dir):
-        print("⚠️ Characters directory not found:", char_dir)
-        return jsonify([])
-
-    images_dir = os.path.join(os.path.dirname(__file__), "static", "images")
-    for file in os.listdir(char_dir):
-        if file in ("_active_character.json", "index.json"):
-            continue  # internal shared-state file / derived index, not a character
-        if file.endswith(".json"):
-            path = os.path.join(char_dir, file)
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if not isinstance(data, dict):
-                    continue
-                name = data.get("name", file.replace(".json", ""))
-                chars.append(name)
-
-                # Self-heal slideshow dangling refs: prune images[] entries
-                # whose file no longer exists in static/images, ALWAYS keeping
-                # the scalar `image` carrier first (even if its file is missing)
-                # so the array is never emptied of its primary. Only rewrites
-                # the .json when the array actually changed — steady-state (no
-                # dangling refs) does no writes. Never deletes any image file.
-                if "images" in data and isinstance(data["images"], list):
-                    carrier = (data.get("image") or "").strip()
-                    existing = [f for f in data["images"]
-                                if isinstance(f, str)
-                                and os.path.isfile(os.path.join(images_dir, f))]
-                    reconciled = ([carrier] if carrier else []) + \
-                                 [f for f in existing if f != carrier]
-                    if reconciled != data["images"]:
-                        data["images"] = reconciled
-                        try:
-                            with open(path, "w", encoding="utf-8") as wf:
-                                json.dump(data, wf, indent=2, ensure_ascii=False)
-                            print(f"🧹 Pruned slideshow dangling refs for {name}: -> {reconciled}")
-                        except Exception as we:
-                            print(f"⚠️ Could not rewrite {file} after slideshow prune: {we}")
-            except Exception as e:
-                print(f"⚠️ Failed to load {file}: {e}")
-                continue
-
-    # Self-heal: rewrite characters/index.json from the directory scan so the
-    # on-disk index always converges to reality. The directory is the single
-    # source of truth; index.json is a derived cache that other readers still
-    # consume as a JSON array of names (chat_routes.py: /chats/open ~175,
-    # auto_name_chat ~491, branch_chat ~746). This subsumes the May-21 desync
-    # fragility — a character present on disk but missing from the index (e.g.
-    # Andromeda) is reconciled on every call.
-    unique_sorted = sorted(set(chars))
-    try:
-        index_path = os.path.join(char_dir, "index.json")
-        with open(index_path, "w", encoding="utf-8") as f:
-            json.dump(unique_sorted, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        print(f"⚠️ Could not rewrite characters/index.json: {e}")
-
-    print(f"✅ /list_characters -> {unique_sorted}")
-    return jsonify(unique_sorted)
-    
-# --------------------------------------------------
-# Create New Character
-# --------------------------------------------------
-@app.route("/create_character", methods=["POST"])
-def create_character():
-    try:
-        data = request.get_json()
-        name = data.get("name", "").strip()
-        if not name:
-            return jsonify({"status": "error", "error": "Character name required"}), 400
-
-        char_dir = os.path.join(os.path.dirname(__file__), "characters")
-        os.makedirs(char_dir, exist_ok=True)
-
-        # Save the individual character file
-        char_path = os.path.join(char_dir, f"{name}.json")
-        char_data = {
-            "name": name,
-            "description": data.get("description", ""),
-            "main_prompt": data.get("main_prompt", ""),
-            "tagline": data.get("tagline", ""),
-            "scenario": data.get("scenario", ""),
-            "post_history": data.get("post_history", ""),
-            "character_note": data.get("character_note", ""),
-            "image": data.get("image", "")
-        }
-        with open(char_path, "w", encoding="utf-8") as f:
-            json.dump(char_data, f, indent=2, ensure_ascii=False)
-
-        # Update the characters index list
-        index_path = os.path.join(char_dir, "index.json")
-        if os.path.exists(index_path):
-            with open(index_path, "r", encoding="utf-8") as f:
-                characters = json.load(f)
-            if name not in characters:
-                characters.append(name)
-        else:
-            characters = [name]
-
-        with open(index_path, "w", encoding="utf-8") as f:
-            json.dump(sorted(characters), f, indent=2, ensure_ascii=False)
-
-        print(f"✅ Created new character: {name}")
-        return jsonify({"status": "ok", "name": name})
-
-    except Exception as e:
-        print(f"❌ Error creating character: {e}")
-        return jsonify({"status": "error", "error": str(e)}), 500
-        
 # --------------------------------------------------
 # Upload Character Image
 # --------------------------------------------------
@@ -6452,316 +6333,14 @@ def upload_image():
     except Exception as e:
         print(f"❌ Failed to process image: {e}")
         return jsonify({"error": str(e)}), 500
-        
-# --------------------------------------------------
-# Character Management
-# --------------------------------------------------
-@app.route('/characters/<path:filename>')
-def serve_characters(filename):
-    return send_from_directory('characters', filename)
-
-
-@app.route('/characters/<n>.json', methods=['POST'])
-def save_character(n):
-    try:
-        data = request.get_json()
-        path = os.path.join("characters", f"{n}.json")
-        # Preserve fields the config page doesn't know about (e.g. tts_voice)
-        # so they don't get wiped on every character save
-        if os.path.exists(path):
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    existing = json.load(f)
-                preserved_keys = ["tts_voice"]
-                for key in preserved_keys:
-                    if key in existing and key not in data:
-                        data[key] = existing[key]
-            except Exception:
-                pass  # If we can't read existing, just save what we have
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        print(f"✅ Character saved: {path}")
-
-        # Keep characters/index.json in sync — the editor-save path must never
-        # land a .json without registering it (mirrors create_character ~5862).
-        # list_characters also reconciles the index on each scan, but updating
-        # here keeps it correct between scans.
-        index_name = ((data.get("name") if isinstance(data, dict) else None) or n).strip()
-        try:
-            index_path = os.path.join("characters", "index.json")
-            if os.path.exists(index_path):
-                with open(index_path, "r", encoding="utf-8") as f:
-                    characters = json.load(f)
-                if not isinstance(characters, list):
-                    characters = []
-            else:
-                characters = []
-            if index_name and index_name not in characters:
-                characters.append(index_name)
-                with open(index_path, "w", encoding="utf-8") as f:
-                    json.dump(sorted(set(characters)), f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            print(f"⚠️ Could not update characters/index.json on save: {e}")
-
-        return jsonify({"success": True})
-    except Exception as e:
-        print(f"❌ Failed to save character {n}: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-@app.route('/character_voice/<n>', methods=['GET'])
-def get_character_voice(n):
-    """Get the saved TTS voice for a character."""
-    try:
-        path = os.path.join("characters", f"{n}.json")
-        if not os.path.exists(path):
-            return jsonify({"voice": None})
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return jsonify({"voice": data.get("tts_voice", None)})
-    except Exception as e:
-        return jsonify({"voice": None})
-
-
-@app.route('/character_voice/<n>', methods=['POST'])
-def set_character_voice(n):
-    """Save TTS voice for a character — only updates tts_voice field, leaves rest intact."""
-    try:
-        data = request.get_json()
-        voice = data.get("voice", "")
-        path = os.path.join("characters", f"{n}.json")
-        if not os.path.exists(path):
-            return jsonify({"success": False, "error": "Character not found"}), 404
-        with open(path, "r", encoding="utf-8") as f:
-            char_data = json.load(f)
-        char_data["tts_voice"] = voice
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(char_data, f, indent=2, ensure_ascii=False)
-        print(f"✅ Voice saved for {n}: {voice}")
-        return jsonify({"success": True})
-    except Exception as e:
-        print(f"❌ Failed to save voice for {n}: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
-
-
-@app.route('/character_system_prompt/<n>', methods=['GET'])
-def get_character_system_prompt(n):
-    """Get the saved system prompt template for a character."""
-    try:
-        path = os.path.join("characters", f"{n}.json")
-        if not os.path.exists(path):
-            return jsonify({"system_prompt": None})
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return jsonify({"system_prompt": data.get("system_prompt", None)})
-    except Exception as e:
-        return jsonify({"system_prompt": None})
-
-@app.route('/character_system_prompt/<n>', methods=['POST'])
-def set_character_system_prompt(n):
-    """Save system prompt template for a character — only updates system_prompt field, leaves rest intact."""
-    try:
-        data = request.get_json()
-        template = data.get("system_prompt", "")
-        path = os.path.join("characters", f"{n}.json")
-        if not os.path.exists(path):
-            return jsonify({"success": False, "error": "Character not found"}), 404
-        with open(path, "r", encoding="utf-8") as f:
-            char_data = json.load(f)
-        char_data["system_prompt"] = template
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(char_data, f, indent=2, ensure_ascii=False)
-        print(f"✅ System prompt saved for {n}: {template}")
-        return jsonify({"success": True})
-    except Exception as e:
-        print(f"❌ Failed to save system prompt for {n}: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # --------------------------------------------------
-# User Persona Management
+# User Persona Management / Editing routes extracted to user_routes.py
+# (user_bp): /users/<filename>, /set_active_user, /get_user, /save_user,
+# /list_users, /get_all_users, /get_active_user. USERS_DIR stays defined in
+# this module for chat()'s persona-bio load.
 # --------------------------------------------------
-@app.route('/users/<path:filename>')
-def serve_user_files(filename):
-    return send_from_directory(USERS_DIR, filename)
-
-
-
-@app.route('/set_active_user', methods=['POST'])
-def set_active_user():
-    import tempfile, shutil
-    data = request.get_json()
-    selected = data.get('user')
-    try:
-        with open(os.path.join(USERS_DIR, "index.json"), "r", encoding="utf-8") as f:
-            user_list = json.load(f)
-
-        for name in user_list:
-            path = os.path.join(USERS_DIR, f"{name}.json")
-            if os.path.exists(path):
-                try:
-                    with open(path, "r", encoding="utf-8") as uf:
-                        udata = json.load(uf)
-                except Exception:
-                    udata = {"name": name}
-                udata["active"] = (name == selected)
-                # Atomic write - safer than r+/seek/truncate
-                dir_ = os.path.dirname(os.path.abspath(path))
-                with tempfile.NamedTemporaryFile("w", dir=dir_, delete=False,
-                                                 suffix=".tmp", encoding="utf-8") as tf:
-                    json.dump(udata, tf, indent=2, ensure_ascii=False)
-                    tmp_path = tf.name
-                shutil.move(tmp_path, path)
-
-        print(f"[INFO] Active user set to: {selected}")
-        return jsonify({"success": True, "active": selected})
-
-    except Exception as e:
-        print(f"[ERROR] Failed to set active user: {e}")
-        return jsonify({"success": False, "error": str(e)})
-
-
-
-# --------------------------------------------------
-# User Persona Editing
-# --------------------------------------------------
-@app.route('/get_user/<n>', methods=['GET'])
-def get_user(n):
-    """Return a user's persona details."""
-    path = os.path.join(USERS_DIR, f"{n}.json")
-    if not os.path.exists(path):
-        return jsonify({"error": f"User '{n}' not found"}), 404
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        # Return only safe fields
-        return jsonify({
-            "name": data.get("name", n),
-            "display_name": data.get("display_name", n),
-            "bio": data.get("bio", ""),
-            "image": data.get("image", "")
-        })
-    except Exception as e:
-        print(f"Failed to load user {n}: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/save_user/<n>', methods=['POST'])
-def save_user(n):
-    """Save updated persona info. Uses atomic write to prevent zero-byte corruption."""
-    import tempfile, shutil
-    try:
-        payload = request.get_json()
-        path = os.path.join(USERS_DIR, f"{n}.json")
-        # Read existing data so we never lose fields (active flag, image, etc.)
-        if os.path.exists(path):
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except Exception:
-                data = {"name": n}
-        else:
-            data = {"name": n}
-        data["display_name"] = payload.get("display_name", n)
-        data["bio"] = payload.get("bio", "")
-        # Only overwrite image if a new one was explicitly provided
-        if "image" in payload and payload["image"]:
-            data["image"] = payload["image"]
-            print(f"Saving user image: {payload['image']}")
-        # Atomic write: write to temp file then rename
-        # Prevents zero-byte corruption if process is killed mid-write
-        dir_ = os.path.dirname(os.path.abspath(path))
-        with tempfile.NamedTemporaryFile("w", dir=dir_, delete=False,
-                                         suffix=".tmp", encoding="utf-8") as tf:
-            json.dump(data, tf, indent=2, ensure_ascii=False)
-            tmp_path = tf.name
-        shutil.move(tmp_path, path)
-        # Register in users/index.json — the edit path must never leave a saved
-        # persona unindexed (personas are visible only via the index / the
-        # directory scan). Rebuild from the directory so this also heals any
-        # pre-existing desync. (Mirrors the hardened create_user.)
-        _scan_and_heal_users_index()
-        print(f"Updated user persona: {n}")
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        print(f"Failed to save user {n}: {e}")
-        return jsonify({"error": str(e)}), 500
-        
-def _resolve_user_image(name, stored_image, images_dir):
-    """Resolve a persona avatar tolerating BOTH the new prefixed naming
-    (user_{name}.png) and legacy unprefixed naming ({name}.png / the stored
-    image field). New persona images get the user_ prefix (see /upload_image
-    is_user branch); existing personas on disk are unprefixed and MUST keep
-    resolving. Order: user_-prefixed file → stored field → unprefixed
-    {name}.png → default.png. Never renames any file."""
-    prefixed = f"user_{name}.png"
-    if os.path.isfile(os.path.join(images_dir, prefixed)):
-        return prefixed
-    if stored_image and os.path.isfile(os.path.join(images_dir, stored_image)):
-        return stored_image
-    legacy = f"{name}.png"
-    if os.path.isfile(os.path.join(images_dir, legacy)):
-        return legacy
-    return "default.png"
-
-
-def _scan_and_heal_users_index():
-    """Directory-scan users/*.json and rewrite users/index.json from
-    sorted(set(names)). The users/ folder is the single source of truth;
-    index.json is a derived cache. This self-heals any JSON-without-index
-    orphan (same convergence as list_characters). Returns
-    (sorted_names, {name: stored_image_field})."""
-    names = []
-    stored = {}
-    if not os.path.isdir(USERS_DIR):
-        return names, stored
-    for fn in os.listdir(USERS_DIR):
-        if fn.startswith("_") or fn == "index.json" or not fn.endswith(".json"):
-            continue
-        try:
-            with open(os.path.join(USERS_DIR, fn), "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if not isinstance(data, dict):
-                continue
-            nm = data.get("name", fn[:-5])
-            names.append(nm)
-            stored[nm] = (data.get("image") or "").strip()
-        except Exception as e:
-            print(f"⚠️ Failed to load user {fn}: {e}")
-    unique_sorted = sorted(set(names))
-    try:
-        with open(os.path.join(USERS_DIR, "index.json"), "w", encoding="utf-8") as f:
-            json.dump(unique_sorted, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        print(f"⚠️ Could not rewrite users/index.json: {e}")
-    return unique_sorted, stored
-
-
-@app.route("/list_users", methods=["GET"])
-def list_users():
-    """Directory-scan personas, heal users/index.json, return sorted names.
-    Mirrors list_characters — the index can never make a persona invisible."""
-    names, _ = _scan_and_heal_users_index()
-    print(f"✅ /list_users -> {names}")
-    return jsonify(names)
-
-
-@app.route("/get_all_users", methods=["GET"])
-def get_all_users():
-    """Return a dict of all users with their resolved image filenames. Driven
-    by the directory scan (which also heals users/index.json), so a persona is
-    never invisible due to index desync, and avatars tolerate both prefixed
-    and legacy-unprefixed image naming."""
-    try:
-        images_dir = os.path.join(os.path.dirname(__file__), "static", "images")
-        names, stored = _scan_and_heal_users_index()
-        result = {}
-        for name in names:
-            result[name] = _resolve_user_image(name, stored.get(name, ""), images_dir)
-        return jsonify(result)
-    except Exception as e:
-        print(f"⚠️ Failed to load all users: {e}")
-        return jsonify({})
-
 @app.route("/get_model", methods=["GET"])
 def get_model():
     """Return the currently loaded model name, mmproj status, and VRAM usage."""
@@ -6830,7 +6409,8 @@ def get_llama_settings():
             'models_dir': s.get('llama_models_dir', ''),
             'args': s.get('llama_args', {}),
             'show_console': s.get('llama_show_console', False),
-            'mmproj_path': s.get('mmproj_path', '')
+            'mmproj_path': s.get('mmproj_path', ''),
+            'lora_path': s.get('lora_path', '')
         }
     except Exception as e:
         print(f"❌ Failed to read llama settings: {e}")
@@ -7009,6 +6589,14 @@ def load_model():
         "--timeout", str(args.get("timeout", 0)),
         "--parallel", str(args.get("parallel", 1)),
     ]
+    # Flash attention — this build takes a value: --flash-attn [on|off|auto].
+    # Enable only when flash_attn is truthy in llama_args; absent/false/"off"
+    # → omit (preserves prior behaviour). Quantized KV cache (cache_type_v)
+    # depends on this. ⚠️ DO NOT revert. (See CHANGES.md.)
+    _fa = args.get("flash_attn", False)
+    _fa = "on" if _fa is True else str(_fa).strip().lower()
+    if _fa in ("on", "auto", "true", "1"):
+        cmd += ["--flash-attn", "auto" if _fa == "auto" else "on"]
     # Only load mmproj if explicitly configured — never auto-detect.
     # Decided BEFORE the chat-template flag because it gates it.
     mmproj_path = cfg.get('mmproj_path', '')
@@ -7018,6 +6606,12 @@ def load_model():
         print(f"🖼️ Vision mode: mmproj loaded from {mmproj_path}")
     else:
         print("📝 No mmproj — text-only mode")
+
+    # LoRA adapter — applied only at launch (see auto_launch_llama note).
+    lora_path = cfg.get('lora_path', '')
+    if lora_path and os.path.isfile(lora_path):
+        cmd += ["--lora", lora_path]
+        print(f"🧬 LoRA adapter loaded from {lora_path}")
 
     # Chat template.
     # ⚠️ NEVER globally force --chat-template chatml. A multimodal GGUF (e.g.
@@ -7091,14 +6685,25 @@ def browse_file():
     try:
         import subprocess, tempfile
         file_filter = request.json.get('filter', 'exe') if request.json else 'exe'
+        # Optional starting folder for the picker (e.g. the LoRA folder). Only
+        # honoured if it's a real directory, so a bad value just falls back to
+        # the OS default — existing callers (no initialdir) are unaffected.
+        initialdir = (request.json.get('initialdir', '') if request.json else '') or ''
         if file_filter == 'gguf':
             ps_filter = 'GGUF Models (*.gguf)|*.gguf|All Files (*.*)|*.*'
+        elif file_filter == 'lora':
+            ps_filter = 'LoRA Adapters (*.gguf)|*.gguf|All Files (*.*)|*.*'
         else:
             ps_filter = 'Executables (*.exe)|*.exe|All Files (*.*)|*.*'
+        _initdir_line = ''
+        if initialdir and os.path.isdir(initialdir):
+            _safe_dir = initialdir.replace('"', '')
+            _initdir_line = f'$d.InitialDirectory = "{_safe_dir}";'
         script = (
             'Add-Type -AssemblyName System.Windows.Forms;'
             '$d = New-Object System.Windows.Forms.OpenFileDialog;'
             f'$d.Filter = "{ps_filter}";'
+            f'{_initdir_line}'
             'if ($d.ShowDialog() -eq "OK") { Write-Output $d.FileName }'
         )
         result = subprocess.run(
@@ -7165,6 +6770,44 @@ def save_llama_config():
         return jsonify({"status": "error", "error": str(e)})
 
 
+@app.route("/get_lora_path", methods=["GET"])
+def get_lora_path():
+    """Return the configured LoRA adapter path ("" = none attached)."""
+    try:
+        with open('settings.json', 'r', encoding='utf-8') as f:
+            s = json.load(f)
+        return jsonify({"lora_path": s.get('lora_path', '')})
+    except Exception as e:
+        return jsonify({"lora_path": "", "error": str(e)}), 500
+
+
+@app.route("/save_lora_path", methods=["POST"])
+def save_lora_path():
+    """Persist lora_path to settings.json (atomic temp-file write, mirrors the
+    startup cloud-reset pattern). Empty string clears the adapter.
+
+    NOTE: takes effect on the next llama.cpp (re)launch — NOT hot-attached.
+    This build exposes GET/POST /lora-adapters, but POST only re-scales adapters
+    that were loaded at launch via --lora; it cannot load a new adapter file by
+    path at runtime. So there is no /attach_lora or /detach_lora route — the UI
+    saves the path here and prompts for a llama.cpp restart to apply it."""
+    try:
+        data = request.get_json(force=True) or {}
+        lora_path = (data.get('lora_path') or '').strip()
+        _path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.json')
+        with open(_path, 'r', encoding='utf-8') as f:
+            s = json.load(f)
+        s['lora_path'] = lora_path
+        import tempfile as _lrtmp, shutil as _lrsh
+        _tmpf = _path + '.tmp'
+        with open(_tmpf, 'w', encoding='utf-8') as f:
+            json.dump(s, f, indent=2)
+        _lrsh.move(_tmpf, _path)
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
 @app.route("/auto_detect_mmproj", methods=["POST"])
 def auto_detect_mmproj():
     """Given a model path, look for a matching mmproj file in the same folder
@@ -7197,32 +6840,9 @@ def auto_detect_mmproj():
         return jsonify({"mmproj_path": None})
 
 
-@app.route('/get_active_user', methods=['GET'])
-def get_active_user():
-    try:
-        with open(os.path.join(USERS_DIR, "index.json"), "r", encoding="utf-8") as f:
-            user_list = json.load(f)
-        
-        # Find the user marked as active
-        for name in user_list:
-            path = os.path.join(USERS_DIR, f"{name}.json")
-            if os.path.exists(path):
-                with open(path, "r", encoding="utf-8") as uf:
-                    data = json.load(uf)
-                    if data.get("active"):
-                        return jsonify({"active_user": name})
-        
-        # Fallback to first user if none marked active
-        if user_list:
-            return jsonify({"active_user": user_list[0]})
-        
-        return jsonify({"active_user": None})
-        
-    except Exception as e:
-        print(f"⚠️ Failed to load active user: {e}")
-        return jsonify({"active_user": None})
-        
-        
+# /get_active_user moved to user_routes.py (user_bp).
+
+
 # --------------------------------------------------
 # Per-Character Chat Saving & Loading
 # --------------------------------------------------
@@ -7362,6 +6982,11 @@ def load_sampling_settings():
         "min_p": 0.05,
         "top_k": 40,
         "repeat_penalty": 1.1,
+        "repeat_last_n": 256,
+        "dry_multiplier": 0.8,
+        "dry_base": 1.75,
+        "dry_allowed_length": 10,
+        "dry_penalty_last_n": -1,
         "frequency_penalty": 0.0,
         "presence_penalty": 0.0
     }
@@ -7405,641 +7030,15 @@ def save_sampling_settings():
 
 
 # --------------------------------------------------
-# Current Situation Routes
+# Current Situation + Global Example Dialog routes → extracted into
+# situation_routes.py (situation_bp)
 # --------------------------------------------------
-@app.route("/get_current_situation", methods=["GET"])
-def get_current_situation():
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            s = json.load(f)
-        return jsonify({"current_situation": s.get("current_situation", "")})
-    except Exception as e:
-        return jsonify({"current_situation": "", "error": str(e)})
-
-@app.route("/save_current_situation", methods=["POST"])
-def save_current_situation():
-    data = request.get_json()
-    situation = data.get("current_situation", "").strip()
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            s = json.load(f)
-        s["current_situation"] = situation
-        import tempfile, shutil
-        tmp = SETTINGS_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(s, f, indent=2)
-        shutil.move(tmp, SETTINGS_FILE)
-        print(f"✅ Current situation saved ({len(situation)} chars)")
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        print(f"❌ save_current_situation failed: {e}")
-        return jsonify({"status": "error", "error": str(e)}), 500
 
 
 # --------------------------------------------------
-# Global Example Dialog Routes
+# Cloud-API settings routes (master switch, Brave/OpenAI/Anthropic keys,
+# models, backend_mode) -> extracted into cloud_api_routes.py (cloud_api_bp)
 # --------------------------------------------------
-@app.route("/get_global_example_dialog", methods=["GET"])
-def get_global_example_dialog():
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            s = json.load(f)
-        return jsonify({"global_example_dialog": s.get("global_example_dialog", "")})
-    except Exception as e:
-        return jsonify({"global_example_dialog": "", "error": str(e)})
-
-@app.route("/save_global_example_dialog", methods=["POST"])
-def save_global_example_dialog():
-    data = request.get_json()
-    dialog = data.get("global_example_dialog", "").strip()
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            s = json.load(f)
-        s["global_example_dialog"] = dialog
-        import tempfile, shutil
-        tmp = SETTINGS_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(s, f, indent=2)
-        shutil.move(tmp, SETTINGS_FILE)
-        print(f"✅ Global example dialog saved ({len(dialog)} chars)")
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        print(f"❌ save_global_example_dialog failed: {e}")
-        return jsonify({"status": "error", "error": str(e)}), 500
-
-
-@app.route("/get_brave_api_key", methods=["GET"])
-def get_brave_api_key_route():
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            s = json.load(f)
-        return jsonify({"brave_api_key": s.get("brave_api_key", "")})
-    except Exception as e:
-        return jsonify({"brave_api_key": "", "error": str(e)})
-
-@app.route("/save_brave_api_key", methods=["POST"])
-def save_brave_api_key_route():
-    data = request.get_json()
-    key = data.get("brave_api_key", "").strip()
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            s = json.load(f)
-        s["brave_api_key"] = key
-        import tempfile, shutil
-        tmp = SETTINGS_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(s, f, indent=2)
-        shutil.move(tmp, SETTINGS_FILE)
-        print(f"✅ Brave API key saved ({len(key)} chars)")
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        print(f"❌ save_brave_api_key failed: {e}")
-        return jsonify({"status": "error", "error": str(e)}), 500
-
-
-# --------------------------------------------------
-# OpenAI Backend Settings Routes
-# --------------------------------------------------
-@app.route("/get_openai_settings", methods=["GET"])
-def get_openai_settings_route():
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            s = json.load(f)
-        # openai_base_url: surface the resolved value through the helper so the
-        # UI displays the actual default (https://api.openai.com/v1) on first
-        # load even when the field is missing from older settings.json files.
-        return jsonify({
-            "backend_mode":    s.get("backend_mode", "local"),
-            "openai_api_key":  s.get("openai_api_key", ""),
-            "openai_model":    s.get("openai_model", "gpt-4o"),
-            "openai_base_url": (s.get("openai_base_url", "") or "").strip() or get_openai_base_url(),
-        })
-    except Exception as e:
-        return jsonify({
-            "backend_mode": "local",
-            "openai_api_key": "",
-            "openai_model": "gpt-4o",
-            "openai_base_url": "https://api.openai.com/v1",
-            "error": str(e),
-        })
-
-@app.route("/save_openai_settings", methods=["POST"])
-def save_openai_settings_route():
-    data = request.get_json()
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            s = json.load(f)
-        s["backend_mode"]   = data.get("backend_mode", "local")
-        s["openai_api_key"] = data.get("openai_api_key", "").strip()
-        s["openai_model"]   = data.get("openai_model", "gpt-4o").strip()
-        # openai_base_url: strip trailing slash; empty → write OpenAI default
-        # back to disk so the round-trip from a fresh settings.json populates
-        # the field explicitly on the second load.
-        _incoming_base = (data.get("openai_base_url", "") or "").strip().rstrip("/")
-        s["openai_base_url"] = _incoming_base or "https://api.openai.com/v1"
-        import tempfile, shutil
-        tmp = SETTINGS_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(s, f, indent=2)
-        shutil.move(tmp, SETTINGS_FILE)
-        mode = s["backend_mode"]
-        print(f"✅ OpenAI settings saved — backend_mode={mode}, model={s['openai_model']}, base_url={s['openai_base_url']}")
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        print(f"❌ save_openai_settings failed: {e}")
-        return jsonify({"status": "error", "error": str(e)}), 500
-
-
-@app.route("/get_openai_models", methods=["GET"])
-def get_openai_models_route():
-    """Fetch available chat models from the configured OpenAI-compatible endpoint.
-
-    Hits {openai_base_url}/models. Most providers (OpenAI, OpenRouter, Together,
-    Groq, Mistral, Fireworks, Anthropic) support this. Providers that don't
-    will return a non-200 here, which is surfaced as an error — users on those
-    providers should type the model name into the dropdown directly (it
-    persists via _setOpenAIModelSelect).
-    """
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            s = json.load(f)
-        api_key = s.get("openai_api_key", "").strip()
-        if not api_key:
-            return jsonify({"status": "error", "error": "No API key set"}), 400
-
-        _base_url = get_openai_base_url()
-        r = requests.get(
-            f"{_base_url}/models",
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=10,
-        )
-        if r.status_code != 200:
-            return jsonify({"status": "error", "error": f"Provider returned {r.status_code}: {r.text[:200]}"}), 502
-
-        all_models = r.json().get("data", [])
-
-        # Filter to chat-capable models only — exclude embeddings, tts, whisper, dall-e, etc.
-        CHAT_PREFIXES = ("gpt-", "o1", "o3", "o4", "chatgpt")
-        EXCLUDE_SUFFIXES = ("-instruct", "-search", "-realtime", "-audio")
-        EXCLUDE_CONTAINS = ("embedding", "tts", "whisper", "dall-e", "moderation", "babbage", "davinci", "ada", "curie")
-
-        chat_ids = []
-        for m in all_models:
-            mid = m.get("id", "")
-            ml = mid.lower()
-            if not any(ml.startswith(p) for p in CHAT_PREFIXES):
-                continue
-            if any(ml.endswith(s) for s in EXCLUDE_SUFFIXES):
-                continue
-            if any(x in ml for x in EXCLUDE_CONTAINS):
-                continue
-            chat_ids.append(mid)
-
-        # Sort: put flagship models first, then by name
-        def _sort_key(mid):
-            ml = mid.lower()
-            if "gpt-4o" in ml and "mini" not in ml:
-                return (0, mid)
-            if "gpt-4o-mini" in ml:
-                return (1, mid)
-            if ml.startswith("o"):
-                return (2, mid)
-            return (3, mid)
-
-        chat_ids.sort(key=_sort_key)
-        print(f"✅ OpenAI models fetched: {len(chat_ids)} chat models")
-        return jsonify({"status": "ok", "models": chat_ids})
-
-    except Exception as e:
-        print(f"❌ get_openai_models failed: {e}")
-        return jsonify({"status": "error", "error": str(e)}), 500
-
-
-# --------------------------------------------------
-# Anthropic Backend Settings Routes
-# --------------------------------------------------
-# Anthropic creds are stored ALONGSIDE the OpenAI ones (separate keys in
-# settings.json), so both providers stay saved and switching is just a
-# backend_mode flip — no re-pasting. backend_mode is shared and written by both
-# this route and /save_openai_settings (whichever Save button you press persists
-# the toggle's current value); the per-provider key/model/base_url fields are
-# only ever touched by their own route, so saving one never clobbers the other.
-@app.route("/get_anthropic_settings", methods=["GET"])
-def get_anthropic_settings_route():
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            s = json.load(f)
-        return jsonify({
-            "backend_mode":       s.get("backend_mode", "local"),
-            "anthropic_api_key":  s.get("anthropic_api_key", ""),
-            "anthropic_model":    s.get("anthropic_model", ""),
-            "anthropic_base_url": (s.get("anthropic_base_url", "") or "").strip() or get_anthropic_base_url(),
-        })
-    except Exception as e:
-        return jsonify({
-            "backend_mode": "local",
-            "anthropic_api_key": "",
-            "anthropic_model": "",
-            "anthropic_base_url": "https://api.anthropic.com/v1",
-            "error": str(e),
-        })
-
-@app.route("/save_anthropic_settings", methods=["POST"])
-def save_anthropic_settings_route():
-    data = request.get_json()
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            s = json.load(f)
-        s["backend_mode"]       = data.get("backend_mode", "local")
-        s["anthropic_api_key"]  = data.get("anthropic_api_key", "").strip()
-        s["anthropic_model"]    = data.get("anthropic_model", "").strip()
-        _incoming_base = (data.get("anthropic_base_url", "") or "").strip().rstrip("/")
-        s["anthropic_base_url"] = _incoming_base or "https://api.anthropic.com/v1"
-        import tempfile, shutil
-        tmp = SETTINGS_FILE + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(s, f, indent=2)
-        shutil.move(tmp, SETTINGS_FILE)
-        print(f"✅ Anthropic settings saved — backend_mode={s['backend_mode']}, model={s['anthropic_model']}, base_url={s['anthropic_base_url']}")
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        print(f"❌ save_anthropic_settings failed: {e}")
-        return jsonify({"status": "error", "error": str(e)}), 500
-
-
-@app.route("/get_anthropic_models", methods=["GET"])
-def get_anthropic_models_route():
-    """Fetch available models from the Anthropic /v1/models endpoint.
-
-    Native Anthropic format: GET {base}/models with x-api-key + anthropic-version
-    headers, returns {"data": [{"id": "claude-..."}]}. Newest first (the API
-    already returns descending by creation), filtered to claude-* chat models.
-    """
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            s = json.load(f)
-        api_key = s.get("anthropic_api_key", "").strip()
-        if not api_key:
-            return jsonify({"status": "error", "error": "No API key set"}), 400
-
-        _base_url = get_anthropic_base_url()
-        r = requests.get(
-            f"{_base_url}/models",
-            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
-            params={"limit": 100},
-            timeout=10,
-        )
-        if r.status_code != 200:
-            return jsonify({"status": "error", "error": f"Provider returned {r.status_code}: {r.text[:200]}"}), 502
-
-        all_models = r.json().get("data", [])
-        chat_ids = [m.get("id", "") for m in all_models if m.get("id", "").lower().startswith("claude")]
-        print(f"✅ Anthropic models fetched: {len(chat_ids)} claude models")
-        return jsonify({"status": "ok", "models": chat_ids})
-
-    except Exception as e:
-        print(f"❌ get_anthropic_models failed: {e}")
-        return jsonify({"status": "error", "error": str(e)}), 500
-
-
-# --------------------------------------------------
-# Theme Routes
-# --------------------------------------------------
-THEMES_DIR = os.path.join(os.path.dirname(__file__), "themes")
-
-def get_active_theme_name():
-    """Get active theme name from settings.json, default to 'midnight'."""
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            s = json.load(f)
-        return s.get("active_theme", "midnight")
-    except:
-        return "midnight"
-
-def set_active_theme_name(name):
-    """Write active theme name to settings.json."""
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            s = json.load(f)
-        s["active_theme"] = name
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(s, f, indent=2)
-    except Exception as e:
-        print(f"❌ set_active_theme_name failed: {e}")
-
-def get_active_theme_path():
-    name = get_active_theme_name()
-    os.makedirs(THEMES_DIR, exist_ok=True)
-    return os.path.join(THEMES_DIR, f"{name}.css")
-
-@app.route("/get_theme", methods=["GET"])
-def get_theme():
-    """Read CSS custom properties — style.css defaults first, active theme overlaid on top."""
-    try:
-        vars_dict = {}
-
-        # Step 1: seed defaults from style.css :root so every variable has a value
-        style_path = os.path.join(os.path.dirname(__file__), "style.css")
-        if os.path.exists(style_path):
-            with open(style_path, "r", encoding="utf-8") as f:
-                style_css = f.read()
-            for match in re.finditer(r'(--[\w-]+)\s*:\s*([^;]+);', style_css):
-                vars_dict[match.group(1).strip()] = match.group(2).strip()
-
-        # Step 2: overlay active theme file (adds/overwrites theme-specific values)
-        path = get_active_theme_path()
-        if not os.path.exists(path):
-            for fallback in ["theme.css", "style.css"]:
-                fb = os.path.join(os.path.dirname(__file__), fallback)
-                if os.path.exists(fb):
-                    path = fb
-                    break
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                css = f.read()
-            for match in re.finditer(r'(--[\w-]+)\s*:\s*([^;]+);', css):
-                vars_dict[match.group(1).strip()] = match.group(2).strip()
-
-        return jsonify(vars_dict)
-    except Exception as e:
-        print(f"❌ get_theme failed: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/save_theme", methods=["POST"])
-def save_theme():
-    """Write updated CSS custom properties into :root in the active theme file."""
-    try:
-        data = request.get_json()
-        path = get_active_theme_path()
-        print(f"💾 save_theme: writing to {path}, {len(data)} variables")
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                css = f.read()
-        else:
-            print(f"⚠️  save_theme: file not found, creating new")
-            css = ":root {\n}\n"
-
-        # Build fresh :root block from incoming data
-        root_vars = "\n".join(f"  {var}: {value};" for var, value in data.items())
-        root_block = f":root {{\n{root_vars}\n}}"
-
-        # Replace existing :root block if present, otherwise prepend one
-        root_match = re.search(r":root\s*\{[^}]*\}", css, re.DOTALL)
-        if root_match:
-            css = css[:root_match.start()] + root_block + css[root_match.end():]
-        else:
-            # Insert after opening comment block if present
-            comment_match = re.match(r"\s*/\*.*?\*/", css, re.DOTALL)
-            insert_at = comment_match.end() if comment_match else 0
-            css = css[:insert_at].rstrip() + "\n\n" + root_block + "\n\n" + css[insert_at:].lstrip()
-
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(css)
-        print(f"✅ Theme saved to {os.path.basename(path)}: {len(data)} vars")
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        print(f"❌ save_theme failed: {e}")
-        import traceback; traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/save_bg", methods=["POST"])
-def save_bg():
-    """Save an uploaded background image to static/ as a real file and return
-    its URL. Storing the image as a file (not base64) avoids the localStorage
-    ~5MB quota that silently broke large wallpapers."""
-    try:
-        if 'file' not in request.files:
-            return jsonify({"error": "No file provided"}), 400
-        file = request.files['file']
-        if not file.filename:
-            return jsonify({"error": "No file selected"}), 400
-        ext = os.path.splitext(file.filename)[1].lower() or '.jpg'
-        if ext not in ('.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'):
-            return jsonify({"error": f"Unsupported image type: {ext}"}), 400
-        import glob as _glob
-        static_dir = os.path.join(os.path.dirname(__file__), "static")
-        os.makedirs(static_dir, exist_ok=True)
-        # Drop any previous background file (any extension) so old ones don't orphan
-        for old in _glob.glob(os.path.join(static_dir, "hwui-bg.*")):
-            try:
-                os.remove(old)
-            except Exception:
-                pass
-        save_name = f"hwui-bg{ext}"
-        file.save(os.path.join(static_dir, save_name))
-        print(f"🖼️ Background image saved: static/{save_name}")
-        return jsonify({"status": "ok", "url": f"/static/{save_name}"})
-    except Exception as e:
-        print(f"❌ save_bg failed: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/clear_bg", methods=["POST"])
-def clear_bg():
-    """Delete the saved background image file(s)."""
-    try:
-        import glob as _glob
-        static_dir = os.path.join(os.path.dirname(__file__), "static")
-        for old in _glob.glob(os.path.join(static_dir, "hwui-bg.*")):
-            try:
-                os.remove(old)
-            except Exception:
-                pass
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/themes/list", methods=["GET"])
-def list_themes():
-    """List all available theme files."""
-    try:
-        os.makedirs(THEMES_DIR, exist_ok=True)
-        themes = sorted([f[:-4] for f in os.listdir(THEMES_DIR) if f.endswith('.css')])
-        return jsonify({"themes": themes, "active": get_active_theme_name()})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/themes/switch", methods=["POST"])
-def switch_theme():
-    """Switch active theme."""
-    try:
-        name = request.get_json().get("name", "").strip()
-        if not name or not re.match(r'^[\w\- ]+$', name):
-            return jsonify({"error": "Invalid theme name"}), 400
-        path = os.path.join(THEMES_DIR, f"{name}.css")
-        if not os.path.exists(path):
-            return jsonify({"error": f"Theme '{name}' not found"}), 404
-        set_active_theme_name(name)
-        print(f"✅ Switched to theme: {name}")
-        return jsonify({"status": "ok", "active": name})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/themes/create", methods=["POST"])
-def create_theme():
-    """Create a new theme by copying the active theme."""
-    try:
-        name = request.get_json().get("name", "").strip()
-        print(f"🎨 create_theme: name='{name}', THEMES_DIR={THEMES_DIR}")
-        if not name or not re.match(r'^[\w\- ]+$', name):
-            print(f"❌ create_theme: invalid name rejected")
-            return jsonify({"error": "Invalid theme name"}), 400
-        os.makedirs(THEMES_DIR, exist_ok=True)
-        new_path = os.path.join(THEMES_DIR, f"{name}.css")
-        print(f"🎨 create_theme: new_path={new_path}")
-        if os.path.exists(new_path):
-            return jsonify({"error": f"Theme '{name}' already exists"}), 400
-        src = get_active_theme_path()
-        print(f"🎨 create_theme: src={src}, exists={os.path.exists(src)}")
-        if os.path.exists(src):
-            import shutil
-            shutil.copy2(src, new_path)
-        else:
-            with open(new_path, "w", encoding="utf-8") as f:
-                f.write(":root {\n}\n")
-        # Do NOT auto-switch — just create the file
-        print(f"✅ Created theme file: {new_path}")
-        return jsonify({"status": "ok", "created": name})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/themes/delete", methods=["POST"])
-def delete_theme():
-    """Delete a theme file."""
-    try:
-        name = request.get_json().get("name", "").strip()
-        if not name or not re.match(r'^[\w\- ]+$', name):
-            return jsonify({"error": "Invalid theme name"}), 400
-        path = os.path.join(THEMES_DIR, f"{name}.css")
-        if not os.path.exists(path):
-            return jsonify({"error": "Theme not found"}), 404
-        os.remove(path)
-        if get_active_theme_name() == name:
-            remaining = sorted([f[:-4] for f in os.listdir(THEMES_DIR) if f.endswith('.css')])
-            set_active_theme_name(remaining[0] if remaining else "midnight")
-        print(f"✅ Deleted theme: {name}")
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-THEME_PRESETS_FILE = "theme_presets.json"
-
-def load_theme_presets():
-    if os.path.exists(THEME_PRESETS_FILE):
-        with open(THEME_PRESETS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-def save_theme_presets(presets):
-    with open(THEME_PRESETS_FILE, "w", encoding="utf-8") as f:
-        json.dump(presets, f, indent=2)
-
-@app.route("/theme_presets", methods=["GET"])
-def get_theme_presets():
-    return jsonify(load_theme_presets())
-
-@app.route("/theme_presets/save", methods=["POST"])
-def save_theme_preset():
-    try:
-        data = request.get_json()
-        name = data.get("name", "").strip()
-        colours = data.get("colours", {})
-        if not name:
-            return jsonify({"error": "No name provided"}), 400
-        presets = load_theme_presets()
-        presets[name] = colours
-        save_theme_presets(presets)
-        print(f"✅ Theme preset saved: {name}")
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        print(f"❌ save_theme_preset failed: {e}")
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/theme_presets/delete", methods=["POST"])
-def delete_theme_preset():
-    try:
-        data = request.get_json()
-        name = data.get("name", "").strip()
-        presets = load_theme_presets()
-        if name in presets:
-            del presets[name]
-            save_theme_presets(presets)
-            print(f"🗑️ Theme preset deleted: {name}")
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        print(f"❌ delete_theme_preset failed: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-# --------------------------------------------------
-# Sampling presets — disk-backed (mirrors theme presets).
-# Previously these lived only in browser localStorage, so edits never persisted
-# to disk and were lost on cache-clear / different browser / Electron storage
-# resets. Stored as a name → {temperature, max_tokens, …} map.
-# --------------------------------------------------
-SAMPLING_PRESETS_FILE = "sampling_presets.json"
-
-def load_sampling_presets():
-    if os.path.exists(SAMPLING_PRESETS_FILE):
-        try:
-            with open(SAMPLING_PRESETS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"❌ load_sampling_presets failed: {e}")
-    return {}
-
-def save_sampling_presets(presets):
-    # Atomic write so a crash mid-save can't truncate the file.
-    import tempfile, shutil
-    tmp = SAMPLING_PRESETS_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(presets, f, indent=2)
-    shutil.move(tmp, SAMPLING_PRESETS_FILE)
-
-@app.route("/sampling_presets", methods=["GET"])
-def get_sampling_presets():
-    presets = load_sampling_presets()
-    print(f"[SP] GET /sampling_presets → {list(presets.keys())} "
-          f"(top_p per preset: { {k: v.get('top_p') for k, v in presets.items()} })", flush=True)
-    return jsonify(presets)
-
-@app.route("/sampling_presets/save", methods=["POST"])
-def save_sampling_preset_route():
-    try:
-        data = request.get_json()
-        print(f"[SP] POST /sampling_presets/save raw body: {data}", flush=True)
-        name = (data.get("name", "") or "").strip()
-        preset = data.get("preset", {})
-        print(f"[SP]   name={name!r}  preset={preset}  top_p={preset.get('top_p') if isinstance(preset, dict) else 'N/A'}", flush=True)
-        if not name:
-            return jsonify({"error": "No name provided"}), 400
-        if not isinstance(preset, dict):
-            return jsonify({"error": "Preset must be an object"}), 400
-        presets = load_sampling_presets()
-        presets[name] = preset
-        save_sampling_presets(presets)
-        # Read back from disk to PROVE the write landed (and what top_p actually is).
-        verify = load_sampling_presets()
-        print(f"[SP]   wrote {os.path.abspath(SAMPLING_PRESETS_FILE)} — "
-              f"read-back '{name}'.top_p = {verify.get(name, {}).get('top_p')}", flush=True)
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        print(f"❌ save_sampling_preset failed: {e}", flush=True)
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/sampling_presets/delete", methods=["POST"])
-def delete_sampling_preset_route():
-    try:
-        data = request.get_json()
-        name = (data.get("name", "") or "").strip()
-        presets = load_sampling_presets()
-        if name in presets:
-            del presets[name]
-            save_sampling_presets(presets)
-            print(f"🗑️ Sampling preset deleted: {name}")
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        print(f"❌ delete_sampling_preset failed: {e}")
-        return jsonify({"error": str(e)}), 500
 
 
 # Static + Template Routes
@@ -8133,8 +7132,6 @@ def continue_chat():
         }
 
 
-
-
         print("📤 Sending continuation payload to model...")
 
         # ❌ Disable duplicate POST to model
@@ -8190,31 +7187,6 @@ def delete_last_messages(character):
         print(f"❌ delete_last_messages error: {e}")
         return jsonify({"error": str(e)}), 500
 
-# --------------------------------------------------
-# Get Character Data (for auto-switching characters)
-# --------------------------------------------------
-@app.route("/get_character/<n>")
-def get_character(n):
-    """
-    Returns character data (JSON) for the specified character name.
-    Frontend uses this when auto-switching characters from sidebar.
-    """
-    try:
-        char_path = os.path.join("characters", f"{n}.json")
-        
-        if not os.path.exists(char_path):
-            return jsonify({"error": f"Character '{n}' not found"}), 404
-            
-        with open(char_path, "r", encoding="utf-8") as f:
-            character_data = json.load(f)
-            
-        print(f"✅ Loaded character data for: {n}")
-        return jsonify(character_data)
-        
-    except Exception as e:
-        print(f"❌ Error loading character '{n}': {e}")
-        return jsonify({"error": str(e)}), 500
-        
 
 # --------------------------------------------------
 # Run Server

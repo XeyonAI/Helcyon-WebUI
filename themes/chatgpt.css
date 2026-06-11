@@ -20,9 +20,9 @@
   --sidebar-footer-btn-bg: #2c2c2c;
   --sidebar-footer-btn-border: #323232;
   --user-msg-bg: #313131;
-  --user-msg-text: #dadada;
+  --user-msg-text: #eaeaea;
   --model-msg-bg: #212121;
-  --model-msg-text: #dadada;
+  --model-msg-text: #f9f7f7;
   --msg-border: #383838;
   --hr-color: #6b6b6b;
   --input-bg: #2a2a2a;
@@ -35,11 +35,12 @@
   --modal-bg: #303030;
   --modal-bg-hover: #575757;
   --modal-border: #363636;
-  --modal-text: #b2b2b2;
+  --modal-text: #e2e2e2;
   --memory-tab-active-bg: #7a7a7a;
   --memory-entry-bg: #292929;
   --memory-entry-text: #929292;
   --project-item-bg: #1e1e1e;
+  --project-edit-bg: #0a0d10;
   --project-item-hover: #252525;
   --icon-button-bg: #454545;
   --icon-button-hover: #606060;

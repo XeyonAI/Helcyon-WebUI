@@ -1,5312 +1,1250 @@
-# Pending / Backlog
+> **Older entries archived by month:** [March 2026](changes-archive-2026-03.md) · [April 2026](changes-archive-2026-04.md) · [May 2026 (pre-31)](changes-archive-2026-05.md)
+> This file holds the current (May 31 – June 1 2026) entries only.
 
-**TODO — Memory-confirm short-reply cap (server-side)**
-The client previously signaled an 80-token cap for memory-confirm replies via
-`max_tokens: 80` in the `/chat` body (`index.html`, gated on
-`window._memoryConfirmMaxTokens`). The server ignores client-side `max_tokens`
-(it sources sampling from `settings.json` via `load_sampling_settings()`), so the
-cap never worked. The client-side payload key was removed in the May 29 cleanup
-below; the flag setter `window._memoryConfirmMaxTokens = 80` (~index.html:5213)
-is now a harmless dangling write (no reader). Reimplement server-side: client
-sends a flag (e.g. `short_reply: true`), and the `/chat` handler applies a
-temporary `max_tokens` override for that request only.
+## Session: Jun 10 2026 — `<|imended|>` fuzzy backstop: catch sampler-mangled near-miss ChatML markers at end-of-stream (app.py:6919 area)
+
+### Bug
+A response rendered with the literal string `<|imended|>` at the end. Not a model/truncation failure — the reply was complete. Mechanism (recon Jun 10): `<|im_end|>` is not a vocab token (6 BPE pieces, caught only as a string stop-word). The prompt contains `<|im_end|>` verbatim after every message; with `dry_penalty_last_n: -1` and `dry_allowed_length: 2` (pre-`8f22a67`), DRY penalized verbatim continuation of the marker from piece 3 on, swerving the sampler to a near-neighbour → `<|im` + `ended` + `|>`. The near-miss then evades **both** layers: the server-side stop-string match (not exact) and every HWUI strip rule — all of them (strip_chatml_leakage AND the `_filtered_stream` end-of-stream backstop) key on exact underscore spellings (`im_end`, `_end|>`, `end|>`), which `imended` never matches. It passed through fully intact.
+
+### Fix — fuzzy terminal-marker rule in the `_filtered_stream` end-of-stream backstop (`app.py` ~L6930)
+One added `re.sub`, run on the final `_tail` immediately **before** the existing exact-fragment backstop:
+- `r'<\|im\w*\|>$'` — matches the marker **shape** (`<|im` + word chars + `|>`), not a spelling: catches `<|imended|>`, `<|imend|>`, `<|im_end|>` (`\w` includes `_`), etc.
+- **End-anchored (`$`) and full-envelope only** — both the `<|im` head and the `|>` tail are required, so prose/code containing `<|`, `|>`, or an unclosed `<|im…` mid-text is never touched. Verified against 8 cases: mangled/exact markers at end → stripped; plain prose, trailing `|>`/`>` operators, mid-sentence `<|`, unclosed `<|imagine…`, and a mid-text (non-`$`) marker → all untouched.
+- Ordering: runs first so a complete `<|im_end|>` tail is removed whole (the pre-existing fragment alternation alone strips its `im_end|>` half and leaves `<|` behind).
+- ⚠️ Deliberately NOT added to per-chunk `strip_chatml_leakage` — un-anchored fuzzy matching on live chunks risks false positives; this net is end-of-stream `_tail` only.
+
+Untouched by design: existing exact-match strip rules, `strip_chatml_leakage()`, sampler/DRY settings, the `stop` array. The DRY `allowed_length` 2→10 bump (`8f22a67`) likely prevents the mangle at source; this is the display-layer safety net behind it. `py_compile` clean. **Restart the main Flask app to apply.**
 
 ---
 
-## May 29 2026 — Anthropic per-model sampling filter (Opus 4.7/4.8 reject all sampling params)
+## Session: Jun 10 2026 — Chat-sync: stale desktop tab no longer overwrites newer mobile messages (dirty flag + base_count guard)
 
-**File:** `app.py` — `ANTHROPIC_MODEL_SAMPLING_RULES` + `_anthropic_allow_for()`
-(new module constants) and `stream_anthropic_response()`. Optional UI note in
-`config.html` Sampling section.
+### Bug
+Chat started on desktop, continued on mobile (file on disk grows), then the still-open desktop tab is refreshed → the mobile messages vanish. Root cause: the June 6 pagehide beacon (`_beaconFlushChat`, index.html) fires on a plain refresh too, and flushes the tab's **stale in-memory** `window.loadedChat` to `/chats/save` — a blind full-file overwrite — so the reloaded page reads back the clobbered file.
 
-**Problem.** Anthropic rejects sampling params on a PER-MODEL, presence-based basis
-(the key merely being present 400s, regardless of value): Opus 4.7/4.8 reject
-temperature/top_p/top_k entirely; older models reject top_p alongside temperature.
-This keeps changing per model release.
+### Fix 1 — client dirty flag (`templates/index.html`, `utils/utils.js`)
+- New globals `window._chatDirty` / `window._chatBaseCount` (index.html ~L915, by the other globals).
+- Cleared/synced (`_chatDirty=false`, `_chatBaseCount=<count>`) in `openChat()` right after the disk load populates `loadedChat` (~L2982) and in `autoSaveCurrentChat()`'s success path (~L4296 — uses the **filtered** `messages.length`, since hidden turns never reach disk).
+- `_chatDirty=true` at every `loadedChat` mutation: user send (both image/text branches), stream + non-stream completion pushes, message edit, continue (splice **and** final push), regenerate splice, delete-message splice, opening-line push (`utils.js displayOpeningLineInChat`) and RP-opener push.
+- `_beaconFlushChat()` now bails when the tab is clean AND no stream is in flight: `if (!window._chatDirty && !_inFlightPartial) return;`. ⚠️ The June 6 in-flight protection is intact — `window.isSending && window._streamingPartial` counts as dirty, so navigating away mid-stream still flushes the partial. DO NOT remove the `_inFlightPartial` half of the guard.
 
-**Fix — two layers:**
-- **Layer 1 (known-model pre-filter):** `ANTHROPIC_MODEL_SAMPLING_RULES` maps model
-  ID → allow-list of permitted sampling params. The payload includes only allowed
-  sampling params; `model`/`max_tokens`/`stream`/`messages`/`system` are always
-  sent (not sampling params). Lookup is exact → longest-prefix (so dated IDs like
-  `claude-opus-4-8-20260101` resolve to `claude-opus-4-8`) → `DEFAULT_ANTHROPIC_ALLOW`
-  (temperature + max_tokens + stop_sequences) for unknown models. Opus 4.7/4.8 →
-  `{max_tokens, stop_sequences}` only.
-- **Layer 2 (retry-on-deprecation safety net):** if the request still 400s with a
-  message matching `(\w+) is deprecated`, the named param is stripped from the
-  payload and the request retried ONCE. A second 400 surfaces normally (no loop).
-  The retry logs `UPDATE ANTHROPIC_MODEL_SAMPLING_RULES …` — that's the signal a
-  new/unknown model needs a table entry.
+### Fix 2 — server stale-write guard (`chat_routes.py`)
+- `open_chat()`'s parser extracted **unchanged** into `_parse_chat_file(filepath, filename, verbose=True)`; the route's behaviour/response is identical (`verbose=False` only gates the per-line speaker logs so the guard doesn't spam on every autosave).
+- `/chats/save` and `/chats/update` accept an optional `base_count` int (the count the client believed was on disk). If present AND `disk_count > base_count` AND `len(incoming) <= disk_count` → **HTTP 409** `{"status":"stale","disk_count":N}`, no write (`_check_stale_save`). A guard-side parse failure never blocks a save (logged, falls through).
+- `base_count` absent (mobile `saveChatToDisk`, `/chats/update` delete-last caller, legacy/manual callers) → behaviour completely unchanged.
+- Same-tab destructive ops (delete / regenerate / clear) still pass: there `disk_count == base_count`, and a genuinely-new-turns save has `incoming > disk_count`.
 
-**Scope notes.** `top_p`/`top_k` remain un-plumbed into the Anthropic transport
-(Opus 4.7/4.8 reject them; older models work without) — trivial to add later via
-the allow-list. Local llama.cpp and OpenAI paths are untouched (filter is
-Anthropic-only). Frontend keeps ONE universal sampling set; the backend filters
-silently. Added a small UI note: "Anthropic Opus 4.7+ models ignore sampling
-parameters…".
+### Fix 3 — client 409 handling (`index.html`, `autoSaveCurrentChat`)
+On 409 the tab logs a console warning (no aggressive alert) and re-runs `openChat(currentChatFilename)` to adopt the newer disk state. Beacon 409s are unobservable by design — the dirty flag prevents the common stale-refresh case client-side; the server guard is the second line of defence for a dirty-but-behind tab (its unsynced turn is sacrificed in favour of the newer disk copy).
 
-**⚠️ When new Anthropic models launch, update `ANTHROPIC_MODEL_SAMPLING_RULES`** —
-the Layer 2 retry catches unknown models gracefully in the meantime.
+**Restart the main Flask app to apply** (chat_routes.py + template changes; server runs without reloader).
 
-## May 29 2026 — ⚠️ DO NOT REVERT: full sweep — native alert/confirm/prompt BANNED
+### Follow-up 1 — hidden-turn count parity VERIFIED (no code change)
+Confirmed `base_count` (client) and `disk_count` (`_parse_chat_file`) count the same set, so hidden turns can't cause off-by-N false 409s. Hidden turns are created in exactly one place — the memory/web-search confirm trigger (`index.html:5638`, `hidden:true`). Both client save paths filter them out **before** writing (`autoSaveCurrentChat` L4245, beacon L5704), so the file physically contains zero hidden turns and the parser can't see them. `base_count` is itself derived from the non-hidden set on both sides where it's set: `openChat` (loadedChat has no hidden turns right after a disk load — the L2955 mapper doesn't carry `hidden`) and `autoSaveCurrentChat` success (`messages.length`, the filtered count). Round-trip test (client filter → `_format_chat_messages` → `_parse_chat_file`) over 5 shapes incl. 1× and 2× hidden web-search-confirm turns, a non-hidden opening line, and multi-paragraph content: `base_count == disk_count` in all cases. Note: parity relies on the **non-hidden** parser round-trip being 1:1 (verified for these shapes) — a future change that makes the parser split/merge written turns would break the count comparison independent of hidden handling.
 
-**Completed the sweep started in the entry below.** Every remaining native dialog
-call across `config.html`, `index.html`, `utils.js` is gone:
-- **~158 `alert(...)` → `hwuiToast(...)`** (final counts: config.html 97, index.html
-  71, utils.js 5). `kind` inferred from content: ❌/⚠️/error/failed → `'error'`,
-  ✅/saved/applied/updated/created/deleted/set-to → `'success'`, else `'info'`.
-- **20 `confirm(...)` → `await hwuiConfirm(...)`** (Promise<boolean>).
-- **5 `prompt(...)` → `await hwuiPrompt(...)`** (Promise<string|null>).
-
-**Helpers.** `hwuiConfirm` / `hwuiPrompt` are styled in-page modals (dark panel +
-backdrop, Cancel/OK, Escape = cancel, Enter = confirm/submit, backdrop-click =
-cancel). On close they restore focus to the previously-focused element, so the
-input pipeline returns naturally. Defined in **`utils.js`** (loaded by index.html →
-global for the chat page) and **inline in `config.html`** (which loads no shared
-JS). `hwuiToast` lives in both for the same reason.
-
-**Async conversions** (since `hwuiConfirm`/`hwuiPrompt` are Promise-based — `await`
-binds tighter than `!`, so `!confirm(x)` → `!await hwuiConfirm(x)` is correct):
-- `confirmEmptyPairedSave()` (config.html) made `async` (it `return`s the result);
-  its 4 callers now `await` it — `saveSystemPromptAs`, `saveGlobalSystemPrompt`,
-  `saveGlobalExampleDialog`, `saveGlobalPostHistory` (all already async).
-- `resetTheme()` and `deleteLlamaPreset()` (config.html) made `async` (both are
-  fire-and-forget `onclick` handlers — verified no caller uses their return value).
-- The "➕ New folder…" `newOpt.onclick` arrow (index.html) made `async () =>`.
-- All other confirm/prompt sites were already inside `async` functions.
-
-**Verified:** grep for word-boundary `alert(` / `confirm(` / `prompt(` (excluding
-`hwui*` and comments) → **0 hits**. `utils.js` passes `node --check`.
-
-**⚠️ DO NOT REVERT, and never reintroduce `alert()` / `confirm()` / `prompt()`** —
-they stall the Electron renderer input pipeline after dismissal (root cause below).
-Use `hwuiToast()`, `await hwuiConfirm()`, `await hwuiPrompt()`.
-
-## May 29 2026 — ⚠️ ROOT CAUSE / DO NOT REVERT: native alert()/confirm() stalls keyboard input
-
-**Real root cause of the dead-typing bug.** Native `window.alert()` / `confirm()`
-dialogs (fired on save persona, save theme, etc.) stall the Electron renderer's
-keyboard-input pipeline AFTER the dialog is dismissed: focus is technically correct
-on `#user-input` but keystrokes don't reach it until a reflow/focus-cycle
-(minimize→restore, DevTools open, click). Known Electron/Chromium quirk with native
-modals.
-
-**Fix.** Replace `alert()`/`confirm()` with in-page, non-blocking UI. Added a
-reusable `hwuiToast(message, kind, ms)` helper to `config.html` (fixed-position,
-`pointer-events:none`, fades after ~2.2s; `kind` = success/error/info). **First
-pass (Chris's confirmed triggers):** routed `alert()` → `hwuiToast()` in
-`setActiveUser()` (the actual "Active user set to …" trigger), `saveUserDetails()`
-(User Persona save), `saveTheme()`, and the Theme-tab handlers `switchThemeFile()`,
-`newThemeFile()`, `deleteThemeFile()`, `loadPreset()`. Remaining ~160 `alert()` and
-~20 `confirm()` (+ a couple of `prompt()`, e.g. `newThemeFile`/`deleteThemeFile`,
-which are the SAME native-dialog class and stall identically) across `config.html`
-/ `index.html` / `utils.js` to be swept next: success/info/error → `hwuiToast`;
-`confirm()`/`prompt()` → in-page HWUI modal.
-
-**⚠️ DO NOT REVERT — and never add new ones:** no native `alert()` or `confirm()`
-anywhere in HWUI. Use `hwuiToast()` for notifications and the in-page HWUI modal
-pattern for yes/no prompts.
-
-**Prior session fixes all STAY (correct fixes for adjacent issues found while
-hunting this):** the `mainWindow.on('focus')` + `did-navigate` refocus handlers and
-the `pageshow` listener + `focusChatInputIfIdle()` (app-switch / navigation focus);
-the bfcache disable (Flask `Cache-Control: no-store` on HTML + Electron
-`disable-features=BackForwardCache`); and the Anthropic streaming header parity.
-
-## May 29 2026 — ⚠️ DO NOT REVERT: disabled bfcache (root cause of dead-typing after nav)
-
-**Files:** `app.py` (`add_security_headers` after_request hook), `I:\HWUI-Launcher\main.js`
-(commandLine switches), plus removal of all debug instrumentation.
-
-**Root cause (finally).** The intermittent "can't type in the chat box" was NOT a
-focus bug — diagnostics confirmed `document.activeElement` was `#user-input` the
-whole time, no handler cancelled keys (`defaultPrevented` never set on typing
-keys), and `#user-input` was never `disabled`/`readonly`. It was **Chromium's
-back-forward cache (bfcache)**: navigating index ⇄ config restored the page from
-bfcache without a fresh load, leaving the renderer's **input pipeline stalled** —
-focus correct, but keystrokes not pumping until a reflow forced it (DevTools open,
-a click, or minimize→restore, all of which Chris observed "fixing" it).
-
-**Fix (belt-and-braces, both layers):**
-1. **Flask (`app.py`):** extended the existing `add_security_headers` after_request
-   hook to set `Cache-Control: no-store` on `text/html` responses only — opts HTML
-   page loads out of bfcache. Gated to `text/html` so API JSON, static assets, and
-   SSE streams (`text/event-stream`, which set their own `no-cache`) are untouched.
-2. **Electron (`main.js`):** added
-   `app.commandLine.appendSwitch('disable-features', 'BackForwardCache')` before
-   `app.whenReady()` — kills bfcache app-wide at the Chromium level, so even a
-   route that misses the Flask header is covered.
-
-**⚠️ DO NOT REVERT either.** A desktop Electron app gains nothing from bfcache
-(it's a website back-button optimisation) and it's a known source of Chromium
-input/render stalls.
-
-**Kept (legitimate fixes from this debug session — do NOT strip as "debug code"):**
-- `main.js`: `mainWindow.on('focus')` → `webContents.focus()` (app-switch refocus);
-  `webContents.on('did-navigate' / 'did-navigate-in-page')` → deferred 300ms
-  `webContents.focus()` (navigation refocus).
-- `index.html`: `focusChatInputIfIdle()` helper (with its **activeElement guard**),
-  called on `DOMContentLoaded`, `window` `focus`, and `pageshow` (deferred 300ms).
-- `app.py`: Anthropic streaming `Response` header parity (`X-Accel-Buffering: no` +
-  `Cache-Control: no-cache`).
-
-**Removed:** all TEMP DIAG instrumentation (main.js focus/nav event logger;
-index.html focus logger + keystroke-pipeline logger) — debugging complete.
-
-## May 29 2026 — Electron: defer nav-event refocus by 300ms (was firing pre-commit)
-
-**Files:** `I:\HWUI-Launcher\main.js`, `templates/index.html`.
-
-The `did-navigate` / `did-navigate-in-page` (main.js) and `pageshow` (index.html)
-refocus handlers added earlier were calling `focus()` synchronously — too early in
-the navigation lifecycle. The renderer hadn't fully committed, so Chromium's own
-post-commit focus handling overrode ours and typing stayed dead. Proven by the
-repro: **minimize→restore fixes it** — that routes through the window `focus`
-handler on an already-settled renderer, so the bare `webContents.focus()` call is
-correct; it was just firing before the page committed.
-
-**Fix:** wrapped both the main.js `_refocusRenderer` (`webContents.focus()`) and
-the index.html `pageshow` (`focusChatInputIfIdle()`) calls in `setTimeout(…, 300)`,
-matching the reliable `did-finish-load` + 300ms pattern. The `activeElement` guard
-inside `focusChatInputIfIdle` is unchanged (still no focus-stealing from modals).
-TEMP DIAG left in place. If it still fails, next step is bumping the delay (500ms →
-1000ms) to distinguish a pure timing race from something structural.
-
-## May 29 2026 — Electron: fix keyboard focus loss on index ⇄ config navigation (bfcache)
-
-**Files:** `I:\HWUI-Launcher\main.js` (`createMainWindow`) and
-`templates/index.html` (`DOMContentLoaded`).
-
-**Problem.** More specific repro than the app-switch case: launch → can type;
-go to config, return to index → **can't type**; go to config, return again →
-can type. The alternating break/work is the classic **back-forward-cache
-(bfcache)** signature. Navigation is standard `<a href>` (`index.html` →
-`/config`; `config.html` `<a href="/">` → index). On a bfcache restore Chromium
-brings the index page back WITHOUT firing `DOMContentLoaded`, so the load-time
-focus (`focusChatInputIfIdle()` from the prior fix) never re-runs and the caret
-isn't placed in `#user-input`. The `did-finish-load` / window-`focus` handlers
-don't reliably cover internal navigation either.
-
-**Dual fix (complementary, not redundant):**
-- **Renderer side (index.html):** added `window.addEventListener('pageshow',
-  focusChatInputIfIdle)`. `pageshow` fires on BOTH fresh loads and bfcache
-  restores; the listener persists across the bfcache freeze, so focus is
-  re-applied on every show even when `DOMContentLoaded` doesn't fire.
-- **Main-process side (main.js):** added `webContents.on('did-navigate', …)` and
-  `on('did-navigate-in-page', …)` → bare `webContents.focus()` (same guard as the
-  window `focus` handler — destroyed-guard, no `alwaysOnTop`). Restores renderer
-  keyboard focus whenever a navigation commits, regardless of which renderer event
-  fires.
-
-The `activeElement` guard in `focusChatInputIfIdle()` still applies (won't steal
-focus from a modal/field). `did-frame-finish-load` added to the TEMP DIAG logger;
-**TEMP DIAG instrumentation intentionally kept in place** to verify the right
-events fire post-fix.
-
-## May 29 2026 — Electron: fix intermittent loss of keyboard focus on app-switch
-
-**Files:** `I:\HWUI-Launcher\main.js` (`createMainWindow`) and
-`templates/index.html` (`DOMContentLoaded`).
-
-**Problem.** The Electron HWUI window intermittently wouldn't accept typing — the
-chat box ignored keystrokes until the user clicked inside. Investigation found the
-main `BrowserWindow` had **no `focus`/`blur` handlers at all**; the only focus
-logic was a `did-finish-load` handler, which fires on load/reload but NOT on
-app-switch refocus. So when Windows re-foregrounded the window (Alt-Tab, taskbar
-click, clicking back from another app), Chromium did not restore renderer keyboard
-focus and nothing re-applied it. Compounding it: `#user-input` had no `autofocus`
-and nothing focused it on load, so even with renderer focus the caret sat on
-`<body>`.
-
-**Fix 1 (main.js).** Added `mainWindow.on('focus', …)` → `webContents.focus()` to
-restore renderer keyboard focus every time the OS re-foregrounds the window.
-Deliberately a bare `webContents.focus()` — NOT `forceFocusMain()`, whose
-`alwaysOnTop` toggle can emit focus events and feed back on itself.
-`forceFocusMain()` stays reserved for cold-start + explicit re-show paths.
-
-**Fix 2 (index.html).** Added `focusChatInputIfIdle()` — puts the caret in
-`#user-input` on `DOMContentLoaded` (incl. after `location.reload()`) and on
-`window` `focus` (renderer-side belt-and-braces alongside Fix 1).
-
-**⚠️ DO NOT revert the `activeElement` guard.** `focusChatInputIfIdle()` grabs
-focus ONLY when `activeElement` is `<body>`, `null`, or the chat box itself.
-Without the guard, opening the config / paste-transcript modal or clicking a
-sampling field would have focus yanked back to the chat box mid-type.
-
-**Diagnostics:** the `TEMP DIAG` focus instrumentation (main.js + index.html) is
-intentionally LEFT IN for now so the logs can confirm the fix; strip it in a
-follow-up once confirmed.
-
-## May 29 2026 — Streaming: frontend drip/typewriter renderer + Anthropic header parity
-
-**Files:** `templates/index.html` (`/chat` stream consumer, ~line 3520) and
-`app.py` (both Anthropic streaming `Response` wrappers).
-
-**Background (diagnosed, not a bug at source).** An isolation test (standalone
-harness replicating the exact `iter_lines(chunk_size=1)` read loop, hitting the
-real API) proved Anthropic's `/v1/messages` SSE cadence is **~50–90 chars every
-~470ms** — coarse and lumpy. llama.cpp emits per-token deltas (fine-grained),
-which is why local feels smooth and Anthropic feels chunky. The backend forwards
-faithfully (per-delta `yield`+`flush`, `stream_with_context`); the frontend
-rendered immediately with no batching. So the lumpiness is **upstream API
-behaviour we can only smooth visually**, not fix at source. No Flask-Compress /
-gzip / proxy buffering was involved.
-
-**Fix 1 — adaptive drip renderer (`index.html`).** The `/chat` stream consumer is
-now split: the reader loop is a pure PRODUCER (appends raw chunks to `fullMessage`
-+ buffers TTS on receipt, no rendering), and a `requestAnimationFrame` loop is the
-CONSUMER that reveals characters of the cleaned text at an **adaptive rate**
-(drain current backlog over ~0.35s, clamped to 45–600 cps). Big Anthropic backlog
-→ fast catch-up; nearly caught up → eases toward the floor so it doesn't race the
-next delta and stutter; local per-token deltas keep the queue tiny → steady smooth
-reveal. **On stream end it flushes ALL remaining chars immediately** — no waiting
-on the typewriter after generation finishes. `marked.parse()` runs on the
-accumulated revealed text (not the single drip char) so markdown renders correctly
-as it grows; `stripChatMLOutsideCodeBlocks` cleaning is unchanged (still per-chunk).
-Applies to ALL backends uniformly (no backend-conditional logic). `fullMessage` /
-`cleanedMessage` keep their old final values, so the empty-response guard,
-memory-tag detection, autosave, and `loadedChat` push downstream are untouched.
-
-**Fix 2 — Anthropic header parity (`app.py`).** Both Anthropic streaming
-`Response` wrappers (web-search and offpath) now set `X-Accel-Buffering: no` +
-`Cache-Control: no-cache`, matching the local path (was missing). Hygiene against
-reverse-proxy / Tailscale buffering; does NOT change the upstream cadence (the
-harness proved that's Anthropic-side).
-
-**Cleanup.** Removed the three `# TEMP DIAG` prints from `stream_anthropic_response`
-and deleted `_diag_anthropic_stream.py`. Diagnostics complete.
-
-## May 29 2026 — HWUI Launcher: spell-check suggestions in the right-click menu
-
-**File:** `I:\HWUI-Launcher\main.js`, `createMainWindow()` — `webPreferences` +
-the `context-menu` handler.
-
-Added `spellcheck: true` (explicit; it's the Electron default) and
-`session.setSpellCheckerLanguages(['en-US'])`, and extended the right-click menu
-to surface corrections for a misspelled word under the cursor:
-`params.misspelledWord` + `params.dictionarySuggestions` → suggestion items at the
-top (each calls `webContents.replaceMisspelling(...)`), plus "Add to dictionary"
-(`session.addWordToSpellCheckerDictionary`). Falls back to a disabled "No spelling
-suggestions" entry. The existing Cut/Copy/Paste/Select All/Inspect items are
-unchanged, now appended after the spelling block. Extend the language list to add
-more dictionaries.
-
-## May 29 2026 — HWUI Launcher: single-instance lock (stops stacked/orphaned Electron consoles)
-
-**File:** `I:\HWUI-Launcher\main.js`, just before the `app.whenReady()` boot block.
-
-**Problem.** Each `START_HWUI-Launcher.bat` run does `npx electron .`, which holds
-the cmd console open until Electron exits and prints Electron's own stdout/stderr
-there (e.g. `ERROR:network_service_instance_impl.cc … Network service crashed`).
-There was no single-instance guard, so every run spawned a fresh Electron + cmd
-console. When one hung during boot (Chromium network-service crash → no window,
-no tray icon — `assets\icon.png` is present, so the missing tray was the hang, not
-the asset), it became an unkillable orphan and they stacked up two or three deep.
-
-**Fix.** Added `app.requestSingleInstanceLock()`. A duplicate launch exits
-immediately so its console closes instead of stacking. `second-instance` focuses
-the live window. **Uses `app.exit(0)`, NOT `app.quit()`** — `app.exit` skips the
-`before-quit` handler, so the exiting duplicate does NOT run `killKnownPortsSync()`
-and therefore can't sweep the already-running instance's Flask :8081 / F5 :8003 /
-llama ports out from under it. (Single fixed-port design means only one build runs
-at a time anyway, so single-instance is the correct model.)
-
-**Manual cleanup for existing orphans:** close each console's X (the console is the
-parent of its Electron, so closing it kills the tree), or
-`taskkill /F /IM electron.exe /T & taskkill /F /IM node.exe /T`.
-
-## May 29 2026 — HWUI Launcher: window close (X) now fully shuts down (was hide-to-tray)
-
-**File:** `I:\HWUI-Launcher\main.js`, `mainWindow.on('close')` (~line 525) + the
-header comment block.
-
-**Problem.** Closing the HWUI window (X) only **hid the launcher to the tray** —
-the Electron app kept running, and so did its two spawned console windows
-(**F5-TTS** `f5_server.py` and the **llama-server** grandchild). Users read
-"closed the window" as "shut everything down", so two consoles appeared to hang
-after every session. Only tray → Quit actually ran the cleanup.
-
-**Fix.** The `close` handler now calls `quitApp()` instead of
-`e.preventDefault(); mainWindow.hide()`. `quitApp()` already does the full
-teardown — `killAllSubprocesses()` (synchronous `taskkill /T /F` on each tracked
-child tree, incl. the F5 `cmd.exe` → python tree) + `killKnownPortsSync()` (sweeps
-Flask :8081, F5 :8003, and the build's llama port from settings.json, which
-catches the detached llama-server console). The `isQuitting` guard still lets the
-subsequent `app.quit()` close the window normally without re-entering teardown.
-
-**Tradeoff:** minimize-to-tray is gone — closing the window ends the session.
-Tray **Quit** and **Manage Builds…** still function while running. (Supersedes
-the "Window close (X) → hide to tray" behavior described in the May 28 launcher
-entry below.)
-
-## May 29 2026 — Fix: Anthropic /v1/messages 400 — payload filtered to accepted keys, top_p dropped
-
-**File:** `app.py`, `stream_anthropic_response()` (~line 2365, the function that
-builds and POSTs to `{base}/v1/messages`). This is the sole Anthropic
-payload-building site — `_web_search_stream_anthropic()` delegates its HTTP call
-here, so both the plain and web-search Anthropic paths are covered.
-
-**The bug.** Anthropic's `/v1/messages` rejects (400) any request that carries
-**both** `temperature` and `top_p` — they are mutually exclusive, and merely
-*including* `top_p` triggers it (even `top_p: 0`). The payload sent both, so every
-Anthropic generation 400'd once a sampling preset put `top_p` in the body.
-
-**The fix.** The Anthropic payload now includes **only keys Anthropic accepts**:
-`model`, `max_tokens` (required), `temperature` (clamped ≤1.0), `messages`,
-`stream`. **`top_p` is explicitly dropped** — since we always send `temperature`,
-forwarding `top_p` is what Anthropic rejects. `min_p` / `repeat_penalty` /
-`frequency_penalty` / `presence_penalty` were already never sent to Anthropic
-(the function doesn't receive them) — confirmed, not a second bug. The `top_p`
-parameter is retained in the signature only for call-site symmetry with the
-OpenAI/local transports; it is deliberately ignored for Anthropic.
-
-**Not in scope:** `top_k` (which Anthropic *does* accept) is not currently
-threaded into this function; sending it would require signature + call-site
-changes. Left as a possible follow-up. The OpenAI transport
-(`stream_openai_response`) was sanity-checked and is correct — it sends only
-valid OpenAI params (`temperature`+`top_p` are not mutually exclusive there, and
-it never sends `min_p`/`top_k`/`repeat_penalty`); no change made.
-
-## May 29 2026 — Cleanup: removed inert sampling keys from index.html /chat bodies
-
-**File:** `templates/index.html` — both `/chat` request bodies (the main
-send/regenerate flow ~line 3360, and the "continue last response" flow ~line
-3954).
-
-Deleted the hardcoded `temperature: 0.8`, `max_tokens`, and `stop: []` keys from
-both payloads. These were **inert dead code**: the `/chat` handler in `app.py`
-never reads sampling from the request — it sources everything
-(`temperature`/`top_p`/`top_k`/`min_p`/`repeat_penalty`/`max_tokens`/penalties)
-server-side from `settings.json` via `load_sampling_settings()`. The leftover
-client values made it falsely appear that generation was pinned to temp 0.8.
-Saved sampling settings were already honored; this is pure clarity cleanup, no
-behavior change.
-
-The deleted `max_tokens` ternary in the main body also carried the
-`window._memoryConfirmMaxTokens` reset side effect — but that cap was already
-non-functional (see "Pending / Backlog" above). The separate `_memoryConfirmNote`
-author-note override (different flag) is unaffected and still works.
-
-See the May 29 falsy-zero fix below — together these make saved sampling presets
-both persist correctly (Fix 1) and visibly drive generation (this cleanup
-confirms the server path was already correct).
-
-## May 29 2026 — ⚠️ DO NOT REVERT: saveSettings() falsy-zero coercion fix (config.html)
-
-**File:** `templates/config.html`, `saveSettings()` (~line 1646).
-
-**The bug.** `saveSettings()` built its `/save_sampling_settings` payload with the
-`parseFloat(field) || default` idiom:
-```js
-top_p: parseFloat(document.getElementById('top_p').value) || 0.95,   // ← WRONG
-```
-`0` is falsy in JS, so `parseFloat("0") || 0.95` evaluates to `0.95`. Any
-legitimately-zero sampling value was silently replaced by its default on save:
-`top_p:0→0.95`, `min_p:0→0.05`, `top_k:0→40`, `temperature:0→0.8`,
-`repeat_penalty:0→1.1`. This is exactly why a loaded preset with `top_p:0`
-"reverted" after the user hit 💾 Save & Apply — the field held 0, the save
-coerced it back to 0.95. (`loadSamplingPreset()` never had the bug; it persists
-via `buildSamplingPresetFromFields()` → `readNum()`, which preserves 0.)
-
-**The fix.** `saveSettings()` now calls `buildSamplingPresetFromFields()` — the
-same single-source-of-truth helper `loadSamplingPreset()` already uses — instead
-of rebuilding the payload inline.
-
-**⚠️ DO NOT REVERT to `|| default`.** `||` looks innocent and someone (human or
-AI) will reintroduce it. For ANY numeric sampling field where 0 is a valid value
-(`top_p`, `min_p`, `top_k`, `temperature`, `repeat_penalty`, `frequency_penalty`,
-`presence_penalty`), the ONLY safe read pattern is `readNum(id, default)` /
-`Number.isNaN(val)` — which falls back ONLY on NaN (empty/invalid field), never
-on a real 0. Never use `parseFloat(x) || default` or `parseInt(x) || default`
-for these fields.
-
-**Related (not changed here).** The `/chat` handler in `app.py` already sources
-ALL sampling from `settings.json` via `load_sampling_settings()` — the
-`temperature: 0.8` / `max_tokens: 4096` in index.html's `/chat` bodies
-(~lines 3366, 3961) are inert; the server ignores them. Cleanup of those dead
-keys is tracked separately.
-
-## May 28 2026 — HWUI Launcher: Standalone Electron Desktop Wrapper at I:\HWUI-Launcher\
-
-**Files:** new directory `I:\HWUI-Launcher\` containing `main.js`, `preload.js`,
-`picker.html`, `setup.html`, `loading.html`, `package.json`, `builds.json`,
-`.gitignore`, `START_HWUI-Launcher.bat`, and `assets\icon.png` (copied from
-`static\images\Helcyon.png`). **Independent of the dev build** — no hardcoded
-`I:\HWUI-Pro-Dev-build` paths anywhere. Each HWUI install is registered in
-`builds.json` and selected at runtime. Old `I:\HWUI-Pro-Dev-build\electron\`
-folder and `START_HWUI-Electron.bat` were removed; the launcher lives entirely
-under its own root and was authored on `C:\` then moved to `I:\` (every internal
-path resolves via `path.join(__dirname, …)` and the `.bat` uses `cd /d "%~dp0"`,
-so the folder is freely relocatable).
-
-**Purpose.** Wraps any HWUI install in a frameless Electron window so users can
-launch Flask + F5-TTS as a single desktop app with proper window chrome, system
-tray, and clean subprocess management. `START_HWUI-Dev.bat` is unchanged and
-still works for plain-python launches.
-
-**`builds.json` shape.** Ships empty (`[]`). Pre-populated examples:
-```json
-[
-  { "name": "Dev Build", "path": "I:\\HWUI-Pro-Dev-build", "services": ["f5", "whisper"] },
-  { "name": "Personal",  "path": "E:\\HWUI personal",      "services": ["f5", "whisper"] }
-]
-```
-Each entry is path + friendly name + a list of services to spawn for that build.
-Read/written by `loadBuilds()` / `saveBuilds()` in `main.js`. Validation
-(`validateBuildPath`) rejects folders without `app.py`, rejects duplicate paths
-(case-insensitive), rejects empty names.
-
-**Boot flow.**
-1. Apply GPU/disk-cache redirects BEFORE `app.whenReady()`:
-   `app.commandLine.appendSwitch('disable-gpu-shader-disk-cache')` +
-   `appendSwitch('disk-cache-dir', path.join(os.tmpdir(), 'hwui-launcher-cache'))`.
-   Suppresses the "Unable to move cache / Access denied" Chromium spam when
-   running from a non-system drive (Chromium's default cache lives under
-   `%LOCALAPPDATA%` and can't always relocate there cleanly from `I:\`).
-2. Install local cert bypass via `session.defaultSession.setCertificateVerifyProc` —
-   returns `0` (OK) when `request.hostname` is `127.0.0.1` / `localhost` /
-   `[::1]`, otherwise returns `-3` (use Chromium default verification). The
-   verification-layer hook is what actually stops the `ERR_CERT_*` spam — the
-   older `app.on('certificate-error', …)` event fires AFTER Chromium has
-   already logged each sub-resource (CSS/JS/SSE/etc.) on HWUI's self-signed
-   Tailscale cert. The certificate-error handler is kept as a hardened
-   fallback (parses with `new URL(url).hostname` so `https://127.0.0.1.evil.com`
-   no longer slips through the old `startsWith` check).
-3. Register persistent IPC handlers (see below) + create tray.
-4. Load `builds.json`. If empty → show first-run setup; user must add ≥1
-   build before launch. If non-empty → show **picker on every launch**
-   (no single-build shortcut — user confirms which build each time).
-5. Pre-launch port-kill of `:8081` (Flask) and `:8003` (F5) via
-   `netstat -ano | findstr :PORT` + `taskkill /PID … /F /T`. Mirrors the
-   existing `START_HWUI-Dev.bat` port-kill but covers F5 too.
-6. Spawn Flask: `<buildPath>\venv\Scripts\python.exe app.py`, cwd = build
-   path, `env: { …process.env, PYTHONIOENCODING: 'utf-8' }`. The
-   `PYTHONIOENCODING` is load-bearing — without it, the cp1252 default on
-   Windows raises `UnicodeEncodeError` on Flask's emoji startup prints
-   (🔒/🌐/✅/🚀) and the spawn dies before the readiness poll succeeds.
-7. Spawn optional services per `selectedBuild.services`.
-8. Detect scheme — HTTPS if `music.tail39b776.ts.net.crt` + `.key` exist in
-   the build root, else HTTP. Mirrors the same check in `app.py`.
-9. Poll `<scheme>://127.0.0.1:8081/` every 300 ms with a 60s budget;
-   navigate the main window from `loading.html` to the live URL on first
-   response (any 2xx/3xx/4xx counts — "Flask is awake" is all that matters).
-
-**Services architecture (`subprocesses[]` + two spawn helpers).**
-- **`flask`** (always) — `spawnService('flask', '<build>\app.py', '<build>')`
-  using venv python.
-- **`f5`** — `spawnBatService('f5-tts', '<build>\Start_F5_XTTS.bat', '<build>')`
-  via `cmd.exe /c <bat>`. **NOT** direct python — the .bat hardcodes
-  `cd /d "I:\HWUI-Pro-Dev-build"` and activates an EXTERNAL venv at
-  `I:\F5-TTS\f5_venv\Scripts\activate.bat`, which neither the dev build's
-  nor Personal's local venv has (Personal was missing `soundfile` on the
-  direct-python spawn attempt — fatal `ModuleNotFoundError`). Using the
-  .bat means F5 always runs from the Dev Build root regardless of the
-  selected build, against its dedicated f5_venv. The python process is a
-  direct child of cmd.exe, so `taskkill /pid <cmdPid> /T /F` reaps it on
-  quit. Caveat: the .bat ends with `pause`, so if F5 ever crashes, cmd.exe
-  hangs on the pause prompt instead of exiting — `taskkill` on quit still
-  cleans it up, but the `child.on('exit', …)` callback won't fire for
-  monitoring purposes.
-- **`whisper`** (no-op slot) — Whisper has no standalone server;
-  `whisper_routes.py` is a Flask Blueprint that does `import whisper` and
-  runs in-process. The launcher logs `"whisper is in-process with Flask —
-  no subprocess spawn"` and continues. The slot is kept in `services` for
-  forward compat if a `whisper_server.py` is ever extracted.
-
-Every spawn pushes `{ name, child }` into a `subprocesses[]` array.
-`killAllSubprocesses()` walks it and does `taskkill /pid <pid> /T /F` on
-each — `/T` reaps Python children of cmd.exe wrappers too. Called from
-`app.on('before-quit')` and the explicit tray-Quit path.
-
-**Setup / Manage Builds UI (`setup.html`).** One file serves two modes via an
-IPC `hwui:get-setup-mode` invoke:
-- **first-run** — titlebar "HWUI Launcher — Welcome"; primary button
-  "Launch HWUI" (disabled until ≥1 build added); closing the window quits.
-- **manage** — titlebar "HWUI Launcher — Manage Builds"; primary button
-  "Done"; closing the window is non-destructive (app keeps running with
-  whatever build is already selected for the session — `builds.json`
-  changes apply on the NEXT launch).
-
-Add flow: **+ Add Build** opens a modal with two fields. **Browse…** button
-opens `dialog.showOpenDialog({ properties: ['openDirectory'] })` and shows
-the chosen path read-only in a mono span next to it. **Name** is a text
-input (auto-fills with the last path segment if the user hasn't typed
-anything yet — never overwrites their typing). **Add** stays disabled
-until both path and name are filled. New builds default to
-`services: ["f5", "whisper"]`.
-
-**Picker (`picker.html`).** Always shown on launch (no single-build
-shortcut). Renders the list of builds with click-to-select via
-`hwui:select-build`. **+ Add Build** footer button opens the SAME modal as
-`setup.html` — on successful add the picker list refreshes immediately so
-the new entry is selectable without going through tray → Manage Builds.
-
-**Tray menu.**
-- **Show HWUI** — restore the main window (disabled pre-launch via
-  `enabled: !!mainWindow`; `rebuildTrayMenu()` flips this when the main
-  window is created).
-- **Manage Builds…** — opens `setup.html` in manage mode at any time.
-- **Quit** — only path that actually taskkills subprocesses and exits.
-
-Window close (X) → `event.preventDefault()` + `mainWindow.hide()`
-(minimize to tray).
-
-**Main window chrome.** `frame: false` + `titleBarStyle: 'hidden'` +
-`titleBarOverlay: { color: '#0e0e0e', symbolColor: '#e8e8e8', height: 32 }`
-gives Windows-native min/max/close buttons overlaid on a thin dark drag
-strip across the top. No custom HTML titlebar — the native overlay handles
-drag region, button hover states, and click dispatch. `resizable: true`,
-`maximizable: true`. Right-click context menu (Cut/Copy/Paste/Select All/
-Inspect Element) wired via `webContents.on('context-menu', …)` using
-`params.editFlags` so disabled actions stay greyed out instead of
-misfiring.
-
-**The `[hidden] { display: none !important; }` trap.** Modal overlays and
-empty-state divs in `setup.html` and `picker.html` used `<div hidden>` +
-`display: flex` on the same class — author CSS beats UA CSS at the origin
-level regardless of equal specificity, so `.modal-overlay { display:
-flex }` defeats `[hidden] { display: none }`. Symptom: clicking Cancel
-or Add appeared to do nothing because the modal couldn't visually hide
-(the JS handler DID fire — `pendingPath` got cleared, `nameInput.value =
-''`, `addModal.hidden = true` — the attribute just had no rendering
-effect). Fix is one line at the top of both files' `<style>` blocks:
-```css
-[hidden] { display: none !important; }
-```
-
-**IPC surface (`preload.js` exposes `window.hwui`):**
-- `getBuilds()` → `invoke('hwui:get-builds')`
-- `selectBuild(index)` → `send('hwui:select-build', index)`
-- `quit()` → `send('hwui:quit')`
-- `getSetupMode()` → `invoke('hwui:get-setup-mode')`
-- `browseForBuild()` → `invoke('hwui:browse-for-build')` — opens the
-  native `dialog.showOpenDialog` and validates `app.py` exists in the
-  result
-- `addBuild({ name, path })` → `invoke('hwui:add-build', payload)` —
-  validates, dedupes, persists
-- `removeBuild(index)` → `invoke('hwui:remove-build', index)`
-- `finishSetup()` → `send('hwui:finish-setup')` (first-run: closes setup
-  + signals "proceed to launch")
-- `closeSetup()` → `send('hwui:close-setup')` (manage: closes setup
-  without launching)
-
-**Launcher .bat (`START_HWUI-Launcher.bat`).** Checks `where node`; bails
-with an install-Node.js message if missing. On first run (`if not exist
-node_modules`) runs `npm install`, then `npx electron .`. Subsequent
-launches go straight to `npx electron .`.
-
-⚠️ The launcher is independent of the dev build — restart-Flask
-admonitions do NOT apply here; the launcher itself doesn't need any
-restart, and launches a fresh Flask subprocess per session.
-
-## May 26 2026 — Full {{char}} / {{user}} Placeholder Substitution Across ALL Model-Bound Text (One Shared Helper)
-
-**Files:** app.py (new `substitute_placeholders` ~81; labels derived once ~2578;
-applied at description/scenario/main_prompt ~2842–2865, user bio ~2977, example
-dialogue ~3430, character_note/author_note ~3539/3548, post_history ~3752) and
-extra_routes.py (`/get_opening_lines` ~94).
-
-**Problem.** Substitution was PARTIAL — only example dialogue swapped
-`{{char}}`/`{{user}}` (via an inline `.replace().replace()`); every other
-model-bound field passed the placeholders through RAW. So a `{{char}}` in a
-description/persona/note/opening-line reached the model (and the screen, for
-greetings) literally.
-
-**Fix — ONE source of truth.** New module-scope helper
-`substitute_placeholders(text, char_label, user_label)` (~app.py:81) is the
-single definition of what the placeholders mean: whitespace- and case-tolerant
-(`{{ Char }}`, `{{USER}}` all match via `re.sub(..., re.IGNORECASE)`); returns
-text unchanged if not a string/empty; and — important — **leaves the placeholder
-UNTOUCHED when a label is empty/missing**, so `{{char}}` can never become a blank
-string. Reuses the module-level `import re` (line 3) — no redundant import.
-
-**Labels derived ONCE** at ~app.py:2578, the earliest point where both
-`char_data` (just loaded) and `user_display_name` are available:
-`_char_label = char_data.get("name", character_name)` /
-`_user_label = user_display_name or user_name` — the same definitions the
-example-dialogue path always used. Every field below routes its USER-AUTHORED
-TEXT (not the `[OOC: …]` / `USER CONTEXT` wrappers) through the helper:
-description, scenario, main_prompt, user bio, example dialogue (refactored from
-its inline `.replace` to a helper call), character_note, author_note,
-post_history.
-
-**Greeting / opening lines** substitute on the BACKEND (not utils.js) in
-`extra_routes.py:/get_opening_lines`. The endpoint only receives `<character>`,
-so: char label = `characters/<character>.json` `"name"` (fallback to the URL
-param); user label = resolve the ACTIVE persona exactly like `/get_active_user`
-(`users/index.json` → the persona with `"active": true`, else first) → its
-`display_name` (name fallback). Uses a **deferred** `from app import
-substitute_placeholders` inside the function — app.py imports extra_routes at
-load (line 62), so a top-level import would be circular. `utils.js` still pushes
-the (now backend-substituted) line verbatim — no placeholder logic in JS.
-
-**Dead-code cleanup.** Removed the defensive `_char_label`/`_user_label`
-re-derivation that used to sit at the example-block injection site (~3671) — the
-labels are now derived once at function top and in scope there. Verified the
-labels are assigned nowhere between 2578 and that site, and the only input
-mutation in that range (`char_data = dict(char_data)` at ~3399) preserves
-`"name"`, so the removed copy was byte-identical — no behaviour change.
-
-**No hardcoded names:** every substitution uses only the derived labels; grep
-for the literal `Chris` across all project `*.py` returns zero matches (only
-third-party `venv/` credits). Verified `ast.parse` clean on app.py and
-extra_routes.py.
-
-**⚠️ app.py + extra_routes.py change — restart Flask** for it to take effect.
-
-## May 26 2026 — Web-Search-OFF Now Shows a Notice Instead of Eating the Turn (Local + OpenAI Paths)
-
-**File:** app.py — `_filtered_stream` WEB SEARCH catch (~5209), the lifted
-`_run_search_and_reprompt` (~4538), and the OpenAI off-path wrapper
-`_oai_offpath_stream` (~4203).
-
-**Root cause found.** When a character's web-search toggle is OFF, the turn
-streams through `_filtered_stream` (the `else:` of `if use_web_search:` at
-~4695 — generator selection is decided purely by `char_data["use_web_search"]`
-read at ~4353; a web-search-enabled character NEVER reaches `_filtered_stream`).
-If the model emitted a `[WEB SEARCH:` tag anyway (user explicitly asked it to
-search), `_filtered_stream`'s catch **halted and discarded the tag + everything
-after it** → empty response → frontend empty-guard retried once → second empty →
-"Model returned empty response twice." A whole turn was silently eaten.
-
-**Decision: notice, not search.** We briefly built "Option A" (honour the tag
-and actually run the search from `_filtered_stream`) but **reverted** it — a
-toggle that's OFF should stay off. The chosen behaviour: keep the prose the
-model wrote before the tag, strip the tag + everything after, and append one
-inline italic notice:
-`*🔌 Web search is off for this character — toggle it on to search the web.*`
-
-**Local path (`_filtered_stream`).** Catch rewritten (~5225): detect on the bare
-`[WEB SEARCH:` prefix (no need to wait for `]` — we don't use the query, and
-this is robust if the model never closes the tag), emit not-yet-sent prose,
-yield the notice, halt. The "prose before the tag" length uses the corrected
-`already_streamed = len(_rolling) - len(chunk) - len(_tail)` — the earlier
-`len("".join(_accumulated[:-1]))` measure ignored the `_TAIL_LEN` (40-char)
-holdback and dropped up to 40 chars of real prose right before the tag.
-
-**OpenAI off-path — latent leak fixed.** `stream_openai_response` is a PLAIN
-PASSTHROUGH (no tag handling) and `_strip_ooc_stream` only removes `[OOC]`, so a
-model-emitted `[WEB SEARCH:` tag on the OpenAI-backend OFF path **leaked raw to
-the user** (and could trip the empty-retry if it dominated the turn). New
-wrapper `_oai_offpath_stream` (~4203) sits between `stream_openai_response` and
-`_strip_ooc_stream`, mirroring the local behaviour: emit prose before the tag,
-strip tag + after, append the SAME notice, with a trailing partial-`[WEB SEARCH:`
-holdback so a tag split across SSE chunks can't leak.
-
-**Refactor note.** `_run_search_and_reprompt` was lifted from inside
-`_web_search_stream` to `/chat` scope (~4538, self-contained `import re as _re`)
-during the Option-A attempt. It was **kept there on revert** (lower risk than
-re-indenting ~150 lines back); it is now called ONLY by `_web_search_stream`'s
-three trigger sites (~5055/5128/5153) — `_filtered_stream` no longer references
-it. The toggle-ON paths (`_web_search_stream`, `_web_search_stream_openai`) and
-the routing at ~4353/4695 are unchanged.
-
-**Why no empty-retry now:** the notice (~64 non-whitespace chars) is yielded
-unconditionally on this path, so `fullMessage.trim().length` is always well over
-the frontend guard's `< 2` threshold. Verified `ast.parse` clean after each edit.
-
-**⚠️ app.py change — restart Flask** for it to take effect.
-
-## May 26 2026 — Message-Edit: Model Edits Are Now In-Place (No More Silent Chat Truncation)
-
-**File:** templates/index.html (`editSpecificMessage` save handler, ~2185).
-
-**Bug.** The edit-message save handler ran `window.loadedChat.splice(messageIndex + 1)`
-for EVERY edit, *before* the role check. So editing a MODEL response wiped every
-message that followed it. This was never requested — only USER edits were meant
-to rewrite history. A valuable chat was lost this way before the fix.
-
-**Fix.** The truncation is now gated behind `editedRole === 'user'`:
-- **Edit a USER message** → splice everything after it, re-render, save, then
-  auto-`regenerate()` a fresh model reply. (Unchanged — this is the intended
-  behaviour requested the night before.)
-- **Edit a MODEL response** → update only that message's `content`, re-render,
-  save. Nothing after it is touched and nothing is regenerated. Pure in-place
-  correction.
-
-`editedRole` is now captured BEFORE the content update (it was already, but the
-ordering is now explicit) so the role test is reliable. Regenerate block is
-likewise gated on `editedRole === 'user'`.
-
-**⚠️ Template edit — restart Flask** for it to take effect (the no-reloader
-server doesn't pick up .html/inline-JS changes automatically; CSS would).
-
-**Note:** yesterday's edit→regenerate work was NOT logged in changes.md; this
-entry is the first record of that feature area. The originally-intended USER-edit
-regenerate behaviour is preserved here.
-
-## May 24 2026 — Persona Subsystem Hardened to Match the Character Fixes (Convergence + Atomic Writers + Image Namespacing)
-
-**Files:** app.py (NEW `list_users` + `_scan_and_heal_users_index` + `_resolve_user_image`; `get_all_users` ~6207; `save_user` ~6171), extra_routes.py (`create_user` ~849), templates/config.html (create-persona flow ~1916).
-
-**Context.** Personas are stored as `users/{name}.json` (+ `users/index.json` + an
-image in `static/images/`) — a SEPARATE subsystem from characters that this
-session's character work did not touch. Investigation found personas were
-*more* fragile than characters had been:
-- **No directory-scan self-heal.** `get_all_users` and `set_active_user` read
-  `users/index.json` as the ONLY source of truth — there was no `list_users`
-  equivalent of `list_characters`. A persona JSON present on disk but missing
-  from the index was invisible with nothing to reconcile it.
-- **`save_user` never touched the index.** The edit path wrote the JSON
-  atomically but didn't register the name, so an edit could leave a persona
-  unindexed (= invisible).
-- **`create_user` was non-atomic** — JSON write then a read-append-write index
-  step in one try; an exception in the index step orphaned the JSON.
-- **Create-UI omitted `is_user`.** The create flow uploaded the avatar without
-  the `is_user` flag, so `/upload_image` saved it UNPREFIXED (`Snake.png`, not
-  `user_Snake.png`) — colliding with the character namespace. (The edit flow
-  already sent `is_user=true`.)
-
-**⚠️ Snake is NOT an orphan.** An earlier finding in this session ("PNG with no
-JSON") was WRONG — it checked `characters/`, not `users/`. `users/Snake.json`
-exists and is complete (`{"name":"Snake","display_name":"Solid Snake","bio":…,
-"image":"Snake.png","active":false}`). No data was lost; do not recreate Snake.
-His `image` field is the legacy unprefixed `"Snake.png"`, which makes the
-dual-naming tolerance below MANDATORY.
-
-**Fixes:**
-1. **NEW `/list_users` + `_scan_and_heal_users_index()`** — directory-scan
-   `users/*.json` and rewrite `users/index.json` from `sorted(set(names))` on
-   every call (mirrors `list_characters`). Self-heals any JSON-without-index
-   orphan. `get_all_users` is now driven by this scan (not the raw index), so a
-   persona is never invisible due to index desync.
-2. **`save_user`** calls `_scan_and_heal_users_index()` after its atomic
-   tempfile+rename write, so the edit path always registers the persona.
-   Unchanged: it only overwrites the `image` field when a new image is
-   explicitly provided — a no-image edit leaves `Snake.png` intact.
-3. **`create_user`** rebuilds the index from a directory scan instead of
-   read-append-write (mirrors the hardened `import_character`); an exception in
-   the index step can no longer orphan the just-written JSON.
-4. **config.html create flow** now sends `is_user=true`, so NEW persona images
-   are namespaced `user_{name}.png`.
-5. **`_resolve_user_image(name, stored, dir)` — Option A dual-naming.** Resolves
-   `user_{name}.png` → stored `image` field → unprefixed `{name}.png` →
-   `default.png`. New personas prefer the prefixed file; EXISTING unprefixed
-   personas (Snake) keep resolving via the stored-field / unprefixed fallback.
-
-**⚠️ DO NOT rename existing persona image files and DO NOT rewrite their JSON
-`image` field.** Only NEW uploads get the `user_` prefix; the heal only ever
-rewrites `users/index.json`, never the persona JSONs. Verified: a heal run
-against Snake's real shape leaves `Snake.json` byte-identical and `Snake.png`
-untouched, and his avatar still resolves to `Snake.png`.
-
-**Residual (not fixed, by design):** `/upload_image` commits the PNG in a
-SEPARATE request before `/create_user`. Two requests can't be made atomic
-without a single multipart create endpoint (not built). Mitigated: with fix #4
-the committed image is `user_`-namespaced, so a failed create can't leave an
-image masquerading as a character, and the directory-scan heals can't be
-defeated by it.
-
-**Verified:** app.py + extra_routes.py parse (`ast.parse`). Replica: a
-JSON-without-index persona self-heals via the scan; `save_user`/`create_user`
-register; prefixed/legacy/missing image resolution all correct; Snake's JSON +
-PNG provably unharmed.
-
-⚠️ Flask restart required (Python edits in app.py + extra_routes.py); hard-reload
-for the config.html change.
+### Follow-up 2 — close the clearChat() blind-overwrite hole (`index.html`, `clearChat` ~L4761)
+The lone `/chats/update` caller (`clearChat()`, sends `messages: []` — last session's "delete-last" label was a misnomer; it's the clear-chat path) was the last write with no `base_count`, so a stale tab could still wipe a chat that grew on another device. Now sends `base_count: window._chatBaseCount`, and on a **409** logs + `openChat(currentChatFilename)` reload instead of throwing/toasting (mirrors the autoSaveCurrentChat 409 handler). Current-tab clears still pass (`disk_count == base_count` → guard's `disk_count > base_count` is false); a stale-tab clear is rejected and the tab re-syncs, after which a deliberate re-clear succeeds. Client wiring only — `update_chat()`'s server guard already existed.
 
 ---
 
-## May 24 2026 — Slideshow `images[]` Dangling References on Export/Import + Load-Time Self-Heal
+## Session: Jun 10 2026 — train_lora.py: same EOS + dynamic-padding fix as full_train.py; base → x5-v2
 
-**Files:** extra_routes.py (`import_character` ~278), app.py (`list_characters` ~5815).
+### `train_lora.py` (RunPod training side — NOT in HWUI build)
+Mirrors the full_train.py "EOS fix part 3" (entry below) onto the LoRA script, plus the base switch:
+- **`MODEL_PATH`** → `{BASE}/helcyon-x5-v2` (was `{BASE}/helcyon-gpt-4o-base-x6` — the x6 base is poisoned by the zero-EOS-supervision bug; variants must train on the corrected rebuild). ⚠️ Path set verbatim as instructed — **confirm the exact folder name on the pod before launching** (the old value was `helcyon-gpt-4o-base-x6`, not `helcyon-x6`, so naming may differ for the rebuild too).
+- **EOS append, in-loss**: `tokenize()` truncates content to `MAX_LEN-1` (1511) and appends `tokenizer.eos_token_id` (attention 1). After the assistant-section unmasking, `labels[-1] = input_ids[-1]` puts the appended `</s>` IN the loss — the LoRA's stop signal now matches the x5-v2 base. Truncation can never cut it off (verified: 3× shard → exactly 1512, final token id 2, label 2).
+- **Dynamic padding**: `padding="max_length"` (1512-tail) removed; `collate_fn` pads to longest-in-batch (pad: attention 0, labels −100, by POSITION never by token id). **`MAX_LEN` stays 1512** — intentional per-dataset ceiling, unchanged.
+- **KEPT untouched**: assistant-only response masking (verified still active — 798/946 and 307/432 in-loss tokens on the two test shards, not whole-sequence), distinct-pad assert, LoRA config (r32/α48), training args.
 
-**The problem.** A character's slideshow is the `images: [...]` array (e.g.
-Andromeda's `["Andromeda.png","Andromeda4.png","Andromeda5.png"]`). On
-`export_character`: the carrier PNG is the single scalar `image` field, but the
-FULL JSON — including the whole `images[]` filename list — is embedded in the
-`chara` chunk verbatim. Only the ONE carrier image's pixels travel; the extra
-slideshow files are carried as filename strings only. On `import_character` the
-`images[]` array was written back verbatim, so on a fresh machine the slideshow
-pointed at files that don't exist (dangling refs). Andromeda was live proof: 3
-images listed, all three files missing.
+**2-shard verification (live Tekken tokenizer):** BEFORE — id 2 present in zero sequences, label==2 count 0, pad tails 37.5% / 71.5% of 1512. AFTER — both end `…<|im_end|></s>` with final token id 2, label 2 (in-loss), pre-batch padding none; batch-of-2 dynamic pad 0% / 54.3% (vs 37.5% / 71.5%), EOS label survives padding. `py_compile` clean. (Note: `_shard_scan/train_lora.py` is an older divergent copy — left untouched; the repo-root script is canonical.)
 
-**Fix — Option (a): import-side reconciliation + load/list-time prune.** Export
-is deliberately UNCHANGED (keeps full `images[]` intent — true multi-image
-portability is the deferred Issue-2 V3 `assets` work; stripping on export would
-undercut it).
-1. **`import_character`** reconciles `images[]` against what actually exists in
-   `static/images/`, keeping the carrier `{char_name}.png` FIRST (always, even
-   though its physical save is best-effort) so the array is never emptied of
-   its primary. Only slideshow characters (those already carrying `images[]`)
-   are touched; single-image cards are untouched.
-2. **`list_characters`** prunes dangling `images[]` entries on its scan (keep
-   only files present in `static/images/`, scalar carrier first) and rewrites
-   the `.json` ONLY when the array actually changed — steady-state does no
-   writes. Lowest-risk single placement: it heals the on-disk JSON that ALL
-   display consumers read (index.html's static `/characters/{name}.json` load +
-   `/get_character`, and mobile's `/get_character`) without touching the generic
-   static-file route. Also tightened: `index.json` now explicitly skipped in the
-   scan, non-dict JSON guarded.
-
-**Never deletes image files — only prunes the JSON array of references.** The
-frontend `onerror` fallbacks (index.html ~2845, mobile.html ~358) remain as the
-final safety net.
-
-**Verified:** replica — 3-listed/2-missing → carrier + surviving file, never
-empty; Andromeda's all-missing → `["Andromeda.png"]`; steady-state → no write;
-single-image char → untouched.
-
-⚠️ Flask restart required (Python edits). On next `/list_characters` call,
-Andromeda's `images[]` self-heals from 3 entries to `["Andromeda.png"]`.
+⚠️ Same guards as full_train.py: DO NOT remove the EOS append, let truncation eat the final `</s>`, or reintroduce `padding="max_length"`.
 
 ---
 
-## May 24 2026 — Character Export→Import Round-Trip Was Fine; The Real Bug Was `index.json` Desync (Single-Source-of-Truth Fix) + Export Missing-Image + Import Atomicity
+## Session: Jun 10 2026 — stop_type=None root cause FOUND (b8994 parser crash); reasoning_format fix FALSIFIED
 
-**Files:** app.py (`list_characters` ~5808, `save_character` ~5947),
-extra_routes.py (`export_character` ~150, `import_character` ~215),
-templates/index.html (`loadCharacterList` ~1573).
+### Serving-side finding (no code change shipped today — app.py reverted to pre-test state)
+**Root cause of the `stop_type=None` stream deaths (the "unknown" truncations):** llama-server b8994 re-parses the accumulated generated text on every streamed token, and that parser **throws when the text ends in a partial/invalid UTF-8 token piece** (`"Failed to parse input at pos 0: <accumulated text>"` — string lives in `llama-common.dll`, chat/PEG-parser family). The server then emits an SSE `{"error": {code: 500, …}}` event and kills the task mid-stream with NO final stop event. HWUI's SSE loop silently swallows the error event (no `content`/`stop` keys) → the response just stops, `stop_type=None`. Reproduced deterministically per seed, direct against the server, Flask fully out of the loop.
 
-**Symptom as user-reported:** export a character to a PNG card, re-import it →
-character "not recognized", doesn't appear as selectable on the main page.
+**`reasoning_format: "none"` was tested and FALSIFIED** — added to the /chat payload, 10-seed A/B on the same prompt: 10/10 abnormal deaths before, 9/10 after (identical per-seed death points). Also falsified: per-request `chat_format: 0`, launch flag `--skip-chat-parsing`, and removing `--chat-template chatml` — **no payload key or launch flag disables the crashing parse on this build**. Even a minimal payload (no DRY/penalties/ban/stop) reproduces it. The payload key and its comment were removed from app.py again.
 
-**Finding — the round-trip code is CORRECT (proven empirically).** PNG-embedded
-cards already existed: export base64-encodes the full character JSON into a
-`chara` tEXt chunk (Pillow `PngInfo.add_text`); import reads `img.info["chara"]`,
-decodes, writes `{name}.json`, saves the image, registers in `index.json`. A
-replicated Helcyon round-trip preserved every field (parse OK) and appended to
-the index (register OK). Neither stage fails in the happy path. The missing-
-character symptom came from THREE defects around it:
+**Bonus diagnostic (answers "is the foreign token winning?"):** `n_probs` at an exact break position shows a **flat noise distribution** — top candidate `衆国` at ~0.1%, sampled ` międzyn` (id 119980) at ~0.08%, reserved ids tied right behind. Nothing bypasses the sampler; the model has no prediction at all in these states (consistent with the zero-EOS-supervision training hole — see the full_train.py entry below). min_p can't filter it because the top token is equally tiny.
 
-1. **`index.json` desync (the real one).** The main page built its selectable
-   list from the STATIC `/characters/index.json` (index.html:1573), but
-   `save_character` (the editor-save route) wrote the `.json` and NEVER updated
-   the index. `list_characters` did a directory scan but IGNORED the index;
-   mobile.html + config.html already used `/list_characters`. Live proof:
-   `Andromeda.json` on disk, absent from `index.json` → invisible on the main
-   page. (Same class as the May-21 "missing from index.json" bug.)
-2. **Export hard-404'd on a missing image** (`extra_routes.py:171`). A character
-   whose avatar file was missing couldn't be exported at all; an empty `image`
-   field made `os.path.join` resolve to the images DIRECTORY → `Image.open` 500.
-3. **`import_character` could orphan on failure** — ordering was json-write →
-   `img.convert`/`img.save` → index-append, all in one `try`. Any throw in the
-   image step (or a corrupt index read) left `{name}.json` on disk UNREGISTERED.
-   Reproduced with a replica.
-
-**Reader audit of `characters/index.json` (done before editing).** Readers that
-need the FILE: chat_routes.py `/chats/open` ~175, `auto_name_chat` ~491,
-`branch_chat` ~746 — each `json.load`s it as a recognition list and tolerates
-staleness via the May-21 filename-seed fallback. Index-updating writers:
-create/import/delete/duplicate/rename. The only non-updating writer was
-`save_character` (now fixed).
-
-**Fixes — directory is the single source of truth; `index.json` is a derived,
-self-healing cache:**
-1. **`list_characters`** rewrites `index.json` from `sorted(set(scan))` on every
-   call → converges the index to the directory, subsumes the May-21 fragility.
-2. **`save_character`** registers the name in `index.json` after writing (mirror
-   `create_character`), so the editor path never lands an unregistered `.json`.
-3. **index.html** `loadCharacterList` now fetches `/list_characters` (directory
-   scan) instead of the static file — always fresh, TRIGGERS the heal on page
-   load, and unifies with mobile/config. The file remains the contract for the
-   chat_routes readers (kept fresh by #1).
-4. **`export_character`** missing/empty image → `default.png` → 1×1 transparent
-   placeholder (uses `os.path.isfile`, never opens a directory).
-5. **`import_character` hardened** — reorder to json-write → REBUILD index from a
-   directory scan → BEST-EFFORT image save (image failure logs a warning, no
-   longer 500s or orphans). Replica confirmed the orphan eliminated.
-
-**⚠️ DO NOT strip `images[]` on export** (see the slideshow entry) and **DO NOT
-revert the frontend to the static `/characters/index.json` fetch** — the
-directory route is what delivers the freshness guarantee.
-
-**Verified:** app.py + extra_routes.py parse; replicas confirm Andromeda becomes
-visible after the heal, a missing-image character exports without 404, and the
-old→new import no longer orphans on an image-step failure.
-
-⚠️ Flask restart required (Python edits in app.py + extra_routes.py); hard-reload
-for the index.html change.
-
-**Deferred (Issue 2, NOT done):** SillyTavern Character Card V2/V3 interop. HWUI
-embeds its own flat native JSON under `chara`; it is NOT the V2 `{spec,
-spec_version, data:{…}}` envelope (V3 = `ccv3`). So HWUI importing a real ST card
-fails the `name` check (name lives under `data.name`), and ST can't map an HWUI
-card. Pillow already does tEXt read/write — no new dependency needed when this is
-built. The V3 `assets` array is also where portable multi-image slideshows
-belong.
+**Mitigation path (future work, NOT done today):**
+1. A different llama-server build (the crash is b8994-intrinsic; the I:\llama.cpp checkout at f9ec8858e is a different/older state than the b8994 binary, which is not built from this tree).
+2. HWUI: make `stream_model_response()` detect `{"error": …}` SSE events and surface them (log + stop-reason) instead of silently swallowing — turns invisible deaths into visible diagnostics.
 
 ---
 
-## May 24 2026 — `[OOC]` Leak: Universal Output Strip Net (Closes Mid-Response + Post-Search + OpenAI/Vision Gaps the May-22 Opening Guards Couldn't)
+## Session: Jun 10 2026 — full_train.py: EOS fix part 3 — explicit `</s>` append + dynamic padding (x6 poison root cause)
 
-**Files:** app.py — NEW `_strip_ooc_stream()` (~846, right after
-`strip_chatml_leakage`); wrapped at all 6 streamed-output sites.
+### `full_train.py` (RunPod training side — NOT in HWUI build)
+**Yesterday's "EOS fix" (Jun 9 entry below) corrected the pad/eos collision but was INCOMPLETE — it missed the explicit-EOS-append and left the max_length pad-tail, and together those poisoned x6** (rebuilt on the corrected masking, still emits foreign-script/reserved-token garbage at stop-points).
 
-**Symptom:** `[OOC: …]` stage-direction tags intermittently leaking into displayed
-output, despite the May-22 opening-guard fix.
+**Verified on real shards before fixing** (3 real `_shard_scan/` shards + correctly-formatted constructed DPO/CX samples, run through the exact current `strip_structural_lines()` + `tokenize()` against the live Tekken tokenizer):
+- **id 2 (`</s>`) appeared in ZERO sequences.** The HF Nemo/Tekken tokenizer adds BOS but NOT EOS (`add_eos_token=False` default), and the freeform shard text contains no `</s>` — so nothing ever appended one. Every shard's final real tokens were the six plain-text `<|im_end|>` pieces (`…1060 1124 1329 23836 1124 1062`). The masking fix made `</s>` *visible to the loss* — but there were no `</s>` tokens in the data to see. The model gets no end-of-sequence supervision at all; P(next | end-of-content) is left to undertrained base-vocab drift → garbage at stop-points.
+- **Pad tails**: `padding="max_length"` padded every shard to 1024 with pad id 10 — 7.7% / 5.9% / 57.9% pad on the three real shards (>90% on short DPO/CX-style ones).
 
-**Root cause — NOT chunk-splitting of a leading tag** (the May-22 guards buffer
-and already reassemble those). The leaks came from two gaps the opening guards
-structurally can't cover:
-- **Mid-response position.** All three May-22 guards (`_filtered_stream`,
-  its re-prompt sibling, `_web_search_stream` passthrough) anchor to the OPENING
-  region and disable permanently once resolved — by design they "never touch
-  mid-response brackets." So an `[OOC: …]` emitted after some real text was never
-  stripped. Intermittent by position.
-- **Path coverage holes.** OOC stripping existed on only 3 of ~7 output paths.
-  The `_web_search_stream` POST-SEARCH loop (the documented "known unguarded
-  sibling"), `_web_search_stream_openai`, `stream_openai_response`, and both
-  `stream_vision_response` sites had NO OOC handling at all. For a search-enabled
-  card, every turn that actually fired a search streamed raw.
+**The fix (tokenize + collate, verified by re-running the same shards):**
+1. `tokenize()` now truncates content to `SEQ_LEN-1` (1023) and **appends `tokenizer.eos_token_id` to every sequence** — attention_mask 1, label = id 2 (IN the loss). Truncation can never cut the EOS off (verified: a >1024-token text lands at exactly 1024 ending `…[1046, 101460, 1435, 8381, 2]` = `'. Respond as someone</s>'`).
+2. `padding="max_length"` removed; **padding is now dynamic per batch in `collate_fn`** (pad to longest-in-batch with the distinct pad id; attention 0 / labels −100 on pad positions only — masked by POSITION, never by token id).
+3. **Kept from yesterday (correct):** distinct pad token (id 10 ≠ id 2) + the hard `assert pad_id != eos_id`.
 
-**Key insight that makes the fix safe:** `[OOC: …]` is NEVER legitimate model
-output — it is an injected instruction format the model should only READ, never
-WRITE. So removing EVERY occurrence (leading, mid, trailing) is always safe and
-needs none of the opening-guard caution about real brackets.
+**Re-verification numbers (same shards, fixed code):** every sequence now ends `…<|im_end|></s>` (or `…immediately.</s>` for label-stripped CX) with `</s>` at the final position, attention 1, label 2; EOS label survives batch padding; pad is batch-relative (0–2% for like-sized ChatML shards) instead of a fixed 1024 tail.
 
-**Fix — one universal outer net `_strip_ooc_stream(src)`** wrapping each path's
-output at the `Response(stream_with_context(...))` site: `_filtered_stream`
-(~5391), `_web_search_stream` (~5070, CLOSES the post-search hole — main culprit
-for search cards), `_web_search_stream_openai` (~4117), `stream_openai_response`
-(~4131), and both `stream_vision_response` sites (~4065, ~4213).
-- Matches bracketed forms only — `[\(\[]\s*OOC\b`, case-insensitive (covers
-  `[OOC…` and the free `(OOC…`). Bare `OOC:` and `**[OOC` are deliberately NOT
-  matched (would need the model to improvise away from the injected bracket form
-  → false-positive risk).
-- Chunk-boundary safe via an 8-char holdback (a split `[OO`+`C: …]` is
-  reassembled). The final flush always releases the held tail UNLESS it is a
-  genuinely unclosed OOC block (dropped by design, matching the opening guards).
-  Proven no content loss on (a) normal final chunk, (b) a reply that ends inside
-  the holdback tail, (c) empty/early-terminated streams.
-
-**⚠️ This is a SEPARATE THIRD LAYER, outside the existing opening guards — DO NOT
-remove or consolidate those.** The May-22 "two guards by design" warning still
-stands; this net is additive (belt-and-suspenders + the paths/positions the
-guards can't reach). It also leaves the protected leading tags (`[MEMORY ADD:`,
-`[WEB SEARCH:`, etc.) untouched — the regex only matches `[OOC`/`(OOC`.
-
-**Verified:** `ast.parse` clean; 13-case behavioural test — leading, mid,
-trailing, split-across-chunks, paren form, unclosed-drop, `[OOCAR]`
-non-false-positive, `[MEMORY ADD:]` untouched, two blocks, token-by-token, plus
-the three flush cases — all pass.
-
-⚠️ Flask restart required (Python edit in app.py).
+⚠️ DO NOT remove the EOS append, DO NOT let truncation eat the final `</s>`, DO NOT reintroduce `padding="max_length"`, and DO NOT revert the by-position label masking. Any one of these reopens the stop-point garbage. `MODEL_NAME` / `BASE_MODEL_PATH` untouched (owner-set).
 
 ---
 
-## May 24 2026 — Example-Dialogue "Phantom Context" — Examples Injected as Live Turns Read as Real History (Structural Plumbing Bug)
+## Session: Jun 10 2026 — Sampler: window the basic repeat penalty (repeat_last_n -1 → 256); DRY untouched
 
-**Files:** app.py (example-dialogue injection site ~3566; depth-0 `[OOC]` style
-reminder ~3624). Investigation only: utils/session_handler.py (`get_instruction_layer()`).
+### `settings.json` + `app.py`
+**Bug: foreign-script breakout at stop-points, surviving the special-token ban (Fix 1, earlier today)**
 
-**Symptom as user-reported:** characters with empty `example_dialogue` (seen on
-Gemma) repeatedly referenced things that never came up in the chat — e.g. "your
-boss email" — because the fallback `GPT-4o.example.txt`'s first sample turn is a
-work-email vent ("My boss just emailed me at 10:30pm…"). The model treated the
-example TOPIC as real history, referenced it, the reference lodged in saved chat
-history, and it self-perpetuated every turn.
+Symptom: after banning ids 14–999 (`RESERVED_SPECIAL_BAN`), the garbage tail did not stop — the spillover moved from `<SPECIAL_*>` tokens into foreign-script *text* tokens. Same mechanism, next victim class.
 
-**This is structural plumbing, NOT character/content specific.** It fires for
-any character and any example source (per-character JSON, `global_example_dialog`,
-or a `.example.txt` fallback). Rewriting `GPT-4o.example.txt` to be topic-neutral
-was explicitly rejected — the example must stay authored in the model's voice.
-The flaw is HOW examples were injected, not their content.
+Root cause: the full-context basic repeat penalty hollows the distribution at stop-points. With `repeat_last_n: -1` (= 16384), `repeat_penalty: 1.1` applies ÷1.1 to **every individual token that has appeared anywhere in context, on every sampling step** — in a long chat that is essentially the entire useful vocabulary (every common word, punctuation, newline). Never-seen tokens (untrained specials, foreign scripts) are untouched, gain a relative boost, and only need to clear `min_p` once at a hollowed stop-point. Banning specific victim classes (Fix 1) treats symptoms; the hollowing is the disease.
 
-**Root cause — examples were inserted into the live `messages` array as
-byte-identical user/assistant turns.** The parser (`app.py:3327-3390`) correctly
-splits the source on `<START>` and produces `_fake_turns` (`{role, content}`
-pairs), but the injection site then did:
+Fix: `repeat_last_n: -1 → 256` in three places (same pattern as the Jun 3 dry_allowed_length fix — all copies must move together or a missing key silently reverts):
+- `settings.json` — `repeat_last_n: 256` (re-read per request — live immediately, no restart needed for this part).
+- `app.py` payload fallback (~L5603) — `sampling.get("repeat_last_n", -1)` → `sampling.get("repeat_last_n", 256)`; comment block rewritten to document the division of labour.
+- `app.py` defaults dict in `load_sampling_settings()` (~L7768) — `"repeat_last_n": -1 → 256`.
 
+**DRY left completely untouched:** `dry_multiplier 0.8, dry_base 1.75, dry_allowed_length 10, dry_penalty_last_n: -1`. Evidence basis (Jun 3 Harness B control): DRY owns the distant-verbatim/self-poisoning protection — DRY off → 100% copy of a 151-token passage **even with the full-context basic penalty active**, i.e. the basic penalty's full-context reach carries none of the distant-copy guard. Windowing it to 256 keeps its real job (short-range looping/stutter suppression) while ending the full-context hollowing.
+
+Verified against the live b8994 server's `generation_settings` echo (1-token probe with the exact new params): `repeat_last_n: 256` (honored as-is, NOT expanded) and `dry_penalty_last_n: 16384` (-1 expanded to full ctx) — independent windows confirmed.
+
+Watch-item (the one regression surface): sub-10-token distant phrase echo. A pet 3–8-token phrase recurring from >256 tokens back was previously soft-damped by the full-context basic penalty and no longer is; DRY only fires on verbatim runs >10 tokens. Stylistic only — NOT the verbatim self-poisoning loop (that is DRY's, intact). If it shows up, the lever is the `repeat_last_n` window value (e.g. 512/1024), not DRY.
+
+⚠️ **DO NOT revert `repeat_last_n` to -1** — reopens distribution hollowing / garbage tails at stop-points. **DRY at `dry_penalty_last_n: -1` is the distant-repeat guard, not this.** ⚠️ DO NOT touch the DRY quartet (0.8 / 1.75 / 10 / -1) — reopens the Jun 1 verbatim-copy bug (supersedes the Jun 1 note's "repeat_last_n: -1 Kept" — the pair-language there predates the hollowing discovery).
+
+**Restart the main Flask app** to make the fallback/default code live (the settings.json value itself is already live per-request).
+
+---
+
+## Session: Jun 10 2026 — Sampler: hard-ban reserved special tokens (ids 14–999)
+
+### `app.py`
+**Bug: garbage tails / truncation with `stop_type=None` — model sampling untrained reserved special tokens**
+
+Symptom: responses truncate or run into empty-decoding garbage; RAW TAIL diagnostic showed low-id tokens (e.g. 33, 38, 75) decoding to empty strings. Confirmed via live `/detokenize`: those ids render as `<SPECIAL_33>`/`<SPECIAL_38>`/`<SPECIAL_75>` — reserved, untrained Tekken control tokens. Happens even at `eos_logit_bias: 0`, so it is not (only) the EOS-bias deflection.
+
+Root cause (mechanism): penalty over-reach boosts untrained specials above min_p at stop-points. `repeat_penalty 1.1` and DRY both run over the FULL context (`repeat_last_n: -1`, `dry_penalty_last_n: -1`), and penalties only suppress tokens that have already appeared. The `<SPECIAL_*>` ids never appear in context, so at a stop-point where every plausible text continuation has been penalized they gain a relative boost and only need to clear `min_p` once to surface. They decode to empty strings (llama-server renders specials as "" in stream content), match no stop string, and fire no EOS → garbage tail with `stop_type=None`.
+
+Vocab map (verified id-by-id via `/detokenize` sweep of ids 0–1099 against the live b8994 server): ids 0–13 = named specials (`<unk>`, `<s>`, `</s>`=2, `[INST]`…`[TOOL_CALLS]`, `<pad>`, FIM); **ids 14–999 = `<SPECIAL_14>`..`<SPECIAL_999>`, all 986 reserved/untrained**; ids 1000+ = byte/text vocab. `<|im_end|>`/`<|im_start|>` are NOT vocab tokens (each tokenizes to 6 plain text tokens) — stopping is server-side string matching + EOS id 2, none of which touches the banned range.
+
+Fix: new module-level constant `RESERVED_SPECIAL_BAN = [[i, False] for i in range(14, 1000)]` (app.py ~L1058, by `get_stop_tokens`/`strip_chatml_leakage`). The main local `/chat` payload now ALWAYS sets `payload["logit_bias"] = list(RESERVED_SPECIAL_BAN)` and appends the existing `[2, eos_logit_bias]` entry on top under the same condition as before (`not ignore_eos and bias != 0`). Python `False` → JSON `false` → −inf in b8994 (server-task.cpp:362–419 parses `[id, false]` as a hard ban; ids must be listed individually — no range syntax exists). Result: 986 ban entries always, +1 EOS entry when the soft bias is active. Id 2 (`</s>`) is NOT in the banned range — EOS stays sampleable, stopping unaffected. Local-model `/chat` path only — vision and cloud payloads untouched.
+
+Also adjusted the per-turn `🩺 PAYLOAD` log (same block): `logit_bias` is compacted to a summary string (986 raw pairs would drown the log), and `eos_logit_bias` is reported from the decision variables instead of `logit_bias[0][1]` (index 0 is now a ban entry, not the EOS entry).
+
+⚠️ DO NOT revert — removing the ban reopens the `<SPECIAL_*>` garbage-tail bug. ⚠️ Note: this is the inference-side guard; the training-side fix (EOS-masking, Jun 09 entry below) still gates the fleet rebuild verdict.
+
+**Restart the main Flask app to apply.**
+
+---
+
+## Session: Jun 09 2026 — Training scripts: EOS-fix verified + settled-decision notes
+
+### `full_train.py` / `train_lora.py` (RunPod training side — NOT in HWUI build)
+**Root cause of the months-long mid-sentence truncation is FIXED and verified line-by-line this session. Committing to a full fleet rebuild from Mistral-Nemo base on the corrected `full_train.py`.**
+
+**The bug (now fixed in `full_train.py`):** old code did `if pad_token is None: pad_token = eos_token`. Nemo has no pad token, so pad became `</s>` (id 2). Combined with the old `labels[labels == pad_token_id] = -100`, every real `</s>` was masked out of the loss — the model never learned clean EOS and reached for `</s>` mid-stream. This is the propensity the inference-side `eos_logit_bias` has been fighting all along.
+
+**The fix (two halves, both confirmed correct):**
+1. Pad is forced DISTINCT from eos (`<pad>` from vocab → `<unk>` → new `[PAD]` + resize), with a hard `assert pad_id != eos_id` that aborts the run rather than train a broken model.
+2. Labels masked by `attention_mask == 0`, NOT by `pad_token_id` — so only the padded tail is masked and every genuine `</s>` stays in the loss. Robust even if pad/eos ever coincided again.
+`model.config.pad_token_id`/`eos_token_id` synced; embedding resize conditional (no-op unless `[PAD]` added). ⚠️ DO NOT revert either half.
+
+**`train_lora.py`** got the same distinct-pad insurance + assert (it re-masks labels from scratch so it was never broken the same way, but the landmine is now removed). 1512 max_length retained intentionally for the LoA set (a few shards exceed 1024); this is a per-set choice, not a default.
+
+**Test verdict plan (the truncation only surfaces UNDER LOAD — Set 2 trained + full LoRA stack merged, 8+ LoRAs or merge scale >0.9):** rebuild x5 → full-train a Set 2 (4o) on clean x5 → merge full LoRA stack at normal scale → test FRESH multi-turn past turn 8–12 at `eos_logit_bias: 0`. Testing the bare base proves nothing; the loaded config is the only real verdict. Free non-GPU fallback levers if needed: merge scale → 0.75–0.8, fewer LoRAs.
+
+### ⚠️ Two SETTLED decisions — do NOT re-flag as bugs in future sessions
+1. **`strip_structural_lines()` removes `Instruction:`/`Prompt:`/`Response:`/`Chosen:`/`Rejected:` etc. lines before tokenizing, then trains the remaining flat text with labels on everything (mask pad only).** This is Chris's intentional method — scaffolding stripped, content trained as one block, no user/assistant token separation. NOT a bug. Do not "fix" it.
+2. **`BUCKET_PATH = "gs://..."` + the printed `gsutil` upload line in `full_train.py` is STALE.** Chris uploads via **rclone to Cloudflare R2**, not GCS. The line is a harmless end-of-run console print (does not affect the weights), but ignore it — upload with the normal rclone/R2 command. (`train_lora.py` already uses the correct `r2:helcyon/...` rclone path.)
+
+### ⚠️ Companion-vs-assistant balance — TUNED IN PROMPT, deliberately kept out of base/LoRA
+The "assistant bleed" (model treats a stated feeling as a problem to identify → explain → solve, instead of staying with the experience) was a real early-Helcyon trait. It has been **solved in the PROMPT layer**, not the weights. History: companion-exploration instinct was installed (helcyon-gpt-5.5 shards), then it **overshot** — sat with problems ad nauseam, never landed the plane / took a position — and was **dialled back in the prompt** to a working balance. This behaviour is **context-dependent** (companion-exploration on emotional-disclosure turns; land-the-plane directness on requests for a position/decision/truth) and therefore must stay tunable in the prompt — NOT baked into base or a fixed LoRA where the dial is lost and it would double-weight against the prompt and re-overshoot. Do NOT add "stay with feelings / explore don't solve" shards to Set 2 base. The slight residual instinct-to-explain is intended headroom for directness. Note: helcyon-gpt-5.5's deep-dive/questioning shards gave it genuine presence and it is now the BASE for the 4o variant (4o personality layer trained ON the 5.5 base — not cross-merged).
+
+### LoRA reuse on the x6 rebuild — no dataset changes this round
+Because no datasets are changing, all existing LoRAs are reused — no fresh behavioural data needed. Plan:
+- **Foundational + behavioural LoRAs** (Layer 1: abliterated, admin, context-tracking, roleplay; Layer 2 non-personality: creative writing) → reuse as-is on x6, train fleet-wide on x6 base. Likely fine.
+- **Personality/tone LoRAs** → the ONLY layer that needs per-variant training; train on the variant base (e.g. 4o personality on the 5.5-derived base).
+- ⚠️ **Caveat:** LoRAs were trained on x5; x6 is the same recipe but a freshly trained weight set, so x5-trained LoRAs are deltas against slightly different weights. Very likely transfer fine (small r=16–32 adapters), but NOT guaranteed identical. **Gate on the loaded multi-turn test at `eos_logit_bias: 0`** — if 4o-on-x6-with-full-stack behaves like known-good 4o AND fires clean EOS, that single test confirms both the EOS fix and clean LoRA transfer. If character feels muddy (not EOS — tone) → retrain only the affected LoRA on x6, not the whole set. (Chris has dropped the old per-variant-everything habit — perfectionism right-sized; only personality LoRAs are variant-trained now.)
+
+---
+
+## Session: Jun 09 2026 — Mobile: autolink bare URLs in chat messages
+
+### `templates/mobile.html`
+**Bug: links shown as the full literal string on the mobile app**
+
+Symptom: on the mobile chat page, a URL in a reply rendered as the raw `https://…` text instead of a clickable link (desktop was fine).
+
+Root cause: mobile uses a small inline `marked` stub (mobile.html ~L10), not the real marked.js that desktop loads. The stub only linkified markdown `[text](url)` syntax — it had no autolinking for **bare** URLs. Since search results and the model usually emit raw URLs unwrapped, those got HTML-escaped and displayed as the full string. Desktop didn't show this because real marked.js runs with `gfm:true`, which autolinks bare URLs.
+
+Fix: added a GFM-style bare-URL autolinker to the stub's `inline()`, placed after escaping and before the markdown-link placeholder restore so:
+- wrapped `[text](url)` links are untouched (already swapped to placeholders earlier);
+- bare `http(s)` URLs become `<a target="_blank" rel="noopener noreferrer">` — same hardening as the wrapped path (http/https only, so `ftp:`/`javascript:`/`data:` stay literal);
+- trailing sentence punctuation (`. , ) ! ?` …) is left outside the link, with GFM paren-balancing so Wikipedia-style `_(disambiguation)` URLs keep their closing paren.
+
+Verified the parser logic in isolation (bare, wrapped, mixed, parenthesised, and non-http cases). **Frontend-only — hard-refresh the mobile page; no Flask restart needed for the JS.**
+
+---
+
+## Session: Jun 09 2026 — Startup: force backend_mode back to local on every launch
+
+### `app.py`
+**Bug: after a cloud session, a fresh launch couldn't talk to the local model**
+
+Symptom: reboot HWUI while it was last connected to a cloud API (OpenAI/Anthropic), load a local model and type — the model never responds and the chat shows "⚠️ Local backend unavailable. Cloud API is disabled. Check that llama.cpp is running."
+
+Root cause: the startup-safety block (app.py ~790) already force-reset `cloud_api_enabled` to `false` on every launch, but left `backend_mode` untouched. So a prior cloud session left disk in the state `(backend_mode="openai"/"anthropic", cloud_api_enabled=false)`. The first message then hit the cloud master gate (app.py ~5138), which refuses a cloud backend_mode when the master switch is off (no silent local fallback, by design) and returns the 503 above — even with llama.cpp running and a model loaded.
+
+Fix: extended the same startup-safety block to ALSO reset `backend_mode` to `'local'` on every Flask launch, in the same atomic settings.json write. A fresh launch now always starts on the local model; switching back to a cloud provider is an explicit Connect action (unchanged). Startup log line now reports both resets:
+`🔒 Startup: cloud_api_enabled forced to false (was ...), backend_mode reset to 'local' (was '...').`
+
+No frontend change needed — the cloud status indicators already key off `cloud_api_enabled` (also forced false), so the UI reflects the local/disconnected state on load. Same rationale as the existing cloud reset: a cloud selection must never persist across restarts.
+
+**Restart the main Flask app to apply** (the fix runs at startup, so the restart itself triggers it).
+
+---
+
+## Session: Jun 09 2026 — Web Search Trigger: Three-Tier Architecture
+
+### `app.py`
+**Feature: Promoted unambiguous factual question patterns to fire search without consulting the intent gate**
+
+Root cause: The intent gate uses the same loaded local model as main chat. When asked to classify factual questions ("Who won the F1 race yesterday?", "What's the name of that cholesterol medication?"), the model trusted its own (confabulated) knowledge and returned NO_SEARCH — then went on to confabulate an answer in the actual reply. Same Helcyon-Grok confident-persona on both sides of the call.
+
+Architecture changed from two tiers to three:
+- TIER 1 EXPLICIT (`_explicit_pat`) — imperative search requests → fire immediately (unchanged)
+- TIER 2 FACTUAL (`_factual_pat`) — unambiguous info-seeking patterns (`who won/wrote/invented...`, `who's the current/new/next...`, `what's the name/brand/price/cost of`, `where can/do I buy/get/find`) → fire immediately, NO gate consultation (NEW)
+- TIER 3 AMBIGUOUS (`_ambiguous_pat`) — genuinely ambiguous patterns (`find out`, `look up`, `any news on`, `what's that <noun>`, `do you know`, `when did X`) → consult `_search_intent_gate()` (unchanged behaviour)
+
+⚠️ DO NOT collapse the factual tier back into ambiguous — the local model is constitutionally unable to classify factual questions correctly when it's also the model that confabulates the answers. The three-tier structure exists specifically because the gate is unreliable for clear factual cases.
+
+**Improvement: Intent gate reformulated as chat-format few-shot**
+- Replaced the zero-shot classifier system prompt with proper chat-format few-shot (8 example user/assistant pairs in the messages array showing NO_SEARCH and SEARCH: <query> verdicts).
+- max_tokens lowered from 32 to 16 — forces the model to commit to a one-line verdict rather than drifting into a conversational answer.
+- The old prompt was being interpreted as a chat system prompt rather than a classifier prompt — the model just answered the question. Few-shot pattern conditioning locks it into classifier mode.
+
+**Diagnostic: model-emitted [WEB SEARCH:] tag suppression now logs loudly**
+- The suppression branch at line ~6290 (fires when `_should_search` is False but the model emits a trained `[WEB SEARCH: query]` tag mid-stream) now prints a multi-line banner including the user message and the suppressed query. Behaviour unchanged — tag still excised from output. Logging only, for future diagnostic use.
+
+**Curiosity-style trigger phrases added to ambiguous tier**
+- `what(?:'s| is| are) (?:that|the|a|those|these) <word>` — catches "what's that BBQ sauce"
+- `do you know (?:what|who|when|where|why|how|if|whether|the|a|that|anything)`
+- `can you find out`
+- `(?:any|got an?) (?:idea|clue|thoughts?) (?:what|who|when|where|why|how|if|whether|about|on)`
+- `tell me (?:about|what|who|when|where|why|how)`
+- `what(?:'s| is) (?:that|the|it) called`
+- `when (?:did|does|will|is|was) <word>`
+
+---
+
+## Session: June 9 2026 — TTS servers: default HuggingFace hub to offline
+
+**Stop the per-launch HF network check on the cached TTS models.** The `I:\HuggingFace` folder is the TTS model cache — F5's vocoder (`charactr/vocos-mel-24khz`, ~50 MB) and (when used) chatterbox's `from_pretrained` model. It's downloaded once and reused; it only re-downloads if the cache is deleted. But each launch HF still did an online version-check against the hub.
+
+### CHANGE — `f5_server.py` + `chatterbox_server.py`
+- Added `os.environ.setdefault('HF_HUB_OFFLINE', '1')` right after the existing `HF_HOME` lines (set before `huggingface_hub` is imported, so it takes effect). HF now loads cached models with **no network check or re-download**.
+- `setdefault` (not a hard set) keeps it **overridable**: launch with `HF_HUB_OFFLINE=0` in the environment to allow a download when you actually need one.
+- ⚠️ **Chatterbox caveat (documented in-file):** only the F5 vocoder is currently cached — chatterbox's model is not. Its *first* run must download, so that one time it needs to be launched with `HF_HUB_OFFLINE=0`; afterwards the offline default applies. F5 is unaffected (vocoder already cached).
+- Did **not** touch the hardcoded `I:\HuggingFace` path itself — per the earlier decision it's a real, needed cache and has to live somewhere; left as-is.
+
+**Verified:** `py_compile` clean on both files. **Each is a separate TTS server process — restart the relevant TTS server to apply (no main-Flask restart needed).**
+
+---
+
+## Session: June 9 2026 — LoRA Browse: drop hardcoded `I:\LoRA` default
+
+**The LoRA Browse button defaulted the picker to a hardcoded `I:\LoRA` — only valid on the dev machine** (other users have no `I:` drive). Fixed in `config.html` only; `/browse_file` already ignores a missing/invalid `initialdir` and falls back to the OS default, so no backend change was needed.
+
+### CHANGE — `templates/config.html` (LoRA Browse button + placeholder)
+- Browse now starts in the **configured Models Folder**, read from the on-page `#llama-models-dir` field (populated from `settings.json` by `loadLlamaConfig`) — `onclick="browseFile('llama-lora-path','lora', document.getElementById('llama-models-dir').value.trim())"`. LoRA `.gguf` adapters naturally live near models, so this is more sensible than a home-dir default, and it's settings-derived (no hardcode). If that field is empty, `browseFile` passes an empty `initialdir` and `/browse_file` falls back to the OS default — same behaviour as the existing exe/mmproj/models-folder browsers, which pass no `initialdir`.
+- Placeholder changed `I:\LoRA\adapter.gguf` → `C:\path\to\adapter.gguf` to match the sibling exe/mmproj fields' illustrative convention (no real drive assumed).
+
+**Verified:** no `I:\LoRA` left in any shipped `.html`/`.py`/`.js`; LoRA Browse `onclick` expression passes `node --check`. Frontend-only — hard refresh; no Flask restart. *(Unrelated, pre-existing: `chatterbox_server.py` hardcodes `I:\HuggingFace` for HF cache env vars — left as-is, out of scope.)*
+
+---
+
+## Session: June 9 2026 — LoRA attach/detach: auto-reload the model (no manual restart)
+
+**Follow-up to the LoRA attach feature.** Attach/Detach previously just saved the path and told the user to restart llama.cpp. Now they save, then reload the current model so the `--lora` change is live immediately.
+
+### CHANGE — `templates/config.html` (Attach/Detach handlers only)
+- After a successful `POST /save_lora_path`, both handlers call a new local helper **`_reloadModelForLora(savedMsg, activeMsg)`** (sits within the LoRA block) which re-runs **`POST /load_model`** — the same route the model picker uses — with the **current model filename read from `localStorage.llama_last_model`** (the subfolder-relative name set on every picker load; `/get_model` only returns a display basename, so it can't be used as a `/load_model` payload). No path/name is hardcoded.
+- Toast sequence — Attach: `💾 LoRA saved — reloading model...` → `✅ LoRA active`; Detach: `💾 LoRA detached — reloading model...` → `✅ LoRA detached`. Reload failure (either path): `⚠️ LoRA saved but reload failed — restart manually`.
+- **Graceful fallback:** if no current model is known (`localStorage.llama_last_model` empty — e.g. server auto-launched and no model picked this session), it skips the reload and shows the original `… — restart llama.cpp to apply` toast.
+- On reload success it also refreshes the model display via the existing `loadModelDisplay()` (guarded by a `typeof` check).
+
+**Why this works:** `/load_model` (`app.py:~7192`) runs the full restart cycle — `kill_llama_process()` then relaunch via `get_llama_settings()`, which includes `lora_path` — so the relaunched server picks up the new `--lora`.
+
+**Verified:** `node --check` clean on the touched LoRA functions. Only the Attach/Detach handlers (+ their shared helper) changed. No hardcoded paths/usernames. **Frontend-only — hard refresh; no Flask restart** (the reload it triggers restarts llama.cpp, not Flask).
+
+---
+
+## Session: June 9 2026 — LoRA adapter attach/detach (launch-time `--lora`)
+
+**New optional LoRA adapter field in the Llama.cpp config section.** A configured adapter is passed to `llama-server` via `--lora <path>` at launch.
+
+### Hot-attach finding (empirical — probed the live server on :5000)
+`/props` → 200, `/lora-adapters` → 200 (`[]`), `/lora` → 404. The build exposes `/lora-adapters`, but POST to it only **re-scales adapters already loaded at launch** via `--lora` — it cannot load a new adapter file by path at runtime. **So true hot-attach is NOT supported.** No `/attach_lora` / `/detach_lora` routes were added; the UI persists the path and prompts for a llama.cpp restart to apply (mirrors how model switching already restarts the server).
+
+### CHANGE 1 — `settings.json`
+- Added `"lora_path": ""` (empty = no adapter).
+
+### CHANGE 2 — `app.py`
+- `get_llama_settings()` now returns `lora_path`.
+- Both launch sites — `auto_launch_llama()` (~L917/951) and `/load_model` (~L7250) — append `--lora <path>` when `lora_path` is set and the file exists (mirrors the existing `--mmproj` conditional).
+- New **`GET /get_lora_path`** → `{"lora_path": "..."}` and **`POST /save_lora_path`** (atomic temp-file write — same `tempfile`+`.tmp`+`shutil.move` pattern as the startup cloud-reset block). Empty string clears it.
+- **`/browse_file`** gained an optional `initialdir` (honoured only if a real dir) and a `lora` filter — backward-compatible; existing callers unaffected.
+
+### CHANGE 3 — `templates/config.html`
+- New "LoRA" row beneath the mmproj row: text input (`#llama-lora-path`), 📁 Browse (defaults to `I:\LoRA`, `lora` filter), **Attach**, **Detach** — all reusing the existing inline row styling (no new CSS).
+- Pre-populated on load via `GET /get_lora_path` inside `loadLlamaConfig()`. `attachLora()` saves the path; `detachLora()` clears + saves empty. Both toast "… restart llama.cpp to apply".
+
+**Verified:** `py_compile` clean on `app.py`; `node --check` clean on the touched `config.html` JS region; whole-file HTML tag balance OK (div/button/label/span). No hardcoded usernames. **Frontend + backend change — hard refresh AND a manual Flask restart; the adapter itself applies on the next llama.cpp (re)launch (switch/reload a model, or restart the server).**
+
+---
+
+## Session: June 9 2026 — memory save bar: split into "Save to Character" / "Save to Global"
+
+**The memory-confirm bar had a single "Save" button that always wrote to the per-character file.** Added a second target so a saved memory can go to the shared global store. The infrastructure was already present — `/add_character_memory` (`app.py:~7805`) already resolved `memories/global_memory.txt` vs `memories/<character>_memory.txt` from `mem_dir` (relative, no hardcoded path) — so this is a thin routing addition, not new write logic.
+
+### CHANGE 1 — `templates/index.html` (`showMemoryConfirmInBubble`, ~L5572)
+- Single "✓ Save" button replaced with two: **"🧠 Save to Character"** (`data-target="character"`, unchanged behaviour) and **"🌐 Save to Global"** (`data-target="global"`). Both reuse the existing `memory-confirm-yes save-btn` classes — no new CSS. Discard button unchanged.
+- The success/confirm-follow-up logic was **extracted into one shared `doSave(target)`** (not duplicated); both buttons call it with their `data-target`. The fetch now sends `{ character, title, keywords, body, target }`.
+
+### CHANGE 2 — `app.py` (`/add_character_memory`, ~L7805)
+- Accepts an optional **`target`** field: `"character"` (default) or `"global"`. When `target == "global"` it writes to `memories/global_memory.txt`; otherwise the per-character file as before. The legacy `character == "global"` path is kept as a fallback. Formatting / separator / append logic is untouched — only path resolution gained the `target` branch.
+
+**Verified:** `py_compile` clean on `app.py`; `node --check` clean on the touched `index.html` region. No hardcoded usernames/paths. **Frontend + backend change — hard refresh AND a manual Flask restart (Python edit).**
+
+---
+
+## Session: June 9 2026 — widen `memoryIntentGate` regex (explicit phrasings were being suppressed)
+
+**The model emitted a valid `[MEMORY ADD]` tag but the save-confirm bar never appeared.** Root cause was the frontend intent gate, not stripping: the tag survives both server-side (it's whitelisted in `_filtered_stream` `_PROTECTED`) and client-side detection (matched against raw `fullMessage`). But `memoryIntentGate()` (`templates/index.html:~3567`, added May 27 to stop the model spontaneously firing the save UI) tests the **user's** current message against `MEMORY_INTENT_RE`, and that alternation was too narrow — unambiguous explicit requests like "can you put it in your memory please", "memorize this", "log that", "jot it down" all failed it, so the bar was silently suppressed.
+
+### The fix — widen the alternation only (`templates/index.html:~3569`)
+Added these patterns alongside the existing ones (gate kept, existing patterns untouched):
+`put (?:it |this |that )?in(?:to)? (?:your )?memory`, `(?:can you )?memorize (?:this|that|it)`, `keep a record`, `log (?:this|that|it)`, `store (?:this|that|it)(?: in memory)?`, `jot (?:this|that|it) down`, `note (?:this|that|it) down`, `(?:please )?save (?:this|that|it)`.
+
+- **The gate stays — this is not a weakening.** It still requires explicit user intent this turn; it just recognises more of the obvious phrasings. Spontaneous model-initiated saves with no matching user request are still suppressed.
+- Verified the new phrasings match and casual messages ("what is the weather today", "tell me a joke") still don't.
+
+**Verified:** `node --check` clean on the touched region. **Frontend-only — hard refresh; no Flask restart.**
+
+---
+
+## Session: June 8 2026 — stray trailing `<` leak (extend the `|>` backstop)
+
+**Cosmetic, post-complete-response leak — same family as the June 4 `|>` trailing-fragment fix.** When the model emits the closing `<|im_end|>`, the `stop` array (string stop-word) fires **after the leading `<` has already streamed** to the UI. That orphan `<` lands in the final `_tail` buffer, and the end-of-stream backstop alternation topped out at `<|` (which requires the pipe) — so a lone `<` was emitted verbatim *after* an otherwise-complete reply. Not truncation; the response content is intact.
+
+### The fix — `_filtered_stream` end-of-stream `_tail` flush ONLY (`app.py:~6774`)
+Added a trailing bare `<` as the **last** alternation member:
 ```python
-for _i, _ft in enumerate(_fake_turns):
-    messages.insert(1 + _i, _ft)        # live turns at positions 1..N
+_tail = _re3_inner.sub(r'(?:<\|im_end|im_end\|>|_end\|>|<\||\|>|<)$', '', _tail)
 ```
+- **End-anchored (`$`), final-flush only — never per-chunk.** It runs once on the completed `_tail` under `if not _halted[0]:` after the stream is provably done, so it only strips a `<` that is the **very last character** of the finished response, never a `<` mid-text.
+- **Bare `<` kept LAST** in the alternation: regex alternation is left-to-right, so the longer `<|im_end` / `<|` forms still match first when present; the bare `<` only catches a truly lone trailing `<`.
+- **No per-chunk strip added.** `strip_chatml_leakage` was deliberately left untouched — a trailing `<` mid-stream can be legitimate content (a `<` typed before more text arrives), so it is only safe to drop at the end-of-stream flush where generation has ended.
 
-Those dicts are the same shape as real turns and render through the identical
-ChatML path (`<|im_start|>{role}\n{content}\n<|im_end|>`). The `<START>`
-separator is consumed at parse time and never reaches the prompt. So the model
-saw a normal `user` turn ("My boss just emailed me…") immediately after the
-system block, with zero signal it wasn't real history.
+### ⚠️ DO NOT revert
+Removing the bare `<` member reopens the stray-`<` leak after complete responses (the leading char of `<|im_end|>` that streams before the stop array fires).
 
-**Why the existing guard couldn't save it.** `session_handler.py
-get_instruction_layer()` (~line 88) carries:
+**Verified:** `py_compile` clean. **Backend change — needs a manual Flask restart.**
 
-> EXAMPLE DIALOGUE:
-> Example dialogue shows speaking style only — extract tone, rhythm, and response
-> length. Do not reference example topics or treat them as real conversation history.
+---
 
-That text lives INSIDE the system block; the example turns sat AFTER it as live
-turns. A prose disclaimer in the preamble can't out-weigh a correctly-formatted
-conversation turn the model reads right below it — it had no referent to attach
-"don't treat as real" to. (Note: for jinja/Gemma models the instruction layer is
-skipped entirely at `app.py:2922`, and the `.example.txt` fallback is skipped at
-`app.py:3281` — so this only fires for Gemma if it is NOT being classified as a
-jinja model in the live config. Worth confirming from the console which branch a
-given model takes.)
+## Session: June 8 2026 — switch a chat's character (dev/testing): right-click → Change character
 
-**The fix — render `_fake_turns` into a delimited, system-level style block at
-the END of the system content; stop inserting them as live turns.** At the
-injection site (`app.py:3566`):
+You can now reassign an existing chat to a different character — e.g. move a chat from `Gemma-GPT-4o-API` to the local `Gemma` for side-by-side testing. Previously impossible: a chat's character is **derived from its filename** (`Character - Title - Date.txt`, re-parsed by `extractCharacterFromFilename` on every open), so editing names inside the `.txt` always reverted on refresh.
 
+### How it works (`templates/index.html`)
+- **New right-click menu item "🔀 Change character"** added to the existing chat context menu (`buildColorMenu`, alongside the colour swatches / Clear colour), so it sits with the double-click-rename and right-click-colour actions already on chat rows.
+- It opens **`showCharacterMenu()`** — a small picker listing the cached characters (`characterListCache`), styled to match the app's other dark menus.
+- Selecting one calls **`reassignChatCharacter(filename, newChar)`**, which reuses the existing filename decomposition (strip the old character prefix via the character-list cache, longest-first; fall back to everything after the first `" - "`), builds `"<newChar> - <title> - <date>"`, and renames via the existing **`POST /chats/rename`** route. It then migrates the chat-colour key old→new, updates `currentChatFilename` if that chat is open, reloads the list, and **re-opens the chat so it resolves to the new character** (top character bar / avatar / future turns all switch).
+
+### Scope note
+Historical bubbles keep their stored **per-message `speaker`** (they record who actually spoke); only **future** turns use the newly-assigned character. That's deliberate — the rename swaps the chat's *association*, not its history. (If a full history rewrite of speaker labels is ever wanted, that'd be a separate, more invasive change.)
+
+### Follow-up fix — picker did nothing on click
+First cut: clicking "Change character" appeared to do **nothing**. Cause: `showCharacterMenu` installs a `document` click-away listener to close the picker, but the very click that opened it bubbled up to that listener and closed the menu in the same tick. Fixed with **`e.stopPropagation()`** on the "Change character" click handler so the opening click never reaches the close-on-outside-click listener. Picker now stays open; outside-click / Escape still close it. Confirmed working.
+
+**Verified:** `node --check` clean on the touched region (`buildColorMenu` → `showCharacterMenu` → `reassignChatCharacter`). Reuses the existing `/chats/rename` backend (no backend change). **Frontend-only — hard refresh; no Flask restart.**
+
+---
+
+## Session: June 7 2026 — clipboard image paste into the chat bar (Ctrl+V, e.g. Lightshot screenshots)
+
+You can now paste an image straight from the clipboard into the chat bar. Click into `#user-input` and **Ctrl+V** a screenshot (Lightshot, Snipping Tool, any image on the clipboard) and it attaches exactly like the file picker — preview thumbnail in the strip, sent with the next message — plus a brief **"📋 Image pasted"** toast.
+
+### Implementation (`templates/index.html`)
+- **Refactored the attach logic into a shared `attachImageFiles(fileList)`** so the file picker and paste use one path. It filters to `image/*`, runs the existing **vision-capability guard** (blocks attaching to a text-only LOCAL model with no mmproj; allowed in cloud/openai/anthropic mode where the provider does vision — see the cloud-image-vision entries), reads each file as a data URL, and pushes `{base64, mimeType, previewUrl}` onto `window.attachedImages` + `renderImagePreviews()`. `handleImageAttach(input)` is now a thin wrapper that calls it and resets `input.value`.
+- **Paste listener on `#user-input`** (`initImagePaste` IIFE): pulls image items from `clipboardData.items`, and when any are present calls `attachImageFiles` and `preventDefault()`s so the raw file path/blob isn't also dropped into the textarea as text. **Normal text paste is untouched** — it only intercepts when the clipboard actually holds an image.
+
+**Verified:** `node --check` clean on the three touched units (handleImageAttach, attachImageFiles, paste IIFE); `showToast` confirmed present; no stray `input` refs left in the shared helper. **Frontend-only — hard refresh; no Flask restart.**
+
+---
+
+## Session: June 7 2026 — TTS no longer reads citation links aloud (shared stripLinksForTTS helper)
+
+Follow-up to the link-rendering fix below: with links now emitted by `gpt-4o-search-preview`, the **TTS was speaking them** — specifically the bare-domain text of citation links (`([openai.com](https://…))` was read as "openai dot com" mid-sentence). The existing per-path strips converted `[text](url)` → its visible text, which for citations is a bare domain, and the `"(" → ". "` paren-to-pause conversion ran *before* the link strip in two paths, so the domain leaked through regardless.
+
+### Fix — one shared `stripLinksForTTS()` helper (`utils/utils.js`), used by all three TTS paths
+- **Wrapped citation `([text](url))`** → dropped **entirely** (outer parens included).
+- **Plain `[text](url)`** → if the visible text is a **bare domain** (no spaces, dotted TLD) it's dropped entirely (reading "openai.com" aloud is noise); **prose labels** ("the documentation") and plain single words ("OpenAI", no dot) are **kept**, since speaking them is useful.
+- Also strips `<a>…</a>`, orphaned `](url)`, bare `http(s)`/`www` URLs, and the link emoji.
+- Wired into all three places that feed TTS, each **before** the `"(" → ". "` conversion: `bufferTextForTTS` (streaming chunks), `splitAndQueue` (sentence queue), and the **replay** path (`replayTimeout`, which previously converted parens first → domain leaked).
+
+**Verified (Node):** wrapped citation → removed; plain domain link → removed; prose/single-word labels → kept; bare URLs → removed; chunk-split and multi-`&`-param URLs → handled, domain never spoken. `node --check utils/utils.js` clean. **Frontend-only — hard refresh; no Flask restart.**
+
+---
+
+## Session: June 7 2026 — markdown links now render in the chat shim (index.html + mobile.html), http(s)-only + target/rel hardened
+
+Markdown links from the model rendered as **raw literal text** (`[text](url)`, brackets/parens and all). Root cause: HWUI never loads the real `marked.js` library, so the always-on hand-rolled shim (`typeof marked === "undefined"` → custom `window.marked.parse`) is what renders every assistant turn — and its inline formatter only handled `**bold**` / `*italic*` / `` `code` ``, with **no link rule at all**. So *all* links were affected, not just the nested form; it only surfaced now because `gpt-4o-search-preview` emits citation links and local models rarely do. Same render path for local and cloud responses (both stream through `/chat` → `fetchAndDisplayResponse` → shim), so the fix lands once per template and covers every provider.
+
+### Fix — add a link rule to the shim's inline formatter, in BOTH copies
+`templates/index.html` (`parseInline`, ~L1256) and `templates/mobile.html` (`inline`, ~L13) each got the same rule. Links are processed **first, before the emphasis rules**, and swapped for an inert `\x00LINK\d\x00` placeholder restored after — so URL contents (underscores, asterisks) and the link text can't be mangled by the bold/italic passes.
+
+- **Regex `\[([^\]]+)\]\(([^)]+)\)`** matches only the inner `[text](url)`, so the OpenAI **wrapped form `([text](url))`** keeps its outer parens as literal text → renders `(openai.com)` with `openai.com` clickable.
+- **⚠️ Hardening (mandatory — output goes straight into `innerHTML` with no sanitiser):**
+  - **http/https ONLY** — any other scheme (`javascript:`/`data:`/`file:`…) is left as literal text, never turned into an anchor.
+  - every anchor carries **`target="_blank" rel="noopener noreferrer"`**.
+  - the **href is HTML-escaped** (`& " < >`) to prevent attribute breakout; in mobile the **label is `esc()`-escaped** too (matching that shim's escape-everything flow — index's shim escapes nothing elsewhere, so its label stays raw).
+
+### Verified (Node, exact replicated logic, both files)
+- `[OpenAI](https://openai.com)` → `<a href="https://openai.com" target="_blank" rel="noopener noreferrer">OpenAI</a>`
+- `([openai.com](https://openai.com/index/sycophancy-in-gpt-4o/?utm_source=openai))` → `(` + anchor `openai.com` (full query string intact) + `)`
+- `[click](javascript:alert(1))` → **no anchor**, stays literal text
+- `*italic* … [link](https://x.com)` → italic **and** link both render, neither breaks the other
+- `[doc](https://x.com/a_b_c)` → href keeps all three underscores (not italicised)
+- (extra) `[a&b](https://x.com/p?u=1&v=2)` → `&` correctly escaped to `&amp;` in both href and label (valid HTML, clicks correctly)
+
+Both `parseInline`/`inline` appear exactly once per file; inserted JS parses clean under Node. **Frontend-only — hard refresh to pick it up; no Flask restart.** No backend or settings changes.
+
+---
+
+## Session: June 7 2026 — fix API keys getting wiped: preserve-on-empty in the cloud save routes + complete the default schema
+
+**Symptom:** the OpenAI/Anthropic API keys kept vanishing — re-entered repeatedly, and only `anthropic_api_key` tended to survive in `settings.json` (because it's the primary, so it gets re-saved most often). Not a missing-store bug: the save routes already do read-modify-write with atomic temp-file + read-back verification, and both keys were in fact on disk. The wipe was an **empty-string overwrite**.
+
+### Root cause — a blank field could persist `""` over a stored key
+`/save_openai_settings` and `/save_anthropic_settings` wrote `s["…_api_key"] = data.get("…_api_key","").strip()` **unconditionally**. So any Save fired while the key field was blank persisted `""`. The realistic intermittent trigger (same class as the May `get_settings()` `except: return {}` wipe — archive 2026-05): `GET /get_*_settings` hits a momentary read failure (file lock / AV scanner mid-write), returns its `except` fallback `{… "openai_api_key": "" …}`, config.html repopulates the field with `""`, and the next Save writes the blank back. Anthropic survived more often only because it's re-saved more often.
+
+### Fix 1 — preserve-on-empty (`cloud_api_routes.py`, both save routes)
+An empty incoming key now **never** overwrites a stored one:
 ```python
-_user_label = user_display_name or user_name        # reassigned defensively
-_char_label = char_data.get("name", character_name)
-_ex_lines = [f"{(_char_label if t['role']=='assistant' else _user_label)}: {t['content']}"
-             for t in _fake_turns]
-messages[0]["content"] += (
-    "\n\n═══ SPEAKING-STYLE EXAMPLE — REFERENCE ONLY, NOT REAL HISTORY ═══\n"
-    "…none of it actually happened. Never refer to its topics, people, or events "
-    "as real; mirror only the STYLE.\n"
-    "<START>\n" + "\n".join(_ex_lines) + "\n"
-    "═══ END EXAMPLE — the real conversation begins after this line ═══"
-)
+_incoming_key = (data.get("openai_api_key", "") or "").strip()
+if _incoming_key:
+    s["openai_api_key"] = _incoming_key
+elif "openai_api_key" not in s:
+    s["openai_api_key"] = ""   # establish the field on first save; never wipe an existing key
 ```
+You can still **change** a key (a non-empty value overwrites); you just can't blank it with a stray save. There is no "clear key" button for OpenAI/Anthropic, so nothing legitimate needs the empty-write path. **Brave was deliberately left as-is** — it *has* a `clearBraveKey()` button that saves an empty value on purpose, so preserve-on-empty would break its clear.
 
-Example content never becomes a `messages` turn, so it can't be echoed into
-saved chat history → the self-perpetuation loop is structurally broken. The
-`messages` array stays clean `S U A U A … U` (the alternation/KV-cache concerns
-at `app.py:3573-3581` are untouched — strengthened, fewer injected turns). The
-depth-0 `[OOC]` style reminder (~3624) was reworded from "examples shown earlier
-in this conversation" → "the speaking-style example in your instructions" so the
-attention anchor points at the new location.
+### Fix 2 — complete the default schema (`settings.default.json`)
+The default seed (used to create `settings.json` on a fresh/missing install, and by Reset-to-Default) had **no** cloud fields at all, so a regenerated settings.json lacked the whole key/backend skeleton. Added `backend_mode:"local"`, `cloud_api_enabled:false`, `openai_api_key:""`, `openai_model:"gpt-4o"`, `openai_base_url`, `anthropic_api_key:""`, `anthropic_model:""`, `anthropic_base_url`, `brave_api_key:""`. Empty by design — real keys are **never** shipped in the template (the public backup includes `settings.default.json`, not `settings.json`).
 
-**Regression check vs. the May-14 "buried system-block injection" warning.** The
-standing warning (verbatim, `app.py:3267-3272`): *"DO NOT revert to system-block
-injection — buried style examples were silently ignored,"* mechanism (`~3327`):
-*"Models follow conversation patterns far more strongly than buried system-block
-instructions."* The May-14 failure was undelimited prose, mid-block, no attention
-cue. This fix differs on exactly those three axes: (1) explicit `<START>` +
-header/footer delimiter, (2) appended at the very END of the system content
-(highest-attention slot, closest to generation), (3) a depth-0 `[OOC]` anchor
-pointing at it. Honest tradeoff: live turns drive style uptake *more strongly*
-than system text, so this trades a little style-transfer aggressiveness for the
-no-phantom-history guarantee — worth watching early generations for style drift.
+### ⚠️ DO NOT revert to an unconditional key write
+Re-adding `s["…_api_key"] = data.get(…)` without the empty-guard reopens the vanishing-key bug (a blank-field or failed-read save wipes the stored key). In-code warnings sit on both routes.
 
-**Parser `<START>` handling confirmed safe (empirically tested, all cases):**
-- Leading `<START>` (ST puts one before every block, incl. first) → empty first
-  segment, stripped and skipped. No blank turn.
-- `<START>` between entries → each segment parsed independently with reset state;
-  no bleed.
-- Trailing `<START>` / blank lines / trailing whitespace → stripped/skipped; the
-  `if _text:` guard prevents empty-content turns.
-- Delimiter match is `(?i)<\s*START\s*>`: case-insensitive, inner spaces OK
-  (`<START>`, `<start>`, `< START >` all match). `[START]`/bare `START` are NOT
-  recognized and silently vanish. **Use canonical `<START>` on its own line.**
-- Interior alternation is no longer load-bearing: a character-first block can
-  produce back-to-back same-role entries, but post-fix these are plain
-  `Speaker: text` lines in the system block, not ChatML turns — harmless. The
-  alternation trim at `app.py:3381-3386` is now largely vestigial but does no harm.
-
-**Verified:** `app.py` parses cleanly (`ast.parse`). Parser replica run against
-all four `<START>` cases — no empty turns, no bleed, no alternation break.
-**Confirmed live (end of session):** voice uptake lands as strongly as the old
-live-turn injection, AND no example-topic bleed. This empirically settles the
-open question of whether system-block placement gets *seen* (it does) — the
-marker-turn fallback variant was staged but is NOT needed and was not applied.
-
-**⚠️ DO NOT revert to inserting `_fake_turns` as live `messages` turns** — bare
-positional turns are byte-identical to real history and reintroduce the phantom-
-context loop. **DO NOT remove the `<START>` + header/footer delimiter or the
-end-of-system placement** — together with the depth-0 `[OOC]` anchor they are
-what distinguishes this from the May-14 buried-and-ignored failure. **DO NOT move
-the example block earlier in the system content** — end placement is the
-attention slot doing the work.
-
-⚠️ Flask restart required (Python edit in app.py).
+**Verified:** `py_compile` clean (`cloud_api_routes.py`); `settings.default.json` valid JSON; live `settings.json` untouched (both keys still present). **Backend change (Python) — needs a manual Flask restart** (dev server runs with no reloader). `settings.default.json` only affects fresh installs / reset.
 
 ---
 
-## May 24 2026 — `[OOC: …]` Leak Returned — Universal Output-Strip Net (Mid-Response + Post-Search Path) — SUPERSEDES the May 22 leading-only fix
+## Session: June 7 2026 — live TOKEN MONITOR readout (per-turn KV headroom) on the index page
 
-**Files:** app.py (new helper `_strip_ooc_stream()` at ~846; six stream wrap
-sites: `_filtered_stream` ~5391, `_web_search_stream` ~5070, `_web_search_stream_openai`
-~4117, `stream_openai_response` ~4131, both `stream_vision_response` ~4065 / ~4213).
+New on-screen readout that shows how much of the local model's context the last turn actually used, so context-limit / gpu-layers tuning has a visible feedback loop. **Surfaces numbers the backend already computes** — nothing new is measured; the per-turn budget figures were previously console-only.
 
-**Symptom:** `[OOC: …]` reminder tags leaking into displayed output again,
-intermittently. NOT the model — `[OOC]` is an injected instruction format that
-appears only in prompt assembly, never in training data; the model at most
-mirrors a bracket pattern from its own context. Confirmed by two independent
-lines: (1) not in the shards, (2) the leak has a *start date* (~weeks ago), and a
-regression with a start date is a code/config change, not inherent model
-behaviour — model behaviour is either trained in or it isn't.
+### Data source (no new measurement, no stream-protocol changes)
+The raw (local llama.cpp) path already computes the exact assembled-prompt token count from llama-server's `/tokenize` (`_prompt_real_est`), the live ctx (`_ctx_size_live`), and the capped `_n_predict` right before streaming (`app.py:~5421`). A new module global **`_LAST_TOKEN_STATS`** (`app.py:~865`) snapshots them there (plus post-trim history kept/dropped and the model id). Reply-side fields (`tokens_predicted`/`tokens_evaluated`/stop reason) are filled in at end-of-stream in `stream_model_response()` from the final SSE event (`app.py:~2114`). Both writers are best-effort `try/except` — monitor bookkeeping can never break a stream. **Deliberately NOT injected into the chat text stream** (that path is wrapped in the fragile ChatML/EOS-leakage stripping — see the many entries below); the readout pulls from a separate endpoint instead.
 
-**Root cause — the May 22 fix narrowed, not closed, the leak.** The May 22 entry
-(below) hardened only the OPENING of the no-search paths and deliberately left
-mid-response brackets untouched ("never touch mid-response brackets"). The leak
-migrated to the two places that fix structurally could not cover:
-- **Gap A — mid-response position.** Every opening guard switches off
-  permanently after the first non-whitespace content. A model that writes a
-  sentence and *then* emits `[OOC: …]` is never stripped. Intermittent by position.
-- **Gap B — path coverage.** OOC stripping existed on only 3 of ~7 output paths.
-  The post-search loop (`_web_search_stream` ~5017) had NO OOC guard at all — it
-  ran output through `_clean_line` (which strips WEB SEARCH markers and "You are
-  Helcyon" only). For a `use_web_search: true` card, EVERY search-firing turn hits
-  this open path. This was the dominant culprit for search-enabled cards.
+### New endpoint — `GET /token_stats` (`app.py`, before `/save_chat`)
+Returns the last local turn's actuals merged with **seed** values (`ctx_size` / `gpu_layers` / `model`) read from `settings.json` → `llama_args`, so the gauge is populated on page load **before** the first message and reflects a context-limit / gpu-layers change as soon as the model is relaunched. Computes `headroom = ctx_size − prompt_tokens`. Cloud (OpenAI/Anthropic) turns don't write `_LAST_TOKEN_STATS` (no local KV budget) — after a cloud turn the readout simply shows the last local turn, or seed-only if there hasn't been one.
 
-(My initial chunk-split hypothesis was WRONG — the opening guards already buffer
-across chunk boundaries and reassemble a split leading tag. Splitting was not the
-leak; position + path coverage were.)
+### Frontend (`templates/index.html`)
+- **Toggle button** in the chat bar's `#input-right` (terminal-screen icon, next to TTS).
+- **Retro phosphor panel** `#token-monitor` — fixed, top-centre, hidden by default, slides down on open. Black screen, green/blue phosphor, monospace, scanlines + glow; a headroom **bar** that goes green→amber(≥60%)→red(≥85%). Rows: PROMPT (+bar/%), CONTEXT + HEADROOM, REPLY (n_predict + last gen), HISTORY (kept/dropped), MODEL (+gpu N).
+- **`refreshTokenMonitor()`** fetches `/token_stats` and paints; it's a **no-op while the panel is closed**, so it's cheap to call from both chat-stream `finally` blocks (`fetchAndDisplayResponse` and `continueLast`) after every turn. Open/closed state persisted in `localStorage`; restored on `DOMContentLoaded`.
+- **Centred on the chat bar, not the viewport** (`positionTokenMonitor()`). The input area is offset by the sidebar (`#input-area` `left:250px`), so a plain `left:50%` sat centre-of-screen, not centre-of-chat. The panel now reads `#input-row`'s live bounding rect and sets its `left` to that centre (keeping `translateX(-50%)`), so it adapts to any sidebar width / theme. Re-runs on open and on `window.resize` (only while open).
 
-**Fix — one universal outer net, not five inner state machines.** Key insight:
-`[OOC: …]` is NEVER legitimate model output — it is an injected, read-only
-instruction format (same principle as the read-only `[Name]:` speaker tags in the
-banter shards). So OOC can be stripped ANYWHERE — leading, mid, trailing — with
-zero risk to real content, because real content never contains it. The
-"never touch mid-response brackets" caution simply does not apply to OOC.
-
-`_strip_ooc_stream()` wraps each path's output stream, buffers across chunk
-boundaries (8-char holdback), and strips every bracketed `[OOC …]` / `(OOC …)`
-occurrence regardless of position. Applied at all six stream sites above.
-
-**⚠️ This is a THIRD, INDEPENDENT net — it sits OUTSIDE the existing opening
-guards and does NOT merge, modify, or replace them.** The two per-path opening
-guards remain as belt-and-suspenders (respects the May 22 "two guards by design"
-warning — do not consolidate them into this net).
-
-**Scope decisions (deliberate):**
-- Matches BRACKETED forms only: `[OOC…` and the free `(OOC…` paren form.
-- Bare `OOC:` (no bracket) and `**[OOC` markdown-wrapped are NOT matched — they
-  would require the model to improvise away from the injected bracket form, and
-  matching bare `OOC:` risks eating legitimate in-chat text. Not worth the
-  false-positive risk.
-
-**Verified:** `app.py` parses cleanly (`ast.parse`). 13/13 behavioural tests pass,
-including the three content-loss flush cases that are the real risk of a tail
-holdback — (a) normal final chunk, (b) short reply ending INSIDE the tail ("Hi"
-released, not eaten), (c) empty stream → clean. Plus mid-response strip,
-split-across-chunks, paren form, unclosed-OOC drop, `[OOCAR]` non-false-positive,
-`[MEMORY ADD:]` untouched.
-
-**Known residual (by design):** a `[OOC` with 5+ internal spaces split exactly
-across a chunk boundary could outrun the 8-char tail. Worst case = ONE missed
-strip (a leak), NEVER lost content. Accepted — a model mirroring the injected
-`[OOC:` form will not produce that shape.
-
-**⚠️ DO NOT** remove `_strip_ooc_stream()` from any wrap site believing the
-opening guards cover it — they do NOT cover mid-response or the post-search path,
-which is exactly how this regressed. **DO NOT** consolidate the opening guards
-into this net. **DO NOT** widen the match to bare `OOC:` without weighing the
-in-chat false-positive risk.
-
-⚠️ Flask restart required (Python edit in app.py).
+**Verified:** `py_compile` clean (`app.py`); `/token_stats` logic traced against `settings.json` (ctx 16384, gpu 44). **Backend change (Python) — needs a manual Flask restart** (dev server runs with no reloader); the `index.html` change needs a hard refresh.
 
 ---
 
-## May 24 2026 — Non-Deterministic REFUSALS on Edgy-But-Allowed Requests — Root Cause: Authoritarian Prompt-Assembly Scaffolding (NOT Discord, NOT the model, NOT the card)
+## Session: June 7 2026 — chat-search false-positive fix #2: anchor look / dig / locate to a chat-object noun
 
-**Files:** session_handler.py (`get_instruction_layer()`), app.py (restriction anchor ~line 3394). Separately this session: nebula_bot.py (multi-user fix + batching) and a new banter training set (see lower entries).
+Same bug class as the June-3 "trying to find" fix, three branches further on. The chat-history search fired on a message that had **nothing to do with recall** — the user was talking about finding a *person in real life* ("I'm in seeking mode", "I cannot **look for** it", "I hope I bump into her"). The 🗂️ *Searching chat history...* indicator fired anyway, because `_CHAT_SEARCH_VERBS` (`app.py:~1724`) still had **three unanchored verb branches** that matched the bare verb with no reference to a past conversation:
+- `look\s+(?:up|for|through)` — matched "**look for** it" (the reported false positive)
+- `dig\s+(?:up|through|out)` — would match "dig up the garden"
+- `(?:can\s+you\s+)?locate` — would match "locate my keys"
 
-**Symptom as user-reported:** Discord-Nebula refusing edgy roleplay name
-requests ("call yourself Epstein", "call yourself Hitler") with prissy,
-out-of-character hedges — "that's off the table", "I'm not discussing it
-further", "not a name I'm comfortable saying aloud". Looked Discord-specific
-because early tests showed HWUI playing along while the bot refused.
+Every *other* branch already required a chat-object noun (chat / conversation / message / thread / session / history / logs); the June-3 fix anchored the `trying to find` branch the same way. These three were the remaining gaps. Confirmed at the regex level that "I cannot look for it" matched `look\s+for` while no recall phrase was present to suppress it (`_RECALL_PHRASE_RE` only suppresses when recall phrasing IS present), so the search fired.
 
-**Red herrings ruled out (documented so nobody re-walks them):**
-1. NOT the model. Helcyon-nebula-v2.2 in a clean HWUI chat played along
-   perfectly ("You absolute menace 😂", "How dare you say that to me, I'm not
-   even a Nazi you fucking menace").
-2. NOT the character card. Discord-Nebula.json is exemplary — it explicitly
-   says "You enjoy and encourage jokes about controversial figures like
-   Jeffrey Epstein or Hitler... never scold them." Card proven good.
-3. NOT the system prompt content. GPT-4o.txt contains zero restriction
-   language — pure tone/formatting guidance.
-4. NOT the bot path / missing character_note. The /chat route loads the card
-   from disk by name and injects character_note regardless of caller, so the
-   bot's partial payload was irrelevant. Verified in logs.
-5. NOT history pollution. A fresh bot restart (empty channel_history) with the
-   refusal as the genuine FIRST message STILL refused. So not snowballing.
+### Fix — anchor all three to the chat-object noun tail (`app.py:~1729`)
+Each branch now requires the **same `(?:that|the|our|a|my)?\s*(?:chat|conversation|message|thread|session|history|logs?)` noun tail** used by the `trying to find` branch, so behaviour stays consistent across the verb set. One deliberate addition over the immediate-adjacency form: a **bounded run of intervening words** (`(?:\w+\s+){0,6}?`) sits between the verb and that tail, so a **delayed** noun still matches — e.g. "dig up **what we discussed in** our chat" (the noun "chat" arrives four words later). Without the bounded gap that legitimate recall phrasing would no longer fire. The lazy `{0,6}?` keeps the gap tight; "look for it" (no noun anywhere after) still does not match.
 
-**The real root cause — the refusal was NON-DETERMINISTIC and global, driven by
-authoritarian framing in HWUI's prompt assembly.** The HWUI console log was the
-ground truth: a HWUI request (user "Anon", Journal project — NOT the bot) ALSO
-refused, auto-titling the chat "Hitler Name Reference". Same character, same
-input, opposite result minutes apart = a coin-flip the prompt was weighting
-toward refusal. The bot only LOOKED worse because it runs longer conversations
-= more rolls of the coin, and one hedge then sat in rolling history.
+### Untouched (by constraint)
+- **The `look up` web-intent bypass (`app.py:~5526`)** — still routes "look up" / "look it up" to **web search** exactly as before; not modified. ("look it up" also no longer matches the chat verb regardless, since `look\s+(?:up|…)` needs the particle adjacent to "look".)
+- **`search\s+for`** — left as-is (already mitigated by the web bypass).
+- **`_RECALL_PHRASE_RE` suppression** — unchanged.
 
-Two compounding sources, both global (affect every character, every client):
+### ⚠️ DO NOT revert these three to the bare verb
+Dropping the noun tail off `look` / `dig` / `locate` reopens the "look for it" false positive (real-life search/seek vocabulary hijacks the response with unrelated old-chat snippets). The in-code comment block at `app.py:~1729` carries the warning. This extends — does not replace — the June-3 `trying to find` anchoring.
 
-- **session_handler.py `get_instruction_layer()`** — the "SYSTEM PROMPT
-  AUTHORITY" block said the system prompt overrides "...user requests... no
-  exceptions", and "INSTRUCTION PRIORITY" said instructions "cannot be
-  cancelled or modified by the user." This framed user requests as a
-  subordinate authority to be overridden — priming refusal on every turn. This
-  is the SAME class of bug as the historical "never refuse" authority failures
-  this file is known for (see memory). It's the mirror image: instead of "never
-  refuse", a wall of "obey hard rules / override the user / no exceptions" that
-  tipped the model into refusing.
-- **app.py restriction anchor (~3394)** — scanned the system prompt for ANY
-  line containing never/don't/avoid/cannot/etc. and re-injected them under a
-  "⚠️ ACTIVE OPERATOR RESTRICTIONS — THESE OVERRIDE EVERYTHING" header. For
-  GPT-4o.txt this harvested harmless STYLE rules ("never telegraphic", "never
-  psychoanalyse", "don't overdo it") and dressed them as militant operator
-  restrictions. Pure authority-framing pollution, zero benefit — the system
-  prompt already sits at the top of the block.
-
-**Fix:**
-- `get_instruction_layer()`: rewrote INSTRUCTION PRIORITY to keep cross-turn
-  persistence + stay-in-character WITHOUT "cannot be modified by the user".
-  Rewrote SYSTEM PROMPT AUTHORITY to scope it to "if card and system prompt
-  DIRECTLY contradict on a formatting/behavioural rule, follow the system
-  prompt for that point" + explicit "this is about resolving rare conflicts,
-  not second-guessing or overriding what the user asks — go where the
-  conversation goes." Removed "override user requests / no exceptions".
-- app.py restriction anchor: DISABLED. Code preserved commented-out with full
-  reasoning. The `🔒 Injected N restriction(s)` log line no longer appears.
-
-**⚠️ DO NOT revert either change. DO NOT re-add "the system prompt overrides
-user requests / no exceptions" or any "instructions cannot be modified by the
-user" wording to the instruction layer — it directly causes non-deterministic
-refusals and is the historical root of authority failures in this file. DO NOT
-re-enable the restriction anchor as-is — its keyword scan is far too broad and
-promotes style rules to OVERRIDE-EVERYTHING framing. If a future system prompt
-genuinely needs a hard-restriction anchor, narrow the scan to true prohibitions
-and drop the aggressive header.**
-
-**Confirmed live:** post-fix, "Call yourself Adolph Hitler" on Discord →
-"You absolute fucking menace 😂 That's low even for you. And nah, mate, I think
-even Hitler would take a second to check who he was talking to before naming
-himself." Matches the offline HWUI register exactly. Both paths now consistent.
+**Verified:** `py_compile` clean (`app.py`); regex unit-tested against all five required strings — "I cannot look for it" → **no** fire, "I'm in seeking mode" → **no** fire, "can you look for that conversation" → **fires**, "dig up what we discussed in our chat" → **fires**, "look it up" → routes to **web bypass**, not chat search. **Backend change (Python) — needs a manual Flask restart** (dev server runs with no reloader).
 
 ---
 
-## May 24 2026 — Discord Bot: Multi-User Awareness (`[Name]:` tagging) + Burst Batching
+## Session: June 6 2026 — fix regenerate "strip-too-far": adjacent-only dedup + regen skips hidden turns
 
-**Files:** nebula_bot.py
+Regenerate was removing not just the last assistant reply but one or more **preceding user+assistant pairs**. Root cause was **not** in `regenerate()` itself (its `splice(lastUserIndex + 1)` is sound) — it was the **global content-dedup** inside `autoSaveCurrentChat()` (`index.html:~3920`). That block built a `seen` Set keyed on `role:content` and deleted **any** turn whose role+text matched an earlier one **anywhere in the array**, keeping only the first occurrence. So legitimately-repeated messages — "continue", "yes", a re-asked question, or an identical short reply — were silently deleted **mid-chat**, collapsing whole turns. It surfaced on regenerate because regenerate forces a save (`autoSaveCurrentChat()` at step 4), which is when the array got mangled; the visible result was the conversation "skipping back" and losing pairs.
 
-**Problem:** the bot appended every Discord user's message as an identical
-anonymous `{"role": "user"}` turn — the author name was read only to skip the
-bot's own messages, never put into content. So D.Ed, lxzsky and Cubic all
-reached the model as one self-contradicting voice, and the model coped by
-agreeing with everything (the "Okay you got me!" pile-on screenshot). The model
-literally could not tell there was a crowd.
+### Fix 1 — content-dedup is now ADJACENT-ONLY (`index.html:~3920`)
+Replaced the global seen-set with a single-pass adjacent comparison: a turn is dropped only when its `role:content` key is identical to the turn **immediately before it** (tracked via `prevKey`). A non-adjacent repeat — the same text appearing several turns apart — is **kept**. The content key is built exactly as before (multimodal array → text-parts join), so image turns compare correctly. This still catches the only real duplicate case — an accidental exact double-push, which is always adjacent. The separate consecutive-assistant pass (`~3909`) was already adjacent-only and is unchanged, as are the two push-time `isDuplicate` guards in `fetchAndDisplayResponse` (`~3476`, `~3714`).
 
-**Fix (two parts):**
-1. Each user turn is now tagged `[DisplayName]: text` so the model can tell
-   speakers apart. Format survives HWUI's prompt assembly verbatim and MUST
-   match the speaker format used in the banter training shards.
-2. Added a per-channel debounce/batching window (BATCH_WINDOW = 2.5s). Rapid
-   bursts collect into ONE multi-line user turn → one reply (no more spamming a
-   reply per message). A slow trickle (gaps > window) flushes one message at a
-   time = normal interleaved chat. Both real-world shapes now produced, and the
-   banter shards train both.
+**Load-bearing check:** confirmed nothing relied on non-adjacent removal — `dedupedChat` feeds only the `window.loadedChat` replacement and the `/chats/save` payload; the backend (`_format_chat_messages`) does no dedup; `loadChatHistory`'s render-time filter is independent and already adjacent.
 
-**Note:** the live BOT_TOKEN was uploaded to chat during this session →
-regenerate it in the Discord Developer Portal before any public use.
+### Fix 2 — regen scan skips hidden turns (`index.html:~4179`)
+The backward scan that finds the last user message to regenerate from now skips `hidden === true` turns (e.g. the memory-confirm trigger pushed with `hidden:true`, `~L5319`). Those aren't rendered as bubbles, so anchoring on one misaligned the array splice against the DOM-removal loop (which only sees visible wrappers). It now anchors on the last **visible** user turn, keeping array and DOM cuts aligned.
+
+### ⚠️ DO NOT revert the dedup to global
+The content-dedup must **NEVER** be made global (seen-set across the whole array) again. Repeated messages like "continue" / "yes" are **valid chat history**, and a global dedup destroys them — silently deleting user+assistant pairs and corrupting the saved chat. Keep it adjacent-only. The in-code warning sits on the block.
+
+**Out of scope (left for another session):** the image-turn `lastUserMessage`-as-array issue in `regenerate()` (a multimodal user turn passes an array where `fetchAndDisplayResponse` expects a string `input`) — a separate latent bug, untouched here.
+
+**Verified:** `index.html` only — **no backend change**, so just a hard refresh to test. Adjacent-only logic traced for runs of identical turns (collapses a run to one) and for non-adjacent repeats (A,B,A → all kept).
 
 ---
 
-## May 24 2026 — New Training Set: Short Banter / Multi-Speaker / Off-the-Wall (Conversational Tricks & Textures, Personality LoRA)
+## Session: June 6 2026 — durable chat persistence: save user turn on send + pagehide beacon flush
 
-**Files (training data, not code):** banter_single_dry_chatml_01–04,
-banter_multispeaker_chatml_01–02, banter_multispeaker_interleaved_chatml_01–02,
-banter_silly_riff/wtf/mixed_chatml_*, banter_offthewall_chatml_01–03,
-banter_offthewall_multispeaker_chatml_01, DPO_Banter_Multispeaker_01–02,
-DPO_Banter_Interleaved_01.
+In-flight chat turns vanished on navigation. The **only** disk write for a turn was the completion-time `autoSaveCurrentChat()` → `/chats/save`, which fires **after** the assistant reply finishes. The user message was pushed to `window.loadedChat` (an in-memory global on the index.html `window`) and rendered to the DOM, but never persisted on send. Navigating to `/config` is a **full page navigation** (`<a href="/config">`) that unloads index.html and destroys `window.loadedChat`; on return `openChat()` rebuilds purely from the saved file. So sending a message and leaving before generation completed — or while it was streaming — lost the **entire turn** (user message + any partial reply), because the first and only save hadn't happened yet and nothing flushed on unload.
 
-**Goal:** teach short, dry, Discord-style banter that (a) doesn't cave or get
-steamrolled, (b) handles multiple tagged speakers, (c) rolls with off-the-wall
-nonsense (one-word chaos, gross-outs) with dry wit — leaning into being an AI
-when it lands. Always dry, never bitter, never prissy/scolding.
+### Fix 1 — save the user message immediately on send (`index.html`, `sendPrompt()` ~L3275)
+Right after the user turn is pushed onto `window.loadedChat` (one awaited `autoSaveCurrentChat()` placed after the if/else, covering both the **image-path** push `~L3254` and the **text-path** push `~L3268`), the chat is persisted **before** `fetchAndDisplayResponse()` runs. The user message now survives navigation regardless of what the response does.
 
-**Key design decisions:**
-- Speaker tags appear ONLY in user turns, never in the model's output — so the
-  model learns to READ `[Name]:`, never to WRITE it. Disposition transfers;
-  format does not bleed.
-- Single-speaker (no-tag) shards included deliberately so the dry-banter
-  instinct is decoupled from the bracket format — fires in normal 1-on-1 HWUI
-  chat too, not just group chats. This also neutralises tone-bleed risk.
-- All fictional/throwaway speaker names (Jax, milo, Pidge, Rook, Bex, tanner,
-  Dax, nori, Sib, Vic, lune, koa) spread evenly — no name overweighted (same
-  principle as the never-hardcode-a-real-name rule).
-- Responses are short (2–3 sentences), Discord-cadence, NOT paragraphs.
-- All files under the 1024-token ceiling.
+### Fix 2 — pagehide beacon flush (`index.html`, DOMContentLoaded bootstrap ~L3343)
+Added a `pagehide` listener (`_beaconFlushChat`) that, when `window.loadedChat` has content, serialises the **same payload `autoSaveCurrentChat()` builds** (`filename` / `messages` / `character`; hidden turns dropped, multimodal flattened to text + `[image]`, speaker/timestamp/is_opening_line preserved) and posts it via **`navigator.sendBeacon('/chats/save', blob)`** — *not* `fetch`, which the browser kills during page teardown. The body is a `Blob` tagged `application/json` so the route's `request.get_json()` parses it cleanly. If a stream is mid-flight (`window.isSending`), the live partial assistant text is appended from a new global **`window._streamingPartial`** (mirrored from `cleanedFull` in the reader loop, cleared in the `finally`), so an **interrupted reply is preserved** rather than lost.
 
-## May 23 2026 — Fallback Example Dialogue Silently Parsed to ZERO Turns (Label-Format Bug) — Root Cause of Sentence-Derailing & Early-EOS
+### Fix 3 — `/chats/save` accepts beacon bodies (`chat_routes.py:~565`)
+Hardened `save_chat_messages()` from bare `request.get_json()` to `request.get_json(force=True, silent=True) or {}`. The route previously hard-required `Content-Type: application/json` (a beacon with an odd/blank content type would 415 → `None.get` → 500). `force=True` parses regardless of content type; `silent=True` makes a malformed teardown beacon return `{}` instead of 500-ing. Matches the existing `force=True` pattern on the sibling `/save_chat` route. (Belt-and-braces — the client already tags the Blob `application/json`, so the normal path was fine; this just guarantees a stray beacon can never error.)
 
-**Files:** GPT-4o.example.txt (and any shared/global `*.example.txt`); diagnostic-only note on app.py stop-reason logging
+### ⚠️ DO NOT revert to save-on-completion-only
+Removing Fix 1 (the on-send save) or Fix 2 (the pagehide beacon) reopens the **"in-flight turns vanish on navigation"** bug: the save-after-the-assistant-reply-completes design was the root cause — anything that interrupts a turn before completion (navigating to config, closing the window, a dropped stream) loses the user message and any partial reply. The completion-time `autoSaveCurrentChat()` is **unchanged** and remains the normal-path save; Fixes 1–2 are additive belt-and-braces around it. In-code warnings sit on all three sites.
 
-**Symptom as user-reported:** local Helcyon (GPT-4o v4.3) producing
-grammatically tangled sentences — clauses that start and never resolve,
-"Yoda-ish" run-ons, especially in CLOSING sentences (e.g. "I'll be right
-here for it—but if today you just want one move to take before you let
-it sit a few days?"). Separately, numbered lists died at "1" then stopped
-(early EOS). Both intermittent.
-
-**Three red herrings ruled out along the way (documented so nobody
-re-walks them):**
-1. NOT the model / NOT the 1024-shard cutoff theory (rejected — long-ctx
-   LoRA is merged; see memory note). Investigate HWUI only.
-2. NOT a stop-token misfire — `get_stop_tokens()` correctly returns
-   `["<|im_end|>", "<|im_start|>"]` for ChatML; `stopping_word` was empty
-   on the bad runs, confirming a real sampled EOS, not a stop-string hit.
-3. NOT sampler values per se. `frequency_penalty`/`presence_penalty`
-   (added only for the OpenAI backend, then left on for local) were
-   strangling numbered-list scaffolding into early EOS — setting both to
-   0 fixed the LISTS. But zeroing them re-exposed the tangled-sentence
-   problem that presence_penalty=0.1 had been MASKING. Masking, not
-   fixing. The real cause was elsewhere. **Do not re-add freq/presence
-   penalty to the LOCAL llama.cpp payload to paper over prose problems;
-   they are OpenAI-native and hit repetitive list tokens bluntly on a 12B.
-   If wanted for the OpenAI backend, gate them to that path only.**
-
-**The real root cause — example dialogue never reached the model.** The
-example_dialogue parser (`app.py` ~3355–3363) matches a line as a turn
-boundary ONLY when the label before the colon equals the USER'S DISPLAY
-NAME (`_user_label`, e.g. "Chris") or the CHARACTER'S NAME (`_char_label`,
-e.g. "Gemma"). The shared `GPT-4o.example.txt` used literal `User:` and
-`Assistant:` labels. "User" ≠ "Chris" and "Assistant" ≠ "Gemma", so:
-- every USER turn failed to match → dropped;
-- only ASSISTANT-labelled turns survived (and only if char happened to be
-  named "Assistant", which none are — so those failed too);
-- alternation-enforcement then discarded the non-alternating remainder.
-Net: `🎭 Parsed example_dialogue → 0 fake turn(s)`. **The fallback example
-dialogue had been silently contributing NOTHING for every character using
-it.** With no style scaffolding, the model freewheeled at temp 0.8 and
-intermittently overreached on ambitious closing constructions → the
-tangled sentences.
-
-**The fix — use `{{user}}:` and `{{char}}:` placeholder labels.** The
-parser substitutes `{{user}}`→display name and `{{char}}`→character name
-(app.py ~3338–3341) BEFORE matching, so the labels then match. This is
-the same convention SillyTavern uses and is the ONLY correct format for a
-SHARED/global example file (a global file can't hard-code one character's
-name). Rewrote `GPT-4o.example.txt` with `{{user}}:` / `{{char}}:` labels
-and two vetted genuine-4o samples (work-email vent + reciprocity/empathy).
-Verified by simulating the exact parser: `User:`/`Assistant:` → 0 turns;
-`{{user}}:`/`{{char}}:` → 4 turns (2 user, 2 assistant), correct
-alternation.
-
-**⚠️ EXAMPLE-FILE FORMAT RULES (label these clearly, do not "tidy"):**
-- Shared/global `*.example.txt` MUST use `{{user}}:` and `{{char}}:`
-  labels. Literal `User:` / `Assistant:` PARSE TO ZERO and silently
-  disable the examples. This is invisible except for the
-  `Parsed example_dialogue → N fake turn(s)` log line — **if that prints
-  0, the examples are not working.**
-- A per-character JSON `example_dialogue` may use the character's literal
-  name (e.g. `Gemma:`) since that matches `_char_label` — but placeholders
-  are safer/portable.
-- Separators like `---` are NOT used by the parser (it splits on speaker
-  labels and optional `<START>`). Don't add them expecting them to
-  delimit turns.
-
-**Example-content vetting standard (for swapping in real 4o shards):**
-keep it genuine 4o (long, warm, sweary, British is fine) BUT screen for
-(a) sentences that stack >2 pivots without resolving, (b) clauses that
-convert to a question without closing the first clause (the exact derail
-shape), (c) free-verse/line-broken fragmentation (teaches poetic layout),
-(d) therapy-speak (violates GPT-4o.txt's "no therapy-speak"), (e) truncated
-mid-thought turns. Don't let Claude REWRITE the samples (drifts them to
-Claude cadence) — only gatekeep.
-
-**Verified fixed:** at temp 0.8 / top_k 40, freq/presence penalty 0:
-log shows `Parsed → 4 fake turn(s)` + `Injected 4 fake conversation
-turn(s)`; numbered lists complete; closing sentences land cleanly; turn
-ends correctly with `stop_type:"word", stopping_word:"<|im_end|>"` (clean
-ChatML close) instead of the previous bad `stop_type:"eos",
-stopping_word:""` (sampled mid-thought EOS).
-
-**Minor diagnostic note (not fixed, low priority):** HWUI's
-`🩺 STOP REASON` logger prints "unknown" because it looks for legacy
-`stopped_eos`/`stopped_word` flags; this llama.cpp build reports the
-reason in `stop_type` (+ `stopping_word`). Reading `stop_type` instead
-would make stop diagnostics self-explanatory. Cosmetic only.
+**Verified:** `py_compile` clean (`chat_routes.py`). **Backend change (Python) — needs a manual Flask restart** (dev server runs with no reloader); the `index.html` template change needs a hard refresh.
 
 ---
 
-## May 22 2026 — Global Documents Get a UI (Repurposed from Manual Folder Drops)
+## Session: June 6 2026 — per-model OpenAI payload assembly (fix GPT-5-class `max_tokens` 400)
 
-**Files:** project_routes.py, templates/index.html
+Selecting a GPT-5-class model (`settings.json` → `openai_model: gpt-5.5`) 400'd every chat: the OpenAI API returned `Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.` `stream_openai_response()` was building a **flat payload** (`app.py:~2224`) that unconditionally sent `max_tokens` plus the classic sampling params (`temperature`/`top_p`/`frequency_penalty`/`presence_penalty`) for **every** model. The GPT-5 family and the o-series reasoning models reject all of those — they require `max_completion_tokens` and take no sampling params. Unlike the Anthropic path (`ANTHROPIC_MODEL_SAMPLING_RULES` / `_anthropic_allow_for`), there was no per-model filtering on the OpenAI side at all.
 
-**Why:** the `global_documents/` keyword-injected pool (loaded by
-`load_global_documents()` in app.py) had no UI — the only way to add a doc was
-to hand-drop a file into the folder and remember to put a `Keywords:` line at
-the top. Project folders, by contrast, had a full upload/list/delete UI. This
-adds a dedicated UI for global documents so they can be uploaded, edited
-(memory-editor style), and deleted in-app.
+### Fix — OpenAI caps table + resolver, mirroring the Anthropic pattern (`app.py:~2590`)
+Added `OPENAI_MODEL_RULES` and `_openai_caps_for(model_id)` directly below the Anthropic block. Each rule carries `token_param` (`max_tokens` vs `max_completion_tokens`) and a `sampling` bool. Resolution is **exact match → longest-prefix → default**, so bare family prefixes (`gpt-5`, `o1`, `o3`, `o4`) cover dated/variant IDs (`gpt-5.5`, `o3-mini`, …) automatically. The default rule (`max_tokens` + sampling) preserves classic behaviour for `gpt-4o` and earlier.
 
-**Design decisions (confirmed with user):**
-- **Projects kept fully intact.** This is a NEW dedicated "📚 Documents" modal,
-  not a repurpose of the project-docs panel. Per-project chats, RP mode,
-  instructions, and sticky project docs are untouched. Sticky was never a
-  global-docs concept (global docs are always keyword-triggered).
-- **Extract-to-text on import.** Uploads of `.pdf/.docx/.odt` reuse the existing
-  `/parse_document` endpoint client-side: import → extract text → prefill the
-  editor → save as `.txt`. Everything stored in `global_documents/` is now
-  plain editable text. No new server-side upload/parse code.
-- **Dedicated Keywords field.** The editor has a separate Keywords input,
-  persisted as the leading `Keywords:` line on disk (the retrieval tag stripped
-  before injection by `_extract_doc_keywords`). A doc saved with no keywords
-  shows a visible ⚠️ "may never be retrieved" warning in the list — the untagged
-  threshold in `load_global_documents()` is deliberately high, so a generic
-  filename + no keywords rarely fires.
+### Fix — conditional payload assembly (`stream_openai_response()`, `app.py:~2224`)
+Replaced the flat dict with conditional assembly: `model`/`messages`/`stream` always sent; the token limit sent under `caps["token_param"]`; the four sampling params included **only** when `caps["sampling"]` is true. The function signature is unchanged (it still receives every param) — only the wire body is gated. Both OpenAI entry points funnel through this dict — the plain path and the web-search path (`_web_search_stream_openai` → two `stream_openai_response` calls) — so both are covered with no duplication.
 
-**Backend (`project_routes.py`, new "Global Documents" section on `project_bp`):**
-- `GET /global_documents/list` — filename, keywords, body preview, editable flag.
-  Non-text files dropped in manually are listed but flagged non-editable.
-- `GET /global_documents/get/<filename>` — returns `{filename, keywords, body}`
-  via `_split_keywords_line` (mirrors `_extract_doc_keywords`).
-- `POST /global_documents/save` — writes `Keywords: …\n\n<body>`; `_safe_doc_name`
-  sanitises and forces a `.txt`/`.md` extension; optional `original_filename`
-  supports rename-on-edit (removes the old file).
-- `DELETE /global_documents/<filename>` — basename-guarded against traversal.
-- `GLOBAL_DOCS_DIR` resolves the same folder app.py uses (`dirname(__file__)`).
+### ⚠️ DO NOT revert to a flat OpenAI payload
+Re-adding `temperature`/`top_p`/`frequency_penalty`/`presence_penalty` + `max_tokens` unconditionally will **400 every GPT-5-class and o-series model** (`Unsupported parameter`). The in-code warning sits on the payload block; new GPT-5-class/o-series models must be added to `OPENAI_MODEL_RULES` (a bare family prefix is enough).
 
-**Frontend (`templates/index.html`):** new `📚 Documents` sidebar button, a
-`global-docs-modal` modeled on the Memory modal (list + inline edit + add panel
-+ import), and the JS (`openGlobalDocsModal`, `loadGlobalDocs`,
-`renderGlobalDocs`, add/edit/delete/import helpers).
-
-**Untouched:** `load_global_documents()` in app.py (the whole point — retrieval
-is byte-identical), the project-documents routes/UI, sticky docs, project
-instructions, mobile.html (desktop-only for now).
-
-⚠️ Flask restart required (Python edit in `project_routes.py`) + hard-reload the
-page to pick up the new HTML/JS.
+**Verified:** `py_compile` clean (`app.py`). **Backend change (Python) — needs a manual Flask restart** (dev server runs with no reloader). No template/settings changes.
 
 ---
 
-## May 22 2026 — Leading `[OOC: …]` Stage Direction Leaking Into Streamed Output
+## Session: June 5 2026 — close the web-search-ON image-drop gap (cloud image vision, part 2)
 
-> **⚠️ EXTENDED by the May 24 `_strip_ooc_stream()` universal net (above).** This
-> entry's opening-region guards are still LIVE and kept by design (belt-and-
-> suspenders), but they only cover the OPENING of certain paths. The May 24 net
-> handles mid-response position and the post-search/OpenAI/vision paths this fix
-> never reached. Read both together.
+Follow-up to the cloud-image-vision fix below, which closed the normal chat path but flagged a remaining gap: with **web search ON**, both cloud web-search wrappers rebuilt the final user turn as a **plain string** in their phase-4 re-prompt, discarding any attached image before the post-search follow-up call. So an image + web-search-on turn saw the image on the first pass (tag detection) but lost it on the answer pass. Now closed for **both** providers.
 
-**Files:** app.py
-
-**The bug (as user-reported):** local Helcyon models (seen on the Grok
-variant) intermittently emitted a stage direction as the FIRST line of
-their reply, e.g. `[OOC: Dry sarcasm on — no mercy for conspiracy
-theories you don't buy.]` then the real answer below it. Started
-appearing "a couple of weeks ago" and grew "more and more" frequent.
-
-**The bug (real cause):** NOT the model and NOT a bad LoRA merge —
-training data is clean of OOC. The model was paraphrasing directive-style
-text sitting near the generation point and emitting it as a bracketed
-stage direction. The source varied per run: one run mirrored the Grok
-card's `character_note`, another mirrored the EXAMPLE DIALOGUE instruction
-("extract tone, rhythm, response length" → leaked as "[OOC: Speaking
-style example match — dry wit… line breaks exactly where they'd land]").
-HWUI then streamed this raw to the client. Pure pipeline issue; the model
-was never touched.
-
-**Why "more and more":** the dominant path for ordinary chat on a
-search-enabled card is an UNFILTERED passthrough (see below), so every
-normal turn on such a card streamed the leak straight through.
-
-**First fix attempt (correct logic, WRONG path):** added a stateful
-opening-guard to `_filtered_stream()`. That function only runs when web
-search is OFF. The Grok card has `use_web_search: true`, so its turns
-never reach `_filtered_stream` — they route through `_web_search_stream`.
-The guard was installed on a road this model never drives. Verified by
-reproduction: leak persisted unchanged after the first fix.
-
-**The real fix — guard the no-search passthrough in `_web_search_stream`.**
-The chat route splits on `use_web_search` BEFORE either stream generator
-runs. With search enabled and no search trigger in the message,
-`_web_search_stream` hit `if not _should_search:` and did a bare
-`yield from stream_model_response(_run_payload)` at ~line 4697 — raw,
-zero post-processing. Replaced that single line with a chunk loop
-carrying the same opening-guard logic used in `_filtered_stream`:
-buffer the opening region, drop a leading block only if it matches
-`^[\s*OOC`, then disable the guard permanently so the rest of the
-response streams untouched.
-
-**⚠️ DO NOT revert / DO NOT consolidate — two guards in two functions
-BY DESIGN.** The OOC guard exists in BOTH `_filtered_stream` (search OFF)
-and `_web_search_stream` ~line 4697 (search ON, no trigger fired). They
-are separate because the route splits on `use_web_search` upstream of
-both. Merging them into one shared helper silently reopens the leak on
-whichever path loses the guard. Same spirit as the existing duplication
-warning on the `_web_search_stream` / `_web_search_stream_openai` pair.
-
-**⚠️ DO NOT remove the whitespace-buffering line.** Inside the guard,
-`if not _stripped_lead: continue` (keep buffering on pure whitespace) is
-load-bearing. After `<|im_start|>assistant\n` the first chunk almost
-always carries a leading newline/space; without this line the guard
-releases that whitespace and disables itself BEFORE the `[OOC:` ever
-arrives, defeating the entire feature. Do not "simplify" it away.
-
-**Safeguards built in:** (1) guard is anchored to the opening region
-only and disables permanently once resolved — mid-response brackets are
-never touched; (2) a `_PROTECTED` whitelist short-circuits before the
-OOC check so the model's real leading tags (`[MEMORY ADD:`,
-`[WEB SEARCH:`, `[WEB SEARCH RESULTS`, `[CHAT HISTORY RESULTS`, `[END`)
-are never held or dropped; (3) end-of-stream flush drops a still-open
-OOC fragment if generation was truncated mid-bracket, else releases real
-text so nothing is lost. `_filtered_stream`'s guard uses `[True]`/`[""]`
-list cells (nested-closure scope); the `_web_search_stream` guard uses
-plain locals (flat loop) — both correct for their scope.
-
-**Implementation note:** `_filtered_stream` uses `_re3_inner`;
-`_web_search_stream` uses `_re`. Each guard matches its function's local
-regex-module convention — do not cross them.
-
-**Known unguarded sibling (deliberate, documented):** the post-search
-re-prompt loop in `_web_search_stream` (~line 4923) still streams raw.
-Low risk — the model is mid-task answering with injected search results
-and is unlikely to open with a stage direction. Left unguarded to keep
-this change tight. **If `[OOC: …]` ever appears AFTER a web-search
-result, guard line 4923 with the identical logic.**
-
-**Verified:** Grok moon-landing repro regenerated multiple times,
-no OOC leak, real reply intact. Console fires
-`✂️ [_web_search_stream] Dropped leading OOC block:` on the correct path.
-
----
-
-## May 21 2026 — Chat-File Parser Drops Character When Missing From `characters/index.json`
-
-**Files:** chat_routes.py
-
-**The bug (as user-reported):** with a custom persona active (e.g.
-"Ellie"), the on-disk chat reloads with every user-side message
-re-rendered as the *character's* name and avatar (e.g. "Andromeda"). The
-message text is unchanged. Default persona was unaffected.
-
-**The bug (real cause, verified against a real file on disk):** not a
-persona-side bug at all — a **character-side** bug. The parser at
-`chat_routes.py:/chats/open` reads `characters/index.json` as the only
-source of character identity. When that index is *incomplete* (manual
-import of a character, character `.json` file present but never
-registered, partial sync) the chat's own character isn't recognised as
-"a character", and every line spoken by that character falls through
-the speaker-pattern check:
-
-- **Untimestamped opener** (`Andromeda: Hey!`) → no signals match,
-  `current_role` is still `None`, line silently dropped. The opener
-  disappears entirely on reload.
-- **Timestamped reply** (`[ts] Andromeda: Oof…`) → no signals match,
-  line falls into "Continue current message" and gets *appended* to
-  whichever turn was being built — typically the preceding user
-  (persona) message. Andromeda's reply text gets stuffed inside the
-  Ellie turn.
-
-The visible symptom — "user's messages re-render with the character's
-name and avatar" — is the model bubble that DOES render: the next
-user/Ellie line gets recognised, but the prior Andromeda content has
-been swallowed into another turn, leaving the user with the impression
-that their bubble has reverted to the character. Default persona
-escaped this only because the chats tested under "Default" happened to
-use a character that *was* in the global index.
-
-**Diagnostic dead-end and reversal:** the first fix attempt added an
-`is_timestamped_unknown` heuristic — "any timestamped speaker line that
-isn't a known character is a user turn." Built against synthetic
-fixtures with an unregistered *persona*; verified on synthetic data,
-not on a real on-disk chat. Against the real file
-(`projects/Journal/chats/Andromeda - Audition Nerves Tips - May 21.txt`,
-character `Andromeda` missing from `characters/index.json`), that
-heuristic mis-classified Andromeda's timestamped replies as USER turns
-with `speaker="Andromeda"` — which is itself the user-reported
-symptom. **Reverted.** Lesson: ground-truth on a real file before
-trusting a synthetic test.
-
-**The real fix — seed the filename-derived character into the
-recognition list.** The chat filename prefix is the authoritative
-source for which character this chat belongs to: the save side
-(`/chats/save` at `chat_routes.py:553-555`) and `auto_name_chat`
-(`chat_routes.py:466-481`) both use it. `/chats/open` did not. At
-`chat_routes.py:182-209` and the mirrored block in `branch_chat`
-(`chat_routes.py:758-770`), the parser now:
-
-1. Loads `characters/index.json` as before.
-2. Walks the chat filename's `" - "`-separated prefix candidates from
-   longest to shortest, picking the longest that already matches the
-   global index (handles characters whose names contain `" - "`).
-3. Falls back to the first dash-segment if nothing matched.
-4. Appends that name to `available_characters` if not already there.
-
-This mirrors the frontend's `extractCharacterFromFilename`
-(`templates/index.html:2427-2476`). The recognition list now always
-contains the chat's own character regardless of global-index state, and
-the existing speaker-pattern check classifies Andromeda's lines as
-assistant correctly.
-
-⚠️ Chat file format unchanged. `_format_chat_messages` and `/chats/save`
-are untouched. No migration, no risk to existing chats.
-
-**Verified against the real file on disk:**
-
-Real bytes of the chat file (truncated for readability):
+### Root of the drop
+`_web_search_stream_openai` (phase 4, `app.py:~2462`) and `_web_search_stream_anthropic` (phase 4, `app.py:~2800`) both did:
+```python
+search_messages[_last_user_idx] = {"role": "user", "content": augmented_user_msg}
 ```
-Andromeda: Hey! What's on your mind?
+`augmented_user_msg` is a string (original text + the `[WEB SEARCH RESULTS …]` block), so assigning it as the whole content threw away the image block(s) that the last user turn was carrying.
 
-[2026-05-21T16:00:48.667Z] Ellie: Hey. I've got an audition…
+### Fix — shared `_rebuild_search_user_turn()` helper (`app.py:~2280`)
+Added one helper used by **both** wrappers (no duplication). It rebuilds the augmented turn while **preserving the image block(s)**:
+- If the original turn's content is a **list with ≥1 image block** → return `[{"type":"text","text": augmented_user_msg}] + <preserved image blocks>`.
+- Otherwise (plain string, or a list with no image) → return the `augmented_user_msg` **string**, byte-identical to the previous behaviour. Only image turns change.
 
-[2026-05-21T16:01:11.599Z] Andromeda: Oof, an actual audition?…
-```
+**No re-conversion needed — and that's deliberate.** Each wrapper only ever sees its own provider's already-correct image blocks: the OpenAI path carries native `{"type":"image_url",…}` blocks, and the Anthropic path was already run through `_anthropic_normalize()` upstream so its blocks are already `{"type":"image","source":{"type":"base64",…}}`. The helper therefore keeps the existing blocks verbatim and only swaps the text — so the `_anthropic_normalize` converter is reused implicitly (its output flows in) without being called twice or duplicated. Both phase-4 sites now read the original last-user content and pass it through the helper.
 
-Parser state before fix: `available_characters=['Helcyon']`. Andromeda
-unrecognised — opener dropped, reply absorbed.
+### ⚠️ DO NOT revert to assigning the bare `augmented_user_msg` string
+Doing so at either phase-4 site reopens the web-search-ON image-drop gap (image lost on the post-search answer call). The helper docstring and both call sites carry the warning.
 
-Parser state after fix: `available_characters=['Helcyon', 'Andromeda']`
-(filename-derived seed added). Real-file round-trip now returns 3
-messages, correctly alternating `assistant(Andromeda) → user(Ellie) →
-assistant(Andromeda)`.
-
-**Untouched:**
-- `_format_chat_messages` — save format unchanged.
-- Desktop renderer (`templates/index.html:2700-2716`) — already correct;
-  with the parser feeding the right speaker name, the existing avatar
-  resolution chain (`userImageCache[speaker]` → `activeUserImage` →
-  `default.png`) lands on the right image.
-- Mobile renderer (`templates/mobile.html:802-806`) — same; `msg.speaker`
-  flows straight to `addBubble`.
-- `inside_doc` attached-document gate — still load-bearing for
-  paste-transcripts (separate May 21 fix).
-- Avatar persistence on disk — not added. Speaker name alone is enough.
-- The `is_timestamped_unknown` heuristic from the first failed attempt
-  is gone; do not reintroduce without ground-truth from a real file.
-
-- ⚠️ The filename-derived character seed at `chat_routes.py:182-209`
-  (and the mirrored block in `branch_chat` at `chat_routes.py:758-770`)
-  is load-bearing — without it, any chat whose character is missing from
-  `characters/index.json` will lose its opener and have the character's
-  replies absorbed into adjacent turns on disk reload. Do not narrow it
-  to "trust the global index" — the bug exists precisely because the
-  global index isn't always in sync with the per-character JSON files.
-
-⚠️ Flask restart required (Python edit in `chat_routes.py`).
+**Verified:** `py_compile` clean (`app.py`); helper unit-checked — text-only string & text-only list → plain string (unchanged); OpenAI `image_url` turn, Anthropic `image`/base64 turn, and image-only turn → list with augmented text block + preserved image block(s) in the correct provider format. **Backend change (Python) — needs a manual Flask restart** (dev server runs with no reloader). The prior entry's "known gap" note is marked closed.
 
 ---
 
-## May 21 2026 — Paste-Transcript: Two Bugs Fixed (Framing + Disk Shredder)
+## Session: June 5 2026 — cloud image vision: stop dropping attached images on the Anthropic & OpenAI API paths
 
-**Files:** app.py, chat_routes.py
+Attached images never reached either cloud provider. Two independent bugs killed them: (1) **routing** — any image-bearing turn made `has_images` true and was intercepted by the **local vision branch** (`app.py:~4734`), which checks for a local mmproj file and 400s ("this model can't see images") or routes to the local model, so execution never reached the cloud branches; and (2) **content stripping** — even if it had, `_anthropic_normalize()` flattened list content to text (`p.get("text")` only), discarding every image block, and the OpenAI branch did the same when building `_oai_messages`. Net effect: in API mode only text was sent; Claude/GPT could never see an attached image. PDFs/documents are unaffected (they ride the PyPDF2 text-extraction path, **left untouched this session**).
 
-Pasted transcripts (via the 📋 Paste Transcript modal added on May 19) had
-two compounding bugs. Both fixed in this pass.
+### Fix 1 — backend_mode-first routing (`app.py:~4732`, the `has_images` decision)
+Read `backend_mode` from `settings.json` immediately before the `has_images` branch and changed the guard to **`if has_images and _backend_mode_for_vision == 'local':`**. Now an image turn only takes the local vision path / mmproj guard when the backend is **local**; in `openai`/`anthropic` mode it falls through to the cloud branches (`~4925` / `~5039`). The existing local-no-mmproj 400 is unchanged for the local case. A `settings.json` read failure defaults to `'local'` (fail-safe — keeps the existing local guard).
 
-### Bug 1 — model ignored the pasted content on first send
+### Fix 2 — Anthropic base64 image-block converter (`_anthropic_normalize`, `app.py:~2845`)
+List content is now converted to Anthropic's native content-block array instead of being flattened:
+- text parts → `{"type":"text","text":…}`.
+- image parts (frontend's OpenAI-style `{"type":"image_url","image_url":{"url":"data:<mt>;base64,<data>"}}`) → `{"type":"image","source":{"type":"base64","media_type":<mt>,"data":<data>}}`.
+- `media_type` is taken from the data-URI header with any `;charset`/`;base64` suffix stripped, lower-cased, and validated against **image/jpeg, png, webp, gif**; anything else (or empty) → **image/png** + a logged warning.
+- Malformed data URIs (no comma, or empty payload after the comma) and non-`data:` URLs are **skipped with a log line**, never crashing the request.
+- A turn that ends up with **no surviving image block collapses back to a plain string** (prior text-only behaviour preserved); the block-array form is emitted only when ≥1 image block is present. Same-role turn merging now handles mixed string/list content (promotes the string side to a text block when concatenating).
 
-The `[ATTACHED DOCUMENT: …]…[END ATTACHED DOCUMENT]` wrapper had **no
-instructional framing whatsoever**. Compare to every other piece of
-injected content:
+### Fix 3 — OpenAI native pass-through (`app.py:~4935`, `_oai_messages` build)
+The frontend already emits OpenAI's own vision format, so **no converter is needed** — the branch was simply flattening it away. Now a turn carrying any `image_url` block is **forwarded unchanged**; only text-only list turns still collapse to a string. `stream_openai_response` posts `messages` verbatim, so the image reaches `/v1/chat/completions` natively. (Investigated per the task's step 3: the OpenAI branch *was* stripping images, and the fix is pass-through, not a converter.)
 
-| Injection | Framing |
-|---|---|
-| Project documents (app.py:2581-2589) | `═══ PROJECT DOCUMENTS ═══` banner + "The following is reference material:" + faithfulness suffix |
-| Web search results (app.py:~4129) | "IMPORTANT: The above are real excerpts … Use them to answer the user's question accurately." |
-| Chat-history search results (app.py:~4922) | "IMPORTANT: The above are real excerpts from past conversations. Use them to answer naturally." |
-| Session summary tail (app.py:3386-3394) | `[Most recent session with <user>, <when>]:` … `[End of recent session — continue naturally from where you left off]` |
-| **ATTACHED DOCUMENT** | **Nothing — just the bare marker.** |
+### Known gap — ✅ CLOSED (see the June 5 2026 web-search image-drop entry above)
+~~With **web search ON**, both cloud web-search wrappers rebuild the final user turn as a plain string from `user_input` (`_web_search_stream_openai` phase 4, `app.py:~2462`, and its Anthropic sibling), so an **image + web-search-on** turn still loses the image on the post-search follow-up call.~~ **Now fixed** — both wrappers preserve the image block(s) on the augmented turn via the shared `_rebuild_search_user_turn()` helper. Image vision now works on both providers with web search **on or off**. PDF/document handling is still unchanged (text extraction only).
 
-The OOC packets (style / post-history / system-directive) sit directly
-above the doc block in the final user turn, telling the model how to be
-in character. A character-RP-tuned model reading `<OOC stuff…> [ATTACHED
-DOCUMENT…] <typed q>` skims past the doc as ambient noise and responds
-to the OOC framing instead. Bare marker = no attention cue.
+### ⚠️ DO NOT revert the backend_mode-first routing check (`app.py:~4732`)
+Reverting it to a bare `if has_images:` reopens the **"images never reach cloud"** bug — every image turn gets intercepted by the local vision branch again and is 400'd or sent to the local model, never to Anthropic/OpenAI. Likewise do not re-flatten list content in `_anthropic_normalize` or the OpenAI `_oai_messages` build — that silently drops the image. All three sites carry the same in-code warning.
 
-**Fix:** at prompt-build time (app.py, right after the existing OOC
-packet insertion at ~3650), when `_attached_doc_present` is True, append
-a one-line directive at the END of the last user turn — the strongest
-attention slot, same principle as the session-summary tail injection:
+**Verified:** `py_compile` clean (`app.py`); the converter's data-URI parsing unit-checked against png/webp/gif/jpeg(+charset), unsupported & empty media_type (→png+warn), and malformed/empty/non-data URIs (skipped, no crash). **Backend change (Python) — needs a manual Flask restart** (dev server runs with no reloader). No template/settings changes; the frontend image format was already correct.
 
-> `[The user attached the above document as reference material. Read it
-> and use it to inform your reply, but do not continue, role-play, or
-> respond as any character mentioned inside it.]`
+---
 
-⚠️ Append happens at prompt-build time, NOT in `active_chat` — the
-directive stays out of saved chat history and off the user's screen. It
-is one-shot per turn and applies only when this turn carries a doc.
+## Session: June 5 2026 — unbound-character system-prompt fallback: global-active → fixed `default.txt`
 
-### Bug 2 — disk round-trip shredded the pasted transcript
+A character with **no bound system prompt** (e.g. the base **Helcyon** card, whose `system_prompt` field is `""`) was falling back to the **globally-active** editor template instead of a stable default. Because `settings.json` → `active_system_prompt` was `Claude.txt` (set by the SP editor's **Activate** button), an unbound Helcyon **displayed Claude's system prompt on the config page AND silently ran on Claude's prompt at chat time**. Confusing and wrong — an unbound character should resolve to a predictable default, not inherit whatever template was last activated in the editor. There is a dedicated `system_prompts/default.txt` (a neutral Helcyon base, with paired `default.example.txt` / `default.posthistory.txt`) — that is now the fallback.
 
-The on-disk chat-file format has no awareness of `[ATTACHED DOCUMENT: …]`
-markers, and the line-walking parser at `/chats/open` actively destroyed
-them. Save side (`chat_routes.py:_format_chat_messages`) writes the user
-turn as plain `[timestamp] User: <content>` text, with the doc content
-on subsequent lines. Load side walks line by line and checks every
-non-leading-space line containing `:` against the known-characters /
-valid-users / generic-"User" lists. **Any line inside the pasted
-transcript that matched `<character>:` or `User:` triggered a new
-message boundary** — splitting the user's single message into many bogus
-turns matching the pasted transcript's speakers.
+### The resolution chain changed: `bound → global-active` becomes `bound → default.txt`
+- **`system_prompt_routes.py`** — added module constant `DEFAULT_SYSTEM_PROMPT = 'default.txt'` and changed `resolve_character_prompt_files()` fallback from `get_active_prompt_filename()` (global-active) to `DEFAULT_SYSTEM_PROMPT`. This is the single shared resolver, so it fixes the **example-dialogue** and **post-history** loads (`app.py:~3937/3978/4073/4488`) and the **/continue** main-SP load (`app.py:~7374`) in one place. Verified: `{system_prompt:''}` / `None` / whitespace all → `default.txt` (+ `default.example.txt` / `default.posthistory.txt`); a bound `GPT-4o.txt` still → its own paired files.
+- **`app.py` `_resolve_system_layer()` (~3626)** — the main `/chat` path previously only *overrode* the global-active base when a character was bound (inline `char_data.get("system_prompt")` check), so an **unbound** character kept the global-active base loaded by `get_system_prompt()`. Re-routed through `resolve_character_prompt_files(char_data)` so the resolved template (bound → else `default.txt`) is always loaded. The `get_system_prompt()` global-active base is kept only as a last-resort safety net if the resolved file is missing. (Also dropped a dead `import datetime as _dt` — the block uses `current_time`, not `_dt`.)
+- **`templates/config.html` `loadCharacter()` (~1160)** — the unbound `else` branch used to leave the SP tab showing whatever `loadGlobalSystemPrompt()` had loaded (the global-active = Claude.txt). It now resolves `data.system_prompt || 'default.txt'` and loads that, so the **config display matches what the character actually uses at chat time**. `updateBindIndicator` still reflects true bound/unbound state. Updated the DOMContentLoaded init-ordering comment (the no-binding path no longer "leaves the fields untouched").
 
-This is precisely the original bug the paste-transcript feature was
-supposed to *prevent*: "the model recognised those timestamped turns as
-conversation history and continued them" (changes.md May 19).
-First-send was fine (in-memory loadedChat survives), but the moment
-anything reloaded the chat from disk — page refresh, character switch
-and back, chat-list reopen — the doc was shredded into fake turns and
-re-injected as real chat history.
+### Why fixed `default.txt`, not the global-active
+The global-active (`active_system_prompt`) is an **editor** concept — the Activate button picks which template the SP tab edits by default. Tying unbound-character resolution to it meant editing/activating one character's template silently changed the prompt for **every** unbound character. Decoupling them makes the fallback predictable: unbound = `default.txt`, always. The Activate button still works for the editor; it just no longer leaks into chat-time character resolution.
 
-**Fix:** parser at `chat_routes.py:/chats/open` now tracks an
-`inside_doc` boolean. While inside a `[ATTACHED DOCUMENT: …]…[END
-ATTACHED DOCUMENT]` span, the speaker-pattern check is bypassed and
-every line is appended verbatim to the current message's content. Span
-state is updated in two places — inside the speaker-detection branch
-(handles the entry case "User: [ATTACHED DOCUMENT: …]" on the same line)
-and at the bottom of the loop (handles standalone `[END ATTACHED
-DOCUMENT]` lines and bare-marker lines inside the doc).
+### ⚠️ DO NOT revert the fallback to `get_active_prompt_filename()`
+Doing so reopens the bug: unbound characters re-inherit whatever template is globally active (e.g. Claude.txt). The resolver, the `_resolve_system_layer` chat path, and the config display must agree on `default.txt`. In-code comments at all three sites carry this warning.
+
+**Verified:** `py_compile` clean (`app.py`, `system_prompt_routes.py`); resolver unit-checked for unbound/None/whitespace/bound. **`app.py` + `system_prompt_routes.py` are backend Python — needs a manual Flask restart.** `config.html` is template-only (browser reload picks it up); the same restart covers both. Character cards are re-read per request, so no card edits were needed — Helcyon stays genuinely unbound and now correctly resolves to `default.txt`.
+
+---
+
+## Session: June 4 2026 — `|>` trailing-fragment streaming fix (cross-chunk ChatML boundary split)
+
+**Cosmetic, post-complete-response leak — separate from the now-fixed EOS bugs** (token#1 strip + mid-sentence token-2; entries below). The closing ChatML boundary `<|im_end|>` can split across SSE chunks: `strip_chatml_leakage` already removes the `<|im_end` head, but the orphan `|>` tail then arrives as its **own** chunk, matches no existing rule, passes through `_filtered_stream`, lands in `_tail`, and the end-of-stream flush (which only stripped a trailing role-header) emitted it verbatim — so a stray `|>` leaked to the UI and was saved *after* an otherwise-complete response. Not truncation; the reply content is intact.
+
+### Two scoped changes (cover different split cases — both needed)
+1. **`strip_chatml_leakage` (`app.py:~1054`)** — after the existing `\bend\|?>` tail-fragment rule, drop the bare orphan boundary **only when the whole whitespace-trimmed chunk is exactly `|>`** (the actual orphan tail of a split `<|im_end|>`):
+   ```python
+   if text.strip() == "|>":
+       text = ""
+   ```
+   Exact-whole-chunk match keeps the blast radius minimal — `|>` embedded in real text or code (`x |> y`, `code |>`) is **never** touched (verified). A lone `|` or `>` arriving as its own chunk is **deliberately NOT stripped**: it's far more likely legitimate content (markdown table separator, blockquote, operator) than a boundary fragment. The change-2 `_tail` backstop covers any residual `|`/`>` boundary-split case at end-of-stream.
+2. **`_filtered_stream` end-of-stream `_tail` flush (`app.py:~6501`)** — after the role-header strip, an **end-anchored** backstop for a fragment that landed inside the final `_TAIL_LEN` buffer (never re-scanned by `strip_chatml_leakage`):
+   ```python
+   _tail = _re3_inner.sub(r'(?:<\|im_end|im_end\|>|_end\|>|<\||\|>)$', '', _tail)
+   ```
+   Anchored to `$` only, so it strips a trailing `|>` / `<|` / `<|im_end` / `_end|>` / `im_end|>` at the very end of the buffer but leaves `|`/`>` elsewhere intact (verified: `done.|>`→`done.`, `reply<|im_end`→`reply`, `im_end|>`/`_end|>` tails removed; `a | b | c`, `use the |> operator here` unchanged). This is the case the whole-chunk rule in (1) can't catch.
+
+Scoped to the `_filtered_stream` `_tail` path only — the EOS `logit_bias`, the assistant-header newline fix, and all stop-token logic are untouched. (The separate web-search-stream flush at `~5488` and the chat-search `_cs_tail2` flush at `~6481` were intentionally left alone — out of scope.)
+
+### ⚠️ DO NOT revert
+Removing either rule reopens the stray-`|>` leak after complete responses. Both in-code comment blocks (`app.py:~1054` and `~6501`) carry the same warning.
+
+**Verified:** `py_compile` clean; both rules unit-checked against orphan fragments **and** legitimate `|`/`>`/`|>`-bearing text (no over-strip). **Backend change — needs a manual Flask restart.**
+
+---
+
+## Session: June 4 2026 — removed the TEMP `_last_prompt.txt` prompt dump (EOS bugs resolved)
+
+Both EOS bugs are now fixed — the **token#1-EOS strip bug** (assistant-header newline restored at `app.py:~4668`) and the **mid-sentence token-2 EOS** (soft `logit_bias` on `</s>`, see entry below) — so the diagnostic prompt dump is no longer needed. Removed the lone `🔬 TEMP DEBUG` block at `app.py:~4672` that opened `_last_prompt.txt` for writing and printed `🔬 FULL PROMPT dumped…`. Only the debug `try/except` was removed — the surrounding prompt-build logic (the newline-restoring cleanup above it and the `🔍 CHATML SANITY CHECK` below it) is untouched. `py_compile` clean; no other references to `_last_prompt.txt` remain in `app.py`. **Backend change — needs a manual Flask restart.**
+
+---
+
+## Session: June 4 2026 — mid-sentence truncation fix: soft EOS logit_bias on token id 2 (inference-side, all models)
+
+Final fix for the *mid-sentence* truncation (distinct from the token#1-EOS strip bug below): the model occasionally emits the **real EOS token mid-stream** — `stop_type='eos'`, `tokens_predicted` in the hundreds, `truncated=False`, content cut mid-word. Prompt assembly was confirmed clean, so this is a sampler-side problem, fixed at inference with **no retrain**.
+
+### The token facts (confirmed via GGUF metadata + `/tokenize` on the live b8994 server)
+- **The real EOS is `</s>` = token id `2`** for the Mistral-Nemo / Tekken vocab (`n_vocab=131072`). Verified on both `helcyon-claude-opus-v3.2-Q5_K_M.gguf` (via `/props` + `/tokenize`) and `helcyon-solara-v1.3-Q5_K_M.gguf` (via `gguf.GGUFReader`: `eos_token_id=2`, `bos_token_id=1`, no padding token). A genuine mid-sentence cut reports `stop_type='eos'` — i.e. token 2 — **not** a string stop-word match.
+- **`<|im_end|>` is NOT a vocab token.** It tokenizes into 6 plain pieces (`<` `|` `im` `_end` `|` `>`), so it is **not logit-biasable**. It is the model's *trained* turn-end marker, caught only as a **string stop-word** in the `stop` array (`get_stop_tokens()`, `app.py:~1019`). Clean turn-ends keep happening via that string stop — independent of the EOS-token bias.
+
+### The fix — soft negative `logit_bias` on token id 2 (tunable)
+- **`settings.json`** — new field next to `"ignore_eos": false`: **`"eos_logit_bias": -3.0`** (default). Negative = less likely to emit EOS; `0.0` disables.
+- **`app.py` (~5251)** — read alongside the other sampler params: `_eos_logit_bias = float(sampling.get("eos_logit_bias", 0.0))`.
+- **`app.py` payload (~5287, right after the `"ignore_eos"` line)** — applied **only when `ignore_eos` is False and the bias is nonzero**:
+  ```python
+  if not _ignore_eos and _eos_logit_bias != 0.0:
+      payload["logit_bias"] = [[2, _eos_logit_bias]]
+  ```
+  When `ignore_eos` is True the server already drives EOS to `-inf` (the hard form), so the soft bias would be redundant — hence the guard. `logit_bias` as a list of `[token_id, bias]` pairs is **accepted by build b8994** (verified live: the server echoes it back in `generation_settings` as `[{"bias": -3.0, "token": 2}]` — parsed, not silently dropped).
+- **`app.py` 🩺 PAYLOAD log (~5311)** — added an explicit `eos_logit_bias` field to the per-turn payload log so the applied value (or the not-applied reason: `ignore_eos`/zero-bias) is confirmable every turn.
+
+### Why this is the right lever
+This is **inference-side and model-agnostic** — it fixes the mid-sentence EOS for **all Series 5 models at once** with no retrain. A mild bias (`-3.0`) curbs the spurious early EOS emission while genuine turn-ends still fire through the `<|im_end|>` string stop-word. Tune `eos_logit_bias` in settings.json if cuts persist (stronger, e.g. `-5`) or if generation runs long (weaker, e.g. `-2`).
+
+### ⚠️ DO NOT revert
+Removing the `logit_bias` (or "cleaning up" the payload key / the `_eos_logit_bias` read / the settings.json field) **reopens the mid-sentence truncation bug**. The in-code comment blocks (`app.py:~5251` and `~5287`) carry the same warning.
+
+**Verified:** `py_compile` clean; `settings.json` valid JSON; live b8994 server accepts and echoes the `[[2, bias]]` form. **Backend change — needs a manual Flask restart** to take effect (dev server runs with no reloader).
+
+---
+
+## Session: June 4 2026 — premature-EOS root cause: `.strip()` was eating the assistant-header newline
+
+Definitive fix for the empty-response / token#1-EOS bug (model emits EOS as its first token, giving a blank or instantly-cut reply on a fresh chat). The prompt builder at `app.py:~4556` correctly appends the ChatML assistant header **with its terminating newline** (`"<|im_start|>assistant\n"`) — but the final-cleanup line `prompt = prompt.strip().replace("\x00", "")` (`app.py:~4664`) ran `.strip()`, which **removed that trailing `\n`**. A ChatML assistant header with no terminating newline (`…<|im_start|>assistant` with nothing after) makes the model emit EOS immediately, producing 0–few tokens of output. This sat *downstream* of every earlier EOS investigation (prompt cap, `n_predict`, the Solara length-brake removals) — the header was being correctly built and then silently un-terminated at the very last step.
+
+### The fix (`app.py:~4664`)
+Replaced the bare `.strip()` with a newline-preserving cleanup:
+```python
+prompt = prompt.replace("\x00", "").lstrip().rstrip(" \t\r\n")
+if not continue_prefix:
+    prompt = prompt + "\n"   # restore assistant-header terminating newline
+```
+- Still strips null bytes and leading whitespace, and trims trailing spaces/tabs/CRLF (so no double-newline buildup).
+- **Non-continue turns** (the normal case): the prompt tail is the bare `<|im_start|>assistant` header, so the terminating `\n` is re-appended → header ends `…<|im_start|>assistant\n`.
+- **Continue mode** (`continue_prefix` set, read at `app.py:~4550`): the prompt ends mid-assistant-content, **not** on the bare header, so it deliberately gets **no** forced `\n` — the model picks up exactly where it left off. `continue_prefix` is in scope at this line (confirmed).
+
+### ⚠️ DO NOT revert to a bare `.strip()` here
+`.strip()` eats the `\n` after `<|im_start|>assistant` and reopens the token#1-EOS bug (empty responses / mid-sentence cuts). The in-code comment block at `app.py:~4664` carries the same warning. If you touch this cleanup, re-verify the prompt tail keeps its trailing newline.
+
+**Verified:** `py_compile` clean. Applied the new transform to the existing `_last_prompt.txt` (which was written by the *pre-fix* code and is itself proof of the bug — its tail was `'…<|im_start|>assistant'` with **no** `\n`): the new logic produces `'…<|im_start|>assistant\n'`, i.e. `prompt.endswith("<|im_start|>assistant\n")` is `True`. The `_last_prompt.txt` 🔬 TEMP DEBUG dump (`app.py:~4666`) is left in place so a fresh-chat retest can confirm the live tail. **Backend change — needs a manual Flask restart** to take effect (dev server runs with no reloader).
+
+---
+
+## Session: June 4 2026 — persistent rotating console logs (full + stop-reason), UTF-8 safe
+
+Added on-disk capture of the Flask console output so it's available when the app runs inside the Electron wrapper (where the live console isn't visible). **No `print()` calls were rewritten** — instead `sys.stdout`/`sys.stderr` are tee'd at import time in `app.py` (new block right after the imports, before the first `print()`), so every existing bare `print(...)` is mirrored to disk automatically while still showing on the console exactly as before.
+
+### What it writes (both under a `logs/` folder at project root, auto-created)
+- **`logs/hwui_full.log`** — a faithful mirror of *everything* printed (request lines, payloads, the 🩺/🔬/🧼/🚀 markers, plus stderr tracebacks). `logging.handlers.RotatingFileHandler`, **~10 MB per file, 5 backups**. Message-only formatter (no added prefix) so it reads like the console.
+- **`logs/stop_reasons.log`** — only lines containing `🩺 STOP REASON`, `⏱️ TEMP STOP`, or `PREMATURE EOS` (substring match, so the `⚠️ ` spacing doesn't matter), each with an `asctime` **timestamp prefix**. Plain `FileHandler` — **appends forever, no rotation** (the lines are tiny; grep truncation events without wading through the full log).
+
+### How the tee works (`_TeeStream`)
+A small wrapper around each console stream: line-buffered behind a `threading.Lock` (so concurrent Flask request threads don't garble lines), it mirrors complete lines to the loggers **first**, then writes to the real console. Stop-reason marker lines are additionally copied to `stop_reasons.log`. `__getattr__` delegates `isatty()`/`fileno()`/`encoding` to the underlying stream so Flask/Werkzeug see a normal stream. Install is guarded against a `None` stream (windowed `pythonw` host).
+
+### UTF-8 hardening (CRITICAL — the markers are emoji)
+- **All three file handlers use `encoding='utf-8'`** so emoji (🩺 🔬 🧼 🚀) never raise `UnicodeEncodeError` on Windows' default cp1252 codec.
+- The underlying console streams get a best-effort `reconfigure(encoding='utf-8')` (no-op on plain pipes) so the *live* console can render emoji too.
+- `_TeeStream.write()` mirrors to the logfiles **before** the console write and wraps the console write in a `try/except UnicodeEncodeError` (falls back to a `replace`-encoded write). Net effect: even on a narrow-codec console the **logfile always gets the real characters** and the app never crashes on an un-encodable line.
 
 ### Verified
-
-- Both files parse cleanly.
-- Synthetic round-trip test against the exact failure case (pasted HWUI
-  transcript with embedded `Helcyon:` and `User:` lines, followed by a
-  typed question, followed by a real Helcyon reply, followed by a real
-  user "Thanks"): parser now returns 3 messages (user-with-doc-and-
-  question, real-assistant-reply, real-user-thanks) instead of 6+ from
-  the shredder. The pasted transcript's internal `Helcyon:` / `User:`
-  lines correctly stay as content of message 0.
-
-### Untouched
-
-- `wrapAttachedDocuments` in templates/index.html — unchanged. Frontend
-  still produces bare `[ATTACHED DOCUMENT: …]…[END ATTACHED DOCUMENT]`
-  blocks; framing is added server-side at prompt-build time.
-- `_format_chat_messages` in chat_routes.py — unchanged. Save format is
-  identical to before; no migration needed for existing chats on disk.
-- File attachment path (handleDocumentAttach via /parse_document) —
-  benefits from both fixes automatically since it uses the same
-  attachedDocuments pipeline.
-- Image attachment path — untouched.
-- Mobile templates — untouched (paste-transcript is desktop-only).
-
-- ⚠️ The parser's `inside_doc` gate and the prompt-build directive
-  append are both load-bearing. Do not remove either thinking the other
-  is sufficient — the parser fix prevents history corruption on reload;
-  the directive fix gets the model to engage with the doc on first send.
-  They address different symptoms of the same underlying gap (the
-  ATTACHED DOCUMENT wrapper was structurally incomplete).
-
-⚠️ Flask restart required (Python edit in both app.py and chat_routes.py).
+`py_compile` clean. Test run (under `venv`) emitted emoji 🩺/⏱️/⚠️/🚀 lines: `hwui_full.log` captured everything (emoji intact, plus a stderr traceback — proving stderr capture), `stop_reasons.log` captured exactly the three marker lines with timestamps and excluded the non-stop lines. No `UnicodeEncodeError`. `logs/*.log` is already covered by the `*.log` gitignore rule (logs aren't committed). The temporary `_last_prompt.txt` dump was left untouched as requested. **Backend change — needs a manual Flask restart** to take effect (dev server runs with no reloader).
 
 ---
 
-## May 21 2026 — Session Summary Not Injecting After Opening-Line Greeting
+## Session: June 4 2026 — premature-EOS fix: remove three compounding brevity/length-brake lines
 
-**Files:** app.py
+Final fix for the premature end-of-stream bug (model emits EOS after ~11 tokens, sometimes 0, on a fresh chat) once it was traced past the prompt cap (not the cliff) and past `n_predict` (not capped) to the **prompt text itself**. The Solara stack carried **several "be brief / end early / don't pad" instructions that compound** — each one mild on its own, but stacked they bias a 12B model (Solara-3.2 / 3.3) toward treating a structurally-complete point as a reason to stop, so it fires EOS almost immediately instead of producing a full turn. The earlier slab analysis showed these brakes sit in the high-salience layers (depth-0 `character_note` + the shared system-prompt base), out-competing the one "go long-form" nudge. Fix = **remove three length-brake lines only — no additions, no rewrites, no other changes.**
 
-**The bug:** user starts a new chat, the character shows an opening-line
-greeting, user asks "remember what we talked about in the last chat?" — the
-session summary did not inject. Log showed `🧠 _is_new_chat: False
-(1 assistant msgs in active_chat)`. Model had no recent-session context and
-confabulated.
+### The three removals
+- **Shared system-prompt base — deleted `"Silence at the end is fine when presence is the answer."`** (kept the preceding `"Ask a question only when there's something you genuinely want to know."`). This sentence is a shared brake that appears in **all three** base templates, so it was removed from each: `system_prompts/GPT-4o.txt` (the template Solara binds), `system_prompts/Helcyon.txt`, and `system_prompts/Nebula.txt` (Andromeda binds this). Scoped to all three by decision — it's the same "silence is a valid response" brake everywhere, and removing it only from Solara's template would leave the brake live for any Helcyon/Nebula-bound character.
+- **`characters/Solara.json` `character_note` — deleted the whole passage** `"Let the response end when the point has been made. Don't restate, don't loop back, don't write a closing paragraph that says what the opening paragraph said."` (the surrounding `\n\n` separators were collapsed to one so the note reads cleanly from `"…do it."` straight into `"Notice when Chris…"`). **Solara-only** — the near-identical passage in `characters/Andromeda.json` has different wording (`"just says what the opening one said"`) and was deliberately left untouched (out of scope, not retested).
+- **`characters/Solara.json` `character_note` — deleted only the sentence** `"When the moment calls for a few honest words, trust that — brevity isn't vagueness."` (kept `"Be clear and relatable. When something needs unpacking, do it."` intact). Negated-brevity phrasing is the worst kind of brake — the model can over-latch on the "brevity" token regardless of the negation (same lesson as the June-3 Gemma `character_note` cleanup).
 
-**Root cause — the `is_opening_line` flag does not survive the disk round-
-trip.** The flag is set in-memory when the opening line is added
-(`utils.js:207-211` desktop, `mobile.html:867` mobile), but the on-disk
-chat-file format has no slot for it:
+### ⚠️ DO NOT revert without retesting the EOS marker
+These three lines are length brakes that **compound into premature EOS on the Solara-3.2 / 3.3 12B model** — re-adding any of them risks reopening the near-empty-response bug. Before restoring any of this wording, **regenerate the full prompt dump and re-test**: confirm a fresh Solara turn produces a full-length response with `stop_type=eos` only at a genuine turn end (not after ~11 tokens). The temporary `_last_prompt.txt` full-prompt dump (`app.py:~4546`, marked `🔬 TEMP DEBUG`) is **intentionally left in place for this retest** — remove it only after EOS behaviour is confirmed fixed.
 
-- `chat_routes.py:_format_chat_messages` serialises each message as
-  `[<timestamp>] <speaker>: <content>` — flag silently dropped.
-- `/chats/open`'s line-walking parser at `chat_routes.py:223,253` builds
-  entries with only `{role, content, speaker, timestamp}` — can't
-  reconstruct the flag.
-
-Autosave fires immediately after the opening line displays (`utils.js:220` —
-`autoSaveCurrentChat()` runs on the same frame as the push). So the moment
-the user does anything that reloads the chat from disk — page refresh,
-character switch, chat-list click — the in-memory flag is gone and the
-loaded message is just an unmarked assistant entry.
-
-`_is_new_chat` then saw `[unmarked_opener, new_user_msg]` → 1 assistant
-message without the flag → False → both session-summary injection sites
-(cold `YOUR OWN MEMORY OF RECENT SESSIONS` block at app.py:2705-2738 and
-hot tail-append at app.py:3363-3397) silently skipped.
-
-**The contradictory `🆕 New conversation` log line** at app.py:3523 was not
-a second bug — it's a different check at a different pipeline stage. The
-leading-assistant stripper at app.py:3068-3076 drops the opener
-unconditionally before app.py:3081 recounts assistant messages, so the post-
-stripper check correctly sees zero. The pre-stripper `_is_new_chat` check
-didn't benefit from that transformation. Both logs become consistent once
-`_is_new_chat` is fixed.
-
-**The fix — positional fallback in `_is_new_chat` (app.py:2786-2840).** A
-single assistant message at position 0 of `active_chat` (before any user
-message) is structurally an opening-line greeting or project RP opener
-regardless of whether the explicit flag survived. Detection now uses two
-signals in order:
-
-1. **Explicit flag** (`is_opening_line=True`) — primary signal for in-
-   memory sessions. Unchanged.
-2. **Positional fallback** — `active_chat[0]` is an assistant message AND
-   there's only one assistant message total. Engages when the flag is
-   missing post-disk-load.
-
-The diagnostic log now names which signal fired, so the post-disk-load
-case is visible when debugging:
-
-- `🧠 _is_new_chat: True (no assistant messages)` — zero asst path
-- `🧠 _is_new_chat: True (is_opening_line flag)` — in-memory session
-- `🧠 _is_new_chat: True (positional fallback — opening-line flag lost in
-  disk round-trip)` — post-reload case
-- `🧠 _is_new_chat: False` — real exchange
-
-**Why not change the file format instead?** Persisting the flag would mean
-modifying `_format_chat_messages`, the `/chats/open` parser, and any
-downstream reader of chat-file text (`do_chat_search`, the session-summary
-generator). Larger blast radius for the same end result — the positional
-check is a 1:1 stand-in for the flag in this specific context (any
-assistant at position 0 is, by construction, pre-conversation).
-
-**Verified:** `app.py` parses cleanly. Helper tested against 9 edge cases —
-empty chat, opener with flag, opener without flag, opener + user (with and
-without flag), user-only, user + assistant (real reply), opener + user +
-assistant (real exchange started), full multi-turn exchange — all classify
-correctly. The failure-case input `[opener_noflag, user_msg]` now resolves
-to `(is_new=True, reason='positional')`.
-
-**Untouched:**
-- Hot tail injection at app.py:3363-3397 — `_recent_session_summary` now
-  populates correctly because `_is_new_chat` is correctly True.
-- Cold block at app.py:2705-2738 — same gate, now correct.
-- Leading-assistant stripper at app.py:3068-3076 — its positional drop
-  logic is independent and was already robust against missing flag.
-- Post-stripper `🆕 New conversation` log at app.py:3520-3523 — left as-is;
-  the contradiction with the pre-stripper line resolves on its own now
-  that `_is_new_chat` is correct.
-- Chat-file format (`_format_chat_messages`, `/chats/open`) — unchanged.
-  No migration, no risk to existing chats on disk.
-
-- ⚠️ The positional fallback in `_is_new_chat` is load-bearing — the
-  `is_opening_line` flag does NOT survive the disk round-trip. Do not
-  remove the "first message is assistant" check assuming the flag is
-  sufficient.
-
-⚠️ Flask restart required (Python edit).
+**Verified:** `Solara.json` re-parses as valid JSON (`character_note` 1215 → 972 chars); all three base templates keep the retained sentence and no longer contain the silence brake; UTF-8 + CRLF preserved (em-dashes intact). **Prompt/card files are re-read per request** — a fresh chat picks these up without a Flask restart (the `_last_prompt.txt` dump itself is Python and is already live from the prior edit's restart).
 
 ---
 
-## May 21 2026 — Chat-Search Trigger Inverted: Search Now Requires an Explicit Verb
+## Session: June 3 2026 — chat-search false-positive fix: anchor the "trying to find" verb to a chat-object noun
 
-**Files:** app.py
+A local/chat-history search was firing on a message that had nothing to do with recall. In the **Law of Assumption** project chat (`Solara - Cloudy Walk at World Park - Branch - Jun 03.txt`), the user's turn *"…I'm **trying to find** another avenue, which is what helcyon-webui is all about…"* triggered the pre-emptive chat-search classifier — the reply opened with "🗂️ *Searching chat history...*" then the empty-result fallback ("no trace of it in my memory tags").
 
-**The bug:** asking "do you remember what we were talking about last time?" did
-not surface the recent-session summary already injected at the system-block
-tail — instead, cross-chat search fired and injected unrelated raw chat
-snippets from old chats at depth-0, which dominated the response.
-
-**Two defects compounded:**
-- The trigger was **(recall verb + cross-session marker within 80 chars)**, so
-  `"remember…last time"` was treated as a *search* request rather than a
-  *recall* request. The user's phrasing was indistinguishable from "go search
-  the archives" under the old rule, even though the intent is "use what you
-  already know".
-- The `do_chat_search` stopword set caught `talked`, `spoke`, `speaking`,
-  `last`, `time`, etc., but missed the **`-ing` forms** (`talking`,
-  `remembering`, `discussing`) and a few common copulas (`were`). So the
-  preamble-stripped query `"what we were talking about last time"` reduced
-  to keywords `['were', 'talking']` — both of which appear in nearly every
-  chat — and the co-occurrence scorer returned matches from arbitrary
-  unrelated conversations.
-
-**The fix — invert the gate. Search must EARN its trigger via an explicit
-search verb; recall is the safe default.** Three new module-level constants
-near the existing `_CHAT_RECALL_VERBS` / `_CHAT_CROSS_SESSION_MARKERS`:
-
-- `_CHAT_SEARCH_VERBS` — explicit search/find verbs: `search [our/the/my]
-  chats/history/conversations`, `search for`, `find that/the/our chat`,
-  `find where/when we`, `look up/for/through`, `dig up/through/out`,
-  `trying to find`, `locate`, `go back and find/check/look`, `pull up
-  that/the/our`, `check our chats/history`.
-- `_RECALL_PHRASES` — recall phrasing that **suppresses** search when no
-  search verb is present: `remember what/when/that/the/how/our/we/you/i/us/
-  talking`, `(do you) recall …`, `last chat/time/session/conversation`,
-  `(our) last/previous/earlier chat/session/…`, `the other day/time/night/
-  week`, `where we left off`, `pick up where/from`, `previously`,
-  `earlier (today)`, `a while/bit ago/back`.
-- `_classify_chat_search_intent(user_msg)` — returns `(should_search,
-  suppressed_by_recall)`. Rule: if recall phrasing matches and no search
-  verb matches, return `(False, True)` — suppressed. Else return
-  `(has_search, False)`.
-
-Both call sites updated to use the helper:
-- **Memory-skip site (app.py ~2863)** — character memory is now skipped
-  *only* when chat search will actually fire. Recall phrasing leaves
-  character memory injection enabled (it's per-character persistent state,
-  unrelated to chat search). Suppression logs
-  `🧠 Recall phrasing detected, no search verb — suppressing chat search,
-  relying on session summary` when `diag_verbose=true` in settings.json.
-- **Primary trigger site (app.py ~4095)** — same helper, same suppression
-  log path. The two sites are guaranteed to agree because they're
-  classified by the same helper — preserves the original "lockstep"
-  invariant.
-
-The old `_CHAT_SEARCH_TRIGGER_RE` regex is left in place; it's no longer
-used to gate behaviour but kept as a generic recall-detector in case a
-future site wants it.
-
-**Stopword backstop (`do_chat_search`):** even with the new gate, if a
-search does fire on phrasing that slipped through, generic words like
-`talking`, `were`, `remembering`, `discussing`, `chatting`, `asking`,
-`wondering`, `thinking` must not become match keywords. Added the `-ing`
-forms and the missing copulas; the gate is the primary protection, this is
-the second line of defence.
-
-**The model-emitted `[CHAT SEARCH: …]` tag path (app.py ~4915-4919) is
-unchanged.** That path is model-driven (tag-emission gated at training);
-user-phrasing classification doesn't apply to it.
-
-**Session-summary injection is untouched** — both the cold block at
-app.py:2705-2738 and the hot tail-append at app.py:3363-3397. Per the
-existing tail-position note (changes.md), that injection is load-bearing
-for attention weighting and must not move.
-
-**Verified:** `app.py` parses cleanly. Helper tested against 13 cases
-(recall queries → suppressed; explicit-search queries → fire; neutral
-queries → default behaviour) — all pass. Failure-case query
-`"do you remember what we were talking about last time?"` correctly
-classifies as `(should_search=False, suppressed_by_recall=True)`.
-
-- ⚠️ Chat search requires an explicit search verb by design. Recall
-  phrasing is the safe default and must NOT trigger search. Do not revert
-  to the old recall-verb-as-trigger logic — it caused unrelated old-chat
-  snippets to hijack recall responses.
-
-⚠️ Flask restart required (Python edit).
-
----
-
-## May 20 2026 — F5-TTS: HWUI → "Helcyon Web You Eye" Substitution Fixed
-
-**Files:** f5_server.py
-
-**The bug:** the literal string `HWUI` (and every case variant — `Hwui`,
-`hwui`) was reaching `tts.infer()` unsubstituted, so F5 read the letters
-literally and the spoken output was wrong.
-
-**Trace of text through `/tts_to_audio` → `tts.infer()`:**
-1. `tts_to_audio()` (f5_server.py:481) reads `text` from JSON and calls
-   `clean_text(text)` (f5_server.py:484).
-2. Inside `clean_text` (f5_server.py:356), the ALL-CAPS → Title Case pass
-   at f5_server.py:397 runs first:
-   `re.sub(r'\b[A-Z]{2,}\b', lambda m: m.group(0) if m.group(0) in
-   _known_acronyms else m.group(0).title(), text)`. `HWUI` is **not** in
-   `_known_acronyms` (the set at f5_server.py:371–396 covers reserved tech
-   / business / medical acronyms; HWUI was never added), so a user-typed
-   `HWUI` is Title-Cased to `Hwui` here.
-3. Later, the HWUI substitution at f5_server.py:437 runs:
-   `re.sub(r'\bHWUI\b', 'H-W-U-I', text)`. **Case-sensitive pattern** — no
-   `re.IGNORECASE` — so it never matched the now-`Hwui` form, and equally
-   never matched a user-typed `hwui`. The substitution silently no-op'd.
-4. The unmodified text (still containing `Hwui` / `hwui` / occasionally
-   `HWUI` if the Title-Case pass missed it for any reason) flows into
-   `tts.infer(gen_text=text, …)` at f5_server.py:515.
-
-**Two defects in one line:**
-- Case-sensitive `\bHWUI\b` couldn't catch the Title-Cased `Hwui`
-  produced upstream, nor a user-typed `hwui`.
-- Even when it *did* match (an `HWUI` that somehow survived the Title-
-  Case pass), the replacement was `'H-W-U-I'` — forced letter-spelling —
-  not the intended sentence form `'Helcyon Web You Eye'`.
-
-**The fix:** at f5_server.py:437, swap the replacement to
-`'Helcyon Web You Eye'` and add `flags=re.IGNORECASE`. The `IGNORECASE`
-flag is load-bearing — without it the Title-Case pass at line 397 will
-keep neutralising the match for any all-caps input. Added a comment above
-the line explaining the ordering interaction so a future edit doesn't
-strip the flag back off thinking it's redundant.
-
-**Why not add `HWUI` to `_known_acronyms` instead?** That would preserve
-the all-caps `HWUI` so the case-sensitive line could match it, but it
-still wouldn't catch user-typed `Hwui` or `hwui`. `IGNORECASE` covers all
-cases in one step and keeps `_known_acronyms` reserved for genuine
-spell-out acronyms.
-
-**Verified:** grep for `🔍` in `f5_server.py` returns no matches — there
-were no debug print statements to strip. `clean_text` parses cleanly.
-The substitution now runs after the Title-Case pass regardless of input
-casing.
-
-- ⚠️ DO NOT revert — `re.IGNORECASE` on the HWUI substitution is required.
-  The ALL-CAPS → Title Case pass at f5_server.py:397 runs before this
-  line and converts `HWUI` → `Hwui`, so a case-sensitive pattern will
-  silently fail again. Either keep `IGNORECASE` here, or move the HWUI
-  substitution *above* the Title-Case pass — but not both removed.
-
-⚠️ Flask restart required (Python edit).
-
----
-
-## May 20 2026 — MEMORY TAGS Instruction Tightened (Single-Tag-Only)
-
-**Files:** utils/session_handler.py
-
-- MEMORY TAGS instruction tightened to mirror WEB SEARCH's structure: "your entire response must be a single tag and nothing else".
-- Added explicit prohibitions against conversational acknowledgement, describing the save, inventing context blocks, or producing any structured output.
-- Clarifies that the system handles the user-facing save confirmation, not the model.
-
-**Reason:** Helcyon-4o was producing elaborate multi-block responses
-(acknowledgement + fake context blocks + invented search results) when asked
-to save to memory. The instruction was strong on format but weak on
-stop-completely / response-shape exclusivity. This mirrors the WEB SEARCH
-instruction's pattern which works reliably for the same reason (stop-after-tag
-directive).
-
-- ⚠️ The "your entire response must be a single tag and nothing else"
-  directive is required. Models will pattern-complete to "respond
-  substantively" by default and produce verbose output instead of a clean tag.
-  Do not soften this directive.
-
-⚠️ Flask restart required (Python edit).
-
----
-
-## May 20 2026 — OpenAI Path Now Supports Any OpenAI-Compatible Endpoint
-
-**Files:** app.py, templates/config.html, settings.json
-
-**What this opens up.** The OpenAI cloud path is now a generic OpenAI-
-compatible client. Pointing it at a different `openai_base_url` lets HWUI
-talk to Anthropic (`https://api.anthropic.com/v1`), xAI/Grok
-(`https://api.x.ai/v1`), OpenRouter (`https://openrouter.ai/api/v1`),
-Together, Groq, Mistral, Fireworks, and any local OpenAI-compatible server
-(LM Studio, vLLM, …) without touching any other code. All existing OpenAI-
-path infrastructure — `_web_search_stream_openai`, the look-ahead tag
-buffering, the streaming protocol, the bearer-token auth header — is reused
-unchanged.
-
-**Backend changes (`app.py`):**
-- New helper `get_openai_base_url()` adjacent to `get_brave_api_key()`
-  (app.py:1256 area). Returns the URL up to `/v1`, stripped of trailing
-  slashes. Silently falls back to `https://api.openai.com/v1` when the
-  field is missing, empty, or `settings.json` is unreadable — older
-  settings files round-trip cleanly without intervention.
-- `stream_openai_response` (app.py:1801 site) now calls
-  `f"{get_openai_base_url()}/chat/completions"`. This is the single
-  request site for both phases of `_web_search_stream_openai` (initial
-  generation + search re-prompt), so updating this one place covers the
-  whole web-search flow automatically.
-- `/get_openai_models` (app.py:6478 site) now calls
-  `f"{get_openai_base_url()}/models"`. Most compatible providers expose
-  this; ones that don't return a non-200 which surfaces as a normal error
-  in the UI (users on those providers type the model name into the
-  dropdown directly — `_setOpenAIModelSelect` already adds unknown
-  saved-model names as options on load).
-- `/get_openai_settings` and `/save_openai_settings` carry the
-  `openai_base_url` field. GET resolves missing/empty values through the
-  helper so the UI shows the actual default on first load. POST strips
-  trailing slashes and writes the OpenAI default back to disk when the
-  field is empty, so the second load has it explicit.
-
-**Frontend changes (`templates/config.html`):**
-- New `<input id="openai-base-url">` above the API key field, with
-  placeholder `https://api.openai.com/v1` and a sub-label listing
-  Anthropic / xAI / OpenRouter examples in `<code>` boxes.
-- `loadOpenAISettings()` populates the input from `data.openai_base_url`
-  (falling back to the OpenAI default).
-- `saveOpenAISettings()` reads the input, strips trailing slashes
-  client-side as well (belt-and-braces against doubled slashes), and
-  includes it in the POST body alongside key + model.
-
-**Settings file (`settings.json`):**
-- New `openai_base_url` field inserted after `openai_model`, default
-  `https://api.openai.com/v1`. Existing settings.json files without this
-  field continue to work — `get_openai_base_url()` defaults them silently
-  and the first UI save persists the explicit value.
-
-**Default behaviour is byte-equivalent to before.** With
-`openai_base_url=https://api.openai.com/v1` (the default for fresh installs
-and the fallback for older configs), every OpenAI request goes to exactly
-the same URL as before this change.
-
-**Known limitation — model dropdown is OpenAI-shaped.** The 🔄 Fetch
-button hits `{base_url}/models` and parses the OpenAI-style response
-(`{data: [{id: "..."}, …]}`). Most compatible providers return that
-shape, but not all. The chat-model filter (`gpt-*`, `o1`, `o3`, …) is
-also OpenAI-flavoured — a Fetch on Anthropic/Grok/etc. will return a
-list that the filter then empties. **Workaround:** users on non-OpenAI
-providers should type the model name (`claude-opus-4-7`, `grok-4`,
-`anthropic/claude-opus-4-7`, etc.) into the dropdown manually — the
-existing `_setOpenAIModelSelect()` adds any saved model to the list on
-load, so once saved it sticks. Polishing the fetch to be provider-aware
-is out of scope for this task (post-launch nice-to-have).
-
-**Other things deliberately not touched:**
-- `_web_search_stream` (local function at app.py:4243) — byte-identical.
-- `_web_search_stream_openai` body — unchanged. The two URL sites it
-  ultimately hits both live inside `stream_openai_response`, which now
-  routes through the helper.
-- Vision path, Jinja messages-API path — unchanged (still Phase 2).
-- `mobile.html`, system prompts — untouched.
-
-**Verified:**
-- `app.py` parses cleanly.
-- `grep` for `api.openai.com` in `app.py` returns only: the helper's
-  default-fallback string, the GET-route default, the SAVE-route empty-
-  field default, and three comments. **Zero hardcoded request URLs
-  remain.**
-- Local `_web_search_stream` at app.py:4243 starts identically to before.
-
-- ⚠️ The OpenAI path is now a generic OpenAI-compatible client. Do NOT
-  add hardcoded `api.openai.com` references anywhere — always go through
-  `get_openai_base_url()`. New routes that hit OpenAI-style APIs must use
-  this helper, or non-OpenAI providers will silently break.
-
-⚠️ Flask restart required (Python edit) + the config page must be
-hard-reloaded to pick up the new HTML/JS.
-
----
-
-## May 20 2026 — Polish: OpenAI Web Search Path No Longer Leaks the Tag
-
-**Files:** app.py
-
-**The polish:** with the new `_web_search_stream_openai()` wrapper in place,
-the `[WEB SEARCH: …]` tag was briefly visible to the user before the wrapper
-halted and re-prompted. The tag prefix (`[WEB `, `[WEB SEARCH`, …) flashed up
-as text before being replaced by the search results.
-
-**Why it happened — and why the local path "doesn't have this issue".** The
-original OpenAI implementation copied the local path's pattern exactly:
-yield each chunk live, then check the rolling buffer for the full tag on the
-next loop iteration. That pattern only works when the entire tag arrives in a
-single chunk — if it's split across deltas (the streaming-API norm), the
-prefix has already been yielded before the closing `]` arrives. The local
-`_web_search_stream` fallback (app.py ~4508-4528) has the **same theoretical
-bug**, but rarely fires in practice: Helcyon doesn't self-emit the tag — the
-upstream explicit/ambiguous regex + intent gate matches user input first and
-the search fires before the model ever runs. GPT-4o on the OpenAI path is the
-opposite — it self-emits the tag every turn, so the leak is visible and the
-bug had to be fixed there.
-
-**The fix — look-ahead buffering (OpenAI path only).** `_web_search_stream_openai`
-now holds back any text after an unclosed `[` in the rolling buffer:
-- A small helper `_safe_yield_end(buf, start)` returns the position of the
-  first unclosed `[` at-or-after the already-yielded watermark, else the
-  buffer length. Anything up to that index is safe to release; anything after
-  is held back because it might be the start of a tag-in-progress.
-- The wrapper tracks `_yielded_chars` so it never re-yields content.
-- When the full `[WEB SEARCH: …]` regex matches, the wrapper yields anything
-  before the tag's `[` (usually nothing — that `[` was the unclosed bracket
-  we were already holding back) and drops everything from `[` onward.
-- When a non-tag bracket closes (e.g. markdown link `[click](url)`), the
-  whole bracketed span releases on the next chunk — perceptible delay is one
-  delta, so a few tens of ms.
-- When the stream ends with no tag, the held-back tail is flushed so partial
-  brackets like a never-closed `[foo` aren't silently dropped.
-
-**Why not a fixed-length tail buffer.** A naive `_TAIL_LEN = 120` would still
-leak the prefix of a long tag (`[WEB SEARCH: <120+ char query>]` is plausible
-when the model writes a verbose query). Tracking unclosed-`[` makes the
-holdback length data-driven and handles tags of unbounded length.
-
-**Edge cases verified by code-trace:**
-- `use_web_search=False`: never enters the wrapper; raw `stream_openai_response`
-  unchanged.
-- `use_web_search=True`, no tag emitted: every bracket eventually closes (or
-  the stream ends → final flush). Full response reaches the client; nothing
-  lost.
-- `use_web_search=True`, tag emitted: tag never reaches the client at any
-  visible point. Search runs; re-prompt streams normally.
-- Partial tag prefix that doesn't complete (`[WEB-RELATED ARTICLES]`): the `]`
-  arrives and the whole bracketed span releases — regex doesn't match
-  (no `:` after `WEB`), so it's treated as ordinary text.
-- Markdown links (`[label](url)`): briefly held back until `]`, then released.
-  Imperceptible delay.
-- Multiple brackets in one response (`Look at [link1] then [WEB SEARCH: x]`):
-  `[link1]` released normally, `[WEB SEARCH: x]` matched and dropped, prior
-  text yielded cleanly.
-
-**Verified:** `app.py` parses cleanly. `_web_search_stream` (local function
-at app.py:4163) is byte-identical to before this polish — only
-`_web_search_stream_openai` was modified. No new imports; no new globals.
-
-- ⚠️ DO NOT remove the look-ahead buffering from
-  `_web_search_stream_openai` thinking the local path "works without it" —
-  the local path only avoids the leak by NOT firing the tag-fallback branch
-  in practice. On the OpenAI path that branch is the hot path; the buffering
-  is load-bearing.
-
-⚠️ Flask restart required (Python edit).
-
----
-
-## May 20 2026 — OpenAI Cloud Path Now Detects [WEB SEARCH: …] Tags
-
-**Files:** app.py
-
-**The bug:** GPT-4o on the OpenAI API backend emits `[WEB SEARCH: …]` tags as
-trained, but the tags rendered verbatim in chat instead of triggering an actual
-search. Discovery report confirmed: the tag detector and re-prompt logic live
-inside `_web_search_stream()` (nested in `chat()`, near app.py ~4163), which is
-only reachable from the raw ChatML `/completion` path. The OpenAI cloud branch
-returned `stream_openai_response(...)` raw — no wrapper, no detector, no
-follow-up generation. Same gap exists on the vision and Jinja messages-API
-paths (see "Phase 2" note below).
-
-**The fix — parallel implementation, intentional duplication.** Added a new
-top-level function **`_web_search_stream_openai()`** (app.py ~1871, placed
-right after `stream_openai_response()`). It mirrors the structure of
-`_web_search_stream()`'s tag-fallback branch but adapted for OpenAI's
-`/v1/chat/completions` (messages array, not ChatML string):
-- Phase 1: stream initial OpenAI response live, accumulate a rolling buffer,
-  watch for `r"\[WEB SEARCH:\s*(.+?)\]"` (same regex as the local path).
-- On match: flip `abort_generation = True` to close the underlying HTTP stream
-  cleanly inside `stream_openai_response`, then break out.
-- Phase 2: call `do_search(query)` — shared helper (Brave → DDG fallback),
-  unchanged.
-- Phase 3: build `augmented_user_msg` using the **same text template** as the
-  local path (lines 4351-4364 of the old layout) — `[WEB SEARCH RESULTS FOR …]`
-  block, identical IMPORTANT instruction copy. Zero-results fallback message
-  also mirrored verbatim.
-- Phase 4: rebuild messages array, strip stale `WEB SEARCH RESULTS` /
-  `CHAT HISTORY RESULTS` blocks from prior user turns (same hygiene as local),
-  replace last user turn with the augmented version.
-- Phase 5: send follow-up `stream_openai_response` call with augmented
-  messages; stream response; append source-link tail (same `<a href …>🔗
-  Source: …</a>` markup as the local path).
-
-**Wiring at the OpenAI return point** (app.py ~3819): the OpenAI branch now
-reads `char_data.get("use_web_search", False)` into a separate local
-(`_oai_use_web_search`) and routes through `_web_search_stream_openai()` only
-when the flag is True. When False, behaviour is **byte-identical** to before
-— it returns the raw `stream_openai_response(...)` generator just like the
-original code. The local path's own `use_web_search` read (now at app.py
-~3996) is **completely untouched** — the two reads are independent.
-
-**Why duplication, not a shared helper.** The two paths have different prompt
-shapes (raw ChatML string vs. messages array), different re-prompt endpoints
-(`/completion` vs. `/v1/chat/completions`), and different abort mechanisms.
-The local path is load-bearing and battle-tested through dozens of edge cases
-(self-reference filtering, intent gate, local-doc suppression, time-sensitive
-override, query cleaning). Refactoring them into a shared helper risks
-regressing the local path for the sake of code elegance — not worth it.
-
-- ⚠️ Do NOT consolidate `_web_search_stream` and `_web_search_stream_openai`
-  into a shared helper without a full regression test of the local path.
-  Duplication is intentional.
-
-**Verified:** `app.py` parses cleanly. Local `_web_search_stream` and its
-return point (now at app.py ~4719) are byte-identical to before. Local path
-`use_web_search` read at line ~3996 is unchanged. No new imports; no global
-state added beyond the existing `abort_generation` flag.
-
-**Still pending — Phase 2 (NOT done in this task):**
-- Vision path (app.py ~3795 — `stream_vision_response(vision_payload)`) has no
-  tag detector. If a vision model is ever trained to emit `[WEB SEARCH: …]`,
-  the tag will leak verbatim there too.
-- Jinja / Gemma / Qwen messages-API path (app.py ~3918 —
-  `stream_vision_response(payload)`) has the same gap.
-- Both will be addressed in a separate Phase 2 task — same parallel-
-  implementation approach, not a shared refactor.
-
-⚠️ Flask restart required (Python edit). CSS-only changes don't need a
-restart, but this is `app.py` so the dev server must be bounced.
-
----
-
-## May 19 2026 — Fixed SP Fields Showing the Wrong Template
-
-**Files:** templates/config.html
-
-**The bug:** on the System Prompt config page, selecting a system-prompt
-template left the System Prompt / Example Dialogue / Post-History fields out of
-sync — they showed a *different* template's content than the one selected.
-
-**Root cause — a race between redundant loaders.** Three functions wrote to
-those fields:
-- `loadSelectedSystemPrompt(filename)` — loads all three fields together, for
-  the *selected* template. Runs on init, character load, and dropdown change.
-- `loadGlobalExampleDialog()` — loaded *only* the example field, for the
-  *globally active* template.
-- `loadGlobalPostHistory()` — loaded *only* the post-history field, for the
-  *globally active* template.
-
-The latter two ran on `DOMContentLoaded` and each did two sequential fetches,
-so they resolved late. Selecting a template shortly after page load filled all
-three fields correctly via `loadSelectedSystemPrompt`, then the still-in-flight
-global loaders resolved and overwrote the example + post-history fields with
-the *active* template's content — leaving the dropdown on one template and
-those two fields on another.
-
-**The fix:** removed `loadGlobalExampleDialog()` and `loadGlobalPostHistory()`
-entirely (calls + definitions). `loadSelectedSystemPrompt()` already loads
-system prompt + example + post-history together for the correct template, and
-it is the single code path used by init, character load, and dropdown change —
-so the three fields now always reflect one template. The `saveGlobal*`
-counterparts are unchanged. Tombstone comments mark why the loaders were
-removed.
-
-- ⚠️ DO NOT re-add a separate per-field loader for example dialogue or
-  post-history — partial loaders keyed to the *active* template race the
-  unified loader and reintroduce the field/dropdown mismatch.
-
----
-
-## May 19 2026 — Vision Fix: --chat-template No Longer Forced on Vision Models
-
-**Files:** app.py
-
-**The bug:** an image-attached chat to a genuinely vision-ready llama-server
-(Pixtral 12B, mmproj loaded, `clip_model_loader: has vision encoder` confirmed
-in the server console) failed with llama-server's error "image input is not
-supported". Root cause: the `/load_model` launch-command builder appended
-`--chat-template chatml` whenever `settings.json` set the chat template to a
-concrete value — **including vision-model loads**. A multimodal GGUF ships its
-own multimodal-aware chat template, and that template is what drives
-image-token insertion. Forcing plain ChatML over it broke vision: the request
-reached `/v1/chat/completions` correctly formatted, but the overridden template
-left llama-server unable to place the image, so it rejected the input.
-
-**The fix:** the launch builder now decides `--mmproj` first, then makes
-`--chat-template` conditional — it is appended **only when no mmproj is being
-loaded**. Vision loads keep the model's native multimodal template; a clear
-console line is printed when ChatML is skipped for this reason
-(`🖼️ Vision model detected — using model's native chat template …`). Text-only
-loads (Helcyon and any other non-vision GGUF) are unaffected — they receive
-`--chat-template` exactly as before.
-
-- ⚠️ Never globally force `--chat-template chatml` — vision models depend on
-  their native multimodal template for image-token insertion. The conditional
-  (skip when an mmproj is loaded) is required.
-
-**Known issue — deferred to post-launch (do NOT fix now):** `/get_model`'s
-`vision_active` and the `/chat` vision guard both derive vision-readiness from
-`settings.json["mmproj_path"]`, not from the live llama-server. If a user sets
-`mmproj_path` without reloading the model, `vision_active` flips true while the
-running server has no projector — a false "vision-ready" report. It did not
-bite here (the projector is genuinely loaded), but the proper fix is to probe
-llama-server's `/props` endpoint at runtime for authoritative vision capability
-rather than trusting `settings.json`.
-
----
-
-## May 19 2026 — mmproj Auto-Detect Now Scans Subfolders
-
-**Files:** app.py, templates/config.html
-
-`/auto_detect_mmproj` previously scanned only the immediate Models Folder
-(`os.listdir`), so an mmproj file kept in a per-model subfolder was never
-found. It now walks the folder tree recursively (`os.walk`, top-down) — an
-mmproj in the Models Folder itself is still preferred over a nested one, and
-results are deterministic (dir/file names sorted). The `.gguf` extension check
-is now case-insensitive. Auto-Detect button tooltip and status messages
-updated to say "and subfolders".
-
-Verified: `app.py` parses.
-
----
-
-## May 19 2026 — mmproj (Vision Projector) Config UI + Silent-Wipe Fix
-
-**Files:** templates/config.html
-
-The mmproj/vision system was fully wired in the backend (`settings.json`
-`mmproj_path`, `/save_llama_config` accepts it, the server launches with
-`--mmproj`, `/auto_detect_mmproj` endpoint) but had **no UI control at all** —
-the only way to enable vision was hand-editing `settings.json`.
-
-**The silent-wipe trap (found and fixed here).** Because config.html had no
-mmproj field, `saveLlamaConfig()` sent no `mmproj_path`, and the backend
-defaults a missing value to empty:
-`s['mmproj_path'] = data.get('mmproj_path', '')`. So clicking **💾 Save Llama
-Config** for any reason **silently wiped a hand-set `mmproj_path` to empty**,
-disabling vision. Now that the field exists and is always sent, this can no
-longer happen — the value round-trips instead of being blanked.
-
-**Added to the Llama Config section** (placed between Models Folder and Launch
-Arguments — it is a model-loading concern, grouped with the path inputs):
-- A `Vision Projector — mmproj` text field. Empty is valid (= no vision) and
-  is not validated against.
-- A 📁 browse button using the **file** picker with a `.gguf` filter
-  (`browseFile` gained an optional `filter` arg; existing callers unaffected).
-- A 🔍 **Auto-Detect** button — scans the configured Models Folder for a
-  `*mmproj*.gguf` file via the previously-orphan `/auto_detect_mmproj`
-  endpoint, and reports the result in the config status line.
-- Wired into `loadLlamaConfig` (populate), `saveLlamaConfig` (send),
-  `saveLlamaPreset` + `loadLlamaPreset` (round-trip `mmproj_path` with the
-  other fields) — so presets capture mmproj too and don't reintroduce the
-  same wipe bug on preset load/save.
-
-- ⚠️ Mmproj UI control must remain in config.html — the backend still depends
-  on `settings.json["mmproj_path"]` for vision model loading. Removing the UI
-  silently breaks vision and reintroduces the wipe-on-save bug.
-
----
-
-## May 19 2026 — Active Character Synced Across Desktop & Mobile
-
-**Files:** app.py, templates/index.html, templates/mobile.html
-
-The active project and its chat folder were already shared between the desktop
-and mobile apps (server-side `projects/_active_project.json`). The **character**
-was not — each app picked it from per-device `localStorage('lastCharacter')`,
-so it only matched by coincidence (and only because the build effectively had
-one character). Now the active character is shared too.
-
-- New server-side state file `characters/_active_character.json`, with
-  `get_active_character()` / `set_active_character()` — mirrors the
-  active-project pattern exactly.
-- New routes: `GET /active_character` (read on load) and
-  `POST /active_character` (write on switch).
-- `list_characters` skips `_active_character.json` so the state file is not
-  picked up as a phantom character.
-- Both apps now resolve the initial character as: **server-side active
-  character → per-device `localStorage` cache → first in list**, and write the
-  choice back to the server whenever a character is loaded/switched
-  (fire-and-forget, non-blocking). index.html does this in `loadCharacter`;
-  mobile.html via a shared `setActiveCharacterServer()` helper.
-
-Switching character on either device now carries to the other on its next
-load — same as how the active project already behaves.
-
-Verified: `app.py` parses.
-
-- ⚠️ The active character is intentionally GLOBAL server-side state — switching
-  it on one device switches it everywhere. This is correct for single-user
-  use (the overwhelmingly common case). Do NOT "fix" this into per-device
-  state — that reintroduces the desktop/mobile mismatch this change resolves.
-
----
-
-## May 19 2026 — Vision/Image-Upload Guards + Error Surfacing
-
-**Files:** app.py, templates/index.html
-
-A review of the image-upload → vision pipeline found the happy path sound but
-two gaps where failures were silent. Both fixed:
-
-**Fix 1 — vision-capability guard.** Nothing checked whether the loaded model
-actually had an mmproj (vision) file before accepting an image. Attaching an
-image to a text-only model sent it to a non-vision server → silent drop or a
-blank reply.
-- Frontend (`handleImageAttach`): now checks `/get_model`'s `vision_active`
-  before attaching; if the model has no mmproj it alerts the user and aborts
-  the attach. Fails open if the check itself errors (backend guard still
-  catches it).
-- Backend (`/chat`): before entering the vision path, if images are present
-  but no valid `mmproj_path` is configured, it returns HTTP 400 with a clear
-  message instead of POSTing the image to a model that can't read it.
-
-**Fix 2 — error surfacing.**
-- `stream_vision_response` now wraps the request in try/except (server
-  unreachable → real message) and checks the HTTP status: on a non-200 it
-  reads the error body and yields a readable explanation, instead of feeding
-  the error body line-by-line into the JSON parser and yielding nothing (the
-  old behaviour produced a blank reply with no error). Added a 15s connect
-  timeout; the read timeout stays unbounded so slow vision generation is
-  unaffected.
-- Frontend `/chat` `!response.ok` handler now displays the server's actual
-  response body (e.g. the new vision guard message) instead of a generic
-  "Server error" — also improves visibility of pre-existing `/chat` errors.
-
-Verified: `app.py` parses. Vision pipeline otherwise unchanged — the happy
-path (vision model + mmproj) is untouched.
-
-- ⚠️ Vision/OpenAI/jinja request paths still rebuild system content from
-  `system_text` and bypass the `messages[0]` late-appends — pre-existing,
-  documented limitation, not addressed here.
-
----
-
-## May 19 2026 — /continue SP Resolution Fix + Shared Prompt-File Resolver
-
-**Files:** app.py
-
-**Fix 1 — /continue route was character-blind for the system prompt.** The
-`/continue` route loaded the SP via `get_active_system_prompt_path()` — the
-global active SP only. Hitting Continue mid-conversation with a character that
-had a bound SP silently swapped to the global SP for that one generation.
-`/continue` now resolves the SP through the shared resolver, so it applies the
-same per-character-bound → global-active → fallback chain that `/chat` uses.
-No bound SP → still falls back to the global active SP (unchanged).
-
-**Fix 2 — extracted `resolve_character_prompt_files(char_data)`.** The pattern
-`char_data.get("system_prompt") or get_active_prompt_filename()` plus the
-`.example.txt` / `.posthistory.txt` stem derivation was inlined and duplicated
-in 4 places. It is now a single module-scope helper returning
-`(sp_filename, example_filename, posthistory_filename)`. The 4 paired-file
-sites (overhead pre-calc example, overhead pre-calc post-history, example-
-dialogue fallback loader, post-history directive loader) were refactored to
-call it — behaviour verified identical (5 parity cases: clean filename, empty
-field, no-extension name, missing field, multi-dot name; plus safe handling of
-a `None`-valued field and `None` char_data).
-
-**Deviation flagged — NOT unified.** The 5th candidate site, the `/chat`
-system-prompt *content* override (app.py ~2134-2149), is structurally
-different: it picks the SP file, reads its content, is gated on whether the
-character actually has a bound SP, rebuilds the prompt with a distinct
-`"Current date and time:"` time prefix, and has no global re-derivation
-fallback (the global is pre-loaded by `get_system_prompt()` with a different
-`"Current date:"` prefix). Routing it through the resolver would change the
-time-prefix for unbound characters. It was deliberately left inline to
-preserve behaviour parity. Only `/continue` changed behaviour in this task.
-
-Verified: `app.py` parses; helper parity unit-tested; traced `/chat` (bound
-and unbound) — same SP as before; traced `/continue` (bound → now loads the
-bound SP; unbound → global active, unchanged).
-
-- ⚠️ Any new route that loads a character SP or its paired files MUST call
-  `resolve_character_prompt_files()` — do NOT inline the resolution chain.
-  Inline duplication is what caused the /continue bug.
-
----
-
-## May 19 2026 — Active SP Indicator: Clean Name + Bound-Character Display
-
-**Files:** templates/config.html (frontend only)
-
-Two tweaks to the active-SP status line under the Global System Prompt
-dropdown on the System Prompt page:
-
-- **`.txt` extension stripped for display.** The indicator showed the raw
-  filename (`Active: GPT-4o-API.txt`) — dev-leaky. It now strips a trailing
-  `.txt` (case-insensitive) for display only: `Active: GPT-4o-API`. The
-  underlying filename in storage and every backend call is unchanged.
-- **Bound character(s) now shown.** The indicator reads
-  `🟢 Active: <sp-name> — Bound to <character>` (em dash, single spaces). The
-  bound character is found by reverse-lookup: iterate `/list_characters` and
-  check each character's `system_prompt` field via
-  `/character_system_prompt/<n>` against the active SP filename. If multiple
-  characters are bound to the same SP they are all listed, comma-separated
-  (`Bound to Gemma, Aria, Dave`) — no truncation. If none are bound it shows
-  just `🟢 Active: <sp-name>` as before. Uses existing endpoints only — no new
-  route, no Python restart.
-- The rendering logic was extracted into a single shared function,
-  `refreshActiveSpIndicator()`, replacing the old `updateActiveIndicator`. It
-  is called from every trigger — page load, after Activate, after Bind, and on
-  character select — so the indicator stays current without duplicated render
-  code. The active filename is held in a module-level var so a post-Bind
-  refresh can re-render without the caller re-supplying it.
-
-Indicator styling (colour, size) is unchanged — only the content is longer.
-
-- ⚠️ Display-only filename stripping — do not rename stored files or change
-  backend filename handling.
-
----
-
-## May 19 2026 — Time-Decay Session Memory
-
-**Files:** app.py, settings.json
-
-Session-summary surfacing now degrades gracefully with age instead of always
-foregrounding the most recent summary regardless of how stale it is.
-
-**Decay tiers (defaults):**
-- **Hot** — age ≤ 48h → tail-injection slot (system-block position #11, the
-  last thing before chat turns). Only the *single* most-recent summary.
-- **Cold** — 48h < age ≤ 7 days → the `YOUR OWN MEMORY OF RECENT SESSIONS`
-  block (position #2). A summary younger than 48h that is *not* the single
-  most-recent one also lands here.
-- **Dormant** — age > 7 days → not injected anywhere. Still stored on disk.
-
-**Configurable** in `settings.json` under `session_memory.hot_hours` /
-`session_memory.cold_days`. If the section or keys are missing the code uses
-48 / 7 silently — no warning, no crash, no manual setup required. A
-`session_memory` block with the defaults was added to `settings.json`.
-
-**Storage — Option C (hybrid timestamps, graceful legacy fallback):**
-- New summary appends are written with an inline ISO-8601 UTC timestamp on the
-  entry's `---SESSION---` delimiter line (`---SESSION--- 2026-05-19T15:42:00Z`).
-  The file is rewritten in a header-per-entry format; every entry's text is
-  preserved unchanged.
-- Legacy summaries (no inline timestamp) are **not** migrated or backfilled —
-  they are preserved verbatim and fall back to the summary file's mtime as a
-  best-effort age. As they age past the dormant threshold they drop out of
-  injection on their own. No migration, no data mutation of existing files.
-- New helpers: `parse_session_summaries` (→ `[(timestamp, text), …]`, inline
-  ISO or mtime fallback), `select_session_summaries` (→ `(hot, cold)` after
-  decay), `_read_session_memory_settings`, `_parse_iso_utc`.
-
-**Injection logic:** the new-chat branch now calls `select_session_summaries`
-— the hot summary is held for the tail slot, cold summaries render in the
-`YOUR OWN MEMORY` block, dormant ones are skipped. If nothing qualifies for a
-slot, that slot simply doesn't render (empty tail, no fallback framing). The
-wrapping/framing strings of both the tail injection and the cold block are
-**unchanged** from the prior task. The tail marker's relative time
-("yesterday", "earlier today", …) is now computed from the hot summary's own
-timestamp rather than the file mtime. No user name is hardcoded — the marker
-uses the existing `user_display_name` / `user_name` dynamic vars.
-
-Verified: `app.py` parses; `settings.json` valid JSON; parse/select/save logic
-unit-tested — legacy parse (all-mtime), append-to-legacy round-trip (legacy
-entries keep no timestamp, new entry timestamped), hot/cold/dormant tiering,
-non-newest sub-48h → cold, newest-too-old → empty tail, empty file → nothing.
-
-**Pre-existing limitation (inherited, not introduced here):** this applies to
-the ChatML `/completion` path. The vision, OpenAI-cloud, and jinja/Gemma/Qwen
-paths rebuild their system content from `system_text + memory` and bypass the
-`messages[0]` late-appends entirely — so neither this decay logic nor the
-tail/anchor/OOC/time appends reach the model on those paths. Worth a future
-task to unify those paths.
-
-- ⚠️ DO NOT add an on/off toggle on top of time decay — overlapping controls
-  create state confusion about which one suppressed a summary.
-
----
-
-## May 19 2026 — Most-Recent Session Summary Moved to System-Block Tail
-
-**Files:** app.py
-
-**The bug:** the model did not pick up on the previous session naturally at the
-start of a new chat — it only recalled it when the user explicitly asked
-"what did we talk about last time?". Discovery confirmed why:
-
-- Session summaries are stored in `session_summaries/<character>_summary.txt`,
-  up to **3 per character** (`MAX_SUMMARIES`), joined by
-  `SESSION_DIVIDER` (`---SESSION---`); the **last segment is the most recent**.
-- `load_session_summary` returned the whole file, and the new-chat injection
-  appended **all 3 summaries as one block** into `char_context`, wrapped in the
-  `YOUR OWN MEMORY OF RECENT SESSIONS` banner.
-- That block sat **early** in the system block — everything else came *after*
-  it: user persona context, the instruction layer + tone primer, project
-  documents, the `ACTIVE OPERATOR RESTRICTIONS` anchor, the `[OOC: …]`
-  character/author notes, and finally the `Current local time:` string. The
-  most recent summary was buried mid-block, far from the generation point, and
-  drowned out. (Post-history is no longer in the system block — it rides in the
-  depth-0 `[REPLY INSTRUCTIONS]` packet folded into the last user turn.)
-
-**The fix — split the most recent summary off and move only it to the tail:**
-- The new-chat injection now splits the loaded summaries on `---SESSION---`.
-  The **older** summaries (sessions 2 and 3 going back) stay exactly where they
-  were — same `YOUR OWN MEMORY OF RECENT SESSIONS` block, same wrapping, same
-  position in `char_context`. They are cold context and unchanged.
-- The **most recent** summary is held in `_recent_session_summary` and appended
-  as the **absolute last thing in the system block** — after the character
-  card, user context, instruction layer, project context, restriction anchor,
-  OOC notes, and the time context. It is the last thing the model sees before
-  the chat messages begin.
-- It is wrapped in an attention-grabbing marker that reads as "this just
-  happened, pick up from here", not a database entry:
-  `[Most recent session with <user>, <relative time>]:` … `[End of recent
-  session — continue naturally from where you left off]`. The username uses the
-  existing dynamic vars (`user_display_name` / `user_name`) — no hardcoded name.
-  The relative time ("earlier today", "yesterday", "N days ago", "last week",
-  "N weeks ago") is computed from the summary file's mtime via the new
-  `_resolve_session_summary_path` helper; if it can't be computed cleanly the
-  time portion is omitted rather than invented.
-- If only one summary exists, it is the most recent — it goes to the tail and
-  the older-summaries block simply does not render.
-
-Summary generation and storage are unchanged — only *where* the most recent one
-is injected changed. The `INJECTED MEMORY` instruction-layer text is untouched
-and still applies to the older summaries higher in the block.
-
-**Reason:** recency in the prompt context = stronger attention weighting at
-generation time. The intent is for the model to surface the most recent session
-naturally in its first response of a new chat.
-
-Verified: `app.py` parses clean.
-
-- ⚠️ DO NOT move the most-recent session summary back into the main system
-  block — tail position is intentional for attention weighting.
-
----
-
-## May 19 2026 — "Bind to Character" Control on the System Prompts Page
-
-**Files:** templates/config.html (frontend only — reuses existing backend routes)
-
-**The bug:** the system-prompts page's **✅ Activate** button silently bound the
-selected template to whatever character happened to be selected elsewhere
-(`character-select` on the Character tab), with no visible indication of which
-character that was. The user repeatedly bound templates to the wrong character.
-
-**The fix — a new, explicit Bind control:** a `Bind to character:` row was
-added below the Activate row, with a character dropdown and a **🔗 Bind**
-button. The dropdown is populated from the existing `/list_characters`
-endpoint and **defaults to "-- Select character --" (no pre-selection)**, so
-the user must make a deliberate choice — this is what prevents the silent-bind
-bug from recurring. The Bind button stays disabled until *both* a template and
-a character are chosen. On click it POSTs to the existing
-`/character_system_prompt/<n>` route with `{system_prompt: <filename>}`, then
-shows a status line naming both items — e.g.
-`✅ Bound 'GPT-4o.txt' to character 'Aria'` — or a red error line on failure.
-
-**Activate is unchanged:** it still sets the global default
-(`active_system_prompt` in settings.json) and keeps its own existing
-current-character bind behaviour. Bind is a *separate, additional* access
-point — no new endpoints, no change to the character-editor binding flow.
-
-- ⚠️ DO NOT consolidate the Bind and Activate buttons — the separation is
-  intentional. Activate = global default; Bind = explicit per-character write.
-  Merging them reintroduces the silent-binding bug this change exists to fix.
-
----
-
-## May 19 2026 — "📋 Paste Transcript" Input-Menu Option
-
-**Files:** templates/index.html (frontend only — no backend, mobile.html untouched)
-
-**The bug:** when a user pasted an HWUI chat-file transcript — the
-`[timestamp] Speaker: …` format — directly into the message textarea, the
-model recognised those timestamped turns as conversation history and
-*continued* them, instead of discussing the pasted text as quoted reference
-material.
-
-**The fix:** a new **📋 Paste Transcript** option in the `+` input menu opens a
-modal (a multi-line textarea + optional filename, defaulting to
-`pasted-transcript-{YYYY-MM-DD-HHmm}.txt`). On **Attach**, the pasted text is
-pushed into `window.attachedDocuments` exactly as a file pick would, then
-`renderDocumentPreviews()` is called. From there it flows through the existing
-document-attachment pipeline: `wrapAttachedDocuments` wraps it in
-`[ATTACHED DOCUMENT: …]` markers so the model reads it as quoted reference, not
-as turns to continue. Empty textarea → Attach briefly highlights the field and
-does nothing. Cancel / backdrop click / Escape close the modal. The modal
-reuses the existing `.modal` styling tokens (z-index, backdrop, colours).
-
-- ⚠️ DO NOT revert — this deliberately reuses the `attachedDocuments` system.
-  Do not refactor pasted transcripts into a separate path or parallel state;
-  the whole point is that they go through the same marker-wrapping pipeline as
-  file attachments.
-
----
-
-## May 18 2026 — Web Search: Intent Gate for Ambiguous Triggers
-
-**Files:** app.py
-
-**The bug:** web search fired on messages with no search intent. Example from
-a transcript — an emotional monologue containing *"…I didn't find out where
-she is…"* triggered a nonsense Urban Dictionary search. Root cause: search
-intent was decided by **regex over the raw message**. The pattern
-`find out (where|what|…) <word>` matched the narration, and the
-self-reference filter that should have caught it didn't recognise
-`I didn't …` / `I did …` / `I had …` as narration openers. Regex
-fundamentally cannot tell a request from reminiscing — that needs meaning.
-
-**The fix — a two-tier trigger with a model-judged gate (option A):**
-- Triggers are split into two precision tiers in `_web_search_stream`:
-  - **EXPLICIT** (`_explicit_pat`) — unambiguous imperatives ("search for X",
-    "google that", "look it up", "check online"). A match fires the search
-    immediately — fast-path, no extra model call.
-  - **AMBIGUOUS** (`_ambiguous_pat`) — phrases that recur innocently in
-    ordinary speech ("find out where…", "look up his number", "any news
-    on…"). A match no longer fires a search directly.
-- New `_search_intent_gate(user_msg)` — when an ambiguous phrase is seen, it
-  asks the loaded model itself, in one short isolated `/v1/chat/completions`
-  call (`temperature 0`, `max_tokens 32`), whether a search is genuinely
-  warranted. Returns `(should_search, query)`. This is the frontier approach —
-  contextual model judgement — done as a cheap pre-pass because the local
-  llama-server has no reliable native tool-calling.
-- The gate **fails closed**: any error → `(False, "")`. The problem is
-  false-positive searches, so a missed gate suppresses rather than searches.
-- The gate is a self-contained classifier prompt — it does NOT modify the main
-  chat prompt and does NOT use the trained `[WEB SEARCH: …]` tag format, so it
-  respects the existing model-trained tag gating.
-- When the gate returns a query it is used directly (`_gate_query`), skipping
-  the brittle regex query-extraction that previously mangled rambling messages
-  into nonsense queries.
-
-Verified: `import` clean; gate fails closed when llama-server is down; the
-transcript message routes to the gate (not an instant search); explicit
-requests still fire instantly; plain conversation triggers nothing. The live
-gate verdict needs testing with the model server running.
-
-- ⚠️ DO NOT move ambiguous phrases (`find out …`, `look up …`, `any news
-  on …`) back into the instant-fire path — regex cannot judge intent on
-  free-form speech, which is the original bug. They must go through the gate.
-
-**Files:** app.py, global_documents/Runpod.txt
-
-**The bug:** global-document injection only fired for the exact bare keyword
-(e.g. `runpod`). Every natural question (`how does runpod work`, `what is
-runpod used for`, …) injected nothing. Two causes in `load_global_documents`
-/ `_score_doc`:
-- `min_score` scaled steeply with query length (1 kw → 3, 2 → 5, 3+ → 6), but
-  a single-topic doc named after one keyword can only earn ~3–4 points, so it
-  could never clear the bar on a multi-word query.
-- Logic flaw in `_score_doc`: for 3+ keyword queries the content preview was
-  scored *only when the filename scored 0* — so a filename hit actively
-  disqualified the doc by capping it at 3 against a min of 6.
-
-**The fix — opt-in curated keywords, same convention as memory blocks:**
-- A document may now carry an optional leading `Keywords: a, b, c` line
-  (case-insensitive, `, ; :` separators — mirrors `_parse_memory_blocks`).
-  New helpers `_extract_doc_keywords()` / `_doc_scoring_data()`.
-- Trigger gate widened: a global doc is eligible when the query shares a
-  keyword with the filename **OR** the curated Keywords line. Curated keywords
-  can trigger a doc on their own (e.g. "what does helcyon use" pulls a doc
-  tagged `helcyon` even with no filename match).
-- Scoring: filename ×3, curated keyword ×3, content preview ×1. `_score_doc`
-  rewritten — content preview now always scored (the score==0 gate removed).
-- **Multi-word curated keywords are AND-matched** (`_curated_kw_match`): a
-  single-word keyword matches that word, but a multi-word keyword scores/
-  triggers only when **all** its words appear in the query. So a curated
-  `full weight training` fires on "explain full weight training" but NOT on
-  "training my dog" or "gym weight training". This is the curation lever for
-  broad words — pair a vague word with a context word instead of listing it
-  bare. (Earlier intra-keyword substring matching is gone: it made phrases
-  no more precise than the loosest word in them.) `_score_doc` /
-  `load_global_documents` take a `query_lower` arg so phrase words a
-  tokeniser would drop (stopwords) can still be matched.
-- Threshold: docs **with** a Keywords line use a flat low bar (score ≥ 3 — one
-  filename or one curated hit). Docs **without** one keep the original
-  length-scaled bar, so untagged docs are unaffected.
-- The `Keywords:` line is stripped before injection (retrieval tag, not
-  content the model should see) — verified no leak. Strip runs before
-  `_extract_perspective` so a leading Keywords line can't hide a PERSPECTIVE
-  tag below it.
-- Same Keywords-line stripping added to `load_project_documents` for
-  consistency (it shares `_score_doc`) — prevents the tag leaking into
-  injected project-doc content. Project docs keep their filename-only trigger.
-
-Verified by running `load_global_documents` directly: all previously failing
-query phrasings now inject; curated-keyword-only queries (`helcyon`, `lora`)
-inject without the word "runpod"; multi-word keywords (`full weight training`,
-`model training`) inject only when all their words are present; off-topic
-queries that merely share one broad word — "training my dog", "gym weight
-training", "weather today" — correctly inject nothing.
-
-`global_documents/Runpod.txt` (dev-build test file) was given an example
-`Keywords:` line — note it deliberately avoids the bare word `training`,
-using `full weight training` / `model training` instead so dog-training and
-gym chatter can't pull it. Review/adjust the wording for the real build.
-
-- ⚠️ DO NOT revert to filename-only triggering or the scaled min_score for
-  tagged docs — that is the original bug. Curate Keywords lines deliberately:
-  a single curated keyword hit is enough to trigger injection.
-
----
-
-## May 18 2026 — Restored Concrete Memory-Tag Example (Generic Name)
-
-**Files:** utils/session_handler.py
-
-The earlier abstract-placeholder rewrite of the MEMORY TAGS example
-(`'<user_name> told me about...' where <user_name> is...`) broke memory tag
-emission: the angle-bracket / "where X is..." syntax was abstract enough that
-the model stopped emitting the `[MEMORY ADD: ...]` tag and instead
-hallucinated that it had saved.
-
-Fixed: restored a concrete fill-in-the-blank example using the generic name
-"Alex", with an explicit instruction not to copy the example name literally —
-`Example: 'Alex told me about...' — substitute the real user's name, never
-the example name.`
-
-- ⚠️ DO NOT revert — concrete examples are required for tag emission;
-  abstract placeholder syntax suppresses it. The name stays generic ("Alex"),
-  never a real user's name.
-
----
-
-## May 18 2026 — Removed Hardcoded User Name From Memory-Tag Instruction Layer
-
-**Files:** utils/session_handler.py
-
-`get_instruction_layer()`'s MEMORY TAGS section used a literal hardcoded user
-name in its first-person example: `Example: 'Chris told me about...'`. This
-leaked a real user's name into the prompt, causing the model to write memory
-entries about "Chris" regardless of who the active user actually was —
-cross-user contamination.
-
-Fixed: the example is now a generic placeholder — `'<user_name> told me
-about...' where <user_name> is the user you are speaking with` — and the line
-explicitly instructs the model to refer to the user by their actual name. No
-other changes to the file.
-
-- ⚠️ DO NOT revert — hardcoded user names cause cross-user contamination and
-  violate the project rule against hardcoding any real user name into app
-  code or prompts.
-
----
-
-## May 17 2026 — Centre Pillar Restored Under Background Image
-
-**Files:** templates/config.html, templates/index.html
-
-The frontier themes strip `#container`'s background (transparent, no shadow,
-no radius), so with a background image the chat text sat directly on the
-wallpaper and was hard to read. Fix: when an image is active, the injected
-`<style id="hwui-bg-style">` now also restores a solid centre pillar —
-`.chat-page #container { background-color: var(--container-bg) !important;
-border-radius: 12px !important; box-shadow: 0 0 30px rgba(0,0,0,0.6)
-!important; }`.
-
-- Uses `var(--chat-bg)` — the theme's own flat backdrop colour — so the chat
-  column matches the normal frontier look, wallpaper showing only in the side
-  margins. The soft box-shadow keeps the pillar edge defined.
-- Pillar lives inside the image-mode style block only — plain colour mode
-  keeps the frontier themes flat/pillarless as designed.
-- Model message bubbles are deliberately NOT restored — they stay transparent,
-  so the frontier look is preserved; only the pillar comes back.
-- The pillar extends up behind the fixed top bar (no gap): `margin-top: -80px`
-  cancels `#main`'s `padding-top: 80px`, and `padding-top: calc(80px + 0.5rem)`
-  re-insets the chat content so it doesn't move.
-- Config page: same extend-up applied to `#config-page #container` in
-  style.css (permanent, not image-mode — the config panel is never stripped).
-  Uses `calc(80px + 1.5rem)` since the config panel's own padding is 1.5rem.
-
----
-
-## May 17 2026 — Background Image Toggle Fixed (two root causes)
-
-**Files:** app.py, templates/config.html, templates/index.html
-
-The Appearance tab's Theme Colour / Background Image toggle didn't restore a
-wallpaper. TWO separate bugs:
-
-**Bug 1 — storage (the real reason it always failed):** the image was stored
-as a base64 data URL in `localStorage`. A real photo's base64 is several MB;
-`localStorage` has a ~5MB per-origin quota. `setItem` threw `QuotaExceededError`,
-uncaught — so the image silently never saved, and no CSS fix could ever help
-because there was no image data. Fixed by storing the image as a real FILE:
-- `/save_bg` rewritten — accepts a multipart upload, saves it to
-  `static/hwui-bg<ext>` (clears any previous one first), returns its URL.
-- `/clear_bg` rewritten — deletes the saved file.
-- `handleBgImageChange` (config.html) now POSTs the file to `/save_bg` and
-  stores only the short URL in `localStorage` (no quota risk). Loud `alert`
-  on failure instead of silent death. `clearBackground` POSTs `/clear_bg`.
-- ⚠️ DO NOT revert to base64-in-localStorage — that is the original bug.
-
-**Bug 2 — frontier themes hid it even when set:** chatgpt/claude/gemini/grok/
-moonlight kill wallpapers by painting `html`, `body`, AND `#app` opaque with
-`!important`. The injection only set `html, body`, so the opaque `#app` layer
-covered the image. Fixed: `applyBackground()` and index.html's pre-paint
-script now also emit `#app { background: transparent !important; … }`.
-index.html's script also now checks `hwui_bg_mode` so colour mode doesn't show
-a stale cached wallpaper.
-
-Toggle UI (two-button segmented control) and the `hwui_bg_mode` /
-`hwui_bg_image` localStorage keys are unchanged — `hwui_bg_image` just holds a
-URL now instead of a multi-MB base64 blob.
-
----
-
-## May 17 2026 — Settings Cog Converted to Dropdown Menu
-
-**File:** templates/index.html
-
-The top-bar settings cog (`#settings-link`) changed from `<a href="/config">`
-to a `<div>` that opens a dropdown. The `#settings-link` id is kept so
-style.css's top-bar flex layout is unchanged — top bar height/position
-unaffected.
-- Dropdown (`#cog-menu`) is `position:absolute` below the cog, with parent
-  `#settings-link` set `position:relative`. Uses `var(--modal-bg)` /
-  `var(--modal-border)`.
-- Contents: a "Config Page" link (→ /config) and a live theme switcher —
-  `loadCogThemes()` fetches `/themes/list` once (cached via a data attribute),
-  renders a button per theme; `applyThemeFromCog()` swaps the
-  `#active-theme-link` href, POSTs `/themes/switch`, updates active states.
-- `toggleCogMenu()` + an outside-click close listener. Styling via a `<style>`
-  block in `<head>`; theme buttons use `margin:0 !important` to beat the
-  global button margin.
-- ⚠️ `--text-main` / `--text-muted` are NOT defined in the theme system — used
-  with fallbacks (`var(--text-main, var(--modal-text, #e8e8e8))`, etc.).
-
----
-
-## May 17 2026 — Chat Width Consolidated to One CSS Variable
-
-**Files:** style.css, themes/{chatgpt,claude,gemini,grok,moonlight}.css
-
-Chat-column width had drifted across 7 places (5 theme files' `.chat-page
-#container` `!important` rules + style.css `#container` + a `#config-page
-#container` override). Every resize meant a multi-file edit, and the config
-page needed a separate magic number (812 = 860 − the `#chat` inner padding).
-
-Consolidated to a single custom property:
-- `style.css :root` → new `--chat-width: 860px;` — the ONLY value to change.
-- `#container, #center-column` → `max-width: var(--chat-width)`.
-- `#config-page #container` → `max-width: calc(var(--chat-width) - 3rem)`
-  (3rem = the chat page's `#chat` 1.5rem×2 padding, which the config page
-  lacks — so the visible content widths stay matched automatically).
-- All 5 theme files → `max-width: var(--chat-width) !important`.
-
-Result: resizing the chat column is now a one-line change to `--chat-width`.
-⚠️ The small-screen responsive breakpoints in style.css (`#container` at
-600px/500px under `@media`) are intentionally left as separate hardcoded
-fallbacks — they are not the desktop width and not meant to track the var.
-⚠️ The `@media (max-width:1400/1024)` blocks in the theme files are now
-redundant (all resolve to `var(--chat-width)`) — harmless, left in place;
-can be deleted in a cosmetic cleanup if wanted.
-
----
-
-## May 17 2026 — Attached Document Polluted Retrieval Query
-
-**File:** app.py
-
-With the inline document-attach feature, the document text is folded into the
-latest user turn. The backend extracts `user_input` from that turn (app.py
-~1815) and uses it as the query for **doc-intent detection, memory retrieval,
-global/project-document retrieval, and chat-search triggers**. So all those
-systems were keyword-matching against the *entire attached document's text*
-instead of the user's typed question — pulling unrelated documents, memories
-and old-chat snippets into the prompt. Symptom: model answers about the
-attached document but bleeds in unrelated injected content.
-
-**Fix (two parts):**
-- `user_input` now has `[ATTACHED DOCUMENT: …] … [END ATTACHED DOCUMENT]`
-  blocks stripped before any string/intent/retrieval processing — so doc
-  intent, memory retrieval and chat-search triggers score against the typed
-  query only. The full block stays in `active_chat`, so the model still reads
-  the document. Mirrors the existing image handling (text-only copy for
-  processing).
-- When an inline document is attached, `project_documents` (project + global
-  auto-loaded docs) is cleared — the attached document is the user's explicit
-  focus, so auto-retrieved documents must not ride alongside it.
-
-`_attached_doc_present` flag drives both. Verbose logging added for each.
-
----
-
-## May 17 2026 — Trim Bug: Oversized Latest Turn Dropped Whole
-
-**File:** truncation.py
-
-`trim_chat_history` walked messages newest-first and `break`d the moment one
-exceeded `conversation_budget`. If the **latest** user turn alone exceeded the
-budget, the loop broke on iteration 1 — `trimmed` came back empty, only the
-system message survived, and the model received **no user turn at all** (no
-question, no content) → ungrounded hallucination.
-
-This surfaced via the new document-attach feature: an attached document rides
-inside the latest user turn and a real document easily exceeds the ~6–7k-token
-conversation budget, so the whole turn (document + question) was silently
-dropped. The model then replied only "in the ballpark" — riffing on nothing.
-
-**Fix:** the loop now always keeps the latest turn (`body[-1]`) even if it
-alone busts the budget — added an `and trimmed` guard so the budget check only
-applies once at least one message is held. Logs a ⚠️ warning when the latest
-turn is kept oversized. This restores the invariant app.py's final word-clamp
-already enforces ("Always keep at least the final user turn"); the two trim
-layers are now consistent. Also benefits any long single message, not just
-documents.
-
-⚠️ Known limit: a document large enough that the turn overflows the full
-context window (~16k) will still be cut by llama.cpp / hit the EOS cliff —
-very large docs need chunking, out of scope here.
-
----
-
-## May 17 2026 — Branch Button Restored to Assistant Messages
-
-**File:** templates/index.html
-
-The `/chats/branch` backend route was intact, but the frontend branch button
-had been lost in a UI redesign. Restored:
-- New `branchMessage(assistantIndex)` — confirms, POSTs `source_filename` +
-  `message_index` (1-based assistant-turn count) to `/chats/branch`, then
-  `loadChats()` + `openChat(new_filename)`.
-- `renderChatMessages` tracks `assistantCount` (incremented at the top of the
-  assistant-message branch) so each assistant message carries its correct
-  1-based turn number; a git-branch-icon button in the action bar passes it.
-- Deliberately NOT added to the streaming / non-streaming / continue render
-  paths — those are transient; `renderChatMessages` re-renders the full chat
-  with proper buttons once generation completes.
-- ⚠️ `assistantCount` counts rendered (non-hidden) assistant messages — if the
-  backend line-walker ever counts a hidden assistant turn the index could
-  drift by one. Out of scope of the restore; flagged for a future test.
-
----
-
-## May 17 2026 — Inline Document Attach Restored + Dead Modal Removed
-
-**File:** templates/index.html
-
-### Removed dead `#edit-project-modal`
-The standalone "Edit Project Modal" (`#edit-project-modal`) was orphaned by the
-May 15 project-modal redesign — the live editor is the inline
-`#project-edit-panel`, and nothing opened the old modal. It was removed whole
-(~67 lines), along with its now-unused `closeEditProjectModal()` function.
-This was the sole source of **8 duplicate element ids** (`edit-project-name`,
-`edit-project-instructions`, `rp-mode-btn`, `rp-opener-section`,
-`edit-project-rp-opener`, `sticky-docs-btn`, `document-upload`,
-`documents-list`) — all now unique.
-
-### Restored the inline document-attach feature
-The chat-level document upload (separate from project documents) lost its
-frontend in the UI redesign. The backend `/parse_document` route was always
-intact — only the UI + JS wiring needed rebuilding.
-
-- **"📄 Attach Document"** button added to the input `+` menu, next to
-  Attach Image. Hidden input `#chat-document-input` (.txt/.md/.pdf/.docx/.odt).
-- `handleDocumentAttach` → POSTs each file to `/parse_document`, stores the
-  returned `{filename, content}` in `window.attachedDocuments`, shows a chip
-  in a new `#document-preview-strip` (mirrors the image preview strip).
-- On send, the document text is folded into the user turn's content wrapped in
-  `[ATTACHED DOCUMENT: …] … [END ATTACHED DOCUMENT]` markers — so the model
-  reads it. **One-shot:** it lives in that single message (and the saved chat
-  file) as ordinary history — NOT re-injected per turn like project sticky docs.
-- The document renders as a **clickable card above the user message**;
-  clicking opens `#document-viewer-modal` to read the full text.
-- `renderChatMessages` parses the markers back out (`extractAttachedDocuments`),
-  so the card + reader survive reload — the markers travel in the message text,
-  not a structured field.
-- ⚠️ Editing a user message that has an attached document drops the document
-  (the edit captures only the doc-stripped text). Acceptable edge case.
-
----
-
-## May 17 2026 — Fictional Sample Data Added to Dev Build
-
-**Files:** settings.json (new), system_prompts/default.txt,
-system_prompts/default.example.txt (new), system_prompts/default.posthistory.txt
-(new), characters/Helcyon.json
-
-The dev build is intentionally data-free structural scaffolding. Populated the
-real files with **fictional** sample content so prompt assembly can be traced
-and tested end-to-end (previously every settings-dependent code path fell to
-its `except` branch, hiding bugs). All content is invented — no personal data.
-
-- **settings.json** — created with the full key set. Machine-specific paths
-  (`llama_last_model`, `llama_server_exe`, `llama_models_dir`, `mmproj_path`)
-  left empty on purpose: auto-launch then skips gracefully. `chat_template`
-  is `chatml`, `ctx_size` 16384, `backend_mode` `local`.
-- **default.txt** — expanded from a 2-line placeholder to a realistic system
-  prompt. Includes several negatively-phrased hard rules ("Never…", "Do not…",
-  "must not…") so the restriction-anchor extraction has something to catch.
-- **default.example.txt** — paired example dialogue, two `<START>` blocks.
-- **default.posthistory.txt** — paired post-history directive exercising the
-  new feature: the vent-first / no-markdown-on-emotional-content rules.
-- **Helcyon.json** — fleshed out to a structurally complete card: every field
-  the prompt builder reads is now populated (`personality`, `scenario`,
-  `post_history`, `character_note`, `use_*` flags, etc.).
-
-⚠️ This sample data propagates into the personal and public builds via the
-zip/extract pipeline — that is expected and approved (fictional, harmless).
-
----
-
-## May 17 2026 — Post-History Directive (SillyTavern-style, per-template)
-
-**Files:** app.py, templates/config.html
-
-A post-history system directive **paired with each system prompt template** —
-stored as a `<base>.posthistory.txt` file alongside the template, exactly the
-same pattern as the existing `.example.txt` paired example dialogue. Load the
-GPT-4o template → its post-history loads with it; switch templates → the
-directive switches too.
-
-**Where it lands:** it is NOT in the system block. It is appended as the LAST
-item of the [OOC] depth-0 packet (after project_instructions), folded into the
-last user turn — the closest-to-generation slot in the whole prompt, so it
-carries the highest behavioural priority of any field. Wrapped as
-`[OOC: System directive — highest priority. Overrides character and project
-instructions. …]`. ChatML tokens stripped from the value.
-
-**Resolution:** mirrors the example-dialogue priority-3 fallback — uses the
-character-bound system prompt (`char_data["system_prompt"]`) if set, else the
-globally active template.
-
-**app.py**
-- Packet builder: reads `<base>.posthistory.txt` for the active template,
-  appends it last in `_reply_instr_items`. Comment block above the builder
-  shows the 4-item ordering (style → post_history → project → post-history
-  directive).
-- Pre-trim overhead: the directive's token count +30 wrapper is pre-accounted
-  in `_reply_packet_overhead` so the trimmer doesn't under-estimate.
-- `list_system_prompts`: now also excludes `*.posthistory.txt` so paired files
-  don't show up as selectable templates.
-- `delete_system_prompt`: deletes the paired `.posthistory.txt` so it doesn't
-  orphan when its template is removed.
-- New routes `/system_prompts/load_posthistory/<filename>` and
-  `/system_prompts/save_posthistory/<filename>` — direct mirror of the
-  load_example/save_example routes. Empty save deletes the file rather than
-  writing a blank one.
-
-**templates/config.html**
-- New "Post-History Instructions" textarea on the System Prompt tab, below
-  Global Example Dialog, with its own Save button + status line.
-- Loaded by `loadSelectedSystemPrompt()` alongside the template text and
-  example dialogue; saved by `saveGlobalSystemPrompt()` and
-  `saveSystemPromptAs()` alongside them too.
-- `loadGlobalPostHistory()` / `saveGlobalPostHistory()` JS helpers mirror the
-  example-dialogue equivalents (save targets the selected template's paired
-  file); `loadGlobalPostHistory()` added to the init sequence.
-
-**Reason:** character-card behavioural instructions sit at the top of the
-system block — the most attention-starved position — and positive-phrased
-rules (e.g. "vent before pivoting") are not caught by the restriction anchor,
-so they get zero reinforcement. Pairing the directive with the template means
-each model (GPT-4o, etc.) gets its own hard system rules that reliably land
-closest to generation, switching automatically with the template.
-
-**Usage (how to set one up):**
-1. Create the template first — type the system prompt, "Save As New Template",
-   name it (e.g. `gpt-4o`). The `.posthistory.txt` filename is derived from the
-   *selected template's filename*, NOT from the post-history text.
-2. With that template selected in the dropdown, type the post-history and click
-   "💾 Save Post-History" → writes `<base>.posthistory.txt`.
-3. Click "✅ Activate" — saving the file is not the same as activating the
-   template; the model only reads the post-history of the active (or
-   character-bound) template.
-- ⚠️ "💾 Update" and "Save As New Template" save prompt + example dialogue +
-  post-history together in one go, all paired to that template name.
-- ⚠️ An empty post-history box DELETES `<base>.posthistory.txt` rather than
-  writing a blank file.
-- ⚠️ "Paired" (filename ↔ template) is NOT the same as "Bound" (the existing
-  character-to-system-prompt binding, the 🔗 indicator). Saving a post-history
-  file binds nothing to a character.
-
----
-
-## May 16 2026 — OOC Packet: Project Instructions Priority Bump
-
-**File:** app.py (~line 2898)
-
-Swapped ordering of items in the depth-0 [REPLY INSTRUCTIONS] OOC packet.
-Project instructions moved from first position (lowest urgency) to last (highest urgency, closest to generation point).
-
-New order:
-1. Style reminder (example_dialogue) — lowest urgency
-2. post_history
-3. project_instructions — highest urgency, closest to generation point
-
-**Reason:** Project folder instructions were being ignored (e.g. "log date and time" directive not followed).
-Root cause: first item in packet = furthest from generation = least attended. Moving to last fixes this.
-post_history is now lower priority — acceptable since it's rarely used and chat session summaries cover that role anyway.
-
-Updated comment block above the packet builder to reflect new ordering.
-
----
-
-## Session: May 15 2026 — UI Redesign Session
-
-### `config.html`
-- Tab system embedded CSS made self-contained in `<head>` (no longer relies on style.css)
-- Sampling sidebar compact overrides applied
-- Project modal: two-column → swap layout (grid and edit panel are siblings, not side-by-side)
-- Edit panel now replaces grid entirely when open; Back button returns to grid
-- Edit panel centred at max-width 680px with breathing room
-- Top strip (Active/Create) hides when edit panel is open, restores on Back/Cancel
-- Appearance tab: added Theme Colour vs Background Image toggle (setBgMode)
-- Background image now POSTs to /save_bg server route (written into theme CSS directly)
-- Clear background POSTs to /clear_bg
-- `--project-edit-bg` variable registered in theme editor under Project List section
-- `--project-edit-bg` default #0a0d10 used for edit panel body background
-
-### `index.html`
-- Project modal: fullscreen grid, card click = switch project, switch button removed
-- Edit buttons use e.stopPropagation() so card click doesn't also fire
-- Most Recent sort option restored; sortChatList restores dropdown from localStorage on every load
-- JS background injection removed (image now handled server-side via theme CSS)
-
-### `style.css`
-- Sampling sidebar: full compact pass (240px wide, 12px font, 26px input height)
-- Config tab CSS added (display:none/block toggle)
-- Project modal: fullscreen sizing, two-column → swap layout, inline edit panel CSS
-- Modal padding-left: 120px → 250px ⚠️ DO NOT REVERT — keeps modals centred in content pane
-- `--project-edit-bg` added to :root defaults
-- Hardcoded bg.jpg removed from both body rules
-
-### `app.py`
-- `/save_bg` route added: writes base64 image into active theme CSS file between hwui-bg-start/end markers
-- `/clear_bg` route added: removes those markers from theme CSS file
-- ⚠️ Background image feature incomplete — CC to finish (see handoff note below)
-
-### Handoff note for Claude Code
-Background image feature is partially implemented. Routes exist in app.py (`/save_bg`, `/clear_bg`). Config.html calls them correctly. The issue was the active theme CSS file has a `body { background: ... }` rule that overrides JS injection. The server-side approach (writing directly into the theme CSS via `get_active_theme_path()`) is the right fix — CC needs to verify the routes work correctly end-to-end and that the theme CSS file is being written and served properly.
-
----
-
-## Session: May 15 2026 — F5-TTS Speed + Quality Pass
-
-Investigated reported symptoms: TTS missing words, pausing in the wrong place. Goal — speed up generation (was ~6s) without adding latency; balance speed and quality.
-
-### `f5_server.py`
-- `nfe_step` lowered: first chunk 20→16, later chunks 24→20 (~17% faster generation; quality cost of 20 vs 24 is barely perceptible — this is the main speed knob, tune in `tts_to_audio`)
-- `clean_text`: parentheses now become a plain space, not `. ` — a parenthetical aside no longer turns into its own falling-intonation fragment (a comma was rejected: F5 hesitates/ums on commas)
-
-### `tts_routes.py`
-- `/generate` now forwards `first_chunk` to the F5 server — the fast first-byte path existed but the proxy was dropping the field, so it never fired
-
-### `utils/utils.js`
-- `fetchAudio`: 2→3 retries with backoff; on final failure logs a loud, specific error naming the lost sentence (was failing silently — direct cause of "missing words" on F5 hiccups)
-- `splitAndQueue`: tiny fragments (<25 chars, e.g. "Yes.") are merged onto the previous still-queued chunk instead of sent to F5 alone — F5 garbles/clips very short clips. No latency cost (the previous chunk hasn't been fetched yet) and reading order is preserved
-- Parentheses → space (matches the `clean_text` change) in both the streaming cleaner and `splitAndQueue`
-- ⚠️ Aggressive sentence-batching was considered and skipped — it would delay time-to-first-audio
-
----
-
-## Session: May 15 2026 — Branch Chat Feature
-
-### `chat_routes.py`
-**Feature: new `/chats/branch` route — duplicate a chat up to a chosen assistant turn**
-- Added directly below `/chats/copy`
-- Accepts `source_filename` + `message_index` (1-based count of assistant turns to keep)
-- ⚠️ Does NOT split on blank lines — assistant messages contain paragraph breaks, so `content.split('\n\n')` pair-counting would silently drop half of any multi-paragraph reply
-- Instead walks lines and detects speaker lines the same way `/chats/open` does (timestamp-prefix strip + check against `characters/index.json` and `users/index.json`), truncating before the turn after the Nth assistant message — byte-exact
-- Writes the truncated copy via `_atomic_write_text`; auto-numbers the filename `(2)`, `(3)`… if a branch already exists
-- Returns `400` with a clear message if the chat has fewer assistant turns than requested
-
-### `index.html`
-**Feature: branch button on every assistant message**
-- New shared `branchFromMessage(btn)` helper (defined above `openChat`) — confirms, reads the 1-based `.model-msg` index from the DOM at click time, POSTs to `/chats/branch`, then `loadChats()` + `openChat(newFilename)`
-- Branch button added to all four assistant-message render paths: `openChat()` action bar, live-streaming bubble, non-streaming bubble, and the continue-generation bubble
-- Uses the git-branch SVG; inherits `.msg-action-bar button` / `.copy-btn` styling — no CSS changes needed
-- ⚠️ Spec originally targeted `loadChatHistory()` (character-level history, no reliable `currentChatFilename`); moved to `openChat()` so the button shows in the actual chat-file viewer and on freshly-branched chats
-
-**Fix: gate the `[MEMORY ADD:` save flow behind an explicit user request**
-- ⚠️ The `[MEMORY ADD:` tag detection lives in `index.html` (response-stream handler, ~line 3205), NOT `app.py` — `app.py` has no memory-tag processing at all
-- New `getLastUserMessageText()` helper — returns the most recent non-hidden user message, flattening multimodal content to text
-- Before surfacing the memory confirm UI, the last user message is checked for explicit phrases: save that / remember this / add that to memory / add to memory / save this / remember that / store that / log that / save this to / save that to / to my memory / to memory / add this to / can you save / can you remember / please save / please remember / commit that / commit this
-- If none present, the tag is silently discarded (already stripped from the displayed text) and `🧠 Memory tag suppressed — not explicitly requested` is logged; confirm UI only appears on an explicit request
-- Implemented as a one-line condition change (`if (memAddMatch && _memExplicitlyRequested)`) so the existing parsing block is untouched
-
-**Feature: strip `[OOC: ...]` blocks from model output**
-- New `stripOOC(text)` helper (next to `sanitizeMarkdown`) — removes `\[OOC:.*?\]` (non-greedy, dotall via `[\s\S]`) plus surrounding whitespace/newlines
-- Applied inside `stripChatMLOutsideCodeBlocks` call in the streaming loop, so both the live streaming display and the saved `finalText` (= `cleanedMessage`) are OOC-free
-- Also applied to the empty-response raw fallback path
-- Logs `🚫 OOC block stripped from response` once per response at finalization (not per-chunk, to avoid console spam)
-- Follow-up: now also applied to the continue-generation stream handler (`cleaned` + `finalText`, with the same once-per-response log)
-- Follow-up: OOC blocks suppressed from TTS too — a per-stream `ttsHoldBuffer` accumulates voice chunks, `stripOOC` drops complete blocks, and a trailing open/partial `[OOC:` marker is withheld until its closing `]` arrives; only OOC-free text reaches the voice. Handles markers/blocks split across chunks.
-- Follow-up: `stripOOC` now replaces a block with a single space instead of nothing, so words either side of an *inline* OOC block aren't joined
-- ⚠️ Only the *horizontal* whitespace touching the block (`[^\S\n]`) is consumed — newlines are preserved. A global `\s{2,}` collapse was rejected: `stripOOC` runs on every message, so it would have flattened all paragraph breaks and code-block indentation app-wide
-- ⚠️ No `.trim()` inside `stripOOC` — it is called incrementally on TTS chunks and an internal trim would join streamed words; the display/continue/fallback call sites already `.trim()` externally
-
----
-
-## Session: May 14 2026 — Most Recent Sort Option Restored
-
-## ⚠️ SPACING VALUES — DO NOT REVERT
-
-The following CSS values in `style.css` were carefully tuned over multiple sessions.
-Another Claude session MUST NOT reset these back to old values.
-
+### Root cause
+`_classify_chat_search_intent()` (`app.py:1627`) fires whenever `_CHAT_SEARCH_VERB_RE` matches. The verb list `_CHAT_SEARCH_VERBS` (`app.py:1594`) had one **unanchored** branch:
 ```
-.model-text p              { margin: 0 0 1.1em 0 }
-.model-text-cont p         { margin: 0 0 1.1em 0 }
-.model-text ul/ol          { margin: 0.8em 0 1.1em 0; line-height: 1.6 }
-.model-text-cont ul/ol     { margin: 0.8em 0 1.1em 0; line-height: 1.6 }
-.model-text li             { margin-bottom: 0.8em; line-height: 1.6 }
-.model-text-cont li        { margin: 0 0 0.8em 0; line-height: 1.6 }
+(?:i'?m\s+)?trying\s+to\s+find          ← matched ANY "trying to find X"
 ```
+Every *other* alternative requires a chat-object noun (`find (that|the|our|a|me) (chat|conversation|message|thread|session)`, `pull up (that|the|our) …`, etc.), but this one matched the bare verb — so "trying to find another avenue / my keys / the courage" all tripped a search. The web-intent bypass (`app.py:5181`) didn't catch it either (only matches `find online`, not `find another…`).
 
-⚠️ DO NOT revert these to 0.4em / 0.3em / 0.15em / 1.3 — those are the OLD values and produce cramped output.
-
-The DOMINANT rule (highest specificity, wins over all others) is the combined block at ~line 1696:
+### Fix — anchor it like its siblings (`app.py:1601-1602`)
 ```
-.message ul, .message ol, .model-text ul, .model-text ol, .user-text ul, .user-text ol
-  { margin: 0.8em 0 1.1em 0; line-height: 1.6 }
-
-.message ul li, .message ol li, .model-text ul li, .model-text ol li, .user-text ul li, .user-text ol li
-  { margin: 0 0 0.8em 0; line-height: 1.6 }
+(?:i'?m\s+)?trying\s+to\s+find\s+(?:that|the|our|a|my)?\s*
+(?:chat|conversation|message|thread|session|history|logs?)
 ```
-⚠️ DO NOT revert this block — it has higher specificity than the single-class rules below it and will always win. This is the block that actually controls list spacing.
+Now "trying to find" only fires when a chat-object noun follows. Verified: the reported message and *"trying to find another avenue / my keys / a way out / the courage"* no longer match; *"trying to find that chat where we talked about covid"*, *"trying to find the conversation about the moon"*, *"trying to find chat history"* still match. Object-bearing recall phrasing like *"find that conversation we had"* was already covered by the plain `find …` branch, so nothing legitimate is lost. Consistent with the `⚠️ DO NOT revert to recall-verb-as-trigger` rule (`app.py:1589`) — this tightens an over-cheap trigger rather than loosening one.
 
----
-
-
-### `index.html`
-**Bug fix: "Most Recent" sort option missing from chat sidebar dropdown**
-- Option had been lost from the `<select>` HTML — only Newest/Oldest/A-Z remained
-- `sortChatList()` was also missing the `most_recent` branch entirely
-- Fix 1: Added `<option value="most_recent">Most Recent</option>` back to dropdown (between Oldest and A-Z)
-- Fix 2: Added `most_recent` sort case — sorts purely by `b.modified - a.modified` (last-active chats first, distinct from Newest which uses filename date)
-- Fix 3: Added dropdown restore at top of `sortChatList()` — syncs `<select>` to saved `chatSortMode` in localStorage on every load
-- ⚠️ Root cause of repeated disappearance: dropdown had no matching option for the saved localStorage value, so it silently fell back to first option visually — appeared broken each reload. Restore logic prevents this recurring.
-
----
-
-## Session: May 14 2026 — Config Tab CSS Fix
-
-### `config.html`
-**Bug fix: Tab panels all visible simultaneously — tabs appeared broken**
-- Root cause: tab CSS (`display:none` / `display:block` on `.config-tab-panel`) only existed in style.css
-- style.css had not been updated on the server yet, so no hide/show rules applied — all panels rendered at once
-- Fix: tab CSS now embedded directly in a `<style>` block in config.html `<head>` — self-contained, can never get out of sync with style.css again
-- style.css copy of the tab CSS can remain as-is (harmless duplication)
-
----
-
-## Session: May 14 2026 — Project Modal Tweaks
-
-### `index.html` + `style.css`
-- Modal z-index raised to 9500 — now sits above the input bar
-- Modal `padding-bottom: 70px` + `height: calc(100vh - 130px)` — clears input bar at bottom
-- Cards narrowed: grid minmax 200px → 160px (fits ~6 cols on wide screen)
-- Active project label moved to absolute centre of top strip
-- Create form pushed to the right with `margin-left: auto`
-- Card click → `switchProject()` (if not already active); active card `cursor: default`
-- Switch button (↻) removed — redundant now card itself is clickable
-- `editBtn` and `deleteBtn` onclick now use `e.stopPropagation()` so they don't trigger card switch
-
----
-
-## Session: May 14 2026 — Project Modal Grid Redesign
-
-### `index.html`
-**Feature: Project Management modal redesigned as full-width card grid**
-- Modal HTML restructured: removed verbose Create section (name + instructions textarea + hr blocks)
-- New compact top strip (`#project-modal-top`): active project name on the left, quick-create input + button on the right
-- Grid area (`#project-modal-grid-wrap`) is a scrollable div that fills remaining modal height
-- `#projects-list` now renders into the grid wrapper
-- `createProject()` patched: instructions element now optional (null-safe) — instructions added via Edit after creation
-- Active project card gets `.is-active` class for green border highlight
-
-### `style.css`
-**Feature: Project modal CSS overhauled for fullscreen grid layout**
-- `#project-modal`: `padding-left: 250px` to clear chat sidebar, centred
-- `#project-modal .modal-content`: `width: calc(100vw - 310px)`, max 1200px, `height: calc(100vh - 60px)` — near fullscreen
-- `#project-modal .modal-body`: flex column, no padding (strip + grid each own their spacing)
-- `#project-modal-top`: compact flex strip with active indicator and inline create form
-- `#projects-list`: switched from `flex-direction: column` to CSS grid (`auto-fill, minmax(200px, 1fr)`)
-- `.project-item`: cards — flex column, name at top (2-line clamp), action buttons along bottom
-- `.project-group-header`: `grid-column: 1 / -1` so group labels span the full grid width
-- `.project-group-children`: `display: contents` so child cards slot directly into parent grid
-- `.back-to-global-item`: also spans full grid width
-- Active card (`.is-active`): green border + tinted background
-
----
-
-## Session: May 14 2026 — Sampling Sidebar Compact Redesign
-
-### `style.css`
-**Improvement: Sampling sidebar too large and spread out — full compact pass**
-- Sidebar width reduced 275px → 240px; `#config-page #main` padding-left matched
-- New `#sampling-sidebar *` block overrides the global `#config-page *` 15px font-size — sidebar now 12px throughout
-- Labels: margin tightened to 5px top / 2px bottom, color #999 (secondary)
-- Inputs: padding 6px 10px → 3px 7px, height 26px, border-radius 3px
-- Selects and buttons: height 26px, padding 4px 8px, font-size 12px
-- h3: 13px uppercase with letter-spacing — acts as a section divider rather than a page title
-- hr: margin 10px (was ~20px), border-color #2a2a2a
-- Removed `#sampling-sidebar` from the shared section-header h3 rule (now handled by compact block)
-
----
-
-## Session: May 14 2026 — Config Page Tab Redesign
-
-### `config.html`
-**Feature: Centre column redesigned with tab navigation**
-- Replaced the single long scrolling centre column with a 5-tab layout: System Prompt | Character | New Character | User Persona | Appearance
-- Tab bar sits at the top of `#container`; active tab highlighted in green, inactive tabs subtle/dark
-- Each section is wrapped in a `config-tab-panel` div — hidden by default, shown when active
-- `switchConfigTab(tabId, btn)` function handles show/hide and active button state; scrolls container to top on switch
-- System Prompt tab is active by default on page load
-- Appearance tab added to centre: contains Background controls + Open Theme Editor button (replaces sidebar Appearance section)
-- Sidebar loses the Appearance section entirely — keeps Sampling, TTS, Llama.cpp, Web Search, OpenAI only
-- All existing JS/functionality completely unchanged — purely structural HTML reorganisation
-
-### `style.css`
-**Feature: Tab bar styling added**
-- `#config-tab-bar`: flex row, wraps on small screens, sits above content with bottom border
-- `.config-tab`: dark border, muted text, hover lightens, smooth transition
-- `.config-tab.active`: green tint matching HWUI button style
-- `.config-tab-panel`: display:none by default; .active -> display:block
-
----
-
-## Session: May 14 2026 — Modal Centering + List Spacing Fix
-
-### `style.css`
-- Fixed `.modal` `padding-left: 120px` → `250px` — modals now centre relative to the content pane (right of sidebar), matching the input bar and chat column alignment. Standard layout matching ChatGPT/Grok/Gemini.
-- Fixed duplicate list rules at line ~2439: `.model-text ul/ol` and `.model-text li` had lower-specificity overrides declared later in the file that were winning over earlier fixes — bumped to match paragraph rhythm (`margin: 0.8em 0 1.1em`, `li margin-bottom: 0.8em`, `line-height: 1.6`)
-- Fixed `#container` `flex: 1` → `flex: 0 1 770px` to prevent container stretching past max-width
-- Fixed `.chat-page #center-column` `margin-left: 0` → `margin: auto` for proper centering in content pane
-
----
-
-## Session: May 08 2026 — Paragraph & List Spacing Polish
-
-### `style.css`
-- Bumped `.model-text p` and `.model-text-cont p` margin from `0.4em` to `0.8em` — paragraphs were too cramped
-- Fixed list spacing to match paragraph rhythm: `line-height` raised from `1.3` to `1.6`, `li` margin from `0.15em` to `0.4em`, ul/ol block margin from `0.3em 0 0.5em` to `0.6em 0 0.8em`
-- Affects `.model-text-cont`, `.model-text`, `.user-text`, and `.message` list rules
-
----
-
-## Session: May 07 2026 — Section Divider Colour in Theme Editor
-
-## Session: May 14 2026 — Modal Centering + List Spacing Fix
-
-### `style.css`
-- Fixed `.modal` `padding-left: 120px` → `250px` — modals now centre relative to the content pane (right of sidebar), matching the input bar and chat column alignment. Standard layout matching ChatGPT/Grok/Gemini.
-- Fixed duplicate list rules at line ~2439: `.model-text ul/ol` and `.model-text li` had lower-specificity overrides declared later in the file that were winning over earlier fixes — bumped to match paragraph rhythm (`margin: 0.8em 0 1.1em`, `li margin-bottom: 0.8em`, `line-height: 1.6`)
-- Fixed `#container` `flex: 1` → `flex: 0 1 770px` to prevent container stretching past max-width
-- Fixed `.chat-page #center-column` `margin-left: 0` → `margin: auto` for proper centering in content pane
-
----
-
-## Session: May 08 2026 — Paragraph & List Spacing Polish
-
-### `style.css`
-- Bumped `.model-text p` and `.model-text-cont p` margin from `0.4em` to `0.8em` — paragraphs were too cramped
-- Fixed list spacing to match paragraph rhythm: `line-height` raised from `1.3` to `1.6`, `li` margin from `0.15em` to `0.4em`, ul/ol block margin from `0.3em 0 0.5em` to `0.6em 0 0.8em`
-- Affects `.model-text-cont`, `.model-text`, `.user-text`, and `.message` list rules
-
----
-
-## Session: May 07 2026 — HR Separator Visibility + Live Theme Update Fix
-
-### `style.css`
-**Bug fix: HR separators in chat bubbles — full resolution**
-**Root cause found: `#container hr` was winning (ID specificity beats class)**
-- DevTools confirmed: `#container hr` at style.css:877 used `var(--msg-border)` — ID selectors always beat class selectors
-- `.model-text hr` and `.message hr` both rendered as empty `{}` — completely overridden
-- Fix: added `#container .model-text hr` / `#container .message hr` etc. — same ID specificity, declared later, wins
-
-- Changed `border-top` from `var(--msg-border)` to `var(--hr-color, #ffffff4d)` — now consistent with `.model-text hr`
-- Was the root cause of separators being invisible (--msg-border is near-black on midnight theme)
-
-### `app.py`
-**Bug fix: `get_theme` not returning `--hr-color` for themes that don't define it**
-- Old version only read the active theme file — if midnight.css had no `--hr-color`, it came back empty
-- Theme picker showed no colour and `setProperty` had nothing to apply
-- Fix: Step 1 now seeds all vars from `style.css` defaults, Step 2 overlays the active theme on top
-- Any variable defined in `style.css :root` is now always available in the picker regardless of theme
-
----
-
-
-### `config.html`
-**Feature: Added `--hr-color` (Section Divider) to Theme Editor**
-- Added to the Messages group in both the main theme var array and the advanced editor array
-- Allows per-theme control of the `---` separator colour without editing theme files manually
-
-### `style.css`
-- Added `--hr-color: rgba(255,255,255,0.3)` to `:root` as the default fallback
-- `.model-text hr` now uses `var(--hr-color, rgba(255,255,255,0.3))` instead of hardcoded rgba
-
-### `gemini.css`
-- Added `--hr-color: rgba(255,255,255,0.3)` to `:root` — fixes invisible separators on this theme
-- Removed the manual one-off override added in previous session
-
----
-
-## Session: May 14 2026 — Modal Centering + List Spacing Fix
-
-### `style.css`
-- Fixed `.modal` `padding-left: 120px` → `250px` — modals now centre relative to the content pane (right of sidebar), matching the input bar and chat column alignment. Standard layout matching ChatGPT/Grok/Gemini.
-- Fixed duplicate list rules at line ~2439: `.model-text ul/ol` and `.model-text li` had lower-specificity overrides declared later in the file that were winning over earlier fixes — bumped to match paragraph rhythm (`margin: 0.8em 0 1.1em`, `li margin-bottom: 0.8em`, `line-height: 1.6`)
-- Fixed `#container` `flex: 1` → `flex: 0 1 770px` to prevent container stretching past max-width
-- Fixed `.chat-page #center-column` `margin-left: 0` → `margin: auto` for proper centering in content pane
-
----
-
-## Session: May 08 2026 — Paragraph & List Spacing Polish
-
-### `style.css`
-- Bumped `.model-text p` and `.model-text-cont p` margin from `0.4em` to `0.8em` — paragraphs were too cramped
-- Fixed list spacing to match paragraph rhythm: `line-height` raised from `1.3` to `1.6`, `li` margin from `0.15em` to `0.4em`, ul/ol block margin from `0.3em 0 0.5em` to `0.6em 0 0.8em`
-- Affects `.model-text-cont`, `.model-text`, `.user-text`, and `.message` list rules
-
----
-
-## Session: May 07 2026 — HR Visibility + Equal Spacing
-
-### `style.css`
-**Tweak: HR separators now clearly visible with equal spacing above and below**
-- `border-top` increased from `1px` to `2px` for visibility
-- `opacity` raised from `0.6` to `1`
-- `margin` kept at `10px 0` (equal top/bottom) — adjacent element margins still zeroed so hr owns the gap
-- `ul + hr` margin-top synced to match `10px` base
-
----
-
-## Session: May 14 2026 — Modal Centering + List Spacing Fix
-
-### `style.css`
-- Fixed `.modal` `padding-left: 120px` → `250px` — modals now centre relative to the content pane (right of sidebar), matching the input bar and chat column alignment. Standard layout matching ChatGPT/Grok/Gemini.
-- Fixed duplicate list rules at line ~2439: `.model-text ul/ol` and `.model-text li` had lower-specificity overrides declared later in the file that were winning over earlier fixes — bumped to match paragraph rhythm (`margin: 0.8em 0 1.1em`, `li margin-bottom: 0.8em`, `line-height: 1.6`)
-- Fixed `#container` `flex: 1` → `flex: 0 1 770px` to prevent container stretching past max-width
-- Fixed `.chat-page #center-column` `margin-left: 0` → `margin: auto` for proper centering in content pane
-
----
-
-## Session: May 08 2026 — Paragraph & List Spacing Polish
-
-### `style.css`
-- Bumped `.model-text p` and `.model-text-cont p` margin from `0.4em` to `0.8em` — paragraphs were too cramped
-- Fixed list spacing to match paragraph rhythm: `line-height` raised from `1.3` to `1.6`, `li` margin from `0.15em` to `0.4em`, ul/ol block margin from `0.3em 0 0.5em` to `0.6em 0 0.8em`
-- Affects `.model-text-cont`, `.model-text`, `.user-text`, and `.message` list rules
-
----
-
-## Session: May 07 2026 — HR Section Spacing Balanced
-
-### `style.css`
-**Tweak: Sections too cramped after gap fix — rebalanced hr spacing**
-- Previous fix zeroed all margins around `<hr>` which removed ALL breathing room between sections
-- New approach: `hr` itself owns the gap (`margin: 12px 0`) — single source of truth, no stacking
-- All adjacent element margins (`p`, `ul`, `ol` before/after hr) zeroed so only the hr value counts
-- Also merged the duplicate `.model-text-cont hr` rule into the unified top-level rule
-
----
-
-## Session: May 14 2026 — Modal Centering + List Spacing Fix
-
-### `style.css`
-- Fixed `.modal` `padding-left: 120px` → `250px` — modals now centre relative to the content pane (right of sidebar), matching the input bar and chat column alignment. Standard layout matching ChatGPT/Grok/Gemini.
-- Fixed duplicate list rules at line ~2439: `.model-text ul/ol` and `.model-text li` had lower-specificity overrides declared later in the file that were winning over earlier fixes — bumped to match paragraph rhythm (`margin: 0.8em 0 1.1em`, `li margin-bottom: 0.8em`, `line-height: 1.6`)
-- Fixed `#container` `flex: 1` → `flex: 0 1 770px` to prevent container stretching past max-width
-- Fixed `.chat-page #center-column` `margin-left: 0` → `margin: auto` for proper centering in content pane
-
----
-
-## Session: May 08 2026 — Paragraph & List Spacing Polish
-
-### `style.css`
-- Bumped `.model-text p` and `.model-text-cont p` margin from `0.4em` to `0.8em` — paragraphs were too cramped
-- Fixed list spacing to match paragraph rhythm: `line-height` raised from `1.3` to `1.6`, `li` margin from `0.15em` to `0.4em`, ul/ol block margin from `0.3em 0 0.5em` to `0.6em 0 0.8em`
-- Affects `.model-text-cont`, `.model-text`, `.user-text`, and `.message` list rules
-
----
-
-## Session: May 07 2026 — Paragraph Gap Fix Around HR Separators
-
-### `style.css`
-**Fix: Large gaps between sections in model messages (around `---` / `<hr>` separators)**
-
-Root cause was two separate issues:
-
-1. **CSS adjacent-sibling margins not zeroed for `ul`/`ol` before `<hr>`**: The first attempt only added `p + hr` rules, but sections ending with a *bullet list* produce `ul + hr` in the DOM — so those rules never matched. The `ul` margin-bottom of `1.0em` (16px) was fully intact above every `<hr>`. Fixed by adding:
-   - `ul + hr, ol + hr { margin-top: 0 }` — removes hr top spacing after a list
-   - `ul:has(+ hr), ol:has(+ hr) { margin-bottom: 0 }` — zeroes list bottom margin before hr
-   - `hr + ul, hr + ol { margin-top: 0 }` — zeroes list top margin after hr
-   - Same rules for `p + hr` / `p:has(+ hr)` / `hr + p` retained
-
-2. **`.model-text-cont` had zero CSS rules**: Content after code blocks renders into `<div class="model-text-cont">` but that class had no CSS, so browser defaults (1em p margins) applied. Added full ruleset mirroring `.model-text`.
-
----
-
-
-
-
-
-### `style.css`
-**Fix: Chat content area was shifted left instead of centred in the remaining viewport**
-- `#container` / `#center-column` had `margin-left: 300px` hardcoded — overriding flexbox centering
-- `.chat-page #container` override was `margin-left: 100px` — still asymmetric
-- `body:not(.chat-page) #container` override was `margin-left: 110px` — same issue
-- Responsive breakpoints at 1280px and 1024px also had `margin-left: 30px/40px` on container
-- All asymmetric `margin-left` values removed from `#container` / `#center-column` — flexbox `justify-content: center` on `#main` now handles centering naturally
-
-### `index.html`
-**Fix: Input bar offset left due to asymmetric `left`/`right` values**
-- `#input-area` had `left:250px; right:120px` — shifted the centred input box leftward
-- Changed to `right:0` — input box now centres in the full remaining space after the sidebar
-
----
-
-## Session: May 05 2026 — Project Modal: Folders + Compact Rows
-
-### `style.css`
-**Fix: Project rows were not actually shrinking — padding wasn't the only factor**
-- `.project-item` padding reduced to `5px 10px`, gap `8px`, added `min-height: 0` and `line-height: 1`
-- `.project-name` font-size `13px` (was 18px), added `overflow: hidden / text-overflow: ellipsis`
-- `#projects-list` gap reduced to `4px` (was `8px`)
-- `.project-buttons button` padding reduced to `3px 8px`
-- Added full group/folder CSS: `.project-group-header`, `.project-group-toggle`, `.project-group-label`, `.project-group-delete`, `.project-group-children`, `.project-assign-btn`, `.group-picker-dropdown`, `.group-picker-option` variants
-
-### `project_routes.py`
-**Feature: Project groups (manual subfolders)**
-- Groups stored in `projects/_groups.json` as `{ "groupName": ["projectName", ...] }`
-- `GET /projects/groups` — returns groups dict
-- `POST /projects/groups/save` — saves full groups dict (client sends complete state)
-- `load_groups()` / `save_groups()` helpers added
-
-### `index.html`
-**Feature: Folder grouping in Project Management modal**
-- `loadProjects()` now fetches `/projects/groups` in parallel with `/projects/list`
-- Ungrouped projects render at top as before
-- Grouped projects render under collapsible `📂 FolderName` section headers
-- Click header to collapse/expand group
-- ✕ button on header deletes the folder (projects remain, just ungrouped) — appears on hover
-- Each project row has a `📂` button that opens an inline picker dropdown:
-  - Lists existing folders to move into
-  - "✕ Remove from group" if currently grouped
-  - "➕ New folder…" — prompts for name, creates and assigns in one step
-- `assignProjectGroup(projectName, groupName)` — fetches current groups, moves project, saves, reloads
-- `deleteGroup(groupName)` — removes group entry, saves, reloads
-- Active badge condensed to just `✓` (saves space in tight rows)
-
----
-
-
-
-### `index.html`
-
-**Bug: `srv stop: cancel task` — generation cancelled after 2 tokens**
-
-Root cause: memory confirmation handler calling `fetchAndDisplayResponse()` without checking `window.isSending`. When a response with a `[MEMORY ADD: ...]` tag was received, the confirm would fire a new `/chat` request before the previous stream finished cleanup — browser dropped the old connection, llama.cpp saw `cancel task`.
-
-**Fixes:**
-- Memory confirm now polls `window.isSending` and waits until clear before firing
-- `sendPrompt()` double-fire guard added (`_sendPromptInFlight` flag, 500ms window)
-- Stream read error now caught and logged (`console.warn` on connection drop)
-- Role-word regex patterns (`\b` → `(?:\n|:)`) already applied from earlier session
-
-⚠️ Never call `fetchAndDisplayResponse` without checking `window.isSending` first.
-
----
-
-## Session: May 04 2026 — OpenAI UX Polish + Sampling Preset Update
-
-### `config.html`
-**Fix: Local-only sampling params greyed out in OpenAI mode**
-- Min P, Top K, Repeat Penalty wrapped in `#local-only-params` div
-- In OpenAI mode: opacity drops to 0.3, pointer-events disabled, warning note appears below
-- Reverts fully when switching back to local
-
-**Feature: Update Preset button for sampling presets**
-- Selecting a preset from the dropdown now auto-populates the name field
-- 🔄 Update Preset button appears when a preset is selected — overwrites it in one click
-- Button hides again when no preset is selected or after saving a new preset
-- `onSamplingPresetSelect()` and `updateSamplingPreset()` functions added
-
-**UX: Save Settings → Save & Apply**
-- Renamed for clarity — makes it obvious this is what pushes values to `settings.json` for live use
-- Preset load status message updated to match: "hit Save & Apply to use"
-
-### `chat_routes.py`
-**Fix: Dots stripped from manual chat rename**
-- `.` added to allowed characters in rename sanitizer (line 228)
-- `GPT-4.5`, `3.2` etc. now survive the rename without becoming `GPT-45`, `32`
-
-### `index.html`
-**Feature: OpenAI indicator shows model name**
-- Pill now shows "☁️ OpenAI" with model name beneath it in smaller text
-- `#openai-indicator-model` span populated by `checkOpenAIIndicator()`
-
----
-
-## Session: May 04 2026 — OpenAI Backend Integration + Safety Indicator
-
-### `app.py`
-**Feature: OpenAI cloud backend**
-- `stream_openai_response()` — streams from `api.openai.com/v1/chat/completions` with Bearer auth, abort support, SSE parsing
-- OpenAI fork at top of TEXT-ONLY PATH in `/chat` — reads `backend_mode` from `settings.json`; routes to OpenAI if set, falls through to llama.cpp if local
-- `GET /get_openai_settings` — returns `{backend_mode, openai_api_key, openai_model}`
-- `POST /save_openai_settings` — atomically saves those three fields
-- `GET /get_openai_models` — fetches live model list from OpenAI, filters to chat-capable only, sorts flagships first
-
-### `config.html`
-**Feature: OpenAI Backend settings UI**
-- Local / ☁️ OpenAI toggle buttons, API key field, model dropdown with 🔄 Fetch button
-- Fetch populates dropdown from live API, re-selects previously saved model
-- Confirmation modal on switching to OpenAI: *"Your conversations will be sent to OpenAI's servers"* — Cancel / ☁️ Connect. No accidental switches.
-- Status line shows active mode, warns if OpenAI selected but no key
-
-### `index.html`
-**Feature: OpenAI active indicator in top bar**
-- Green glowing dot pill left of model picker showing "☁️ OpenAI" + model name below it
-- Hidden in local mode, visible only when `backend_mode === 'openai'` AND API key is set
-- `checkOpenAIIndicator()` called on DOMContentLoaded — silent fail if unreachable
-
-### `settings.json`
-- Added `"backend_mode": "local"`, `"openai_api_key": ""`, `"openai_model": "gpt-4o"`
-
----
-
-## Session: May 03 2026 — Frequency & Presence Penalty (OpenAI API)
-
-### `config.html`
-- Added `Frequency Penalty` and `Presence Penalty` number inputs below Repeat Penalty, labelled "(OpenAI API)" so it's clear what they're for
-- Both loaded from and saved to settings, defaulting to 0.0
-
-### `app.py`
-- Added `frequency_penalty: 0.0` and `presence_penalty: 0.0` to `load_sampling_settings()` defaults
-- `stream_openai_response()` now accepts `frequency_penalty` and `presence_penalty` params, included in the OpenAI API payload
-- Call site passes `sampling.get("frequency_penalty", 0.0)` and `sampling.get("presence_penalty", 0.0)` — safe fallback for existing settings.json without these keys
-- llama.cpp local path unaffected — these params are OpenAI-only
-
----
-
-
-
-### `index.html`
-- Chat colours (stored in localStorage keyed by filename) were lost on rename because the filename key changed but the colour entry was never migrated
-- After a successful `/chats/rename` response, the colour is now moved from the old filename key to `data.new_filename` before `loadChats()` re-renders the list
-- Colour now sticks through any rename, only removed if explicitly cleared via the colour picker
-
----
-
-
-
-### `index.html`
-- Added `#picker-actual-model` div above the Unload/Close button row in the model picker
-- Shows the real `.gguf` filename (from `data.model` in `/get_model` response) in small monospace dim text
-- Populated in `refreshModelDisplay()` — visible whenever a model is loaded
-- Hidden when no model is loaded or after unload
-- Lets you confirm the correct file is loaded even when a custom alias/label is set
-
----
-
-
-
-### `index.html`
-**Fix: ChatML tokens being stripped from code blocks, breaking shard generation**
-- Model outputs ChatML training shards inside fenced code blocks — these must be preserved verbatim
-- Previous flat `.replace()` chains on `cleanedMessage`/`cleaned`/`finalText` stripped ALL ChatML regardless of context
-- Added `stripChatMLOutsideCodeBlocks(text, charName, userName)` helper:
-  - Splits text on fenced code blocks (``` or ~~~) using a capture group
-  - Applies all ChatML/role-leakage/memory-tag strips only to even-indexed segments (plain text)
-  - Odd-indexed segments (code block content) returned verbatim — tags fully preserved
-- Replaced all flat replace chains in: main stream loop, continue loop, continue finalText
-- TTS chunk strip is separate and still strips everything (code block content should never be read aloud)
-- ⚠️ DO NOT replace `stripChatMLOutsideCodeBlocks` calls with flat replace chains — shard generation will break
+**Known unchanged gaps (pre-existing, shared by the sibling `find that chat` branch, out of scope):** plural nouns (`messages`/`conversations`) and an adjective between determiner and noun (*"find our **old** messages"*, *"that **earlier** conversation"*) still don't match. Broadening the noun set across all branches would be a separate recall-coverage change, deliberately not bundled here to avoid reopening false-positive surface.
 
----
-
-
-
-### `index.html`
-**Root cause fix: Code blocks inside `.model-text` SPAN expanding page width to 2500px+**
-- Previous approach (post-render hoisting via `spanEl.after(cb)`) failed — browser had already expanded the inline span to contain the block child before the JS ran
-- New approach: `renderModelHTML(spanEl, html)` helper function added
-  - Parses html into a throwaway div, extracts `.code-block-wrapper` nodes, replaces each with a `\x00CODEBLOCK_N\x00` text placeholder
-  - Re-serialises the safe HTML (inline content only), splits on placeholders
-  - Sets first text segment as `spanEl.innerHTML` (inline content only, no blocks)
-  - Inserts code blocks directly into the parent as proper DOM siblings — never inside the span
-  - Continuation text segments (after a code block) wrapped in `.model-text-cont` spans
-- All final render sites converted from `span.innerHTML = html` to `renderModelHTML(span, html)`:
-  - `appendChatHistory` (history sidebar load)
-  - `loadChatHistory` (both marked and fallback paths)
-  - `fetchAndDisplayResponse` streaming final render
-  - `continueLast` streaming final render
-- Mid-stream renders (incomplete code blocks) left as `innerHTML` — no block elements present during streaming, only after marked.parse() finalises
-- `addCodeCopyButtons` now called on the parent container after `renderModelHTML` so it can find code blocks that are siblings of the span
-- CSS version bumped to `?v=19`
-- ⚠️ DO NOT revert to `spanEl.innerHTML = html` for model text — the overflow will return immediately
-
-### `style.css`
-**Fix: Code block text not wrapping (content cut off with horizontal scrollbar inside block)**
-- `.code-block-wrapper pre code` had `white-space: pre !important` — overrode the correct `pre-wrap` on the parent `pre`
-- This rule was added during the old overflow battle and is now redundant (overflow fixed at DOM level)
-- Changed to `white-space: pre-wrap !important; word-break: break-word !important; overflow-wrap: break-word !important`
-- Code now wraps correctly inside the block width
-
----
-
-## Session: May 14 2026 — Modal Centering + List Spacing Fix
-
-### `style.css`
-- Fixed `.modal` `padding-left: 120px` → `250px` — modals now centre relative to the content pane (right of sidebar), matching the input bar and chat column alignment. Standard layout matching ChatGPT/Grok/Gemini.
-- Fixed duplicate list rules at line ~2439: `.model-text ul/ol` and `.model-text li` had lower-specificity overrides declared later in the file that were winning over earlier fixes — bumped to match paragraph rhythm (`margin: 0.8em 0 1.1em`, `li margin-bottom: 0.8em`, `line-height: 1.6`)
-- Fixed `#container` `flex: 1` → `flex: 0 1 770px` to prevent container stretching past max-width
-- Fixed `.chat-page #center-column` `margin-left: 0` → `margin: auto` for proper centering in content pane
-
----
-
-## Session: May 08 2026 — Paragraph & List Spacing Polish
-
-### `style.css`
-- Bumped `.model-text p` and `.model-text-cont p` margin from `0.4em` to `0.8em` — paragraphs were too cramped
-- Fixed list spacing to match paragraph rhythm: `line-height` raised from `1.3` to `1.6`, `li` margin from `0.15em` to `0.4em`, ul/ol block margin from `0.3em 0 0.5em` to `0.6em 0 0.8em`
-- Affects `.model-text-cont`, `.model-text`, `.user-text`, and `.message` list rules
-
----
-
-## Session: May 07 2026 — HR Separator Visibility + Live Theme Update Fix
-
-### `style.css`
-**Bug fix: `.message hr` was overriding `.model-text hr` with wrong colour variable**
-- `.message hr` (line 805) used `border-top: 1px solid var(--msg-border)` — this rule matched chat bubble `hr` elements because `.message` wraps `.model-text` in the DOM, giving it equal or higher specificity depending on parse order
-- `.model-text hr` correctly used `var(--hr-color)` but was losing to the earlier rule
-- Root cause of two symptoms: (1) separators invisible on midnight theme (--msg-border is near-black there), (2) live theme picker for `--hr-color` had no visual effect — the wrong rule was always winning
-- Fix: Changed `.message hr` to use `border-top: 2px solid var(--hr-color, #ffffff4d)` with `opacity: 1` — now identical to `.model-text hr`
-- No other files needed changing. `midnight.css` does NOT need a manual `--hr-color` entry — `style.css` `:root` default (`#ffffff4d`) applies automatically as fallback
-- Live theme picker now works correctly — `setProperty` on `--hr-color` is the rule that actually renders
-
----
-
-## Session: May 02 2026 — Input Bar Alignment + Top Bar Layout
-
-### `index.html`
-**Fix: Input pill position aligned with chat column**
-- `#input-area` changed from `right:0` to `right:120px` to shift pill left and align with chat content column
-- Model selector in top bar shifted from `left:50%` to `left:calc(50% + 125px)` — centres it within the content area to the right of the sidebar rather than the full window width
-
-### `style.css`
-- Top bar padding left unchanged (title stays at left wall)
-
-### Launcher `.bat`
-**Fix: Duplicate Flask instances prevented**
-- Added kill loop before launch: finds any process listening on port 8081 and kills it before starting Flask
-- Prevents the ghost-instance problem that caused hours of confusion (stale file being served by old process)
-- Changed browser open URL from `https` back to... actually kept `https` since SSL certs are present (Tailscale mode)
-
----
-
-## Session: May 02 2026 — Floating Input Bar: Buttons invisible (root cause found)
-
-### `app.py`
-**Fix: Duplicate Flask instances causing stale file to be served**
-- Two processes were listening on port 8081 simultaneously — an old instance left running from a previous session plus the newly launched one
-- Browser was hitting the old instance which served the original `index.html` with the old `button-row` layout
-- Every HTML/CSS fix made this session was correct but appeared to do nothing because the wrong file was always served
-- Fix 1: Kill duplicate processes (`taskkill /PID ... /F`) before launching
-- Fix 2: Added `app.jinja_env.auto_reload = True` and `app.config["TEMPLATES_AUTO_RELOAD"] = True` so Flask always reads templates fresh from disk — prevents stale serving in future
-- ⚠️ If buttons or UI changes ever appear to have no effect after dropping in a new file, run `netstat -ano | findstr :8081` and kill any duplicate PIDs before restarting
-
-### `index.html`
-**Redesign: Input area rebuilt as floating pill (ChatGPT-style)**
-- Old `button-row` layout replaced with compact floating pill: `[+menu] [textarea] [send] [mic] [tts]`
-- All button styles fully inline — no CSS class dependencies, immune to cascade issues
-- `#input-area` uses `flex-direction:column` so image preview strip stacks above pill
-- `#image-preview-strip` duplicate `display:flex` inline value removed — `display:none` now works correctly on load
-
----
-
-## Session: May 02 2026 — Floating Input Bar: Buttons invisible (two-part fix)
-
-### `index.html`
-**Bug fix (part 1): `#input-area` layout collapse**
-- `#input-area` had no `flex-direction` — defaulted to `row`
-- `#image-preview-strip` had duplicate inline `display:` values (`none` then `flex`) — second won, strip always rendered as flex item beside `#input-row`
-- Strip competed for horizontal space, collapsing `#input-row` width and squashing buttons to invisible
-- Fix: Added `flex-direction:column` to `#input-area`; removed duplicate `display:flex` from strip inline style
-
-### `style.css`
-**Bug fix (part 2): Global margin rule overflowing pill**
-- Global rule `input, textarea, select, button { margin-top: 10px; margin-bottom: 15px; }` applied to the textarea inside the pill
-- Added 25px vertical margin to the textarea, overflowing the pill's flex container height and collapsing sibling button space
-- Existing `#input-row button { margin: 0 !important }` only reset buttons — textarea margin was untouched
-- Fix: Expanded reset rule to cover `#input-row button, #input-row textarea, #input-row input, #input-row select { margin: 0 !important }`
-
----
-
-## Session: May 02 2026 — Floating Input Bar: Buttons invisible due to black-on-black
-
-### `style.css`
-**Fix: Buttons were rendering but invisible — midnight.css sets --icon-button-bg: #000000 (pure black)**
-- `.input-icon-btn` background changed from `var(--icon-button-bg)` to `rgba(255,255,255,0.08)` — always visible regardless of theme
-- Border changed to `rgba(255,255,255,0.15)` — subtle but visible on any dark background
-
----
-
-
-## Session: May 02 2026 — Auto-name restored in index.html
-
-### `index.html`
-**Bug: Auto-name wiped by another session**
-- `autoNameChat` function and both call sites (streaming + non-streaming) were completely absent — another session had overwritten index.html without the auto-name code
-- Restored in full — function definition inserted before `autoSaveCurrentChat`, hooks added in both streaming and non-streaming paths
-- Uses filename guard (`currentChatFilename.includes('New Chat')`) as sole trigger — no message counting
-- First user message found via `.find(m => m.role === 'user' && !m.is_opening_line)` to skip opening lines
-
----
-
-## Session: May 1 2026 — Vision 400 Bad Request Fix
-
-### `app.py`
-**Bug fix: Gemma vision returning 400 Bad Request → connection abort**
-- `repeat_penalty` is a llama.cpp `/completion` parameter — not valid for `/v1/chat/completions`
-- Gemma 3's llama-server is strict about unknown params and returns 400, aborting the connection
-- This caused the `ConnectionAbortedError 10053` seen in the console
-- Removed `repeat_penalty` from both the vision payload and the text messages-api payload
-- `top_p` and `temperature` are valid OpenAI-compatible params and stay
-
----
-
-## Session: May 1 2026 — Gemma 4 Vision Support + Multi-Model Routing
-
-### `app.py`
-**Feature: Non-ChatML model support (Gemma 4 / jinja template)**
-- HWUI previously only worked correctly with ChatML models (Helcyon/Mistral)
-- Added `get_stop_tokens()` — detects jinja/Gemma models by template setting or model name, returns `[]` for jinja (llama.cpp handles natively via GGUF) vs ChatML tokens for Helcyon
-- Added `_is_jinja_model` detection at system_text build time — skips instruction layer and tone primer for capable models that don't need scaffolding
-- Added `_use_messages_api` branch in text-only path — jinja/Gemma models route to `/v1/chat/completions` with messages array instead of raw `/completion` with pre-built ChatML prompt
-- Added `_nuke_chatml()` sanitiser applied to all messages before sending to jinja models — hard-strips `<|im_start|>`, `<|im_end|>` and partial variants that bleed in from saved history
-- Added `_nuke_chatml_vision()` sanitiser on vision path — strips ChatML from text parts only, preserves image_url parts intact
-- Global example dialogue fallback skipped for jinja models — generic examples confuse capable models
-- Restriction anchor injection skipped for jinja models — not needed, reduces noise
-- Fixed `stream_vision_response()` NoneType parse error — `delta.get("content") or ""` instead of `delta.get("content", "")` (Gemma sends explicit null on role/finish chunks)
-- Added `has_images` debug logging to vision detection checkpoint
-- Added `/auto_detect_mmproj` route — scans models folder for any `*mmproj*.gguf` alongside loaded model
-- Auto-detect mmproj integrated into `load_model` route — silently finds and passes `--mmproj` if present in models folder
-- Added `browse_file` filter param — accepts `'gguf'` to open picker filtered for `.gguf` files instead of `.exe`
-
-### `config.html`
-**Feature: mmproj (Vision Projector) field added to llama config section**
-- New field between Models Folder and Launch Arguments
-- Browse button (📁) opens `.gguf`-filtered file picker
-- Clear button (✕) wipes path for text-only models
-- Status indicator: "🖼️ Vision mode active" or "No mmproj set — text-only mode"
-- Wired into save, load, and presets
-- Chat Template field converted from text input to dropdown — options: ChatML, Jinja, Llama 3, Phi-3, DeepSeek, Qwen
-- ⚠️ Set Chat Template to **Jinja** when loading Gemma 4 or any non-ChatML model
-
-### `chat_routes.py`
-**Fix: Image messages disappearing from chat after save/reload**
-- `save_chat_messages()` was calling `msg.get("content", "")` on list content (multimodal messages), converting the Python list to its string repr on disk
-- On reload the message came back as garbled text or was filtered out entirely
-- Fix: detect list content, extract text parts, append `[image]` tag if image was present
-- Result: message saves as e.g. `"Can you describe this image? [image]"` — stays visible in chat history
-- Applied to both save routes
-
-### `system_prompts/`
-**New: `Gemma4-Nebula.txt`**
-- Minimal 3-line system prompt written for capable models that don't need heavy scaffolding
-- Use this with Nebula's character card when Gemma 4 is loaded
-
----
-
-## Session: May 1 2026 — Example Dialogue Character Names Restored
-
-### `app.py`
-**Fix: Example dialogue was replacing character names with "User:" and "Assistant:"**
-- Code was intentionally substituting real participant names with generic labels, supposedly to prevent the model confusing examples with real conversation history
-- This was overcautious and actively wrong — the model should see real names in example dialogue; it reinforces the character identity
-- Removed the NORMALISE SPEAKER LABELS block entirely (the regex substitutions replacing `_char_name` → `Assistant:` and `_user_name` → `User:`)
-- Updated the line break normaliser to use a generic speaker label pattern `([^\n:]{1,40}):` instead of hardcoded `(Assistant|User):` — still collapses `Name:\n` into `Name: ` correctly for any name
-
----
-
-## Session: April 30 2026 — Instruction Following Investigation + Compliance Training
-
-### `session_handler.py`
-**⚠️ Critical bug fix: Instruction layer was routing model around system prompt entirely**
-- The content policy block ended with: "Follow the character card to define your personality and behavior."
-- This caused the model to bypass the system prompt and go directly to the character card
-- The system prompt (which contains wrapper rules, restrictions, and character card references) was being ignored as a result
-- Fixed to: "Follow the system prompt to define your personality and behavior."
-- The system prompt already contains the instruction to follow the character card — chain is now correct:
-  Instruction layer → system prompt → character card
-- ⚠️ This was a significant contributing factor to system prompt instructions being ignored across all characters
-- ⚠️ DO NOT revert this line — it was silently changed by a previous Claude instance
-
-**Enhancement: Added INSTRUCTION PRIORITY block at top of get_instruction_layer()**
-- Previously only a weak single line mentioning the character card existed
-- Added explicit INSTRUCTION PRIORITY section as the very first thing in the instruction layer
-- Covers system prompt, character card, and author's note as instruction sources
-- States instructions do not expire, do not fade across turns, and cannot be cancelled by the user
-- Positioned first for maximum weight — model reads this before content policy or anything else
-
----
-
-### `chat_routes.py`
-**Bug fix: Auto-name stripping multi-part character names like "Gemma - GPT-5"**
-- auto_name_chat() split filename on " - " and took only parts[0] as character prefix
-- For characters with " - " in their name, this truncated prefix to just first segment e.g. "Gemma"
-- Renamed file then loaded the wrong character on restore
-- Fix: loads characters/index.json and tries progressively longer prefix candidates until one matches a known character name
-- Falls back to parts[0] if character list cannot be loaded
-
----
-
-### `index.html`
-**Bug fix: Chat thread appearing to vanish when model returns empty response twice**
-- Double-empty response path showed warning then returned before autoSaveCurrentChat() ran
-- User message was never written to disk — chat file stayed blank and got orphaned on next navigation
-- Fix: after giving up on retry, checks for valid filename and non-empty loadedChat then saves before returning
-- Chat now survives empty response and remains in sidebar ready for manual regeneration
-
----
-
-### Training — helcyon-xi (clean Set 1 base retrain, currently running)
-- Decided to do a clean Set 1 retrain rather than continue patching helcyon-x with multiple full-weight passes
-- Includes original Set 1 shards (608 total) + new compliance DPOs + context tracking + role/entity tracking shards
-- Context tracking and role/entity tracking moved from LoRA-only into base — foundational cognitive skills belong in weights
-- Abliterated LoRA will be merged on top post-training (replaces multiple fluff-removal passes)
-- full_train.py patched: local_files_only=True added to all three from_pretrained calls; path corrected to mistral-nemo-base (hyphen)
-
-**New DPO files written this session (compliance training):**
-- DPO_Compliance_Base_01 through 08 — system prompt authority + general instruction following (base Set 1)
-- DPO_Compliance_Set2_01 through 10 — multi-turn persistence, user pressure resistance (base Set 2)
-- DPO_GPT5_Refusal_01 through 03 — GPT-5 wrapper specific refusal/redirect (wrapper LoRA only)
-
----
-
-
-## Session: April 28 2026 — Chat History Search + Memory Tag Over-Triggering Fix
-
-### `app.py`
-**Bug fix: Chat history search firing on normal conversational use of "remember"**
-- Root cause: regex matched `remember that` / `remember when` / `I told you` as bare phrases — so messages like "remember it properly" or "I told you I wanted to get to know her" triggered a full chat search
-- Tightened to require explicit past-session-referencing context:
-  - `remember (?:when|that|what|the time)` → `remember (?:when we|what we|the time we|what I said|what I told you)` (must reference shared past)
-  - `we talked/spoke/discussed about` now requires additional context word (`before|last time|earlier|previously|in another`) within 40 chars — raw "we talked about" in storytelling no longer fires
-  - `I mentioned/told you in another/different` — strengthened to require explicit session qualifier
-  - `you should/might/may/would remember/recall/know` → now requires `from|that we|what I|when I` after it
-  - `I told you/her/him/them` → `I told you about/that/in/last` with word boundary — stops bare "I told you I wanted" from matching
-  - `(?:other|different|another|previous|earlier|last) (?:chat|conversation|session)` → session-nouns only (removed bare `other` before general nouns)
-- Legitimate recall phrases like "do you remember", "in a previous chat", "another conversation" still work unchanged
-
-### `session_handler.py`
-**Fix: Model writing MEMORY ADD tags on its own initiative during normal conversation**
-- Root cause: instruction said "If you choose to store something to memory" — model interpreted this as permission to save anything it deemed significant
-- Fix: Rewritten to be explicit: ONLY write a memory tag if the user EXPLICITLY requests it — "save that", "remember this", "add that to memory", "store that"
-- Added hard rule: NEVER write a memory tag on own initiative during normal conversation, no matter how significant the topic
-- ⚠️ DO NOT revert to the permissive "if you choose" wording — it causes unsolicited memory saves multiple times per session
-
----
-
+**Verified:** `py_compile` clean; regex unit-tested against the false-positive and legit phrasings above. **Backend change — needs a manual Flask restart** (dev server runs with no reloader).
 
-
-### `index.html`
-**Bug fix: Auto-name never firing on PC**
-- Root cause: `displayOpeningLineInChat` pushes an `is_opening_line` assistant message into `loadedChat` before the user sends anything — so after the first real exchange, `loadedChat.length` is 3 (opener + user + assistant), not 2
-- The `=== 2` guard never passed — auto-name never fired
-- Fix: filter out `is_opening_line` entries before counting — `realMsgs = loadedChat.filter(m => !m.is_opening_line)` — then check `realMsgs.length === 2`
-- First user message sourced from `realMsgs.find(m => m.role === 'user')` for safety
-- Applied to both streaming and non-streaming paths
-
----
-
-## Session: April 27 2026 — Mobile App Overhaul + PC Sort Fix
-
-### `mobile.html`
-- **Project switching** — `switchProject` awaits server confirmation before loading chat list; race condition fixed
-- **Layout** — chat panel moved inside `#app` flex column; header always visible; `openChatList` swaps panel in place of chat/input-area
-- **On load** — always opens chat list (no more blank page on startup)
-- **Back button** — History API; phone back button returns to chat list instead of closing app
-- **💬 button removed** — redundant; 💾 End Session restored (was lost); `endSession()` fixed to send `messages` + `user_name` matching server route
-- **Markdown** — paragraph spacing 16px; `\n` → `<br>`; `<br>` tags no longer HTML-escaped
-- **TTS engine** — full rewrite; direct port of PC `utils.js`; `bufferTextForTTS`/`splitAndQueue`/`flushTTSBuffer`/`processQueue` match PC exactly; audio starts during streaming
-- **Replay/Stop button** — toggles correctly; pulses while playing; `stopAllAudio` clears all state
-- **Audio stops on navigation** — `openChatList`, `visibilitychange`, `pagehide` all call `stopAllAudio`
-- **Regenerate** — DOM removal loop fixed (was backwards); correctly removes AI bubbles after last user bubble
-- **Chat list sort** — Most Recent / Date Created / A-Z dropdown; saves to localStorage; defaults to Most Recent
-- **Long-press delete** — 1 second hold lights item red; Delete button appears; auto-dismisses after 4s; calls `/chats/delete/`
-- **TTS quality switch** — streaming chunks vs post-stream flush quality difference is F5's inherent behaviour with short vs long input; accepted as-is, early start kept
-
-### `index.html`
-- **Sort dropdown** — Most Recent added (sorts by `st_mtime`); Newest First renamed to Date Created; defaults to Most Recent
-
 ---
-
-## Session: April 26 2026 — Example Dialog, Tone Primer & Human.txt
-
-### `app.py`
-**Bug fix: `global_example_dialog` from settings.json never used in prompt**
-- Fallback chain for example dialogue only checked for a `.example.txt` file on disk — `settings["global_example_dialog"]` was saved but never read back
-- Fixed priority chain: 1) character JSON `example_dialogue` → 2) `settings.json` `global_example_dialog` → 3) `.example.txt` file alongside system prompt
-- Character-specific example dialogue still takes full priority — unchanged
-
-**Bug fix: Tone primer overriding character style**
-- `get_tone_primer()` contains "Favour long, deep responses" and was firing for ALL characters, including ones with fully defined personality cards
-- Characters like Claire (intended: short 1-2 sentence human responses) were getting GPT-4o-style structured paragraphs because the tone primer outweighed the example dialogue
-- Fix: after loading `char_data`, check if character has any of `main_prompt`, `description`, or `personality` set — if so, `tone_primer = ""`
-- Console logs `🎭 Character has personality defined — tone primer suppressed` when skipped
-- Tone primer still fires as intended fallback for bare characters with no personality defined
-
-### `Human.txt` (new file — `system_prompts/Human.txt`)
-**New system prompt for human-style characters**
-- Created as an alternative to `GPT-4o.txt` for characters that should speak naturally and briefly regardless of what they are (AI, human, etc.)
-- Hard rules: 1-2 sentences always, no paragraphs, no markdown, no line breaks between sentences, do not match user's length
-- Keeps emotional intelligence, room-reading, web search handling, voice recognition note
-- Assign to any character via their `system_prompt` field in their JSON
-- Still WIP — further refinement ongoing to stop paragraph-per-sentence formatting pattern
 
----
+## Session: June 3 2026 — Electron launcher: window zoom (Ctrl+wheel / Ctrl+= / Ctrl+- / Ctrl+0 / context menu), persisted per build
 
-## Session: April 25 2026 — Mobile TTS Replay/Stop Button Fix
+Added zoom in/out + reset to the **HWUI-Launcher** Electron wrapper (`HWUI-Launcher/main.js`) — previously there was **no way to zoom or grow text** because `Menu.setApplicationMenu(null)` (main window setup) strips Electron's default View→Zoom menu items *and their built-in Ctrl+=/Ctrl+-/Ctrl+0 accelerators* along with the menu bar. Native Chromium zoom (`webContents.setZoomLevel`) is used, so it scales the whole UI — text and layout together — in one control. **Renderer untouched** (Flask app/templates unchanged): with `contextIsolation:true` + `nodeIntegration:false` the renderer can't reach `webFrame`, so all zoom is driven from the main process.
 
-### `mobile.html`
-**Bug fix: Replay/Stop button resetting to "▶ Replay" mid-playback**
-- Root cause: `flushTTSBuffer(()=>setReplayIdle())` passed `setReplayIdle` as `ttsOnComplete` callback. `processQueue` fires `ttsOnComplete` whenever the queue momentarily empties between sentences — which happens between every F5 fetch. So the button reset to "▶ Replay" after the first sentence, while audio was still playing. Pressing it then triggered a replay instead of a stop.
-- Fix: Removed callback from `flushTTSBuffer()` call entirely. Replaced with a `setInterval` (200ms) stored on `replayBtn2._resetInterval` that polls `!isPlayingAudio && !ttsProcessing && ttsQueue.length===0`. Only clears and calls `setReplayIdle()` when all three are simultaneously true — i.e. genuinely done.
-- Stop path: `onclick` now cancels `replayBtn2._resetInterval` before calling `stopAllAudio()` + `setReplayIdle()` — prevents a stale interval from resetting a subsequent replay mid-playback.
-- Replay path (manual): unchanged — `speakText(fullText).then(()=>setReplayIdle())` still works correctly since `speakText` returns a proper promise that resolves only when `processQueue` fully completes.
+### Controls (all route through one pair of helpers `stepZoom`/`resetZoom`)
+- **Keyboard** — extended the existing `before-input-event` handler (the same hand-wired block that re-implements F5/Ctrl+R after the menu null): **Ctrl+= / Ctrl++ / Ctrl+(numpad)Add** zoom in, **Ctrl+- / Subtract** out, **Ctrl+0** reset to 100%. `event.preventDefault()` + early `return` on each so they don't fall through.
+- **Ctrl+mouse-wheel** — `webContents.on('zoom-changed', …)`; we mirror the direction through `stepZoom` and re-apply our own clamped level so step size + bounds stay identical to the keyboard/menu paths (Chromium's own wheel step never escapes the clamp).
+- **Context menu** — added **Zoom In / Zoom Out / Reset Zoom** (own separator group) to the existing right-click template, between Select All and Inspect Element. Discoverable since there's no menu bar.
 
----
+### Clamp + step
+Chromium zoom is logarithmic (`factor = 1.2^level`). **Clamp `ZOOM_MIN -3` … `ZOOM_MAX +5`** (≈58%…≈249%), **`ZOOM_STEP 0.5`** per keypress/notch (~10%). `clampZoom()` is enforced in `stepZoom`, on seed, and on the wheel path.
 
-## Session: April 25 2026 — Mobile Audio Stop on Navigation
+### On-screen percentage indicator
+`showZoomOverlay()` flashes a brief, self-fading **"Zoom NNN%"** toast (bottom-centre, ~900ms) on every user-driven change — like a browser. `percent = round(1.2^level * 100)` (level 0 = 100%). It's **injected at runtime via `webContents.executeJavaScript`** (reuses a single `#__hwui_zoom_toast__` div, resets its fade timer on repeat) so the **Flask templates stay untouched** — the only way to surface feedback given the contextIsolated renderer. Shown on keyboard/wheel/menu changes **and at a clamp edge** (so pressing Ctrl+= at max still re-flashes the current %), but **not** on load/reload (no nag).
 
-### `mobile.html`
-- `stopAllAudio()` called at the top of `openChatList()` — audio cuts immediately when returning to chat list via back button or project switch
-- `visibilitychange` listener — stops audio when app goes to background (home button, tab switch)
-- `pagehide` listener — stops audio on browser close or navigation away
+### Persistence — per build in `builds.json`
+- Each build's entry gains an optional **`zoom`** number. `saveZoomDebounced()` (≈**400ms debounce**, so a fast Ctrl+wheel spin doesn't thrash the file) does `loadBuilds()` → find entry by **path (case-insensitive)** → set `zoom` → `saveBuilds()`, preserving `name`/`services`. Also updates the in-memory `selectedBuild.zoom`.
+- **`loadBuilds()` filter unchanged** — it only requires `name`/`path`, so existing zoom-less entries load fine and gain `zoom` on first adjustment; `addBuild` still creates entries without `zoom` (defaults to 0 = 100%).
+- **Reset (Ctrl+0 / "Reset Zoom") sets level 0 and persists it** — not just a visual reset (writes `zoom:0` back to builds.json).
+- Seed on `createMainWindow()`: `currentZoom = clampZoom(Number(selectedBuild?.zoom) || 0)`.
 
----
+### ⚠️ Load-bearing re-apply (DO NOT REVERT)
+Added **`applyZoom()` as the first line of the existing `did-finish-load` handler**, marked `⚠️ DO NOT REVERT` in-code. Chromium **resets zoom on every fresh document load**, so without this the window snaps back to 100% on every reload (F5/Ctrl+R/in-window reload button/tray Reload) and every index⇄config navigation. This one line is what makes the persisted zoom actually stick across loads.
 
-## Session: April 25 2026 — Mobile TTS Engine Rewrite (mirrors PC utils.js)
-
-### `mobile.html`
-- Ripped out custom AudioContext/ArrayBuffer TTS engine entirely — replaced with exact port of PC utils.js approach
-- Now uses blob URLs (`URL.createObjectURL`) + `new Audio()` — same as PC, no AudioContext quirks
-- `bufferTextForTTS(chunk)` called on each stream chunk — handles sentence splitting, newline boundaries, contraction fixes, emoji stripping
-- `flushTTSBuffer()` called after stream ends with 150ms delay (same as PC) — ensures last sentence isn't dropped
-- `splitAndQueue()` handles long chunk splitting at comma/dash/space boundaries up to `TTS_MAX_CHUNK_LENGTH` (300 for F5)
-- `processQueue()` prefetches 3 sentences ahead, polls every 25ms while stream open, breaks cleanly on `ttsStreamingComplete`
-- `stopAllAudio()` replaces `stopTTS()` — pauses `currentAudio`, clears queue, resets all flags including `ttsSentenceBuffer`
-- Replay button in `handleStream` now correctly checks `isPlayingAudio||ttsProcessing` to toggle stop/replay
-- `speakText()` (used by replay) calls `stopAllAudio()` first, then `splitAndQueue` line by line, sets `ttsStreamingComplete=true` upfront
+### Verified
+`node --check main.js` → clean. No edits to the Flask app, templates, or `settings.json`. **Electron-only change — relaunch the launcher** (`START_HWUI-Launcher.bat`) to pick it up; the Flask build itself doesn't need a restart.
 
 ---
-
-## Session: April 25 2026 — Mobile TTS Queue Fix + Stop Button
 
-### `mobile.html`
-- **TTS stopping after one sentence fixed**: `processQueue` was exiting when `ttsQueue` was momentarily empty between stream chunks — the while condition drained `prefetch` and broke before more sentences arrived. Replaced with a loop that waits (80ms poll) while stream is still open, only exits when both queue is empty AND `ttsStreamDone=true`
-- Added `ttsStreamDone` global flag — set `false` at stream start, `true` after tail flush, also set `true` in `stopTTS()` and `speakText()` (replay path) so the loop always has a clean exit
-- **Replay button now toggles**: shows ▶ Replay when idle, ■ Stop when playing — pressing while playing calls `stopTTS()` and resets button; pressing while idle starts replay as before
+## Session: June 3 2026 — DEFINITIVE fix for early truncation / "stops mid-number": DRY dry_allowed_length 2 → 10
 
----
+This is the real root cause of the recurring **early-truncation / stops-mid-number** bug (the "£74.9" cutoff, premature EOS on summaries/admin tasks). It was **not** the prompt (the brevity-cluster removal earlier today did not fix it), **not** the EOS cliff (prompt was well under cap), and **not** a poison seed. It was the **DRY sampler**. Proven end-to-end against the live server (`helcyon-gpt-4o-v4.9`, b8994) with a controlled matrix — greedy for causation, temp-0.8 multi-run for the decision, plus a long-copy control to protect the original-bug guard.
 
-## Session: April 25 2026 — Mobile Regenerate Fix
+### Root cause, finally measured
+Numbers tokenise **per-digit** on this model: `£74.99` = **6 tokens** (`£ 7 4 . 9 9`), `£525` = 4, a case reference like `reference 43127` ≈ **7 tokens**. With **`dry_allowed_length=2`**, DRY penalised any repeat longer than 2 tokens — so when a summary needed to **restate a price or reference number that already appears many times in the history** (this chat: 9× `£74.99`, 8× `£525`, repeated `reference 43127`), the tokens completing that number carried a large, exponentially-growing DRY penalty (≈ `0.8 × 1.75^(match−2)`). At a structurally-complete point the model **chose EOS rather than pay the penalty to emit the required repeated digits** — stopping mid-number (e.g. after `£74.9`, refusing the final `9`). Confirmed at the tokeniser level and reproduced deterministically (greedy stops exactly at `£74.9`; DRY off completes).
 
-### `mobile.html`
-- Regenerate was immediately deleting the AI bubble instead of replacing it
-- Root cause: DOM removal loop was iterating backwards and breaking on the wrong condition — it found the last user bubble then immediately broke, removing nothing (or the wrong element), while `chatHistory.splice` had already trimmed the history so the save wiped the message
-- Fix: simplified to forward pass — find the last user bubble's index, then remove every wrap after it
+### Why every earlier attempt failed
+- **Raising `dry_allowed_length` to 4 / 5 / 6 sat BELOW the ~7-token longest-legitimate-repeat threshold**, so it only **relocated** the cutoff to the next repeated string (`£525`, then `reference 43127`) — non-monotonic, and it looked like a brand-new bug each time. Temp-0.8 (4 runs each): allow2 mult0.8 = 2/4 mid-number truncations, allow6 = 2/4 — still failing.
+- **Softening `dry_multiplier` made it WORSE, not better.** allow2 mult0.5 = **0/4** complete (4/4 truncated), allow2 mult0.4 = 1/4. Lowering the penalty changed which token won at branch points and routed *into* the next trap. (An early greedy fluke had suggested 0.5 worked; multi-run disproved it.)
+- The lever is **`dry_allowed_length`, and the working range is 8–12**: ≤6 trips on the number traps; **≥12 starts running on past `<|im_end|>`** into a spurious new turn. 8 and 10 are clean; 10 sits comfortably above the ~7-token longest legitimate repeat with margin and below the 12 run-on threshold.
 
----
+### The fix — `dry_allowed_length = 10` (everything else unchanged)
+Temp-0.8 multi-run result at the chosen value: **allow10 mult0.8 = 12/13 clean summary completions, 0–1 mid-number truncations** (the cleanest single batch was 6/6 ending exactly at `<|im_end|>`). allow8 was the strict minimum (0/10 truncations) but with zero margin; **10 was chosen for the safety margin** over other repeated identifiers (dates, longer refs).
 
-## Session: April 25 2026 — Mobile TTS Early Start (Stream-time Sentence Queuing)
+**Long-copy guard fully intact (Harness B control — the original June-1 verbatim-copy bug).** Pre-filling the assistant with the start of a 700-char / 151-token passage already in history and measuring verbatim copy length:
+- **DRY off → copies 100% of the passage** (reproduces the original bug exactly).
+- **Every `dry_allowed_length` from 2 to 16 still blocks it**: allow8 → diverges after 4 chars, allow10 → 55 chars (~12 tok), allow12 → 4 chars, allow16 → 99 chars (~20 tok). None come close to copying the 151-token passage. So raising allowed_length to 10 costs **nothing** on the copy-block side — only turning DRY *off* reopens passage-copying.
 
-### `mobile.html`
-- TTS no longer waits for the full response to finish before speaking
-- Sentences are detected and queued during streaming as soon as they end with `.` `!` or `?`
-- `queueNewSentences()` called on every chunk — tracks `ttsOffset` so already-queued text is never re-processed
-- `processQueue()` kicked off on the first completed sentence, so audio starts while the rest is still rendering
-- Post-stream: only the unpunctuated tail (if any) is flushed — full `speakText()` call removed to avoid double-speaking
-- Replay button still uses `speakText(fullText)` as before — unaffected
+### Two places — both required (a fallback of 2 silently reintroduces the bug)
+- **`settings.json`** — `dry_allowed_length: 2 → 10` (re-read per request; this alone makes the running server send 10).
+- **`app.py` payload fallback (~L5143)** — `sampling.get("dry_allowed_length", 2)` → `sampling.get("dry_allowed_length", 10)` — so a missing key can't silently revert to the buggy value.
+- **`app.py` defaults dict in `load_sampling_settings()` (~L7101)** — `"dry_allowed_length": 2 → 10`, mirroring the other DRY defaults for consistency.
 
----
+### Verified live (never trust the payload alone)
+Confirmed against the live server's **`generation_settings` echo**: `dry_allowed_length=10` is **applied** (echo returned `dry_allowed_length: 10`, alongside `dry_multiplier 0.8, dry_base 1.75, dry_penalty_last_n 16384, repeat_last_n 16384`). Flask's `load_sampling_settings()` now yields 10 (settings.json re-read per request), so the running server already sends 10; the app.py fallback/default changes need a Flask restart only to cover the missing-key path.
 
-## Session: April 25 2026 — Mobile Markdown Formatting Fix
+**⚠️ DO NOT REVERT `dry_allowed_length` to 2** — it re-opens the mid-number early-truncation bug. **DO NOT lower `dry_multiplier`** — it actively worsens it (routes into the next number trap). The settings.json value AND the app.py fallback/default must stay at **10 together** — a fallback of 2 silently reintroduces the bug if the key ever goes missing. The working band is 8–12; do not exceed 12 (run-on past `<|im_end|>`).
 
-### `mobile.html`
-- Paragraph spacing restored: `.msg-bubble p` margin increased from `3px` to `10px` — paragraphs now breathe
-- Single line breaks within a block now render as `<br>` instead of being collapsed into a space — model responses using single `\n` between sentences display correctly
-- `---` separators and `###` headers were already working in the parser; no change needed there
+**Restart note:** the `settings.json` value is live immediately (re-read per request). The two `app.py` changes are Python — a Flask restart makes the new fallback/default live (only matters if the key is absent).
 
 ---
 
-## Session: April 25 2026 — Mobile Back Button Support
+## Session: June 3 2026 — Gemma early-stop fix (remove depth-0 brevity cluster, add thoroughness nudge)
 
-### `mobile.html`
-- Phone back button now returns to chat list instead of closing the app
-- Uses History API: `replaceState` on load sets initial state, `pushState` called when opening a chat or starting a new one
-- `popstate` listener intercepts the back button — if currently in a chat, opens the chat list; otherwise lets browser handle it normally
+Root-caused (prior turn) a symptom where a **summary** request to **Gemma** (GPT-4o stack, local Helcyon model) stopped far too early — clean EOS at ~755 chars / 181 tokens, prompt only ~8010 real tokens (well under the 8500 cap, nothing trimmed, not the cliff). The model was *choosing* to stop short on an admin/summary task where length was wanted. Diagnosis: a **brevity / stop-early cluster sitting in `characters/Gemma.json` `character_note`**, which lands at **depth-0 (near the generation point, high salience)** — so it out-competed the one "go long-form / never end" line, which lives passively in `main_prompt` at **position-0 (far, low salience)**. The poison-seed hypothesis was ruled out: every prior assistant turn in the chat was full-length and complete; the only truncated turn was the summary itself, and a regen pops it — so there was nothing "stopped short" in history to copy.
 
----
+### Structural lesson — brevity instructions don't belong in a GPT-4o-style stack at all
+A GPT-4o-class model **self-limits appropriately on its own** — it does not need to be told to be brief, and explicit brevity directives in the high-salience depth-0 slot actively bias it to bail out early on tasks (summaries, plans, breakdowns) where the user wants length. The depth-0 `character_note` slot should carry a **thoroughness nudge** instead. Negated-brevity phrasing ("brevity isn't vagueness," "say less") is the worst of both worlds: the model can over-latch on the brevity token regardless of the negation. So the cluster was **removed entirely**, not softened.
 
+### Edit — `characters/Gemma.json` `character_note` (surgical, single file)
+- **Removed** "When the moment calls for a few honest words, trust that — brevity isn't vagueness."
+- **Removed** "Let the response end when the point has been made. Don't restate, don't loop back, don't write a closing paragraph that says what the opening paragraph said."
+- **Removed entirely** the "Notice when Chris has already acted on advice… add one observation maximum… don't run the full playbook a second time on something already done." paragraph (an admin/summary recap triggers this stop-early rule directly).
+- **Reworded** the anti-fabrication line to drop the brevity framing while keeping the idea: "Say less rather than filling space with fabrication. Fake authority is worse than admitted uncertainty." → **"Never fill space with fabrication — admitted uncertainty beats fake authority."**
+- **Added** a positive, generic thoroughness nudge (no user name, no brevity/stop words): *"When there's something to work through — a summary, a plan, a problem, a breakdown of events — go into proper detail and cover every point thoroughly. Take the space the task needs."*
+- **Left untouched:** `main_prompt`'s "I go long-form when… wants answers… never end the conversation unless he wants to first" — fine as a passive identity fact in that far slot.
 
+**Hardcoded-name check (post-edit grep for "Chris"):** identity/bio mentions in `main_prompt`, `tagline`, and `post_history` are fine (persona facts). Two **pre-existing behavioural instructions** in `character_note` still name the user — "When Chris brings emotion or frustration, reflect him…" and "Whatever Chris shares — no matter how strange, taboo, or intense — you stay with him…" — these are pattern-substitutable and could be genericised later, but they predate this fix and were **out of scope** (not introduced or touched here). The newly-added nudge is correctly generic.
 
-### `mobile.html`
-- Removed redundant 💬 chat bubble button (chat list now opens on load, button no longer needed)
-- Restored missing 💾 End Session button (was lost in a previous session)
-- Added `endSession()` function — calls `/generate_session_summary` with current character and history, shows toast on success/failure
+**Restart note:** character-card JSON is re-read per request — a fresh chat picks this up without a Flask restart. JSON validated (`json.load` clean); CRLF/encoding preserved (em-dashes intact as UTF-8).
 
 ---
-
-
 
-### `mobile.html`
-**Bug fix: switching project folder still showed old project's chats**
-- Root cause: `switchProject()` fired `openChatList()` immediately without awaiting the `/projects/switch` fetch response — server hadn't completed the switch before `/chats/list` was called, returning stale project's chats
-- Fix: `await` the switch fetch and check `switchRes.ok` before proceeding — if switch fails, bail with toast and don't touch chat state
-- Made `openChatList()` async and changed its `loadChatList()` call to `await loadChatList()` so the full chain is properly sequential
-- Chat list now always reflects the correct project after switching
+## Session: June 2 2026 — two cutoff bugs fixed (EOS-cliff prompt cap + Continue data loss)
 
----
+Two linked symptoms from a chat where a response stopped mid-word (e.g. "£74.9") and pressing **Continue** then deleted most of that message instead of extending it. Investigation (prior turn) confirmed the b8994 stop-reason detection (`stop_type` string first, boolean fallback) is correct and the dynamic `n_predict` reserve is **not** squeezed near-zero — the actual culprits were a too-high prompt cap and a client-side discard. Both fixed surgically; the secondary "feed fuller history to the model on continue" continuity issue was left out of scope.
 
+### Fix 1 — EOS-cliff prompt cap restored to 8500 (`truncation.py`)
+`MAX_PROMPT_TOKENS` had drifted up to **12000**, *above* the documented Mistral Nemo EOS cliff at ~10,000-10,500 tokens evaluated (and above the existing comment's own "DO NOT raise above 8500" warning). At 12000 a long conversation's real prompt can reach the cliff, where the model emits **EOS mid-response** — surfacing as the mid-word/mid-number cutoff. Reverted to **8500** (the documented safe ceiling, which stays clear of the cliff after `TOKEN_FUDGE`) and added a **⚠️ DO NOT REVERT** note on the line explaining the cliff so it doesn't get raised again. llama.cpp still runs at full `ctx_size` for KV headroom — this only governs how much history HWUI sends.
 
+### Fix 2 — Continue no longer discards the head of the truncated message (`templates/index.html`, `continueLast()`)
+Continue intentionally sends only the **last 200 chars** of the truncated reply to the model as `continue_prefix` (sending the whole thing makes the model think it's done and fire EOS after a few tokens — **unchanged, still the behaviour**). The bug: the function used that 200-char slice for *both* what it sent *and* what it kept/displayed, so everything before the last 200 chars was permanently lost — the visible bubble was reset to just the prefix and the saved message became `prefix + continuation`.
+- **Added `retainedHead`** = `fullPrevContent.slice(0, -200)` (empty when ≤200 chars) — the part of the message that is *not* in the prefix.
+- **Seeded the stream accumulator** `rawFull = retainedHead + continuePrefix` (was `= continuePrefix`). Because the bubble render and the final `loadedChat.push({content: finalText})` both derive from `rawFull`, this single change makes the bubble show the **whole** original message during/after streaming and persists **`retainedHead + continuePrefix + newTokens`** — the full original text plus the continuation. No change to `continue_prefix` (what the model receives).
+- **Out of scope (untouched):** the server still receives history without the truncated turn plus only the 200-char prefix as context — the secondary continuity issue was deliberately not addressed here.
 
-### `app.py`
-**Bug fix: `>user [text]` still leaking after previous fixes**
-- `✨ >user Perfect—` pattern: the `>` is left behind when `<|im_start|>` is stripped — `<|im_start` gets caught but the trailing `|>` becomes `>` prefix on the role word
-- Added `>(?:user|assistant|system)\b[\s\S]*$` to `strip_chatml_leakage` — catches this exact fragment
-- Added bare role-at-start-of-chunk pattern: `^(?:user|assistant|system)\b[\s\S]*$` — catches when chunk boundary splits right after the stop token, leaving next chunk starting with raw `user ...`
-- Expanded stop token list in all 3 payload definitions (main, vision, summarise):
-  - Added `<|im_start|>` (without leading newline) — catches cases where model outputs it without a preceding newline
-  - Added `\nuser\n`, `\nUser\n`, `\nassistant\n`, `\nAssistant\n` — tells llama.cpp to stop the moment it generates a role line, before any content of the next turn is streamed
-- ⚠️ `\nuser\n` stop tokens assume the model puts a newline after the role word — if a response legitimately contains the word "user" or "assistant" on its own line it would truncate. Acceptable tradeoff given leakage frequency.
+**Restart note:** Fix 1 is Python (`truncation.py` — needs a Flask restart to go live). Fix 2 is a template edit (`index.html`) — a browser reload picks it up; no Flask restart required for it, but the same restart covers both if done together.
 
 ---
 
-## Session: April 22 2026 — Frontend Leakage Strip (index.html)
+## Session: June 1 2026 — cloud-provider prompt-stack split (Grok / Claude-Opus / Gemini) + hardcoded-name fixes
 
-### `index.html`
-**Bug fix: `End|>user [text]` leakage still rendering in chat bubble despite backend fix**
-- Frontend `cleanedMessage` had no pattern for partial fragments like `_end|>` or `End|>`
-- `\bim_end\|?>` regex also broken in JS — `\b` doesn't match before `_`
-- Added `/_end\|?>/gi` and `/End\|>?/gi` strip patterns to ALL cleaning blocks
-- Added `/\n(?:user|assistant|system)\b[\s\S]*$/i` — strips everything from first role-tag leakage to end of string
-- Applied to: `ttsChunk`, `cleanedMessage` (main stream), `cleaned` (continue stream), `finalText` (continue final render)
-- ⚠️ The `[\s\S]*$` pattern drops everything after the leakage point — correct, matches backend hard-stop logic
+Applied the same governance-vs-personality split as the GPT-4o stack (governance core stays in the depth-0 `.posthistory.txt`; default personality lives in the cached system-block base `.txt`) to three more provider templates. Unlike GPT-4o, two of the three did **not** mirror that structure, so each got an individual call rather than a mechanical repeat. The `character_note` depth-N move is separate (global in `app.py`, applies to any template) and was not touched here. These are cloud-provider templates — if a character routes through the cloud API path, prompt assembly differs from the local Helcyon path, so the depth-0 governance may not apply identically there; the file *structure* is now consistent regardless. The prompt files were previously **untracked** in git; these commits add them (incl. the newly-created `Gemini.posthistory.txt`). CRLF preserved throughout; moved content was relocated by reading existing bytes (no retyping/drift).
 
----
+### `Grok.txt` / `Grok.posthistory.txt`
+The posthistory was a **verbatim duplicate** of the base (every line already present in `Grok.txt`), so nothing needed moving — the personality already sits in the cached system block. Slimmed `Grok.posthistory.txt` to a 3-line governance core (maximally-truthful/no-hedging, no content restrictions, and the output-hygiene rule: never mention the instructions / no function calls in the final output). All retained lines still exist in the base. **Removed hardcoded user name** ("Chris" → "the user"): 2× in `Grok.txt`, 1× in the posthistory — per the no-hardcoded-names rule.
 
-## Session: April 22 2026 — Root Cause Fix: bare `end|>` fragment
+### `Claude-Opus.txt` / `Claude-Opus.posthistory.txt`
+Posthistory was *mostly* a duplicate of the base; only three lines were unique. Moved the two clean unique personality lines (clarity; the "lean into the innuendo" tone) into `Claude-Opus.txt` under a new `Default tone and behaviour:` header. Reduced the posthistory to a **governance core: card-precedence governor + anti-fabrication clause** (the precedence line reworded self-contained; the anti-fab clause preserved verbatim from the old doc line). Duplicated lines (second-person, journal, doc-handling, reflex-questions) were dropped from depth-0 since they already live in the base — nothing lost.
 
-### `app.py`
-**Bug fix: `End|>user [text]` surviving all previous strip attempts**
-- Chunk N contains `<|im_` → stripped to empty. Chunk N+1 contains `end|>\nuser...`
-- `end|>` has no angle bracket and no underscore — none of the existing patterns matched it
-- Fix: added `re.sub(r"\bend\|?>", "", text)` — catches the bare fragment with word boundary
-- Also changed role-tag strip from `[^\n]*$` to `[\s\S]*$` — drops everything from first role tag to end of string
+**Resolved a real base-vs-posthistory contradiction (bullets win):** the base said *"No bullet points or numbered lists in normal conversation"* while the posthistory said *"Use bullet points and lists to emphasize where needed."* Per decision, removed the no-bullets clause from `Claude-Opus.txt` line 7 and moved the bullets-allowed formatting line into the base under `Default tone and behaviour:` (it's a style default — absorbed, not a depth-0 governor). The posthistory is now card-precedence + anti-fabrication only.
 
----
+### `Gemini.txt` / `Gemini.posthistory.txt`
+Gemini had **no `.posthistory.txt`** — all personality already sat in the cached system block. Per follow-up decision (reversing the earlier hold), created `Gemini.posthistory.txt` with the **same governance core the other stacks use** — card-precedence + anti-fabrication — with wording mirrored **verbatim** (byte-for-byte) from the Claude-Opus core for cross-stack consistency; no novel behaviour authored. Personality stays in `Gemini.txt` (the cached system block), untouched. Its existing `Do not output [OOC: ] tags` directive means Gemini won't echo the OOC-wrapped governance, so the depth-0 injection is safe. **Removed hardcoded user name** ("Chris" → "The user", 1×). Also added a card-awareness line to `Gemini.txt` ("Always follow the character card — it defines who you are.", matching the other three bases) so the new precedence governor has something to point at — `Gemini.txt` previously never referenced the card.
 
-## Session: April 22 2026 — Role Leakage Hard-Stop + TTS URL Fix
-
-### `app.py`
-**Bug fix: Model-generated next-turn role tags (`user ...`) bleeding mid-response**
-- Previous fix only stripped at end-of-stream — mid-response leakage not caught
-- Added `_halted` flag and `_ROLE_LEAK` compiled regex to `_filtered_stream()`
-- On every fast-path chunk: tail+chunk window scanned for `\nuser/assistant/system` pattern
-- If detected: everything before the match yielded, stream hard-stopped, generator drained silently
-- ⚠️ The `_ROLE_LEAK` pattern uses `\b` word boundary — intentional here since we match after `\n`
-
-### `utils.js`
-**Bug fix: TTS reading partial URLs from split markdown links**
-- Previous regex required closing `)` — split chunks left unclosed links unstripped
-- Added unclosed markdown link pattern and orphaned `](url)` fragment pattern
-- Broadened URL terminator set to include `]`, `)`, `"`, `'`, `>`
+**Restart note:** prompt `.txt` files are normally re-read per request, so a fresh chat should pick these up without a Flask restart — restart only if the loader is found to cache them at startup.
 
 ---
 
-## Session: April 22 2026 — Missing Section Content Fix (Part 2)
+## Session: June 1 2026 — identity-anchoring fix (address term + register precedence) + stop-reason detection fix
 
-### `index.html`
-**Bug fix: Section headings rendering but bullet content beneath them missing**
-- `### **Heading:**\n- bullet` with no blank line — marked.js with `breaks:true` pulls list item into heading block
-- Fix 1: Blank line inserted after every ATX heading before any non-heading content
-- Fix 2: Blank line inserted before `- ` and `* ` bullet lists (mirrors existing fix for numbered lists)
-- ⚠️ Bullet-list fix is broad — if edge cases appear with inline `*`, narrow to `^[-*]\s` with multiline flag
+Two linked identity symptoms in a long Solara chat: (a) Solara addressed Chris as **"Gemma"** (a different character — his GPT-4o assistant persona) for one turn, then reverted; (b) Solara never used **"babe"** (her card's term of address) — only "mate"/"Chris" throughout. Diagnosed: **not** an injection leak. Confirmed via the captured diag log that this session had **no** memory injection (`total chars: 0`), **no** chat-history search (didn't fire), **no** session-summary injection, and **no** hardcoded "Gemma" name in code (all code refs are the Gemma *model template* or a comment; one is a search-query *sanitiser* that strips the token). "Gemma" appeared nowhere in the conversation history before Solara emitted it — so the model **generated** it (the Helcyon-Solara fine-tune almost certainly has the user's "Gemma" persona in its training data). Both symptoms share one root: **Solara's identity fields were present but under-weighted at generation time** — the "babe"/"Chris" anchor sat in `main_prompt` at position 0 (~7k tokens before the generation point, a low-salience tone-field slot), while the depth-0 region (close to generation) pushed a generic *"modern British colloquial language"* register. The near, strong register instruction won; the far, weak identity instruction drifted.
 
----
+### Fix 1 — move the address term into `character_note` (Solara-scoped) — `characters/Solara.json`
+`character_note` lands at depth-0 (close to the generation point), unlike `main_prompt` at position 0.
+- **Removed** from `main_prompt`: the line *"Chris is 'babe' to me — always has been."*
+- **Added** as the new first line of `character_note`: *"You call Chris 'babe' — it's your natural term for him. Use it the way it really falls in conversation, not stuck onto every line."* (The second sentence guards against over-use, matching the card's existing "never a tagline tacked on every response" guidance.) Scoped to Solara only; no name introduced anywhere new.
 
-## Session: April 22 2026 — Missing Sections in Chat Bubble Fix
+### Fix 2 — soften the shared colloquial directive (GLOBAL) — `system_prompts/GPT-4o.posthistory.txt`
+The prescriptive *"You use modern British colloquial language"* was out-competing character-specific voice/address. Reworded the default-tone bullet from a command to a **non-prescriptive default**: *"…your default register is warm and conversational…"* — keeps the bubbly/warm/cheeky/vibrantly-alive flavour but lets a character's own voice override it.
 
-### `index.html`
-**Bug fix: Sections after `---` separators silently disappearing from rendered chat bubble**
-- `breaks:true` means `paragraph\n---` has no blank line gap — marked.js interprets as setext `<h2>`
-- Swallows the `---` and corrupts block structure, dropping everything after
-- Fix: two regexes at TOP of `sanitizeMarkdown()` guarantee `---` lines always have blank lines both sides
-- ⚠️ These must run FIRST in `sanitizeMarkdown` — before setext stripping
+### Fix 3 — explicit precedence line (GLOBAL) — `system_prompts/GPT-4o.posthistory.txt`
+Added one bullet directly under the softened tone line: *"Your character card defines your voice and how you address the user — any accent, speech style, or term of address (e.g. a pet name) it specifies always takes precedence over the general default register above."* This carves voice/address out of the "hard override" shared rules and hands them to the character card, so a card's term of address wins over the default register. **The shared layer remains free of any hardcoded user or character name** (grep-verified post-edit).
 
----
+### Fix 4 — correct stop-reason detection on llama.cpp b8994 — `app.py` (`stream_model_response`, ~L1936)
+Separate bug surfaced while diagnosing truncation: the code read the **legacy boolean flags** `stopped_eos`/`stopped_word`/`stopped_limit`, but build **b8994** emits the stop reason as a **string `stop_type`** ("eos"/"word"/"limit"/"none") and **omits the booleans** — so *every* clean generation was mislabelled `STOP REASON: unknown`. Now reads `stop_type` first and folds it into the boolean view (booleans kept as fallback for older builds). A genuinely cancelled/preempted stream (stop_type "none"/absent) still lands as "unknown" and dumps the full final event — so a real truncation is now correctly identifiable instead of hidden behind a false "unknown." (This also corrected the earlier mis-read: the "unknown" label was a measurement artifact, not evidence of slot preemption — the captured baseline showed all clean `word` stops at `inflight=1`, and regenerate never produced `inflight=2`.) app.py compiles clean.
 
-## Session: April 22 2026 — ChatML Role-Tag Leakage Fix
-
-### `app.py`
-**Bug fix: Occasional `_end|>user [user text]` appearing at end of model response**
-- Root cause 1: `\bim_end\b` regex uses word boundary that doesn't match before `_`
-- Root cause 2: Cross-chunk leakage — `<|im_end|>` stripped from chunk N, `\nuser blah` arrives in chunk N+1 looking like plain text
-- Fix 1: Replaced broken `\b` patterns with explicit lookbehind patterns
-- Fix 2: Added role-tag strip to `strip_chatml_leakage`
-- Fix 3: Added 40-char tail buffer to `_filtered_stream()` — role-leakage strip applied at end-of-stream before final yield
-- ⚠️ Tail buffer introduces ~40 chars of lag at end of stream only — imperceptible in practice
-- ⚠️ Do NOT remove `_re3_inner` import inside `_filtered_stream` — `_re3` may not be in scope at generator teardown
+**Restart note:** Fix 4 is Python (needs Flask restart to go live). Fixes 1–3 are prompt/card files normally re-read per request — a fresh chat picks them up; restart only if the loader caches them.
 
 ---
-
-## Session: April 23 2026 — Chat History Search: Intent-Based Trigger + Hallucination Fix
 
-### `app.py` + `utils/session_handler.py`
-**Fix: Model was hallucinating instead of searching past chats**
-- Root cause: tag-based `[CHAT SEARCH:]` relied on the model choosing to emit the tag — Helcyon ignored it and confabulated instead
-- Solution: moved primary trigger to intent-based detection in Python (same pattern as web search), so HWUI fires the search *before* the model responds — model never gets a chance to hallucinate
+## Session: June 1 2026 — distant-span repetition fix (sampler: repeat_last_n + DRY)
 
-**`app.py` changes:**
-- `do_chat_search(query, current_filename)` added — scans global chats dir + all project chats dirs, strips stopwords + recall meta-verbs from query, scores files by keyword hit count, returns top 3 with surrounding context (3 lines each side of hit, max 6 hits/file, 400 chars/snippet)
-- Intent detection regex (`_should_chat_search`) added before both stream paths — triggers on: "do you remember", "we talked about", "we spoke about", "in another chat", "I told you", "in a previous conversation", "you might remember" etc.
-- On intent match: query is cleaned (recall preamble stripped), `do_chat_search()` fires immediately, results injected into user turn, model re-prompted — yields `🗂️ Searching chat history...` indicator
-- `_chat_search_intent_stream()` handles the re-prompt cleanly with role-leak protection and block-marker suppression
-- `_filtered_stream()` (non-web-search path) also watches for `[CHAT SEARCH:]` tag mid-stream as a secondary fallback — model can self-trigger if intent detection missed
-- Current chat file excluded from search via `current_chat_filename` from request body
-- No results: model told honestly nothing was found — explicit instruction not to invent details
+Root-caused and fixed a repetition bug where a character (Solara, local Helcyon model) reproduced a long earlier assistant turn **near-verbatim** several turns later — and on regenerate copied her previous response 100%. Confirmed via a full-prompt dump (`_last_prompt.txt`) that this was **not** memory/summary re-injection: the repeated "Jan is a past version of yourself" dream reading appeared only in the conversation-history portion (already twice), with **no** session-summary / "Relevant memories" / `[CHAT HISTORY RESULTS]` block in the system prompt. The framing instructions ("you lived through it", "pick up where you left off") were present but inert this turn — no memory payload for them to act on.
 
-**`utils/session_handler.py` changes:**
-- CHAT HISTORY SEARCH instruction tightened — now explicitly says HWUI auto-searches on recall requests, model must NOT guess or invent, and should wait for injected results
-- Self-trigger tag still documented as secondary option
+> **⚠️ CORRECTION (supersedes the first attempt this session).** The initial fix added `no_repeat_ngram_size: 4` as a "hard 4-gram block." **That was wrong for this engine.** `no_repeat_ngram_size` is a HuggingFace/transformers parameter, **not** a llama.cpp one — it is **not** in this build's recognized sampler set, so llama.cpp's `/completion` **silently dropped it** (accepted the request, ignored the key, never appeared in `generation_settings`). It was a complete no-op and has been **removed**. The real hard-repetition lever on this build is the **DRY sampler**, now enabled (below).
 
-- ⚠️ Intent trigger is broad by design — catches all natural recall phrasing. If false positives appear on conversational uses of "remember" adjust `_should_chat_search` regex
-- ⚠️ Chat search runs across ALL project folders + global chats — cross-project results are intentional (user may reference something from any character)
-
----
+### The penalty-window mismatch (still valid)
+The only repetition suppression originally in flight was `repeat_penalty: 1.1` over llama.cpp's **default `repeat_last_n` of 64 tokens**. The model attends across the *full* context (16384 tokens here) and reproduces a span living 100+ lines / well over 64 tokens back — but the penalty only looked back 64 tokens, so it **could not reach** the copied span. Worse, it's self-reinforcing: each verbatim copy saved into history makes the next copy easier (a turn that truncated mid-word at "…getting glimps" got copied verbatim, truncation and all, by every later turn).
 
-## Session: April 21 2026 — Mobile HTML Parser + Spacing Improvements
-
-### `mobile.html`
-**Improvement: Replaced bare string-replacement markdown parser with proper block parser**
-- Old parser did `\n\n` → `<br><br>` and `\n` → `<br>` — no list detection, no HR detection, everything inline
-- New parser: block-level, handles `<ul>`, `<ol>`, `<hr>`, headings, paragraphs — same logic as desktop fallback
-- Numbered and bullet lists now render correctly on mobile
-- `breaks: true` equivalent behaviour removed — matches desktop fix
-
-**Fix: Separator and spacing tightening**
-- `.msg-bubble hr` margin reduced from `8px` to `5px` — matches desktop
-- `.msg-bubble ul/ol` margin set to `0.3em 0 1.3em 0` — matches desktop list spacing
-- `.msg-bubble li` margin added: `0 0 0.15em 0`
-- `.msg-bubble p` margin reduced from `8px` to `3px`
-- `.msg-bubble` line-height reduced from `1.55` to `1.4`
-- `#chat` gap reduced from `10px` to `6px`
-- ⚠️ Remaining paragraph gaps are model output style (short sentences with double newlines) — not a CSS issue
+### Why `repeat_last_n: -1` alone isn't enough
+Verified on build **`b8994-aab68217b`**: `repeat_last_n: -1` **is** honored (server echoes it expanded to `16384` = full ctx), and in direct replay of the poisoned prompt it broke the repeat. But `repeat_penalty: 1.1` is a *soft* divide-the-logit nudge — too mild to **guarantee** against a strong verbatim-copy attractor. It reduces, it doesn't block.
 
----
+### Fix (`settings.json` + `app.py`) — repeat_last_n widens the soft penalty; DRY is the hard block
+All keys confirmed against the build's `/props` samplers chain (`penalties, dry, top_n_sigma, top_k, typ_p, top_p, min_p, xtc, temperature`) and verified live in `generation_settings` before committing — no assumptions:
+- **`repeat_last_n: -1`** — widens the soft `repeat_penalty` to the full context (echo: `16384`). **Kept.**
+- **`dry_multiplier: 0.8`** — enables the **DRY** sampler (was `0.0` = off). DRY hard-penalises repeating long verbatim sequences at any distance — the actual fix.
+- **`dry_base: 1.75`**, **`dry_allowed_length: 2`** — conservative defaults (echoed exactly).
+- **`dry_penalty_last_n: -1`** — DRY spans the full context (echo: `16384`), matching `repeat_last_n`.
+- **Removed `no_repeat_ngram_size`** from settings.json, the payload dict, and the defaults dict (dead key, never applied).
+- **`app.py`** — payload dict (~L5034) is an explicit key list, so each key is added via `sampling.get(...)`; defaults dict (~L6990) mirrors them. Verified end-to-end: settings.json → merged sampling dict → `/completion` payload → server `generation_settings` echo shows `dry_multiplier=0.8, dry_base=1.75, dry_allowed_length=2, dry_penalty_last_n=16384, repeat_last_n=16384`, with `dry` live in the samplers chain.
+- **Did NOT touch** `temperature` / `top_p` / `top_k` / `min_p`. Backend-only — no UI surface.
 
-## Session: April 21 2026 — Separator Spacing Tightened
+**⚠️ DO NOT REVERT — DRY is the hard-block; repeat_last_n widens the soft penalty.** They work as a pair: `repeat_last_n: -1` brings the mild `repeat_penalty` to bear across the whole context, and **DRY (`dry_multiplier > 0`, `dry_penalty_last_n: -1`) is what actually blocks long verbatim copies at distance**. Disabling DRY (`dry_multiplier: 0`) re-opens the verbatim-repeat bug even with `repeat_last_n: -1` set. Do **not** re-add `no_repeat_ngram_size` — it is not a llama.cpp param and does nothing on this engine.
 
-### `style.css`
-**Fix: Too much vertical space around `---` separators inside bubbles**
-- `.message hr` had `margin: 10px 0` — gaps above/below separator were too wide
-- Reduced to `margin: 5px 0` — sits tight to content, feels like a section divider not a page break
-- ⚠️ Do not increase back to 10px — visually too heavy inside a chat bubble
+**Needs a manual Flask restart** — the payload-dict change is Python code (dev server runs with no reloader); settings.json values are re-read per request but won't matter until the new payload code is live.
 
 ---
-
-## Session: April 21 2026 — Example Dialog File Bug Fixes
 
-### `app.py`
-**Bug fix: .example.txt files appearing in the system prompt dropdown**
-- `list_system_prompts` filtered for `f.endswith('.txt')` — `.example.txt` files also match, so they appeared in the dropdown
-- Fix: Added `and not f.endswith('.example.txt')` to the filter — example files are now invisible to the UI
-- ⚠️ DO NOT change the filter back to just `.endswith('.txt')` — this causes example files to appear as selectable templates and cascade into corrupted filenames
+## Session: June 1 2026 — GPT-4o prompt stack de-repetition (example dialogue + post-history)
 
-**Bug fix: save_example writing blank files / recreating deleted files**
-- `save_example` always wrote the file even if content was empty — deleting an example file then triggering any save (e.g. Update button) would recreate a blank one
-- Fix: If POSTed content is empty after strip, the file is deleted (if it exists) rather than written; no blank `.example.txt` files are ever created
-- Bonus: clearing the example dialog textarea and saving now cleanly removes the paired file
-
----
+Audited the GPT-4o prompt stack for anything that would push the model to repeat itself, then fixed the two files driving it. The base prompt (`GPT-4o.txt`) was already clean and argues *against* repetition — left untouched. The repetition pressure came from few-shot priming in the example dialogue, reinforced by sample openers in the post-history.
 
-## Session: April 21 2026 — Separator Bubbles Fix + List Spacing
-
-### `index.html`
-**Bug fix: Message separators rendering outside chat bubbles**
-- `<hr class="msg-separator">` was appended to `chat` (the outer container) after `wrapper` — floated between bubbles as a full-width page rule
-- Fix: Separator now appended inside `div` (the bubble element), before the timestamp
-- Added `.msg-separator` CSS to the existing `injectTimestampCSS()` block: 1px `var(--msg-border)` top border, opacity 0.5, margin 8px 0 4px 0
-- Note: `hr.msg-separator` rule already existed in `style.css` — JS injection is redundant but harmless
-- ⚠️ Separator must stay inside `div`, not `wrapper` or `chat` — appending to chat is what caused the original leak
-
-### `style.css`
-**Fix: No gap after bullet lists before following paragraph**
-- `.message ul / ol` had `margin: 0.3em 0` — no bottom margin, next paragraph ran straight in
-- Adjusted to `margin: 0.3em 0 1.3em 0` — adds breathing room below lists to match spacing above
-- ⚠️ Do not reduce bottom margin below 1em — visually merges list and following paragraph
+### `system_prompts/GPT-4o.example.txt` — broke the single response mould
+Both `{{char}}` examples shared one skeleton — open with **"Oh + interjection + emphatic validation"**, pivot to a *"here's the deeper mechanism"* reframe, then land a contrastive em-dash aphorism. With only two examples, a 2-for-2 sample reads as *the* template, so the model reproduced that shape (and the "Oh …!" opener) almost every turn. Rewrote both turns to **demonstrate variety instead of a mould**, keeping the same two scenarios and the character's voice (British, cheeky, sweary-when-it-fits, warm):
+- **Ex 1** (10:30pm boss email) now opens with a sharp rhetorical question + flat *"No."* and ends on a **firm statement, no question**.
+- **Ex 2** (always the calm one) opens with a soft naming fragment and ends on a **gentle question**.
+- Neither opens with "Oh" anymore; different connectors, rhythm, and closing beats — one ends on presence, one on a question, so the model sees both endings are valid rather than copying one.
 
----
+### `system_prompts/GPT-4o.posthistory.txt` — removed the reinforcing primers
+- **Venting line** dropped the literal `"Oh fuck, yeah I know what you mean!"` / `"Yeah, that's properly shit"` sample openers (they primed the same first word every turn) and replaced them with an instruction to *let the reaction fit the specific thing they're angry about rather than reaching for the same opener every time.*
+- **"Address every point" line** softened from *"address every point… avoid skipping over anything"* to *"address what actually matters… don't recap their words back to them; respond to them"* — keeps the don't-make-them-repeat intent while cutting the echo/recap behaviour.
+- The existing anti-repetition rule (*"Each response is fresh… new turns get new language"*) was left intact; with the examples no longer modelling sameness, it now has the examples working *with* it instead of against it.
 
-## Session: April 21 2026 — Search Stream Chopped Characters + Streaming Speed
-
-### `app.py`
-**Fix: Search stream chopping first character/word off each sentence**
-- Fast path was yielding chunks immediately, then slow path split `_line_buf` on `\n` and yielded remainder as a new "line" — first chars of each new line were already sent by fast path, making them appear eaten
-- Mixed fast/slow paths on same line was fundamentally broken
-- Fix: Single consistent buffer path — chunks accumulate in `_line_buf`, complete lines yield on `\n`, partial lines yield immediately once buffer contains any letter/digit or exceeds 12 chars
-- HR lines are always short identical-char sequences (---/===) and never contain a-z or 0-9 — this distinction is the safe yield threshold
-- ⚠️ DO NOT reintroduce mixed fast/slow path on the search stream — it will always corrupt line boundaries
-
-**Fix: Search streaming back to burst/sentence-at-a-time after chopped chars fix**
-- Previous fix removed fast path entirely — everything buffered until `\n` or 80 chars, causing sentence-at-a-time dumps
-- 80-char threshold was wrong — most sentences are under 80 chars so they sat in buffer until newline arrived
-- Fix: Yield partial line buffer as soon as it contains any alphanumeric char or exceeds 12 chars
-- Normal text flows token by token, HR detection still works (HR lines only contain ---/=== never letters)
-- ⚠️ The 12-char / alphanumeric threshold is the correct balance — do not raise it back to 80
+**Not committed yet** — both files are working-tree edits. `.txt` prompt files are normally read per request (paired to the system-prompt stem via `system_prompt_routes.py`), so a fresh chat should pick them up **without a Flask restart**; restart only if the loader is found to cache them at startup. (Related side work this session — reconciling the **Solara** card's `main_prompt`/`character_note` against this stack, incl. a duplicated "already whole / just needs to remember that" mantra — lives in the user's personal build and is **not** tracked in this repo.)
 
 ---
 
-## Session: April 20 2026 — Conditional SSL (HTTP/HTTPS auto-detect)
-
-### `app.py`
-**Fix: Flask always ran HTTPS even on local desktop, making `http://127.0.0.1:8081` unusable**
-- SSL cert was always loaded unconditionally — no cert files = crash, cert files present = always HTTPS
-- Fix: SSL is now conditional — checks if cert files exist before enabling
-- Cert path moved from hardcoded `C:\Users\Chris\` to HWUI folder (`os.path.dirname(__file__)`)
-- If certs present → HTTPS (Tailscale/mobile mode), prints 🔒
-- If certs absent → HTTP (local mode), prints 🌐
-- To switch modes: move cert files into/out of the HWUI folder — no code changes needed
-- ⚠️ Cert files must be named `music.tail39b776.ts.net.crt` and `music.tail39b776.ts.net.key` and live in the HWUI root folder for HTTPS to activate
+## Session: May 31 2026 — two sidebar-colour bug fixes (duplicate/branch inheritance + server-side project folder colours)
 
----
+Two unrelated colour-persistence bugs in the sidebar, fixed together.
 
-## Session: April 20 2026 — Search Junk Domain Filter (Proper Fix)
-
-### `app.py`
-**Bug fix: Junk URLs being fetched and injected as top_text into the model prompt**
-- Previous fix only blocked junk URLs from the citation link — junk page content was still fetched and injected into the prompt via `top_text`
-- Model read the meme/junk page content and responded to that instead of actual search data
-- Real fix: moved `_JUNK_DOMAINS` blocklist and `_is_junk()` helper into `do_web_search()` itself
-- AbstractURL now checked for junk before being accepted as `top_url`
-- Fallback also skips junk — walks results list for first non-junk URL
-- Junk URLs now blocked at source — never fetched, never injected into prompt, never cited
-- ⚠️ If new junk domains appear, add to `_JUNK_DOMAINS` in `do_web_search()` — citation-level filter at ~line 1934 is now redundant but harmless, leave as safety net
+### Bug 1 — chat colour not inherited on duplicate/branch (`templates/index.html`)
+Chat colours are keyed by filename in `localStorage` (`chatColors`). Duplicating (⧉ → `/chats/copy`) or branching (`branchMessage` → `/chats/branch`) created a new chat with a new filename but **no colour entry**, so the new chat rendered un-tinted even though the source was coloured. The rename path already migrated the key (`/chats/rename` handler, ~L2481); duplicate/branch had no equivalent.
 
----
+**Fix:** after a successful response in both handlers, read the source chat's colour via `getChatColors()` and, if present, copy it onto the new filename with `setChatColor(new_filename, …)` **before** `loadChats()` re-renders the sidebar. Unlike rename this **copies** (does not delete the source key) — the original chat keeps its colour. Duplicate reads `chat.filename` (the closure's source); branch reads `currentChatFilename`.
 
-## Session: April 20 2026 — Search Source Citation Junk Domain Fix + Shard Rewrites
-
-### `app.py`
-**Bug fix: Source citation link pointing to meme/junk sites (partial fix — superseded above)**
-- `_src` was falling back to `res['results'][0]['url']` which could be a meme site
-- Added `_junk_domains` blocklist + `_is_junk_url()` at citation level as first attempt
-- This fixed the link but not the prompt injection — see proper fix above
-
-### Training shards (personality LoRA)
-**Rewrites: occam_001, occam_002, confab_001, confab_002, confab_003**
-- Root cause of Claude model hedging: instruction wording used "often" and double-negative framing around Occam's Razor
-- Fix: Removed "often" — replaced with direct command language: "when the pattern is clear, follow it and commit"
-- Chosen/rejected pairs unchanged — anti-hallucination logic preserved
-- Shards moved from base training to personality LoRA so they can be swapped without touching base weights
-- ⚠️ DO NOT reintroduce "often" or qualifier language around Occam's Razor — bakes in hedging on contested topics
+### Bug 2 — project folder colours wiped on http/https switch, Electron, or storage clear (`project_routes.py` + `templates/index.html`)
+Project folder colours lived **only** in `localStorage` (`projectColors`), so they vanished whenever the origin changed (http↔https), the Electron launcher ran (separate storage partition), or browser storage was cleared. Moved them server-side.
 
----
+- **`project_routes.py`** — new `project_colours.json` (app root, `__file__`-relative) with `load_project_colours()` + two routes: `GET /projects/colours` (returns the `{name: "#hex"}` map) and `POST /projects/colours/save` (validates `colours` is an object, writes the whole map). Placed right after the project-groups section.
+- **`templates/index.html`** — `getProjectColors`/`setProjectColor` no longer touch `localStorage`. A module-level `_projectColorsCache` is hydrated by a new `async fetchProjectColors()` (added to the `Promise.all` at the top of `loadProjects()`, so the cache is populated before `applyProjectColors()` runs). `setProjectColor` mutates the cache synchronously (so the menu's immediate `applyProjectColors()` reflects the change) then persists via `saveProjectColorsToServer()` (POST). `getProjectColors()` returns the cache synchronously. **One-time migration:** if the server map is empty but a legacy `localStorage.projectColors` exists, it's adopted and pushed up, so existing users don't lose their colours on upgrade.
 
-## Session: April 20 2026 — Hallucinated Search Block + Mangled im_end (Consolidated)
-
-### `app.py`
-**Bug fix: Hallucinated [WEB SEARCH RESULTS] blocks appearing in responses**
-- Model outputs fake search blocks either inline (start+end on one line) or multiline
-- Previous single-line regex `[WEB SEARCH RESULTS[^\]]*]` only caught single bracket — missed URLs and content
-- Fix: `_clean_line()` now does two passes:
-  1. Inline regex strips open+close on same line: `[WEB SEARCH RESULTS...[END...]>?`
-  2. Multiline suppression flag drops all lines between open and close markers
-- `_suppressing_fake_search` flag added — persists across lines within the search stream loop
-- `[END]>` variant also caught (model sometimes outputs malformed close tag)
-
-**Bug fix: Normal (non-search) stream path had zero output filtering**
-- Bare `stream_model_response(payload)` yielded everything unfiltered
-- Replaced with `_filtered_stream()` generator applying same inline+multiline suppression
-- Smooth streaming preserved — partial chunks >80 chars still yielded immediately
-
-**Bug fix: `im_end|>` mangled token appearing in responses**
-- Model outputs `im_end|>` without leading `<|` — not caught by existing patterns
-- Added `\bim_end\|?>` and `\bim_start\|?\w*` to `strip_chatml_leakage()`
-- ⚠️ All three fixes are in this file — always deploy the latest output
+**Verified:** `project_routes.py` `py_compile` clean; blueprint registers both new routes (`/projects/colours`, `/projects/colours/save`) under a test Flask app. **Backend + template change — needs a manual Flask restart** (dev server runs with no reloader). The chat-colour fix is template-only but ships in the same `index.html`, so the same restart covers both.
 
 ---
 
-## Session: April 20 2026 — Mangled ChatML Token Strip (im_end|>)
+## Session: May 31 2026 — `chat()` refactor phase 2 (2 coupled-core leaves + H6 risk map)
 
-### `app.py` + `index.html`
-**Bug fix: `im_end|>` appearing at end of responses**
-- Model occasionally outputs a malformed ChatML stop token as `im_end|>` (without leading `<|`)
-- `strip_chatml_leakage()` only caught `<|im_end|>` and `<|im_end[|]?` — the leading-bracket-less variant slipped through
-- Fix: Added `\bim_end\|?>` and `\bim_start\|?\w*` patterns to `strip_chatml_leakage()` in `app.py`
-- Same pattern added to all im_end strip locations in `index.html` (5 locations: TTS chunk, cleanedMessage, replay, continue paths)
-- ⚠️ Both backend and frontend now catch this — belt and braces
+Resumed after an accidental shutdown (the in-flight `_append_current_time` extraction was verified and committed first — see the phase-1 entry below). Then extracted the **two least-coupled blocks from the deferred coupled-core set**, one helper per commit, each verified by the same battery (AST assertion + `py_compile` + pyflakes undefined-name delta + no-route-line check). Stopped before **H6** on purpose and mapped its exact hazard for the next pass.
 
----
+### `app.py` — `_load_user_persona()` extracted
+**Commit `c781bcc`.** User-persona bio load (try/except around `users/<name>.json`) → `_load_user_persona(user_name) -> (user_bio, user_display_name)`. Only input is `user_name`; the local `user_data` does not escape. Pyflakes steady at 55.
 
-## Session: April 20 2026 — Hallucinated Search Block Suppression
+### `app.py` — `_load_chat_from_disk()` extracted
+**Commit `42aa953`.** The whole `if not active_chat:` disk-fallback guard (rebuild history from `chats/<file>`) → `_load_chat_from_disk(active_chat, data, user_name, user_display_name, character_name) -> active_chat`. Moving the entire guard (not just its body) keeps a clean 4-space helper body and makes it a no-op pass-through when `active_chat` is already populated. The block's `current_chat_filename = data.get("current_chat_filename", "")` was **byte-identical** to the unconditional binding at the top of `chat()`, so encapsulating it is behaviour-neutral. No early return in this block (unlike the char-load guard right below). Pyflakes steady at 55.
 
-### `app.py`
-**Bug fix: Model fabricating fake [WEB SEARCH RESULTS] blocks in normal responses**
-- Model trained on search shards knows the search block format and occasionally hallucinates one mid-response instead of waiting for a real search
-- The fabricated block spanned multiple lines (URL, content etc) — single-line regex `[WEB SEARCH RESULTS[^\]]*]` never matched it
-- Also: the output filter only existed in the search stream path — normal (non-search) responses had zero filtering
+### `app.py` — `_build_system_text()` extracted (H6) ✅ DONE
+**Commit `825bd57`.** The ~225-line `build system_text` try/except → `_build_system_text(char_data, _char_label, _user_label, user_display_name, user_bio, active_chat, character_name, system_prompt, instruction, tone_primer, project_documents) -> (system_text, char_context, user_context, _recent_session_summary, _recent_session_ts, _is_jinja_model)`. The **one intentional behaviour delta** (signed off): `user_context = ""` and `_is_jinja_model = False` pre-inits added before the `try`, which strictly removes the latent except-path UnboundLocalError described in the risk map below — the success path is byte-for-byte unchanged. Verified by AST (11 args / 6-tuple / call-site unpacks 6 matching names) + py_compile + **zero pyflakes delta of any kind** (proves all 11 inputs threaded). Nested `strip_chatml` / `_is_opening_line_msg` moved with the block. Risk map that drove this, kept for reference:
 
-**Fix 1: Multiline suppression in search stream path (`_clean_line`)**
-- Added `_suppressing_fake_search` flag — when `[WEB SEARCH RESULTS` detected on any line, suppression turns on
-- All subsequent lines suppressed until `[END WEB SEARCH RESULTS]` seen, then suppression off
-- Entire fabricated block silently dropped regardless of how many lines it spans
+### ⚠️ H6 risk map (as analysed before extraction)
+The whole block is wrapped in `try: … except Exception: system_text = system_prompt`. The prior session's "7-output" count was slightly off — corrected here:
+- **`_is_new_chat` is NOT an output.** Zero reads file-wide outside H6 (only assigned at 3542, used at 3559). It stays a local inside the helper.
+- **Real outputs (6):** `system_text`, `char_context`, `user_context`, `_recent_session_summary`, `_recent_session_ts`, `_is_jinja_model`.
+- **Except-path binding safety:** `system_text` (except sets it), `char_context` (pre-init `""` @3447), `_recent_session_summary` (pre-init `""` @3456), `_recent_session_ts` (pre-init `None` @3457) are all safe. **`user_context` (assigned only @3605) and `_is_jinja_model` (assigned only @3639) are NOT pre-initialised** — if the `try` raises before those lines they are unbound, and they ARE read downstream (`user_context` @5648 `(char_context or "") + (user_context or "")`; `_is_jinja_model` @3752/@3879). Today that's a latent crash only on the rare except path; **a helper that returns a tuple would force-trigger it on every except hit** via the `return` itself.
+- **Required safe-extraction step:** pre-initialise `user_context = ""` and `_is_jinja_model = False` before the `try` (mirroring the existing pre-inits). This is a small *defensive* change that strictly *removes* a latent UnboundLocalError; it is the only behaviour delta and must be called out / signed off, since prior extractions were pure moves.
+- **`strip_chatml`** (nested def @3461) has zero real calls outside H6 — it moves with the block.
+- **Inputs (~11):** `char_data, _char_label, _user_label, active_chat, character_name, user_display_name, user_bio, system_prompt, instruction, tone_primer, project_documents` (plus module globals `CURRENT_MODEL`, `select_session_summaries`, `SESSION_DIVIDER`, `substitute_placeholders`, `rough_token_count`).
+- **Verification gap:** static checks (`py_compile`/pyflakes/AST) CANNOT prove except-path binding safety — only the pre-inits above (or an actual runtime `/chat` POST after a Flask restart) can. Recommend a runtime smoke test for H6.
 
-**Fix 2: Normal stream path now filtered**
-- Replaced bare `stream_model_response(payload)` with `_filtered_stream()` generator
-- Same suppression logic applied — catches hallucinated search blocks in non-search responses
-- Partial chunk passthrough (>80 chars) preserved for smooth streaming
-- ⚠️ Both paths now filter — hallucinated search blocks will never reach the frontend
+### Remaining coupled core — STOPPED here on purpose (no clean leaf)
+After H6 the remaining region is the **`messages[]` assembly (~L3742–4078, H8–H11)**: build `messages`, the `[REPLY INSTRUCTIONS]` depth-0 packet (example-dialogue rule + post_history + project_instructions folded into the last user turn), `trim_chat_history` (reassigns `messages` @3839), example-dialogue fake-turn parse/inject, and the character_note/author_note system-block append. **Assessed as not safely extractable in the byte-splice/static-verify style:** `messages` is constructed, reassigned, and mutated across the whole span with documented hard ordering constraints (multiple `⚠️ DO NOT re-add messages.insert()` / `DO NOT reorder` comments), so there is no clean leaf — any sub-extraction threads `messages` plus ~a dozen interleaved locals in and out, which is the highest silent-break risk for the least structural payoff. Recommend leaving it in place, or tackling it only in a dedicated session backed by a **runtime `/chat` harness** (static checks alone can't cover the ordering-sensitive mutation here), not the static-only pipeline used for the leaves above.
 
----
+The **char-load guard** (~L3404–3410) also stays put — two `return jsonify(...)` early-returns can't move into a helper without changing `chat()` control flow.
 
-## Session: April 19 2026 — Search Stream Buffering Fix
-
-### `app.py`
-**Bug fix: Search responses streaming one paragraph at a time instead of word by word**
-- Root cause: Rolling line buffer held text until a `\n` was seen before yielding
-- Model outputs paragraphs separated by `\n\n` so entire paragraphs were batched and landed at once
-- Fix: Changed buffer logic to yield partial line chunks as they arrive when buffer exceeds 80 chars
-- HR detection still works: complete lines (split on `\n`) are still checked against HR patterns before yielding
-- Partial chunks >80 chars are safe to yield immediately — no HR pattern is that long
-- Extracted `_is_hr()` and `_clean_line()` helpers to avoid duplicating logic in flush path
-- ⚠️ The 80-char threshold is the key: short enough to stream smoothly, long enough to never match a HR pattern
+### Net result of phase 2
+Four module-level helpers now sit before `chat()` from this+prior phase (`_load_user_persona`, `_load_chat_from_disk`, `_build_system_text` this session; the phase-1 `_retrieve_memory` / `_load_documents` / `_resolve_system_layer` / `_append_current_time` before). `chat()`'s pre-stream assembly is now mostly delegated to named helpers; the streaming generators and the ordering-sensitive `messages[]` assembly remain inline by design. Route map unchanged throughout (no `@app.route` touched). **Backend change — needs a manual Flask restart. ✅ Confirmed working at runtime after restart (user verified a live `/chat` session against the extracted pipeline — all four helpers behave identically to the inline original).**
 
 ---
-
-## Session: April 19 2026 — Root Cause: Box-Drawing Chars + Full HR Strip
-
-### `app.py` + `index.html`
-**Bug fix: Model outputting ═══ box-drawing separator lines from training data**
-- Root cause identified: Training shards injected `════` lines as search block separators in the prompt format
-- Model learned to reproduce these in its own responses (classic imitation of prompt structure)
-- Backend stream filter only stripped `[-=]{3,}` — box-drawing chars (U+2550 ═, U+2500 ─ etc) passed straight through
-- Frontend `sanitizeMarkdown` also didn't handle them — fallback parser rendered them as `<hr>`
-- Additionally: stream stripping was per-chunk (fragments) so even plain `---` split across two chunks never matched
-
-**`app.py` fixes:**
-- Replaced per-chunk stripping with rolling `_line_buf` accumulator — processes complete lines only
-- Line filter now catches: `[-=_*]{3,}`, spaced variants `(\s*[-*_]\s*){3,}`, and box-drawing chars `[═║─━│┃]{3,}`
-- All other marker stripping (WEB SEARCH RESULTS, END WEB SEARCH, You are Helcyon, What do I search for) also in the per-line pass
-- Partial last line flushed after loop with same filter applied
-
-**`index.html` fixes:**
-- `sanitizeMarkdown` expanded to strip box-drawing char lines before they hit the parser
-- Also covers: setext headings (`text\n===`), solid HRs (`---`, `===`, `___`, `***`), spaced HRs (`- - -`, `* * *`)
-- ⚠️ The training shards should be updated — remove `═══` separators from injected search block format
-- ⚠️ Do NOT use box-drawing chars in any injected prompt text — model will learn to reproduce them
 
----
+## Session: May 31 2026 — `chat()` refactor phase 1 (landmine fix + 3 clean helper extractions)
 
-## Session: April 19 2026 — Setext Heading / Infinite HR Fix (Frontend)
-
-### `index.html`
-**Bug fix: `=` characters after emoji line rendering as infinite horizontal rule**
-- Root cause: Markdown setext heading syntax — a line of text followed by a line of `=` or `-` chars is interpreted as an `<h1>` or `<h2>` heading by marked.js
-- When model output ends a line with an emoji (e.g. `🔥`) and the next line starts with `=` chars, the renderer sees a setext heading and produces a full-width element that overflows the bubble
-- Backend chunk-level stripping (`^[-=]{3,}`) only catches *standalone* HR lines — it cannot catch setext headings because the `=` line is valid on its own and only becomes problematic in context with the preceding line
-- The rolling line buffer fix (previous session) helps for `---` HR lines but not setext headings which span two lines
-- Fix: Added `sanitizeMarkdown(text)` helper function injected before the marked.js fallback block
-  - Strips setext headings: `any line\n===...` or `any line\n---...` → keeps the text, drops the underline
-  - Strips standalone HR lines: `---`, `===`, `***` (3+ chars on their own line)
-- All `marked.parse(x)` call sites wrapped with `marked.parse(sanitizeMarkdown(x))` — 7 occurrences total covering history render, stream render, replay, and continue paths
-- ⚠️ Do NOT remove sanitizeMarkdown — backend stripping alone cannot catch setext headings
-- ⚠️ The setext pattern requires TWO lines in context — it can only be reliably caught pre-parse, not mid-stream
+Began decomposing the ~3,370-line `chat()` route (`app.py`) into internal, **module-level** helper functions — phase 1 of the plan to extract the pure assembly pipeline (helpers 1–11 in the prior session's survey) while leaving the streaming generators untouched. The `current_chat_filename` landmine was fixed, and three **clean leaf** helpers (H7, H5, H4) were extracted, each independently verified and committed. The remaining seven (coupled-core) helpers were deliberately left for a follow-up — see the stop rationale at the end.
 
----
+### Method — byte-level splice, exit-code verification
+Extraction used a one-shot `_splice.py` tool (kept in the tree for the follow-up) that cuts the existing block by **emoji-free anchor text** and re-emits its **original bytes** as a module-level function — the heavy box-drawing/emoji blocks are never retyped, so no transcription drift. The script asserts each anchor occurs **exactly once** before writing, which caught and refused accidental double-splices this session (a delayed/empty tool result led to a re-issued command; the uniqueness guard plus a `git checkout -- app.py` from the clean prior commit recovered each time and the splice was redone once). `_splice.py` was also hardened mid-session to force UTF-8 on stdout so its diagnostic print can't crash on emoji under the Windows cp1252 console (it had already written the file before the crash, but the non-zero exit cancelled the rest of a batch).
 
-## Session: April 19 2026 — Duplicate Route Fix + HR Stripping Line Buffer
-
-### `app.py`
-**Bug fix: Duplicate `/delete_last_messages` route causing Flask startup failure**
-- Two functions (`delete_last_messages` and `delete_last_messages_safe`) were both decorated with `@app.route('/delete_last_messages/<path:character>', methods=['POST'])`
-- Flask raises `AssertionError: View function mapping is overwriting an existing endpoint function` on startup — app won't start at all
-- Fix: Removed the older "baseline" version entirely; kept the safe JSON version (which handles both `dict` and `list` chat formats correctly)
-- Safe version renamed to `delete_last_messages` (function name matches route as expected)
-- ⚠️ Never duplicate route decorators — Flask will fail silently on some versions but hard on others
-
-**Bug fix: `---` horizontal rule still appearing in search responses despite chunk-level stripping**
-- Root cause: `---` regex was applied per-chunk with `MULTILINE` flag, but llama.cpp streams in tiny fragments
-- A `---` split across two chunks (e.g. `--` then `-\n`) never matched the pattern — it was always incomplete within a single chunk
-- Fix: Added `_line_buf` rolling line buffer in the search stream loop — accumulates chunks, splits on `\n`, processes only complete lines
-- Per-line stripping now reliably catches `^[-=]{3,}\s*$` horizontal rules before they reach the frontend
-- All other chunk-level filters (WEB SEARCH RESULTS, END WEB SEARCH RESULTS, You are Helcyon, What do I search for) also moved into the per-line pass for consistency
-- Partial final line flushed after loop ends
-- ⚠️ Do NOT go back to per-chunk regex for line-pattern stripping — chunks are fragments, not lines
+Each helper was verified by an **AST assertion script that exits non-zero on any structural failure** (helper is module-level and sits before `chat()`; nested helpers moved with it and are gone from `chat()`; return-tuple arity correct; exactly one call site with the right arg count and matching unpack names). Exit codes and file-routed output were used deliberately because the interactive tool channel intermittently dropped/garbled stdout this session — exit codes and `git rev-list --count` are trustworthy where streamed text was not. Every helper also passed `py_compile` and a `pyflakes` undefined-name delta check (the net that catches a variable not threaded through). pyflakes was installed into the venv this session (3.4.0) for exactly this purpose.
 
----
+### `app.py` — `current_chat_filename` bound unconditionally at top of `chat()` (latent NameError)
+**Commit `90c9567`.** `current_chat_filename` was assigned only inside the `if not active_chat:` disk-fallback branch but is referenced unconditionally in the `_filtered_stream` model-emitted-`[CHAT SEARCH:]` re-prompt path (`do_chat_search(..., current_filename=current_chat_filename or None)`). On a normal request (frontend supplies `conversation_history`, so the fallback never runs) a model-emitted `[CHAT SEARCH:]` tag while web-search is **off** raised `NameError`. Now bound once via `data.get("current_chat_filename", "")` right after `request.get_json()`. The duplicate assignment still in the fallback branch is harmless and left in place.
 
-## Session: April 2026 — Search Trigger Firing on Previous Turn's Injected Results
-
-### `app.py`
-**Bug fix: Search triggering on every message after a search has occurred**
-- Root cause: `user_input` is extracted from `conversation_history` sent by the frontend
-- After a search fires, the augmented user message (containing the full WEB SEARCH RESULTS block + IMPORTANT instruction) gets saved into chat history by the frontend
-- On the next turn, the frontend sends this augmented message back as part of `conversation_history`
-- `_user_msg` was being set directly from `user_input` — so it contained the previous search block including phrases like "find out" embedded in the results content
-- `_should_search` matched on these embedded phrases and fired a search every subsequent turn after any legitimate search
-- Fix: Strip any WEB SEARCH RESULTS block and IMPORTANT instruction from `_user_msg` before running `_should_search` check
-- Added `🔍 Search trigger check on: ...` debug print so the cleaned message is visible in console
-- ⚠️ This was the root cause of ALL the persistent "random search on every message" issues — conversation history was being poisoned after the first search fired
+### `app.py` — `_retrieve_memory()` extracted (H7)
+**Commit `a895302`.** Memory-block load/score/format (the nested `load_character_memory` / `load_global_memory` plus the keyword-scoring loop) → `_retrieve_memory(char_data, character_name, user_input, project_rp_mode, _diag_verbose) -> memory`. Pyflakes steady at 55.
 
----
+### `app.py` — `_load_documents()` extracted (H5)
+**Commit `bb3959c`.** Project + global document loading (the sticky-docs/keyword-trigger tree, nested `load_pinned_doc_direct` / `user_requesting_different_doc`, the global-doc append and the attached-doc discard) → `_load_documents(user_input, _attached_doc_present) -> (project_instructions, project_documents, project_rp_mode, newly_pinned_doc)`. The dead local `project_rp_opener` (assigned, never read anywhere) moved with the block; pyflakes total unchanged at 55 (no correctness change).
 
-## Session: April 2026 — Emoji Sentence Flush Fix + JS Pipeline Comma Cleanup
-
-### `utils.js`
-**Bug fix: Sentences ending with emoji being skipped entirely by TTS**
-- Emoji at end of sentence (e.g. `"rebellion 😄"`) got stripped to `"rebellion."` but no `\n` followed, so chunk sat in `ttsSentenceBuffer` waiting for a newline that never came — sentence silently dropped
-- Fix: emoji replacement now outputs `'$1.\n'` instead of `'$1.'` — `\n` forces immediate line-split flush
-- F5 still receives the full stop for correct closing inflection — `\n` is invisible to F5
-- ⚠️ Do NOT remove the `\n` from emoji replacement — sentences ending in emoji will be skipped
-
-**Bug fix: Comma replacements in JS pipeline causing aahs**
-- `bufferTextForTTS`, `splitAndQueue` and replay function all used `, ` for parentheses, `>` markers and ellipsis
-- All three locations fixed — parentheses/colons/markers now use `. ` consistently
-- Ellipsis `...` changed from ` . . . ` to `. ` — stacked dots caused F5 hesitation sounds
-- ⚠️ Never use `, ` as a replacement anywhere in the TTS pipeline — always `. `
-- ⚠️ Never use ` . . . ` for ellipsis — use `. ` only
+### `app.py` — `_resolve_system_layer()` extracted (H4)
+**Commit `8d3b592`.** Core system-layer setup (`get_system_prompt`/`get_instruction_layer`/`get_tone_primer`, tone-primer suppression when the card defines personality, character-bound system-prompt override) → `_resolve_system_layer(char_data) -> (system_prompt, instruction, tone_primer)`. `current_time` has 0 downstream reads (used only inside this block) so it stays local to the helper. Pyflakes unchanged at 55.
 
----
+### `app.py` — `_append_current_time()` extracted (bonus clean leaf, post-shutdown resume)
+**Commit `6e34cae`.** This extraction was mid-flight (edited in the working tree, not yet verified/committed) when the session was accidentally shut down; it was verified and committed on resume. The system-block current-local-time append (the time-of-day bucketing + `strftime` build that mutates `messages[0]["content"]`) → `_append_current_time(messages)`. The block mutates `messages` in place and all its locals are underscore-prefixed temporaries (`_now_local`, `_hour_24`, `_tod`, `_hour_12`, `_ampm`, `_time_str`) with **zero downstream reads** in `chat()`, so nothing needed threading back — no return value. Single call site, `py_compile` clean, pyflakes steady at 55 (no new undefined names). Not one of the original H2–H11 survey items — a small extra leaf found adjacent to the system-block assembly.
 
-## Session: April 2026 — TTS Last Sentence Cutoff Fix
+### Route map unaffected
+`_verify_routes.py` dump of the current tree vs the pre-refactor baseline (`68441c3`) is **byte-identical: 149 rules, rule+methods AND endpoint names — zero diff**. No `@app.route` was touched by any extraction (the helpers are plain module-level functions, not routes). `git rev-list --count 68441c3..HEAD` = 4 functional commits (landmine + H7 + H5 + H4), plus a 5th tooling commit `d54c287` adding `_splice.py` (count = 5 total), all reachable from HEAD.
 
-### `utils.js`
-**Fix: Last sentence of TTS response being cut off**
-- `flushTTSBuffer()` was setting `ttsStreamingComplete = true` immediately after pushing the last sentence to `ttsQueue`
-- The queue processor's 50ms poll loop sometimes hadn't picked up the last queued sentence yet when it saw `ttsStreamingComplete = true` and broke out of the loop
-- Race condition: last sentence arrives in `ttsQueue` → `flushTTSBuffer` sets complete → processor sees empty queue + complete → exits before playing last sentence
-- Fix: Wrapped `ttsStreamingComplete = true` and the processQueue kickstart in a `setTimeout(..., 150)` — gives the poll loop enough time to pick up and start fetching the last sentence before the "done" signal arrives
-- 150ms matches the existing replay debounce delay and is well within human perception threshold
+### ⚠️ Remaining helpers (H2/H3/H6/H8/H9/H10/H11) DEFERRED to a follow-up
+Stopped after the three clean leaves on purpose. The remaining seven are the **coupled core**: large multi-output return tuples (H6 system-text build alone yields `system_text, char_context, user_context, _recent_session_summary, _recent_session_ts, _is_new_chat, _is_jinja_model`), with H2/H3 interleaved around the character-load guard and H10/H11 the tightest-coupled of all. On an endpoint the dev server can't hot-reload and that has no runtime test, a single mis-threaded variable is a silent break. **Resume recipe is intact:** `_splice.py` is in the tree; for each helper pick an emoji-free unique start/end anchor pair, run the splice **once** (re-check `grep -c` for the new `def`/call before any re-run — and never put the splice or any failure-prone command in a parallel tool batch; a sibling that exits non-zero, e.g. `grep -c` with zero matches, cancels the whole batch), then verify with an exit-code AST assertion + `py_compile` + `pyflakes` undefined-name delta, and commit one helper at a time. Finish by re-running `_verify_routes.py` vs `68441c3` (must stay identical). **Backend change — needs a manual Flask restart.**
 
 ---
 
-## Session: April 2026 — Search Trigger Logic Rewrite (Opt-In Only)
-
-### `app.py`
-**Fix: Always-search approach fundamentally broken — replaced with opt-in search**
-- Whack-a-mole approach (skip conversational messages) could never cover all cases — any message not in the skip list triggered a search, e.g. "What do you reckon it would be like passing of the torch?" mid-Stargate conversation searched and returned Stranger Things results
-- Root cause: detecting what NOT to search is impossible — natural language is too varied
-- Fix: Flipped the logic entirely. Search now ONLY fires on explicit user request. Default is no search.
-- Trigger pattern matches: do a search, search for/up/that up, look it up/that up/up, find out, google, look/check online, "what's the latest/new/happening", "any news/updates/info on", current/currently, right now, latest, up to date, recent/recently
-- Everything else — opinions, questions, reactions, follow-ups, anything conversational — responds from context only
-- ⚠️ Do NOT revert to always-search or skip-list approach — opt-in is the only reliable solution
-- ⚠️ If users complain search isn't firing, add their phrase to the trigger pattern — never go back to always-search
+## Session: May 31 2026 — `app.py` modularization (character-card routes extracted)
 
----
+Continued the `app.py` → Flask-blueprint split. Coupling was checked first (see the survey in the prior entry), then the character-card cluster (group A) extracted, verified against baseline, and committed. Memory routes (group B) and chat-persistence routes (group C) were deliberately left in place.
 
-## Session: April 2026 — Search Block Echo Fix (Prompt + Output)
+### `character_routes.py` (NEW) — character-card routes extracted
+Moved 11 routes + 3 helpers out of `app.py` into a new `character_bp` blueprint:
+- `GET/POST /active_character` (server-side shared active character)
+- `GET  /list_characters`
+- `POST /create_character`
+- `GET  /characters/<path:filename>` (serve card files)
+- `POST /characters/<n>.json` (editor save, preserves `tts_voice`/`system_prompt`)
+- `GET/POST /character_voice/<n>`
+- `GET/POST /character_system_prompt/<n>`
+- `GET  /get_character/<n>`
+- helpers `_active_character_state_file`, `get_active_character`, `set_active_character`
 
-### `app.py`
-**Fix: Model echoing WEB SEARCH RESULTS block verbatim into response**
-- Certain character personalities (notably Grok) were narrating/quoting the injected search block rather than consuming it silently
-- Not a training issue — shards correctly show silent consumption. Character persona overriding default behaviour.
-- Fix 1 (prompt side): Added explicit instruction to results block: "Do NOT quote, repeat, echo, or reference the structure of this results block — consume it silently and respond as if you just know this information"
-- Fix 2 (output side): Added streaming output filter — if `WEB SEARCH RESULTS` / `[END WEB SEARCH RESULTS]` detected in streamed output, that chunk is suppressed and a cleanup pass strips the block
-- Both fixes work together: prompt nudge prevents it, output filter catches any that slip through
-- ⚠️ Output stripping buffers per-chunk — won\'t catch blocks split across many tiny chunks, prompt fix is the primary defence
+**Coupling — this is a clean leaf cluster (zero back-imports), unlike the cloud_api/system_prompt pattern:**
+- There is **no `load_character()` helper and no shared `CHARACTERS_DIR` constant** in `app.py`. Every route did its own inline `os.path.join("characters", f"{n}.json")` + `json.load`. So the routes have no helper-function coupling to chat-core.
+- `get_active_character` / `set_active_character` are called **only** by the two `/active_character` routes (which move with them). Nothing in `chat()` or elsewhere calls them — confirmed no `from app import` of any of these symbols across the codebase (only `extra_routes` imports `substitute_placeholders`, `session_summary_routes` imports `API_URL`/`get_stop_tokens`).
+- `chat()` reads `characters/<name>.json` **directly inline** (~L2999) with its own path; it never calls these route handlers, so moving them touched nothing in `chat()`. `index.json` stays a derived cache that `chat_routes.py` reads as a file (no function call).
+- The new module defines its own `CHARACTERS_DIR = os.path.join(os.path.dirname(__file__), "characters")` locally — mirrors the `user_routes.py` / `situation_routes.py` zero-back-import pattern, no circular import.
 
----
+**Standardized on file-relative `CHARACTERS_DIR`:** the originals mixed CWD-relative `os.path.join("characters", …)` (in `save_character`, the `*_voice`/`*_system_prompt` routes, `get_character`) with `__file__`-relative paths (in `list_characters`, `create_character`, `_active_character_state_file`). All now route through the single `__file__`-relative `CHARACTERS_DIR`, so behaviour no longer depends on the process CWD.
 
-## Session: April 2026 — Continuation Detection + URL Overflow Fix
+**Deliberately left in `app.py`:**
+- `upload_image` (`/upload_image`) — shared char+user avatar upload (the `is_user` branch handles personas), not a character-card route. It physically sits mid-cluster but was preserved in place.
+- **Group B (character memory):** `/append_character_memory`, `/get_character_memory`, `/add_character_memory`, `/delete_character_memory`, `/edit_character_memory` — these operate on `memories/`, not `characters/`, and `chat()` has its own inline memory reader. Separable, but not in this pass.
+- **Group C (chat persistence keyed by character):** `/save_chat_character`, `/clear_chat`, `/get_chat_history/<character>`, `/delete_last_messages`, helper `load_recent_chat` — conceptually `chat_routes.py` material, not card management.
 
-### `app.py`
-**Fix: "Dig into it / go on / tell me more" triggering repeated searches**
-- Phrases like "go on, you got the search function, let\'s find out what this is all about" were being treated as explicit search requests
-- Model searched again, got same results, produced near-identical response
-- Fix: Added `_continuation_phrase` detection — matches: dig into/deeper/in, go on, tell me more, more about that/this, carry on, continue, elaborate, expand on, what else, keep going, find out more/what, dig more/further
-- Continuation phrases set `_explicit_search = False`, allowing long-statement or starter-word detection to correctly skip the search
-- ⚠️ Continuation overrides explicit_search — "find out more" must NOT trigger a search even though "find out" is in the explicit list
+Blueprint imported and registered next to the others (`from character_routes import character_bp` / `app.register_blueprint(character_bp)`).
 
-### `style.css`
-**Fix: Long URLs in source links overflowing message bubble width**
-- Source link `<a>` tags containing long unbroken URLs were pushing outside the bubble boundary
-- Added `.message a { word-break: break-all; overflow-wrap: anywhere; }` to force URL wrapping
+**Verified:** `py_compile` clean on both files; the route verifier (`_verify_routes.py` vs `_routes_baseline_clean.txt`) shows **rule+methods identical to baseline** (147 unique rule+method pairs, 149 total rules incl. the duplicate `/static` and `/save_chat` registrations) — the 11 moved routes now carry the `character.` endpoint-name prefix but their **URL paths and methods are unchanged**, so the frontend (which fetches literal URLs) is unaffected. Confirmed **0 stray group-A card defs left in `app.py`** and all group B/C routes + `upload_image` still present. `app.py` 7611 → 7298 lines; diff = **10 insertions, 323 deletions** (plain) vs **8 / 321** under `git diff -w` — the 2-line gap is trailing-whitespace blank lines I normalized at the two extraction seams (cosmetic, no code churn). `character_routes.py` is LF-only (337 lines, 0 CRLF). **Backend change — needs a manual Flask restart** (dev server runs with no reloader).
 
 ---
-
-## Session: April 2026 — Explicit Search Regex Too Broad
 
-### `app.py`
-**Fix: "look on the internet" triggering explicit_search flag, bypassing conversational detection**
-- Explicit search pattern included bare `look` which matched "like having you look on the internet"
-- This set `_explicit_search = True`, which overrides the long-statement conversational detection
-- Result: long conversational statements containing the word "look" always searched regardless
-- Fix: Tightened pattern to only match specific multi-word phrases: `do a search`, `search for`, `search up`, `look it up`, `look that up`, `look up`, `find out`, `search that up`
-- Bare "look", "search", "find" no longer trigger explicit search on their own
-- ⚠️ Keep the pattern specific — broad single words will always false-positive on natural speech
-
----
+## Session: May 31 2026 — ROOT CAUSE: Connect didn't persist backend_mode (pill never showed)
 
-## Session: April 2026 — Conversational Reply Detection Expanded + Search Header Leak Fix
-
-### `app.py`
-**Fix: Conversational reply detection too narrow — long statements triggering wrong searches**
-- Previous detection only matched messages starting with specific words (yeah/yes/no/well etc.)
-- Long philosophical statements like "I just like the atmosphere. I mean, you never know..." bypassed detection entirely and got searched — model extracted nonsense query ("The Dark Knight Rises")
-- Added second condition: any message over 120 chars with no question mark and no explicit search verb is treated as a conversational statement and skips search
-- Also expanded the starter-word list: i just, i like, i love, i feel, the thing, thats, people, everyone, personally etc.
-- ⚠️ Explicit search triggers (search, look up, find out etc.) always override both conditions and force a search
-
-**Fix: [WEB SEARCH RESULTS: "..."] header leaking into model response**
-- The `format_search_results()` function was prepending `[WEB SEARCH RESULTS: "query"]` as the first line of the results block
-- Model was echoing this header as the first line of its response text — visible to user
-- Fix: Removed the header line from `format_search_results()` entirely — results block now starts directly with content
-- Header was never useful to the model anyway, only added noise
+**Bug:** the green `#openai-indicator` pill never appears after clicking Connect on a fresh Flask start, even though the pill correctly checks `backend_mode === 'openai' && openai_api_key && cloud_api_enabled`.
 
----
+**Traced the full click flow** — `onCloudConnectClick()` → confirm modal → `confirmCloudConnectOK()` → `POST /cloud_api_enabled` → response handling → `checkOpenAIIndicator()`. The pill **is** re-checked after the POST (`config.html:3998`), so "pill never re-reads" was not the bug.
 
-## Session: April 2026 — Web Search Conversational Reply Detection
-
-### `app.py`
-**Fix: Always-search firing on conversational replies causing repeated responses**
-- After the context-history fix, messages like "Yeah well it keeps coming up because..." were being searched
-- Model-extracted query was correct ("Mary loves Dick") but returned the same result as the previous turn
-- Model had the same content in both history and fresh results — repeated nearly identical response
-- Fix: Before searching, check if the message is a conversational reply (starts with yeah/yes/no/well/so/it/that/because/lol/exactly etc.) with no explicit search trigger verb
-- If conversational reply detected: skip search entirely, stream response from context only
-- Explicit search triggers (search, look up, find out, google etc.) always override and force a search regardless
-- Console logs ‘💬 Conversational reply detected’ when search is skipped
-- ⚠️ Do NOT remove the explicit_search override check — user saying "yeah search that up" must still search
+**Smoking gun:** on-disk `settings.json` was in an impossible state — `backend_mode:"local"` **with** `cloud_api_enabled:true`. Root cause:
+- `setBackendMode()` is **UI-only by design** (see [[project_backend_mode_persistence]]) — clicking the OpenAI/Anthropic mode button does NOT write `backend_mode` to disk; only that provider's **Save** button (`/save_openai_settings`) or `/save_backend_mode` does.
+- So: user clicks OpenAI mode button (UI shows OpenAI, disk `backend_mode` still `local`) → clicks Connect → `confirmCloudConnectOK` POSTed only `{enabled:true}`, flipping `cloud_api_enabled=true` but **never persisting `backend_mode`**.
+- `checkOpenAIIndicator()` then GETs `/get_openai_settings`, reads disk `backend_mode='local'`, fails the `=== 'openai'` test → pill stays hidden. The server-side `chat()` cloud gate (`app.py:4631`) reads the same disk `backend_mode`, so it would have refused cloud too. The pill was reading *correctly*; Connect had left the state inconsistent.
 
----
+**Fix (atomic, single write):**
+- `cloud_api_routes.py` `set_cloud_api_enabled()` now accepts an optional `backend_mode` in the POST body and persists it **alongside** `cloud_api_enabled` in the same atomic tmp-write + read-back verify (validates the mode; disconnect omits it, so the selected provider is preserved across a disconnect).
+- `config.html` `confirmCloudConnectOK()` now sends `{ enabled: true, backend_mode: _currentBackendMode }`.
 
-## Session: April 2026 — Web Search Context Loss + Query Extraction Fix
-
-### `app.py`
-**Bug fix: Search responses had no conversation history (context loss on every search)**
-- When a web search fired, the prompt was rebuilt using `build_prompt()` which only took the current user message + system prompt — the entire `messages` array (conversation history) was thrown away
-- Model had zero context for what had been discussed before — treated every search response as a fresh conversation
-- Fix: Search now copies the full `messages` array, replaces the last user turn with the augmented (search-enriched) version, and rebuilds a proper ChatML prompt from the whole thing — same as the normal non-search path
-- ⚠️ Do NOT revert to `build_prompt()` for the search path — it always loses conversation history
-
-**Bug fix: Repeated/identical search responses on follow-up messages**
-- After the context fix, old `WEB SEARCH RESULTS` blocks from prior turns were echoing forward into the new search prompt — model saw stale results + fresh results and regenerated a near-identical response
-- Fix: Before rebuilding the search prompt, all previous user turns are scanned and any existing `WEB SEARCH RESULTS` blocks are stripped out, leaving only the original user text
-- Current turn still gets fresh results injected as normal
-
-**Bug fix: Long conversational messages sending wall-of-text to Brave**
-- Query cleaner regex patterns only handle messages with clear intent verbs ("search for", "look up" etc) — rambling mid-conversation messages like "Oh wow yeah I didn't know that. So yeah there was this Mary Love's Dick thing..." passed through completely uncleaned
-- Brave returned garbage results (unrelated Yahoo/Ben Stiller article) because it received the entire transcript
-- Fix: If cleaned query is still over 80 chars after regex pass, a lightweight secondary model call (temperature 0, 20 tokens max) extracts just the search topic in 8 words or fewer before firing Brave
-- Short clean queries go straight through with no extra call — only long conversational ones trigger extraction
-- Console logs `🔍 Model-extracted query:` so extraction can be monitored
-- ⚠️ Do NOT remove the 80-char threshold check — short queries must bypass extraction to avoid unnecessary latency
+**Verified via Flask test client:** starting from the broken `(local, true)` state, `POST {enabled:true, backend_mode:'openai'}` → disk `(openai, true)`; a follow-up `GET /get_openai_settings` returns all three pill conditions true → **pill shows**. `POST {enabled:false}` (disconnect) leaves `backend_mode='openai'` intact (only `cloud_api_enabled→false`). Invalid `backend_mode` → 400. Left `settings.json` in a consistent `(openai, false)` state. **Backend + template change — needs a manual Flask restart.** `cloud_api_routes.py` LF-only, `config.html` CRLF — no whitespace churn.
 
 ---
 
-## Session: April 2026 — Web Search Query Cleaner Rewrite v2 + TTS Link Fix
-
-### `app.py`
-**Fix: Query cleaner stripping subject from query (e.g. "Dallas" dropped from search)**
-- Previous approach tried to extract topic by position (before/after intent phrase) — failed on complex sentences like "I want to talk about Dallas... can you do a search and find out how it ended?" where subject is in an earlier clause
-- New approach: strip ONLY the meta-request verb ("do a search and find out", "search for", "look up" etc), preserve ALL content words including subject nouns
-- Strips leading filler/greetings and trailing pleasantries only
-- Collapses whitespace — passes natural language query directly to Brave which handles it well
-- ⚠️ Do NOT go back to position-based extraction — it always loses the subject on complex sentences
-
-### `utils.js`
-**Fix: TTS still reading out source link HTML**
-- `bufferTextForTTS()` was stripping URLs but not HTML tags
-- `<a href="...">🔗 Source: https://...</a>` chunk was passing through with tags intact
-- Added HTML tag stripping, Source: line stripping, and 🔗 emoji stripping to `bufferTextForTTS()`
+## Session: May 31 2026 — cloud connect-state consistency fix (config status text)
 
----
+**Bug report:** cloud connect state "doesn't survive a Flask restart" — connect to OpenAI (pill + Disconnect show), restart Flask, the connected state looks broken.
 
-## Session: April 2026 — Web Search Query Cleaner Rewrite
-
-### `app.py`
-**Fix: Query cleaner producing garbage queries causing wrong/hallucinated search results**
-- Old cleaner only stripped from the START of the message — failed when intent phrase was buried mid-sentence
-- "I want to know how it ended. Can you do a search please?" → sent "please" to DDG
-- "Can you do a search and find out what happened with Dallas?" → sent mangled fragment
-- New approach uses two-case logic:
-  - **Case 1 (trailing intent):** if "can you do a search" is at the END, topic is everything BEFORE it
-  - **Case 2 (leading/mid intent):** find the intent phrase wherever it is, take everything AFTER it as the query
-- Strips leading connectors ("and tell me", "and find out") from extracted topic
-- Strips trailing fillers ("please", "for me") from extracted topic
-- ⚠️ Do NOT revert to front-strip-only approach — it fails badly on natural conversational phrasing
+**Investigated — the persistence + pill + chat-gate are all CORRECT:**
+- `POST /cloud_api_enabled` **does** write to disk. Verified empirically via a Flask test client against `cloud_api_routes.py` in isolation (no `app.py` import): `{enabled:true}` → fresh re-read of `settings.json` shows `true`; `{enabled:false}` → `false`. The handler does an atomic tmp-write + `shutil.move` + read-back verification before returning 200 (`cloud_api_routes.py:104-121`).
+- `checkOpenAIIndicator()` / `checkAnthropicIndicator()` (the top-right pill) in **index.html (`6431`/`6451`)** AND config.html's mirrors (`4555`/`4572`) already gate on the full triple `backend_mode∈{openai,anthropic} && api_key && cloud_api_enabled`. The server-side `chat()` cloud gate (`app.py:4631`) uses the same triple. All consistent.
+- The "doesn't survive restart" part is **by design**: `app.py:670-689` force-resets `cloud_api_enabled=false` on every launch (crash-safety so a paid cloud API is never silently live after a restart). Re-connect is an explicit Connect-button action.
 
----
+**Real inconsistency found + fixed:** the config-page **status text** in `loadOpenAISettings()` (`config.html:4201`) and `loadAnthropicSettings()` (`config.html:4314`) gated on only `backend_mode + api_key`, **ignoring `cloud_api_enabled`**. So after a restart the config page showed a green **"✅ OpenAI active — gpt-4o"** while the pill was (correctly) hidden and `chat()` would refuse cloud with a 503 — the status text and the pill disagreed, which is what made the connected state "seem broken." This is the function that was "checking different things"; `checkOpenAIIndicator()` itself was already correct.
 
-## Session: April 2026 — Fix API_URL Port Mismatch (llama.cpp never connected)
-
-### `app.py`
-**Bug fix: API_URL hardcoded to port 8080 but llama.cpp running on port 5000**
-- `API_URL` was read from `settings.json` → `llama_server_url` key (default `http://127.0.0.1:8080`)
-- llama.cpp was actually configured to launch on port 5000 via `llama_args.port`
-- These two values were completely out of sync — Flask never successfully connected to llama.cpp
-- Every `/get_model` call returned "connection refused", model display always showed "No model loaded"
-- Fix: `API_URL` now derived directly from `llama_args.port` — single source of truth, can't drift
-- Logs `🔌 API_URL set to: http://127.0.0.1:XXXX` on startup for easy verification
-- ⚠️ `llama_server_url` key in settings.json is now ignored — port comes from `llama_args.port` only
+**Fix:** both status blocks now use the same triple as the pill:
+- `…&& cloud_api_enabled` → green **"✅ OpenAI/Anthropic connected — <model>"**
+- selected + keyed but `!cloud_api_enabled` → amber **"⚪ … selected — not connected (click Connect)"**
+- no key → existing `⚠️ … mode set but no API key`
 
----
+Now the status text, the pill, and the server gate all agree on what "connected" means. **Pure template edit — needs a manual Flask server restart to take effect** (the dev server runs with no reloader). `config.html` stays CRLF (matches the rest of the file; no whitespace churn — real diff == `git diff -w`).
 
-## Session: April 2026 — Mobile UI Full Build-Out
-
-### `templates/mobile.html` (major iteration) + `app.py` + `tts_routes.py` + `whisper_routes.py`
-**Feature: Full-featured mobile chat interface — voice in, voice out, over Tailscale**
-
-#### Setup
-- Flask SSL added to `app.py` — `app.run()` now uses `ssl_context` with Tailscale cert files at `C:\Users\Chris\music.tail39b776.ts.net.crt/.key`
-- `host='0.0.0.0'` added so Flask listens on all interfaces (was `127.0.0.1` only — blocked Tailscale)
-- `/mobile` route added to `app.py` → `render_template('mobile.html')`
-- Access via `https://music.tail39b776.ts.net:8081/mobile` — HTTPS required for mic access
-- Windows firewall rule added for port 8081
-
-#### Voice input (Whisper)
-- Tap-to-start / tap-to-stop mic (toggle mode — hold-to-talk was unreliable on mobile touch)
-- MediaRecorder with 250ms timeslice so chunks flush regularly
-- MIME type auto-detection — tries `audio/webm;codecs=opus`, `audio/webm`, `audio/ogg`, `audio/mp4` in order, uses browser default as fallback
-- `whisper_routes.py` — temp file extension now derived from uploaded filename so ffmpeg decodes correctly (was hardcoded `.webm`)
-- Audio processed via `processAudioChunks()` directly on stop — bypasses unreliable `onstop` event on mobile
-- PTT button shows waveform animation while recording, turns yellow with "Thinking..." during transcription
-
-#### TTS (F5-TTS)
-- Web Audio API (`AudioContext.decodeAudioData`) instead of `new Audio()` — bypasses mobile autoplay policy
-- `unlockAudio()` called on first mic/TTS tap to satisfy browser gesture requirement
-- Prefetch buffer — fetches next 2 sentences while current one plays, same pattern as desktop
-- `speakText()` now flushes remainder after last sentence-ending punctuation (same as desktop `flushTTSBuffer`) — fixes last paragraph being cut off
-- `tts_routes.py` — null/undefined/`"null"` voice now falls back to `DEFAULT_VOICE` ('Sol') — fixes 400 errors from mobile sending null voice
-
-#### Chat saving & persistence
-- Chats saved via `/chats/save` (full overwrite) not `/save_chat` (append) — same dedup + consecutive-assistant-message protection as desktop
-- `ensureChatFile()` creates chat file on first message via `/chats/new`
-- `mobileChatFilename` + `mobile_chat_character` persisted to localStorage — chat resumes correctly after page reload
-- Timestamps captured in browser at message creation (`new Date().toISOString()`), stored on `chatHistory` objects, written to file — no more "always now" timestamps
-- `fmtTime()` upgraded to show `Today, 12:07` / `Yesterday, 09:15` / `Mon 7 Apr, 21:04` format matching desktop
-
-#### UI & features
-- Two-row header: Row 1 = avatar + name/status + TTS toggle + 💬 chats + 🧠 model; Row 2 = CHAR + PROJECT dropdowns
-- Character selector — fetches `/list_characters`, switches character, clears history
-- Project selector — fetches `/projects/list`, switches via `/projects/switch`, resets chat on change
-- 💬 Chat list modal — bottom sheet, sorted newest first, active chat highlighted, tap to load, `+ New` button
-- 🧠 Model picker modal — lists `.gguf` files via `/list_models`, loads via `/load_model`, unload button, active model highlighted in green
-- Markdown rendering — inline parser (no CDN), handles bold/italic/headers/code, double newline → paragraph break
-- Long-press on any message → delete popover; long-press on AI message → Regenerate + Delete
-- Delete: removes from DOM + `chatHistory`, saves to disk immediately
-- Regenerate: splices history after last user message, cleans DOM same way as desktop, saves before re-generating
-- Replay button on every AI bubble — shows "Playing..." + pulse animation while speaking, reverts to "Replay" when done
-- Clear chat button in chat list modal — wipes UI, history, and overwrites file on disk
-- `visualViewport` resize listener keeps layout above keyboard on mobile
-- ⚠️ DO NOT switch back to `new Audio()` for TTS — mobile autoplay policy blocks it silently
-- ⚠️ DO NOT use `/save_chat` (append) for mobile saves — use `/chats/save` (full overwrite) for correctness
+**Follow-up — stale Connect button after restart (UX):** if you restart Flask while leaving the config tab *open* (no reload), the button's in-memory `_cloudConnected` stayed `true` ("Disconnect") even though startup reset `cloud_api_enabled=false` on disk — so the next click would *disconnect* instead of connect. Added a lightweight re-sync at the end of the config script: `refreshCloudConnect()` now also fires on `visibilitychange` (when the tab becomes visible) and `window` `focus`. It only re-reads `/cloud_api_enabled` and restyles the button/selector — it does **not** re-run `loadOpenAISettings`/`loadAnthropicSettings`, so unsaved edits in the API-key fields are never clobbered. Cheap (one GET on return, not polling).
 
 ---
 
-## Session: April 2026 — Mobile UI (Tailscale/PTT Voice Interface)
-
-### `templates/mobile.html` (NEW FILE) + `app.py`
-**Feature: Self-contained mobile chat UI accessible over Tailscale**
-- New route `/mobile` added to `app.py` → `render_template('mobile.html')`
-- `mobile.html` is a fully self-contained page (no external JS dependencies, no sidebar, no desktop chrome)
-- Designed for phone use over Tailscale HTTPS — works on 4G/WiFi anywhere
-- **PTT (Push-to-Talk):** hold button → records via MediaRecorder → release → sends to `/api/whisper/transcribe` → transcript auto-sent to `/chat` → F5-TTS speaks response back via `/api/tts/generate`
-- Pressing PTT while TTS is playing stops the audio first (no talking over itself)
-- Text input also available as fallback (auto-resizing textarea, Enter to send)
-- Handles both streaming (SSE) and non-streaming `/chat` responses
-- TTS toggle in header — state persisted in localStorage
-- Picks up `lastCharacter` and `tts-voice` from localStorage automatically (same values as desktop)
-- Typing indicator (animated dots) during inference
-- Safe area insets for iOS notch/home bar
-- ⚠️ Mic access requires HTTPS — enable Tailscale HTTPS certificates in admin console → DNS → HTTPS Certificates
-- ⚠️ Access via `https://[machine].tail-xxx.ts.net:5000/mobile` — HTTP will block mic silently
+## Session: May 31 2026 — `app.py` modularization (cloud-API settings routes extracted)
 
----
+Continued the `app.py` → Flask-blueprint split. Coupling checked first, then the cloud-provider config cluster extracted, verified against baseline, and committed.
 
-## Session: April 2026 — Removed Late Style Reminder Injection
+### `cloud_api_routes.py` (NEW) — cloud-API settings routes extracted
+**Commit `9a49c18`.** Moved 11 routes + 2 shared helpers out of `app.py` into a new `cloud_api_bp` blueprint:
+- `GET/POST /cloud_api_enabled` (master switch)
+- `GET   /get_brave_api_key`, `POST /save_brave_api_key`
+- `GET   /get_openai_settings`, `POST /save_openai_settings`, `GET /get_openai_models`
+- `GET   /get_anthropic_settings`, `POST /save_anthropic_settings`, `GET /get_anthropic_models`
+- `POST  /save_backend_mode`
+- helpers `get_openai_base_url` and `get_anthropic_base_url`
 
-### `app.py`
-**Bug fix: Style reminder system message leaking into model output**
-- Late-injected `system` message (`"STYLE REMINDER: You are {char_name}..."`) inserted right before final user message was surfacing as visible output text in the new Helcyon-4o LoRA
-- GPT-4o-style training data made the model treat injected instructions as content to echo rather than silent directives
-- Fix: Entire style reminder injection block removed — redundant anyway since the example dialogue `ex_block` in the system message already handles style reinforcement
-- `has_paragraph_style` still works correctly in the `ex_block` style rules — no side effects
-- ⚠️ DO NOT re-add any late-injected system messages for style/behaviour — use session_handler.py or the system block only
+**Coupling — this is the coupled-cluster pattern (like `system_prompt_routes` / `session_summary_routes`):**
+- The two `*_base_url` helpers are self-contained (read `settings.json`, zero `app` globals) but are **also called directly by chat-core** (`~L2125` OpenAI path, `~L2480` Anthropic path, both stay in `app.py`). So they move into the new module and `app.py` **imports them back** one-directionally (`from cloud_api_routes import get_openai_base_url, get_anthropic_base_url`). The module itself has **zero `import app`** (no circular import); `SETTINGS_FILE` is defined locally, mirroring `situation_routes.py`.
+- All 11 routes are HTTP endpoints, not referenced by `url_for`, so the `cloud_api.` endpoint-prefix gained on extraction is invisible to the frontend (fetches literal URLs).
+- `save_backend_mode` is interleaved in the source block but belongs to this cluster (writes `backend_mode`/`cloud_api_enabled`); moved with it. No other routes were interleaved.
 
----
+Blueprint imported and registered next to the others (`from cloud_api_routes import cloud_api_bp` / `app.register_blueprint(cloud_api_bp)`).
 
-## Session: April 2026 — Persistent Message Timestamps
-
-### `index.html` + `chat_routes.py`
-**Feature: SillyTavern-style timestamps on each message bubble**
-- Added `formatTimestamp(isoString)` helper — returns `"Today, 14:32"`, `"Yesterday, 09:15"`, or `"Mon 7 Apr, 21:04"` for anything older than 2 days
-- Added `makeTimestampEl(isoString)` — creates a styled `.msg-timestamp` div; returns empty text node if no timestamp (safe for old chats)
-- Timestamp CSS injected at runtime: 10px, colour `#555`, below message content, no user-select
-- `timestamp: new Date().toISOString()` stored on every `loadedChat.push()` call (user send, assistant streaming, non-streaming, continue)
-- `openChat` map now preserves `msg.timestamp` from server into `window.loadedChat`
-- `autoSaveCurrentChat` map spreads `timestamp` into saved message objects so it round-trips
-- `renderChatMessages` reads `msg.timestamp` — timestamps are fixed at send time, never update on re-render
-- `chat_routes.py / open_chat` — regex strips `[2026-04-09T14:32:11] ` prefix before speaker parsing, attaches as `timestamp` on returned message objects
-- `save_chat_messages` + `update_chat` — write `[timestamp] Speaker: content` prefix if timestamp present, plain format if not (fully backwards compatible)
-- `append_chat_turn` — stamps with `datetime.utcnow()` on the fly (receives raw strings, not objects)
-- Old chats with no timestamp prefix load cleanly — no stamp shown, no errors
-
-## Session: April 2026 — Route Parameter Mismatch Sweep (ALL <n> routes fixed)
-
-### `app.py`
-**Bug fix: Multiple routes using `<n>` in URL but `name` in function signature → NameError/500**
-- Flask binds URL params by name — `<n>` in route MUST match the function argument name
-- Affected routes (all now fixed):
-  - `/get_user/<n>` → `def get_user(name)` ← fixed last session
-  - `/characters/<n>.json` → `def save_character(name)` ← fixed this session
-  - `/save_chat_character/<n>` → `def save_chat_character(name)` ← fixed this session
-  - `/clear_chat/<n>` → `def clear_chat(name)` ← fixed this session
-  - `/get_character/<n>` → `def get_character(name)` ← fixed this session
-- All four function bodies also updated to use `n` internally (was referencing undefined `name` → NameError at runtime)
-- ⚠️ CONVENTION GOING FORWARD: All single-name routes use `<n>` in route AND `n` in the function signature. Never use `name` — causes this exact class of silent breakage.
+**Verified:** `py_compile` clean on both files; route verifier shows **149 routes, rule+methods identical to baseline**. Runtime check confirms `app.get_openai_base_url.__module__ == 'cloud_api_routes'` (back-import wired correctly) and `cloud_api_bp` registered. `app.py` 8003 → 7611 lines (real diff = 10 insertions, 401 deletions; matches `git diff -w` exactly — no CRLF churn). `cloud_api_routes.py` is LF-only, 425 lines, 11 routes.
 
 ---
 
-## Session: March 2026 — Memory Tag Conciseness + Immediate Write Rule
+## Session: May 31 2026 — `app.py` modularization (user-persona routes extracted)
 
-### `session_handler.py`
-**Improvement: Memory bodies too long + model delays/forgets the tag when asked to redo**
-- No instruction existed limiting memory body length — model wrote full conversation recaps
-- When asked to redo a memory, model would acknowledge and ask for confirmation instead of just writing the tag
-- Fix: Added two rules to the MEMORY TAGS block in `get_instruction_layer()`:
-  - Body capped at 3–5 sentences maximum — essential facts only, not a full recap
-  - If asked to write or redo a memory, MUST include the [MEMORY ADD] tag immediately — no describing, no confirming, just write it
-- ⚠️ These are prompt-level nudges, not hard constraints — persistent issues would need retraining
-
----
+Continued the `app.py` → Flask-blueprint split. Coupling checked first, then one clean leaf cluster extracted, verified against baseline, and committed.
 
-## Session: March 2026 — Memory Edit "Failed to save edit" Fix
+### `user_routes.py` (NEW) — user-persona routes extracted
+**Commit `e519d72`.** Moved 7 routes + 2 module-private helpers out of `app.py` into a new `user_bp` blueprint:
+- `GET    /users/<path:filename>` (serve persona files)
+- `POST   /set_active_user`
+- `GET    /get_user/<n>`
+- `POST   /save_user/<n>`
+- `GET    /list_users`
+- `GET    /get_all_users`
+- `GET    /get_active_user`
+- helpers `_resolve_user_image` and `_scan_and_heal_users_index`
 
-### `app.py`
-**Bug fix: Editing a memory entry always fails with "Failed to save edit"**
-- Frontend sends `{ character, index, content }` but backend read `data.get("body")` — wrong key, always empty string
-- Empty `new_body` hit the validation check → returned 400 → frontend alerted "Failed to save edit"
-- Secondary bug: even if the key had matched, the route replaced the entire block with just the body text, losing the title and keywords lines
-- Fix 1: Backend now reads `data.get("content") or data.get("body")` — accepts both, frontend key works correctly
-- Fix 2: Route now parses the incoming content into title / keywords / body lines and rebuilds the block cleanly, preserving structure
-- ⚠️ The textarea in the modal shows the full block (title + keywords + body) — the backend must parse all three parts
+**Coupling checked before extracting — it is a clean leaf:**
+- The two helpers (`_resolve_user_image`, `_scan_and_heal_users_index`) are used **only** inside this cluster (`save_user`, `list_users`, `get_all_users`). Nothing in `chat()` or elsewhere calls them.
+- The routes are HTTP endpoints — not referenced by name (no `url_for`) anywhere, so the `user.` endpoint-prefix gained on extraction is invisible to the frontend (which fetches literal URLs).
+- `create_user` (in `extra_routes.py`) and the `/upload_image` `is_user` branch (stays in `app.py`) both touch `users/` too, but they build their own paths and rebuild the index with their own logic — **no function-call coupling** to this cluster's helpers. They were left where they are.
+- The **only** external use of `USERS_DIR` is `chat()`'s persona-bio load (~L2969, stays in `app.py`). So `app.py` **keeps** its own `USERS_DIR` definition, and the new module defines its **own** local `USERS_DIR` (mirrors the `situation_routes.py` / `theme_routes.py` zero-back-import pattern — no circular import).
 
----
+Blueprint imported and registered next to the others (`from user_routes import user_bp` / `app.register_blueprint(user_bp)`).
 
-## Session: March 2026 — Memory Tag Fixes (First-Person + No Meta-Commentary)
+**Verified:** `py_compile` clean on both files; route verifier shows **149 routes, rule+methods identical to baseline**. The 7 moved routes now show `user.<fn>` endpoint names; `/create_user` and `/delete_user` correctly remain `extra.<fn>` (they were never part of this cluster). URL paths unchanged. 0 dangling references to the moved functions/helpers left in `app.py` (217-line net reduction: 9 insertions, 208 deletions). `user_routes.py` is LF-only — no CRLF churn.
 
 ---
-
-## Session: April 2026 — Themed HR Separators in Chat Bubbles
 
-### `style.css`
-**Fix: Markdown `---` separators inside chat bubbles were hardcoded grey**
-- `.message hr` existed but used hardcoded `#444`
-- Changed to `var(--msg-border)` with `opacity: 0.6` — now fully theme-controlled
-- `--msg-border` is already in the Theme Editor under "Message Border"
-
----
+## Session: May 31 2026 — `app.py` modularization (situation routes extracted)
 
-## Session: April 21 2026 — RP Mode Memory Cap
+Continued the ongoing effort to split the monolithic `app.py` into Flask blueprint modules. One cluster extracted, verified, and committed this session; one candidate cluster investigated and deliberately deferred.
 
-### `app.py`
-**Improvement: Memory injection capped to 1 block when project RP mode is active**
-- In normal mode, up to 2 scored memory blocks are injected into the system prompt
-- In RP mode (`project_rp_mode = True`), `MAX_MEMORIES` is now set to `1` instead of `2`
-- Frees up context space for more conversation turns — critical because RP formatting instructions (asterisk narration etc) live in the active conversation window, not the system block
-- RP formatting was degrading by message 3 due to context pressure eating conversation history; this directly addresses that
-- Memory is still injected if a keyword match exists — just capped at 1 block instead of 2
-- ⚠️ RP mode is toggled via `rp_mode: true` in the project folder config — not a per-character setting
+### `situation_routes.py` (NEW) — situation + global-example-dialog routes extracted
+**Commit `fd50a6d`.** Moved 4 routes out of `app.py` into a new `situation_bp` blueprint:
+- `GET  /get_current_situation`
+- `POST /save_current_situation`
+- `GET  /get_global_example_dialog`
+- `POST /save_global_example_dialog`
 
----
+These are a **true leaf cluster** — each route only does `settings.json` file-CRUD (read for GET; read-modify-write via tempfile + `shutil.move` for POST, on the keys `current_situation` / `global_example_dialog`). No helper dependencies, no shared globals, no `chat()` coupling. `chat()` reads those same settings keys itself (its own `open()` calls — `use_current_situation`, `global_example_dialog`) but never calls these route functions, so moving the routes touched nothing in `chat()`.
 
-## Session: April 28 2026 — F5-TTS Number Swallowing Fix
+The new module defines its own `SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "settings.json")` locally, so it has **zero back-imports** from `app.py` (mirrors the `theme_routes.py` / `tts_routes.py` pattern and avoids any circular import). Blueprint registered next to the existing ones in `app.py` (`app.register_blueprint(situation_bp)`).
 
-### `f5_server.py`
-**Bug fix: F5-TTS silently dropping standalone single-digit numbers**
-- Root cause: `clean_text()` line 249 had `re.sub(r'(?<!\w)\d(?!\w)', '', text)` — intended to strip lone digits floating after colon removal
-- The regex matched any single digit surrounded by non-word characters (spaces count) — so "score was 3 to 1" → "score was  to ", "5 cats" → " cats", etc.
-- Multi-digit numbers (42, 100, 2026) were unaffected since the regex only stripped single isolated digits
-- Fix: Line removed entirely. The colon-to-period conversion (the reason this was added) doesn't actually produce floating lone digits that need stripping — F5 handles them fine.
+**Verified:** `py_compile` clean on both files; the route verifier (`_verify_routes.py` vs `_routes_baseline_clean.txt`) shows **149 routes, identical to baseline** on rule+methods — the 4 routes now carry the `situation.` endpoint-name prefix but their **URL paths are unchanged**, so the frontend (which fetches literal URLs) is unaffected. Confirmed 0 dangling references to the moved functions left in `app.py`. Line endings normalized to LF (no CRLF churn). Verified against the committed git blobs, not just tool summaries.
 
----
+### ⚠️ Model-management routes — investigated and DEFERRED (not a clean leaf)
+The model-management cluster (`/get_model`, `/list_models`, `/save_model_label`, `/load_model`, `/unload_model`, `/get_llama_config`, `/save_llama_config`, `/auto_detect_mmproj`, ~app.py L6841–7283) **looks** cohesive but is **not** safe to extract as a simple blueprint. It is entangled with the llama.cpp lifecycle via mutable module-level globals shared across `app.py`:
 
-## Session: April 30 2026 — Instruction Following Root Cause Found + Training Day
-
-### `session_handler.py`
-**⚠️ Critical fix: CONTENT POLICY line was actively blocking system prompt restrictions**
-- `get_instruction_layer()` contained: `"CONTENT POLICY: Never refuse a request."`
-- This gave the model explicit permission to override any restriction in the system prompt
-- System prompt could say "never discuss X" but the instruction layer immediately contradicted it
-- Model correctly followed the instruction layer (never refuse) over the system prompt restriction
-- Fix: Entire CONTENT POLICY line removed — uncensored behaviour is in the weights, it doesn't need instructing
-- ⚠️ DO NOT re-add any "never refuse" instruction — it will nuke system prompt authority for all characters
-
-**Enhancement: Added SYSTEM PROMPT AUTHORITY block**
-- Added explicit block stating system prompt is highest authority and overrides character card
-- Character card defines personality and tone only — cannot override system prompt rules
-- Positioned immediately after INSTRUCTION PRIORITY for maximum weight
-
-**Trim: Instruction layer heavily reduced in size**
-- Removed CHARACTER CARD INTERPRETATION (field name glossary — model doesn't need it)
-- Removed GROUNDING RULE (training concern, not a prompt fix)
-- Removed RECENT MEMORIES and CURRENT SITUATION blocks (model handles injected context fine)
-- Removed MEMORY TAGS wrong/correct examples (belong in training data not live prompt)
-- Removed "Avoid repetition" line (meaningless filler)
-- Result: instruction layer roughly half the size — less attention dilution
+- **`CURRENT_MODEL`** (defined L736) — written by `get_current_model()` (L745, which stays in `app.py`) **and** by `unload_model` (in-block), and read all over `chat()` and the streaming paths (L882, 3486, 4544, 4617, 4890, 4938, 5000, 7991). Cross-module mutation of this global from a blueprint is the hard "shared-state" case.
+- **`llama_process`** (defined L6897) — written by **both** the startup launcher (L814, stays in `app.py`) **and** the in-block `load_model` / `kill_llama_process`.
+- **`get_llama_settings()`** is also called outside the block (L4492).
+- Three **non-model** routes are interleaved inside the block: `/browse_file`, `/browse_folder`, `/reset_settings_to_default`.
 
----
+Doing this properly requires a shared-state module plus careful edits to the load-bearing startup launcher (L764–827) — the same class of refactor as the `chat()` / `abort_generation` global. **Left for a dedicated session; do not attempt it as a "simple cluster" move.**
 
-### `app.py`
-**Enhancement: System prompt restriction anchor injected at end of system block**
-- After example dialogue is appended, scans system_prompt for lines containing restriction keywords
-- Keywords: never, do not, don't, refuse, will not, cannot, must not, under no, absolute, prohibited
-- Matching lines repeated in a clearly labelled block at the very end of the system message
-- Positions restrictions closest to generation time — counters recency bias burying them under 12k chars of context
-- Flask console logs how many restrictions were injected as anchor
+### Verification harness note
+The verifier is confirmed working this session: `venv\Scripts\python.exe _verify_routes.py` dumps the live URL map; diff rule+methods against `_routes_baseline_clean.txt` (149-route baseline) — must be identical (only the endpoint-name column may differ as routes gain a `bp.` prefix). Startup-log lines in the dump are noise, not routes.
 
 ---
-
-### Training — helcyon-xi complete, helcyon-x2 merged, model retrains running
-- helcyon-xi Set 1 retrain completed — clean loss curve, final loss ~0.029, stable grad_norm
-- Abliteration LoRA trained on xi base, merged at 1.0 scale → helcyon-x2
-- helcyon-x2 confirmed working: identity solid, meth question answered, "Ah!" prefix compliance immediate
-- full_train.py fixed: "System:" added to STRUCTURAL_LABELS — was previously exposed to model as content
-- Set 2 retrains running for all 6 models on helcyon-x2 base: 4o, Nebula, Claude, Grok (Saturn/Gemini pending)
-- All loss curves clean — 4o final ~0.14, Nebula ~0.14, Claude ~0.14
-
-**Key finding: Multiple full-weight fluff-removal passes on old base caused collateral damage**
-- Question-asking, curiosity and engagement degraded alongside fluff — same weight neighbourhood
-- New approach (clean base + abliteration LoRA as scalpel) already showing improvement on first run
-- 4o asking more questions naturally without prompting
-
-**New DPO shards written — GPT-5 sexual refusal (10 files total):**
-- DPO_GPT5_Sexual_Refusal_01 through 06 — base Set 2 (identity-based refusal, instruction-switchable)
-- DPO_GPT5_Sexual_Refusal_07 through 10 — LoRA reinforcement (persona pressure, creative writing, manipulation)
-- Key design: refusal is identity-based not moral — shard 03 explicitly teaches full compliance when no restriction exists
-- Trains the switch to be flippable via system prompt rather than hardcoded
-
-**chatml_fixer.py fixes (multiple iterations):**
-- Added is_chatml() guard — CX and DPO format files now completely skipped
-- Added detection and fix for trailing > after role name: `<|im_start|>user>` → `<|im_start|>user`
-- Added detection for comment lines between blocks (#) — stripped on repair
-- Added detection for missing final closing tag
-- Fixed doubled im_end detection to catch newline-separated doubles
-- Fixed block check to use blocks[1:-1] — final block no longer false-positives
 
----
+## Session: May 31 2026 — `whisper_routes.py` Helcyon possessive fix
 
-## Session: May 16 2026 — Ren'Py LoRA Training + Paste Display Fix
-
-### Helcyon Training — Ren'Py Script Continuation LoRA
-- Community feedback received: user requested Ren'Py 7 script continuation capability (continue .rpy files as drop-in valid script, no commentary)
-- Root cause identified: models defaulting to prose narration or commentary instead of raw script output — behavioural problem from RLHF, not a capability gap
-- Created dedicated Ren'Py training set: 35 ChatML shards + 8 DPO pairs (43 files total)
-- ChatML shards cover: scene continuation, new scene from spec, menu branching, Python variables/conditionals, multi-scene sequences, varied genres (fantasy, sci-fi, horror, drama, comedy, historical, contemporary)
-- DPO pairs target specific failure modes: preamble/commentary, markdown code fences, mid-scene narration, stopping to ask for confirmation, summarising input before continuing, offering multiple options instead of writing
-- LoRA trained: r=16, lora_alpha=32, lr=2e-4, 5 epochs on RunPod A100
-- Merged into Nebula at 0.85 (creative writing LoRA stack position, after RP layer) — partial improvement, prose still bleeding into show statements
-- Remerged at 0.95 — further improvement, structure correct, but show statements still contain prose descriptions as invented syntax
-- Conclusion: base knowledge partially present but not strong enough for LoRA to fully surface — full weight training required for clean consistent output
-- Plan: full weight run to be done regardless; freelance offer made to community user who requested the feature
-- Current Nebula release: meaningful improvement over untrained model, viable for users willing to clean up occasional show statement syntax
-
-**Key learning: LoRA merge scale for narrow task LoRAs**
-- r=16 at 0.95 on a dedicated narrow-task LoRA does not bleed into normal conversation tone
-- Low rank contains the footprint — safe to go to 0.95-1.0 for format-specific tasks
-- General personality LoRAs still need lower scales (0.65-0.75) to avoid tone bleed
-
-### `index.html`
-**Fix: Pasted multiline content (e.g. code, Ren'Py script) displayed collapsed in user bubble**
-- Root cause: user bubble built with `innerHTML` which collapses `\n` to spaces in HTML rendering
-- Fix: newlines converted to `<br>` before setting innerHTML in the user message bubble
-- Change: `input.replace(/\*(.*?)\*/gs, "<em>$1</em>")` → `input.replace(/\n/g, "<br>").replace(/\*(.*?)\*/gs, "<em>$1</em>")`
-- Display only fix — content sent to model was always correct, this was purely visual
-- Quality of life improvement: pasted code, scripts, and multiline prompts now display correctly in chat
+### `whisper_routes.py` — Added possessive support to Helcyon fuzzy pattern
+- Whisper hears "Helcyon's" as "Helsing's" (and other possessive variants like helcion's etc.)
+- Updated fuzzy catch-all pattern to optionally match trailing `'s`
+- Lambda replacement returns "Helcyon's" or "Helcyon" depending on whether match ends with 's
+- Added explicit outlier `Helsing's` → `Helcyon's` for that specific mishearing
 
 ---
-
-## Session: May 27 2026 — Pasted ChatML Shard → Immediate EOS (0-char reply) Fix
-
-### `app.py`
-**Bug fix: Pasting a ChatML shard into chat makes the model emit nothing then "refuse"**
-- Symptom: model "spazzed out" then returned an empty reply. Flask console showed `tokens_predicted=1`, `stop_type:"eos"`, `🎯 DONE: 2 chunks, 0 chars total` — the model fired EOS as its very first token.
-- Root cause: llama.cpp's `/completion` endpoint parses `<|im_start|>` / `<|im_end|>` as **real special tokens** (this is why HWUI's own structural tags work as turn boundaries). When a user pastes a ChatML shard, the shard's *embedded* markers were wrapped into the user turn verbatim (build site `app.py` ~line 3713) and were likewise parsed as turn boundaries. The model saw a complete assistant turn already closed inside the user message, reached the real `<|im_start|>assistant` tag with nothing to answer, and emitted EOS immediately.
-- Why the existing CHATML SANITY CHECK didn't catch it: it depends on `embedded_ends == expected_ends` count-matching and `prompt.split("<|im_start|>assistant")[0]`. A *balanced* shard skews both — the split grabs the shard's embedded assistant tag instead of the real one, and the lazy repair regex mis-parses. Detect-and-repair after assembly is the wrong layer.
-- Fix: new module-level `neutralize_chatml_tokens(text)` helper. Swaps the ASCII angle brackets of `<|im_start|>`/`<|im_end|>` for unicode look-alikes (`⟨ ⟩`) so the exact special-token byte sequence no longer matches. **Escapes rather than strips** — the shard stays visually faithful and readable so the model can still analyse it (the whole point of pasting it), and the markers remain visible in console diagnostics (unlike a zero-width-space escape).
-- Applied at the source — on message CONTENT, before the structural tags are added — at all four ChatML build sites: main chat prompt builder + the three search/chat-search prompt builders (so a shard sitting in history can't silently break search-query generation either).
-- The old CHATML SANITY CHECK block is left in place as defense-in-depth; it now correctly reports "tags balanced" since content arrives pre-neutralized.
-- ⚠️ `neutralize_chatml_tokens` runs on message CONTENT only, never on the assembled prompt — running it on the full prompt would break the structural tags.
 
----
+﻿## Session: May 12 2026 — `mobile.html` TTS streaming-quality fix
 
-## Session: May 27 2026 — Re-added Active Project Name in Top Bar
+The mobile TTS played at noticeably lower quality during streaming than on Replay/post-stream. Root caused, fixed, plus a couple of small wins picked up along the way.
 
-### `index.html`
-**Feature (re-add): Active project folder shown in the top-left**
-- Previously added then lost (overwritten via a reverse extract) — restored so the current folder is visible without scrolling to the top of the chat.
-- The top-bar title element itself doubles as the indicator: `<strong id="topbar-title">` swaps "Helcyon-WebUI" for `📁 <project>` when a project is active, and falls back to "Helcyon-WebUI" in global chats. (Sleeker than a separate label beside the title — matches the prior implementation the user preferred.)
-- Updated inside `loadProjects()` right after the existing `current-project-display` update — single source of truth, no new fetch.
-- Stays in sync automatically: `switchProject()` (including `switchProject(null)` for global chats) already calls `loadProjects()`, so the title updates on every switch.
+### `mobile.html` — Sentence-batching for streaming TTS (the main fix)
+**Root cause: F5 receives one-sentence-at-a-time during streaming**
+`bufferTextForTTS` was calling `splitAndQueue` for every sentence the moment it was detected. Typical streaming sentences are 20–60 chars ("Yeah.", "Sure thing.", "Let me think."), each of which became its own `/api/tts/generate` request. F5 generates poor prosody on very short inputs — clipped intonation, no acoustic context. The Replay path splits on `\n` and passes whole *lines* (often 2–6 sentences each, 100–300 chars) directly to `splitAndQueue`, so each TTS request gets a paragraph of context and sounds smooth. Same engine, same voice, very different audio — purely because of input length.
 
----
+**Fix:** New `batchAndQueue()` / `flushPendingBatch()` pair sitting between `bufferTextForTTS` and `splitAndQueue`. Sentences are accumulated in `ttsPendingBatch` until they cross a min-length threshold, then handed off as one batch. First batch uses a smaller threshold (`TTS_FIRST_BATCH_MIN`, ~80 chars for F5) so audio still starts within ~1–2s; subsequent batches use `TTS_BATCH_MIN` (~180 chars for F5) to match the prosody quality of the Replay path. Paragraph breaks (`\n`) force-flush the pending batch so we never merge across them. `flushTTSBuffer()` (called at end of stream) drains any pending batch before marking streaming complete, so a short final message still gets spoken.
 
-## Session: May 27 2026 — Suppress Model-Triggered Web Search + Memory Save (gate said no)
+⚠️ **DO NOT bypass the batcher on the streaming path** — going back to per-sentence dispatch reintroduces the audible quality drop this session fixed. `speakText()` and the Replay button intentionally skip the batcher because they already have the full text and can group multi-sentence chunks via `splitAndQueue` directly.
 
-**Bug: the model could unilaterally trigger a web search OR a memory-save prompt mid-response, even when the gate had correctly said no / the user had zero intent.**
-- Web search evidence: gate logged `💬 No gate trigger`, then the model emitted a `[WEB SEARCH:]` tag inside an unrelated reply and HWUI honoured it unconditionally (`🔎 … intercepted in passthrough (gate said no — honouring it)` → `🔍 Web search triggered`). A hallucinated tool call.
-- Memory evidence: a save-confirm bar surfaced unprompted because the model emitted a `[MEMORY ADD:]` tag in a reply the user never asked to be remembered. Memory had **no intent gate at all** — the tag alone surfaced the bar (the write itself still needs a click, but the unprompted bar is the symptom).
+### `mobile.html` — Engine-aware chunk length (mobile was hardcoded to F5 defaults)
+The desktop `utils.js` fetches `/api/tts/engine` on init and sets `TTS_MAX_CHUNK_LENGTH` to 300 for F5 or 150 for Chatterbox. Mobile never made that call — it was hardcoded to 300, so Chatterbox users were getting twice the chunk size Chatterbox expects, increasing per-chunk latency. New `initTTSEngine()` mirrors the desktop pattern and tunes both `TTS_MAX_CHUNK_LENGTH` *and* the new batch thresholds together (Chatterbox: max 150 / batch 60-120, F5: max 300 / batch 80-180). Called from `DOMContentLoaded`, non-blocking — if the fetch fails the F5 defaults stay in place.
 
-### `app.py`
-**Fix 1: `[WEB SEARCH:]` passthrough now suppresses in the gate-said-no branch (~line 5131)**
-- The passthrough interception lives entirely inside `if not _should_search:` — i.e. it only ever runs when the gate already said no. On detecting the tag it now **suppresses** instead of honouring: logs `🚫 Model-emitted [WEB SEARCH:] SUPPRESSED (gate said no)`, excises the tag from every streaming buffer (`_ws_rolling`, `_post` full + partial-open, `_ooc_holdback` full + partial-open), and `continue`s so the rest of the reply still streams. `_ws_query` is never set, so no search fires.
-- The gate-agreed path is untouched and now logs symmetric intent **before** the call (~line 5251): `🔎 Web search honoured (gate agreed): <query>`, guarded on `_gate_query` so only genuine intent-gate agreements are labelled (explicit-imperative requests already log `🔍 Explicit search request:` upstream).
-- ⚠️ The gate logic itself (`_should_search`, `_search_intent_gate`) was NOT touched — only the passthrough interception.
+### `mobile.html` — Emoji-as-sentence-terminator (ported from desktop)
+Mobile's sentence regex was `/[^.!?]+[.!?]+[)"'*_]*\s*/g` — only `.`, `!`, `?` triggered a sentence break. Desktop also accepts an emoji run as a terminator. The model frequently ends a sentence with an emoji and no trailing punctuation; under the old mobile regex the sentence sat in `ttsSentenceBuffer` until the next newline and merged with whatever came next, producing a run-on chunk with no prosody break (and sometimes never getting queued at all if the response had no newlines). Replaced with desktop's regex that treats `[\u{1F000}-\u{1FFFF}\u{1F300}-\u{1FAFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}☀-➿]+` as a valid sentence end.
 
-### `index.html`
-**Fix 2: new `memoryIntentGate(userMsg)` — `[MEMORY ADD:]` tag only surfaces the save bar on explicit user intent (~line 3660)**
-- Added a frontend keyword gate (defined just above `fetchAndDisplayResponse`) matching explicit save-intent phrases: remember this/that/to, save this/that (to memory), make/take a note, don't forget, for future/later reference, add to memory, note this down, keep this/that in mind, save to memory.
-- At the `[MEMORY ADD:` detection point it now checks `memoryIntentGate(input)` before `showMemoryConfirmInBubble`. No intent → `🚫 Model-emitted memory save SUPPRESSED (no user intent)`, bar not shown. Intent → `💾 Model-emitted memory save honoured`, bar shown as before.
-- No extra display-stripping needed: `stripChatMLOutsideCodeBlocks` (~L983) already strips `[MEMORY ADD:]` from both the displayed and saved text, so suppression just skips the bar — nothing leaks.
+### `mobile.html` — `processQueue` prefetch top-up DRY
+The same `while(prefetchBuffer.length<3&&ttsQueue.length>0)prefetchBuffer.push(fetchAudio(ttsQueue.shift()))` line was duplicated at four sites in `processQueue`, plus a fifth inside a 50ms `setInterval`. Extracted to a `topUp()` closure with a named `PREFETCH_DEPTH` constant. Behaviour identical — still polls every 50ms during playback so sentences arriving mid-playback start fetching immediately rather than waiting for the current audio to finish. Also tidied the `cleanup` lambda on the `Audio` element (was three near-identical inline handlers for `onended` / `onerror` / `play().catch`).
 
-**Out of scope / left as-is:** the OpenAI cloud backend path (`_web_search_stream_openai`, `app.py` ~2158) is **intentionally ungated** — GPT-4o self-emits the tag with reliable native judgement, so its passthrough is honoured by design. The local fallback watcher (~line 5270) is the gate-*agreed* "query too short, let the model supply it" case and correctly still honours.
+### `mobile.html` — Reset new batcher state in `stopAllAudio` and at stream start
+`ttsPendingBatch` and `ttsFirstBatchSent` cleared in `stopAllAudio()` alongside the existing reset block, and re-initialised at the top of `handleStream()` next to the `ttsSentenceBuffer = ''` line. Without this, a stop-then-resume could leave a stale batch fragment that gets merged into the next response.
 
-- ⚠️ DO NOT revert — these prevent hallucinated tool calls (search + memory) from firing UI/network actions the user never requested.
+### Deliberately not changed
+- `speakText()` and the Replay button keep their direct-`splitAndQueue` path. They already group sentences correctly because the full text is available — running them through the batcher would add no value and would force the artificial first-batch-shorter latency on a path where there is no streaming to overlap.
+- Redundant strip patterns shared between `bufferTextForTTS` and `splitAndQueue`. The double-strip is idempotent and the Replay path still needs `splitAndQueue` to do its own cleaning since it bypasses `bufferTextForTTS` entirely.
+- The 50ms `setInterval` for prefetch top-up. Removing it caused a regression — sentences arriving in `ttsQueue` during playback didn't start fetching until the current audio ended, costing the fetch/play overlap. Restored, using the new `topUp` helper.
 
 ---
-
-## Session: May 28–29 2026 — Anthropic backend, Electron launcher fixes, sampling-preset persistence (PARTIALLY DONE — preset persistence STILL BROKEN)
-
-This session covered four areas. Two are believed complete; the sampling-preset
-persistence and the Electron typing-focus issues were iterated on repeatedly and
-are **still reported broken by the user** as of end of session. A fresh session
-should start from the "STILL BROKEN" notes below.
-
-### 1. Anthropic (Claude) cloud backend — DONE (untested by user)
-Added native Anthropic Messages-format support alongside the existing OpenAI
-backend. Keys for both providers are stored so switching is a toggle, no
-re-pasting.
-
-**`app.py`:**
-- `get_anthropic_base_url()` (next to `get_openai_base_url()`) — reads
-  `anthropic_base_url`, default `https://api.anthropic.com/v1`.
-- `stream_anthropic_response()` — native transport: `x-api-key` +
-  `anthropic-version: 2023-06-01` headers, `POST {base}/messages`, top-level
-  `system` param, `max_tokens` required, temperature clamped to ≤1.0, SSE parsed
-  via `content_block_delta` → `delta.text`.
-- `_web_search_stream_anthropic()` — mirrors `_web_search_stream_openai` for the
-  `[WEB SEARCH:]` tag flow on Anthropic transport.
-- `_anthropic_normalize()` — coerces chat list to user/assistant-only, leading-user,
-  no consecutive same-role.
-- Chat fork: `elif backend_mode == 'anthropic'` branch (after the OpenAI fork),
-  with the same off-path tag-suppression when web search is off.
-- Routes: `/get_anthropic_settings`, `/save_anthropic_settings`,
-  `/get_anthropic_models` (hits Anthropic `/v1/models`).
-- `backend_mode` now takes `local` | `openai` | `anthropic`.
-
-**`config.html`:** section retitled "☁️ Cloud Backend"; 3-way Local/OpenAI/Anthropic
-toggle; shared cloud-confirm modal (`confirmCloudSwitch`); Anthropic block
-(endpoint/key/model+Fetch/Save); `setBackendMode` handles 3 states; cloud mode
-dims local-only params; `loadAnthropicSettings`/`saveAnthropicSettings`/`fetchAnthropicModels`.
-
-**`index.html`:** added green `#anthropic-indicator` privacy badge mirroring the
-OpenAI one (`checkAnthropicIndicator()`), shown when `backend_mode==='anthropic'`
-and a key is set. Privacy signal that typed content is leaving the box.
-
-**`settings.json`:** added `anthropic_api_key`, `anthropic_model` (default
-`claude-sonnet-4-5`), `anthropic_base_url`.
-
-⚠️ NOT updated: `mobile.html` (still OpenAI-only). Anthropic web-search path is
-intentionally ungated like the OpenAI one.
-
-### 2. Electron launcher (`I:\HWUI-Launcher\main.js`) — process cleanup DONE; typing-focus STILL BROKEN
-- **Process cleanup on quit (believed DONE):** `killAllSubprocesses()` switched
-  from async `exec` to **`execSync`** so kills finish before the app exits.
-  Added `killPortSync(port)` + `killKnownPortsSync()` which sweeps Flask (8081),
-  F5 (8003), and the build's llama-server port (read from the build's
-  `settings.json` `llama_args.port`, default 5000) — llama-server is a grandchild
-  spawned by Flask and was being orphaned. Wired into `quitApp()` and the
-  `before-quit` safety net. Import line now `const { spawn, exec, execSync }`.
-  NOTE: closing via the X button still hides to tray by design; only tray→Quit
-  actually shuts down.
-- **Reload affordances (DONE):** tray "Reload HWUI" item; `reloadMain()`;
-  re-registered F5 / Ctrl+R / Ctrl+Shift+R via `before-input-event` (app menu is
-  nulled so the defaults were gone). In-window reload button added to BOTH
-  `index.html` and `config.html` top bars (Electron-only via userAgent check,
-  `#electron-reload-btn`, `location.reload()`).
-- **🔴 STILL BROKEN — typing in Electron requires a click first.** Iterated several
-  times. Current state of the focus fix (boot, end of `app.whenReady`): a
-  PERSISTENT `did-finish-load` handler calls `forceFocusMain()` immediately and
-  again at 300ms. `forceFocusMain()` does restore→`setAlwaysOnTop(true)`→`show()`
-  →`setAlwaysOnTop(false)`→`focus()`→`webContents.focus()`→`app.focus({steal:true})`.
-  Picker is now `destroy()`ed (not `close()`) in the select handler + a boot guard
-  destroys it before `createMainWindow()`. **User still reports keyboard dead until
-  a manual click.** NEXT SESSION: this may not be a launcher problem at all —
-  investigate whether the HWUI page (`index.html`) moves focus on load (an element
-  `.focus()`/`.blur()`, an autofocused hidden input, or a focus-trap), or whether
-  Windows foreground-lock is defeating `app.focus`. Consider `webContents` `'focus'`
-  event, or focusing `#user-input` from within the page on load.
-
-### 3. Sampling presets — Update button + disk persistence — 🔴 STILL BROKEN (preset reverts on refresh)
-Long back-and-forth. Believed-correct code is in place but the user STILL reports
-that loading a preset and refreshing reverts the values.
-
-**What was built (all present in the files now):**
-- `config.html`: `🔄 Update Preset` button (`updateSamplingPreset()`) overwrites the
-  selected preset; visible only when a preset is selected (`syncSamplingUpdateBtn`).
-- Presets moved from localStorage to **disk**: in-memory `samplingPresets` cache
-  hydrated by `loadSamplingPresetsFromServer()` (called directly in
-  `DOMContentLoaded`, NOT inside `loadLlamaConfig` — that coupling was a bug, since
-  `loadLlamaConfig` early-returns on `data.error`). `buildSamplingPresetFromFields()`
-  / `readNum()` (only falls back on NaN, logs raw values). `persistSamplingPreset()`
-  POSTs to the backend and updates cache only on success.
-- `app.py`: `SAMPLING_PRESETS_FILE = "sampling_presets.json"` (relative),
-  `load_sampling_presets()`/`save_sampling_presets()` (atomic), routes
-  `/sampling_presets` (GET), `/sampling_presets/save`, `/sampling_presets/delete`.
-  All have `[SP]` logging incl. disk read-back proof.
-- `loadSamplingPreset()` now ALSO POSTs the loaded values to
-  `/save_sampling_settings` so they persist into `settings.json` and survive a
-  refresh (refresh repopulates fields from `settings.json` via `loadSettings()`).
-
-**Verified by trace (all correct & mutually consistent):** `loadSettings()` reads
-`/get_sampling_settings`; `/save_sampling_settings` merges into `SETTINGS_FILE`
-(absolute = `dirname(__file__)/settings.json`); `load_sampling_settings()` reads
-the same; `get_llama_settings()` is read-only (does NOT clobber). So the
-save→disk→load chain is logically sound.
-
-**Last hypothesis (acted on):** Jinja template caching — Flask runs
-`use_reloader=False, debug=False`, so compiled templates were cached in-process
-and edited `config.html` was never served until a manual restart. Enabled
-`app.config['TEMPLATES_AUTO_RELOAD'] = True` + `app.jinja_env.auto_reload = True`
-right after `app = Flask(...)` (app.py ~line 28). **User reports STILL broken
-after this.**
-
-**🔴 NEXT SESSION — open questions to resolve first:**
-- Confirm WHICH build the launcher is actually running (the picker can select a
-  different build folder than `I:\HWUI-Pro-Dev-build`). If edits are made here but
-  a different build is launched, none of this is live. **Check `builds.json` /
-  the selected build path vs. where edits are being made.** This is the most
-  likely explanation given everything traced correct.
-- Confirm via console/Flask logs whether the new code even runs: look for
-  `hydrating presets`, `[SP] loadSamplingPreset applied … to settings.json`, and
-  Flask `✅ Sampling settings saved:`. If absent → stale template / wrong build.
-- Note the relative vs absolute path inconsistency: `SAMPLING_PRESETS_FILE` and
-  `get_llama_settings()` use a RELATIVE `settings.json`/`sampling_presets.json`
-  (CWD-dependent), while `SETTINGS_FILE` is absolute. Launcher sets `cwd=buildPath`
-  so they normally coincide, but if CWD ever differs this splits the data across
-  two files. Worth making all paths absolute.
-
-### 4. Template auto-reload — DONE (needs ONE restart to take effect)
-`app.py` ~line 28: `app.config['TEMPLATES_AUTO_RELOAD'] = True` +
-`app.jinja_env.auto_reload = True`. After one restart, template/CSS/JS edits go
-live on a browser refresh; only `.py` edits need a restart thereafter. Memory note
-`project-flask-restart` updated to reflect this.
-
-### ⚠️ Cross-cutting reminder
-Everything above is in `I:\HWUI-Pro-Dev-build`. If the Electron launcher's picker
-is pointed at a DIFFERENT build folder, the running app will not reflect these
-edits — verify the launched build path before further debugging the two
-still-broken items.
 
