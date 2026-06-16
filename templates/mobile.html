@@ -553,8 +553,23 @@ async function sendMessage(text){
   }catch(err){showTyping(false);showToast('⚠️ Connection error');setStatus('Offline?');}
 }
 
+// Extended-thinking demux — peel Anthropic reasoning sentinels off the answer
+// and show them in a small collapsible. Sentinels are STX-delimited (matches
+// app.py); built via fromCharCode so the source stays plain ASCII. On every
+// other backend these markers never appear, so _mobSplit is a no-op.
+var _MSTX=String.fromCharCode(2);
+var _M_OPEN=_MSTX+_MSTX+'THINK'+_MSTX+_MSTX, _M_CLOSE=_MSTX+_MSTX+'/THINK'+_MSTX+_MSTX;
+function _mobTrail(buf,tok){var max=Math.min(buf.length,tok.length-1);for(var k=max;k>0;k--){if(buf.slice(buf.length-k)===tok.slice(0,k))return k;}return 0;}
+function _mobSplit(raw){
+  var o=raw.indexOf(_M_OPEN);
+  if(o===-1){var hb=_mobTrail(raw,_M_OPEN);return{thinking:'',answer:hb?raw.slice(0,raw.length-hb):raw};}
+  var after=o+_M_OPEN.length, before=raw.slice(0,o), c=raw.indexOf(_M_CLOSE,after);
+  if(c===-1){var t=raw.slice(after);var h=_mobTrail(t,_M_CLOSE);if(h)t=t.slice(0,t.length-h);return{thinking:t,answer:before};}
+  return{thinking:raw.slice(after,c),answer:before+raw.slice(c+_M_CLOSE.length)};
+}
+
 async function handleStream(res){
-  const reader=res.body.getReader(),decoder=new TextDecoder();let fullText='';
+  const reader=res.body.getReader(),decoder=new TextDecoder();let fullText='';let rawAll='';let prevAns=0;let thinkEl=null;
   showTyping(false);
   // Reset TTS buffer for new response
   ttsSentenceBuffer='';ttsStreamingComplete=false;
@@ -574,13 +589,33 @@ async function handleStream(res){
     if(done)break;
     const chunk=decoder.decode(value,{stream:true});
     if(chunk){
-      fullText+=chunk;
+      rawAll+=chunk;
+      const parts=_mobSplit(rawAll);
+      if(parts.thinking){
+        if(!thinkEl){
+          thinkEl=document.createElement('details');
+          thinkEl.open=true;
+          thinkEl.style.cssText='margin:0 0 8px 0;border:1px solid rgba(140,140,160,0.3);border-radius:8px;background:rgba(120,120,140,0.08);font-size:0.88em;';
+          const sm=document.createElement('summary');
+          sm.textContent='💭 Thinking';
+          sm.style.cssText='cursor:pointer;padding:6px 10px;color:var(--text-dim);font-weight:600;list-style:none;';
+          const bd=document.createElement('div');
+          bd.style.cssText='padding:8px 11px;color:var(--text-dim);font-style:italic;white-space:pre-wrap;overflow-wrap:break-word;max-height:280px;overflow-y:auto;line-height:1.5;';
+          thinkEl.appendChild(sm);thinkEl.appendChild(bd);thinkEl._body=bd;
+          bubble.insertBefore(thinkEl,textSpan);
+        }
+        thinkEl._body.textContent=parts.thinking;
+      }
+      const ansDelta=parts.answer.slice(prevAns);
+      prevAns=parts.answer.length;
+      fullText=parts.answer;
       if(typeof marked!=='undefined'){textSpan.innerHTML=marked.parse(fullText);}
       else{textSpan.textContent=fullText;}
-      if(ttsEnabled)bufferTextForTTS(chunk);
+      if(ttsEnabled&&ansDelta)bufferTextForTTS(ansDelta);
       scrollToBottom();
     }
   }
+  if(thinkEl)thinkEl.open=false;
 
   // Replay button — state driven purely by globals (isPlayingAudio, ttsProcessing, replayTimeout)
   // exactly like utils.js. No local flags, no watchers, no callbacks for button state.

@@ -194,6 +194,14 @@
       <label>Presence Penalty:</label>
       <input type="number" id="presence_penalty" step="0.01" min="0" max="2" />
 
+      <label style="display:flex;align-items:center;gap:8px;margin:10px 0 4px;cursor:pointer;">
+        <input type="checkbox" id="auto-memory-enabled" style="width:15px;height:15px;">
+        Automatic local memory
+      </label>
+      <div style="font-size:11px;color:#777;line-height:1.4;margin-bottom:10px;">
+        Uses a short local-model pass after suitable turns. Saves conservatively and shows an Undo notice.
+      </div>
+
       <!-- Sampling Presets -->
       <div style="border-top:1px solid #2a2a2a; padding-top:8px; margin-top:4px;">
         <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:#666; margin-bottom:6px;">Sampling Presets</div>
@@ -246,10 +254,14 @@
       </div>
 
       <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Vision Projector — mmproj <span style="color:#777;">(optional — leave blank for no vision)</span></label>
-      <div style="display:flex; align-items:center; gap:6px; margin-bottom:12px;">
+      <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
         <input id="llama-mmproj-path" type="text" placeholder="C:\path\to\model.mmproj.gguf" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
         <button onclick="browseFile('llama-mmproj-path','gguf')" title="Browse for an mmproj .gguf file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">📁</button>
-        <button onclick="autoDetectMmproj()" title="Scan the Models Folder and its subfolders for a matching mmproj file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">🔍 Auto-Detect</button>
+        <button onclick="attachMmproj()" title="Save the mmproj path (applied on next llama.cpp launch)" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Attach</button>
+        <button onclick="detachMmproj()" title="Clear the mmproj path" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Detach</button>
+      </div>
+      <div style="margin-bottom:12px;">
+        <button onclick="autoDetectMmproj()" title="Scan the Models Folder and its subfolders for a matching mmproj file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; white-space:nowrap;">🔍 Auto-Detect</button>
       </div>
 
       <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">LoRA <span style="color:#777;">(optional — adapter applied on next llama.cpp launch)</span></label>
@@ -270,9 +282,23 @@
           <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Context Size</label>
           <input id="llama-ctx-size" type="number" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
         </div>
-        <div>
+        <div style="grid-column: 1 / -1;">
           <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Chat Template</label>
-          <input id="llama-chat-template" type="text" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
+          <select id="llama-chat-template" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
+            <option value="chatml">ChatML — Mistral 3, Llama 3.2-3B, most fine-tunes</option>
+            <option value="llama3">Llama 3 — Meta Llama 3 / 3.1 / 3.3 / 3.2-8B+</option>
+            <option value="llama2">Llama 2 — legacy [INST] format</option>
+            <option value="gemma">Gemma — Google Gemma 2 / 3</option>
+            <option value="qwen2">Qwen 2 / 3 — Qwen2.5, QwQ, Qwen3</option>
+            <option value="mistral">Mistral — Mistral v0.1 / Mixtral</option>
+            <option value="phi3">Phi-3 / Phi-4 — Microsoft Phi-3/4</option>
+            <option value="zephyr">Zephyr — HF Zephyr / ORPO fine-tunes</option>
+            <option value="deepseek2">DeepSeek — DeepSeek V2 / V3 / R1</option>
+            <option value="command-r">Command R — Cohere Command R/R+</option>
+            <option value="openchat">OpenChat — OpenChat 3.5 / 3.6</option>
+            <option value="vicuna">Vicuna — Vicuna / WizardLM</option>
+            <option value="jinja">Jinja — use model's built-in template</option>
+          </select>
         </div>
       </div>
       <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:#aaa; margin-bottom:10px; cursor:pointer;">
@@ -397,6 +423,17 @@
         <button onclick="fetchAnthropicModels()" title="Fetch models from Anthropic" style="background:#1a2a3a; border:1px solid #2a4a6a; color:#7ab4f5; border-radius:4px; padding:0 8px; font-size:12px; cursor:pointer; height:28px; white-space:nowrap; flex-shrink:0;">🔄 Fetch</button>
       </div>
       <div style="font-size:10px; color:#555; margin-bottom:8px;">Click 🔄 Fetch to load your available Claude models</div>
+
+      <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:#ccc; margin-bottom:4px; cursor:pointer;">
+        <input id="anthropic-thinking" type="checkbox" style="width:15px; height:15px; cursor:pointer;">
+        <span>💭 Show extended thinking</span>
+      </label>
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+        <label for="anthropic-thinking-budget" style="font-size:11px; color:#aaa;">Thinking budget (tokens)</label>
+        <input id="anthropic-thinking-budget" type="number" min="1024" step="1024" value="2048"
+               style="width:90px; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:12px;">
+      </div>
+      <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Streams Claude's reasoning into a collapsible panel above each reply. Only supported models (e.g. Opus 4.x, Sonnet 4.x) emit it. Budget must be ≥ 1024 and below your max-tokens; temperature is ignored while thinking is on.</div>
 
       <div id="anthropic-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
       <button onclick="saveAnthropicSettings()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">💾 Save Anthropic Settings</button>
@@ -1370,9 +1407,10 @@
   }
 
   // --- IMAGE UPLOAD HELPER ---
-  async function uploadCharacterImage(file) {
+  async function uploadCharacterImage(file, name) {
     const formData = new FormData();
     formData.append("file", file);
+    if (name) formData.append("character_name", name);
 
     try {
       const res = await fetch("/upload_image", { method: "POST", body: formData });
@@ -1405,7 +1443,7 @@
     }
 
     if (fileInput && fileInput.files.length > 0) {
-      image = await uploadCharacterImage(fileInput.files[0]);
+      image = await uploadCharacterImage(fileInput.files[0], name);
     }
 
     try {
@@ -1728,6 +1766,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       document.getElementById('repeat_penalty').value    = settings.repeat_penalty    ?? 1.1;
       document.getElementById('frequency_penalty').value = settings.frequency_penalty ?? 0.0;
       document.getElementById('presence_penalty').value  = settings.presence_penalty  ?? 0.0;
+      document.getElementById('auto-memory-enabled').checked = settings.auto_memory?.enabled === true;
       
       console.log('✅ Loaded sampling settings:', settings);
     } catch (err) {
@@ -1742,6 +1781,10 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       // `|| default` idiom, which coerces a legitimate 0 (e.g. top_p:0) to its
       // fallback. See the CHANGES.md "DO NOT revert" note.
       const settings = buildSamplingPresetFromFields();
+      settings.auto_memory = {
+        enabled: document.getElementById('auto-memory-enabled').checked,
+        local_only: true
+      };
       
       const res = await fetch("/save_sampling_settings", {
         method: "POST",
@@ -2849,6 +2892,28 @@ async function detachLora() {
     const res = await fetch('/save_lora_path', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lora_path: '' }) });
     const data = await res.json();
     if (data.status === 'ok') await _reloadModelForLora('LoRA detached', '✅ LoRA detached');
+    else hwuiToast('❌ ' + (data.error || 'Save failed'), 'error');
+  } catch(e) { hwuiToast('Detach failed: ' + e, 'error'); }
+}
+
+// ==================================================
+// mmproj ATTACH / DETACH
+// ==================================================
+async function attachMmproj() {
+  const path = document.getElementById('llama-mmproj-path').value.trim();
+  try {
+    const res = await fetch('/save_mmproj_path', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mmproj_path: path }) });
+    const data = await res.json();
+    if (data.status === 'ok') await _reloadModelForLora('mmproj saved', '✅ mmproj active');
+    else hwuiToast('❌ ' + (data.error || 'Save failed'), 'error');
+  } catch(e) { hwuiToast('Attach failed: ' + e, 'error'); }
+}
+async function detachMmproj() {
+  document.getElementById('llama-mmproj-path').value = '';
+  try {
+    const res = await fetch('/save_mmproj_path', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mmproj_path: '' }) });
+    const data = await res.json();
+    if (data.status === 'ok') await _reloadModelForLora('mmproj detached', '✅ mmproj detached');
     else hwuiToast('❌ ' + (data.error || 'Save failed'), 'error');
   } catch(e) { hwuiToast('Detach failed: ' + e, 'error'); }
 }
@@ -4409,6 +4474,10 @@ function previewThemeVar(varName, value) {
       const baseUrlInput = document.getElementById('anthropic-base-url');
       if (baseUrlInput) baseUrlInput.value = data.anthropic_base_url || 'https://api.anthropic.com/v1';
       _setAnthropicModelSelect(data.anthropic_model || 'claude-sonnet-4-5');
+      const thinkCb = document.getElementById('anthropic-thinking');
+      if (thinkCb) thinkCb.checked = !!data.anthropic_thinking;
+      const thinkBudget = document.getElementById('anthropic-thinking-budget');
+      if (thinkBudget) thinkBudget.value = data.anthropic_thinking_budget || 2048;
       const status = document.getElementById('anthropic-status');
       if (status) {
         if (data.backend_mode === 'anthropic' && data.anthropic_api_key && data.cloud_api_enabled) {
@@ -4433,6 +4502,9 @@ function previewThemeVar(varName, value) {
     const key     = (document.getElementById('anthropic-api-key').value  || '').trim();
     const model   = (document.getElementById('anthropic-model').value    || '').trim();
     const baseUrl = (document.getElementById('anthropic-base-url').value || '').trim().replace(/\/+$/, '');
+    const thinking = !!(document.getElementById('anthropic-thinking') || {}).checked;
+    let thinkBudget = parseInt((document.getElementById('anthropic-thinking-budget') || {}).value, 10);
+    if (!Number.isFinite(thinkBudget) || thinkBudget < 1024) thinkBudget = 2048;
     const status = document.getElementById('anthropic-status');
     try {
       const res = await fetch('/save_anthropic_settings', {
@@ -4442,7 +4514,9 @@ function previewThemeVar(varName, value) {
           backend_mode:       _currentBackendMode,
           anthropic_api_key:  key,
           anthropic_model:    model,
-          anthropic_base_url: baseUrl
+          anthropic_base_url: baseUrl,
+          anthropic_thinking:        thinking,
+          anthropic_thinking_budget: thinkBudget
         })
       });
       const data = await res.json();

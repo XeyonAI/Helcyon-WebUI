@@ -682,6 +682,9 @@ def parse_document():
             except UnicodeDecodeError:
                 content = raw.decode('latin-1')
 
+        elif filename.lower().endswith(('.py', '.html', '.htm')):
+            content = raw.decode('utf-8', errors='replace')
+
         elif filename.lower().endswith('.docx'):
             try:
                 import docx, io
@@ -767,6 +770,7 @@ with open('settings.json', 'r') as f:
     settings = json.load(f)
     _llama_port = settings.get('llama_args', {}).get('port', 8080)
     API_URL = f'http://127.0.0.1:{_llama_port}'
+    FLASK_PORT = int(settings.get('port', 8081))
     print(f"🔌 API_URL set to: {API_URL}")
     # `parallel > 1` enables concurrent slot scheduling in llama-server. HWUI's
     # /chat path uses a global `abort_generation` flag and a single in-flight
@@ -1068,11 +1072,14 @@ RESERVED_SPECIAL_BAN = [[i, False] for i in range(14, 1000)]
 
 
 def strip_chatml_leakage(text):
-    """Remove any leaked or partial ChatML stop tokens from generated text."""
+    """Remove any leaked or partial ChatML/Gemma stop tokens from generated text."""
     import re
     if not text:
         return ""
     original = text
+    # Gemma 4: <|channel|> is the first token the model generates (part of turn format).
+    # It must be stripped, not used as a stop token — stop-token kills generation immediately.
+    text = re.sub(r"<\|channel\|>", "", text)
     # Full tokens
     text = re.sub(r"<\|im_end\|>", "", text)
     text = re.sub(r"<\|im_start\|>\w*", "", text)
@@ -2680,7 +2687,16 @@ def _openai_caps_for(model_id):
 #   - streaming: SSE events typed by a `type` field; text arrives as
 #     `content_block_delta` → delta.text (not choices[].delta.content)
 # `messages` here must be user/assistant only, start with user, and alternate.
-def stream_anthropic_response(messages, api_key, model, temperature, max_tokens, top_p, system=None):
+# Sentinels wrapping extended-thinking deltas in the raw text stream. The
+# frontend stream readers peel these off the answer text and render the inner
+# reasoning in a collapsible panel. Control chars (STX) so they can never
+# collide with model prose, markdown, or ChatML markers. MUST stay byte-for-byte
+# identical to THINK_OPEN/THINK_CLOSE in templates/index.html + mobile.html.
+THINK_OPEN  = "\x02\x02THINK\x02\x02"
+THINK_CLOSE = "\x02\x02/THINK\x02\x02"
+
+def stream_anthropic_response(messages, api_key, model, temperature, max_tokens, top_p, system=None,
+                              thinking=False, thinking_budget=2048):
     global abort_generation
     abort_generation = False
 
@@ -2701,15 +2717,30 @@ def stream_anthropic_response(messages, api_key, model, temperature, max_tokens,
     # plumbed into this function (Opus 4.7/4.8 reject them; older models are fine
     # without) — to add later, gate them the same way: `if "top_p" in allow: ...`.
     allow = _anthropic_allow_for(model)
+    # Extended thinking: when on, Anthropic streams a `thinking` content block
+    # before the answer. Two hard API constraints: (1) max_tokens MUST exceed
+    # budget_tokens (the budget is part of, not on top of, max_tokens), and
+    # (2) temperature/top_p/top_k MUST be unset — sending temperature with
+    # thinking enabled 400s. So we bump max_tokens above the budget and skip
+    # temperature entirely while thinking is active. budget floor is 1024 (API
+    # minimum). (changes.md — Anthropic extended-thinking display.)
+    _think_on = bool(thinking)
+    _budget = max(1024, int(thinking_budget or 1024)) if _think_on else 0
+    _eff_max = max_tokens
+    if _think_on and _eff_max <= _budget:
+        _eff_max = _budget + 1024
     payload = {
         "model": model,
-        "max_tokens": max_tokens,   # always required by the API
+        "max_tokens": _eff_max,     # always required by the API
         "stream": True,
         "messages": messages,
     }
     if system:
         payload["system"] = system
-    if "temperature" in allow:
+    if _think_on:
+        payload["thinking"] = {"type": "enabled", "budget_tokens": _budget}
+    elif "temperature" in allow:
+        # temperature is incompatible with thinking — only sent when thinking off.
         payload["temperature"] = _temp
 
     _base_url = get_anthropic_base_url()
@@ -2747,6 +2778,8 @@ def stream_anthropic_response(messages, api_key, model, temperature, max_tokens,
 
     total_chunks = 0
     all_text = []
+    _think_chars = 0          # reasoning chars seen (logging only)
+    _think_streaming = False  # currently inside a thinking block (sentinel open)
     for line in response.iter_lines(chunk_size=1):
         if abort_generation:
             print("🛑 Anthropic generation aborted", flush=True)
@@ -2766,17 +2799,45 @@ def stream_anthropic_response(messages, api_key, model, temperature, max_tokens,
             evt = json.loads(data_str)
             etype = evt.get("type")
             if etype == "content_block_delta":
-                # delta.type is text_delta for prose, input_json_delta for tool
-                # args — .get("text") naturally selects text-only.
-                chunk = evt.get("delta", {}).get("text") or ""
+                delta = evt.get("delta", {}) or {}
+                dtype = delta.get("type")
+                # Extended-thinking reasoning deltas — wrap in sentinels so the
+                # frontend can peel them into the collapsible thinking panel.
+                if dtype == "thinking_delta":
+                    _t = delta.get("thinking") or ""
+                    if _t:
+                        if not _think_streaming:
+                            _think_streaming = True
+                            yield THINK_OPEN
+                        _think_chars += len(_t)
+                        yield _t
+                        sys.stdout.flush()
+                    continue
+                # The thinking-block signature is verification metadata, not text
+                # — never displayed (we don't replay thinking on later turns).
+                if dtype == "signature_delta":
+                    continue
+                # text_delta (prose). input_json_delta (tool args) carries no
+                # .text, so .get("text") naturally selects text-only. The first
+                # text delta closes any open thinking block.
+                chunk = delta.get("text") or ""
+                if _think_streaming:
+                    _think_streaming = False
+                    yield THINK_CLOSE
                 total_chunks += 1
                 if chunk:
                     all_text.append(chunk)
                     yield chunk
                     sys.stdout.flush()
             elif etype == "message_stop":
+                if _think_streaming:
+                    _think_streaming = False
+                    yield THINK_CLOSE
                 break
             elif etype == "error":
+                if _think_streaming:
+                    _think_streaming = False
+                    yield THINK_CLOSE
                 _msg = evt.get("error", {}).get("message", "unknown")
                 print(f"❌ Anthropic stream error: {_msg}", flush=True)
                 yield f"[Anthropic error: {_msg}]"
@@ -2785,7 +2846,11 @@ def stream_anthropic_response(messages, api_key, model, temperature, max_tokens,
             print(f"❌ Anthropic parse error: {e}", flush=True)
             continue
 
-    print(f"\n☁️ Anthropic DONE: {total_chunks} deltas, {len(''.join(all_text))} chars total", flush=True)
+    # Safety: never leave a thinking block unclosed if the stream just ends.
+    if _think_streaming:
+        yield THINK_CLOSE
+    print(f"\n☁️ Anthropic DONE: {total_chunks} deltas, {len(''.join(all_text))} chars total"
+          f"{f', {_think_chars} thinking chars' if _think_chars else ''}", flush=True)
 
 
 # --------------------------------------------------
@@ -2799,7 +2864,8 @@ def stream_anthropic_response(messages, api_key, model, temperature, max_tokens,
 # different system handling, different SSE shapes (see the duplication warnings
 # on the sibling functions).
 def _web_search_stream_anthropic(messages, api_key, model, temperature, max_tokens,
-                                 top_p, user_input, system=None):
+                                 top_p, user_input, system=None,
+                                 thinking=False, thinking_budget=2048):
     global abort_generation
     import re as _re
 
@@ -2829,6 +2895,8 @@ def _web_search_stream_anthropic(messages, api_key, model, temperature, max_toke
             max_tokens  = max_tokens,
             top_p       = top_p,
             system      = system,
+            thinking        = thinking,
+            thinking_budget = thinking_budget,
         ):
             _streamed.append(chunk)
             _rolling = "".join(_streamed)
@@ -2945,6 +3013,8 @@ def _web_search_stream_anthropic(messages, api_key, model, temperature, max_toke
             max_tokens  = max_tokens,
             top_p       = top_p,
             system      = system,
+            thinking        = thinking,
+            thinking_budget = thinking_budget,
         ):
             _response_chunks.append(chunk)
             yield chunk
@@ -3540,12 +3610,11 @@ def chat():
     
     # (project instructions are already in the system message above - no need to repeat)
 
-    # 🎭 Example dialogue is no longer attached to the system block. It is
-    # parsed into fake user/assistant message pairs and injected at the START
-    # of the conversation history (immediately after messages[0]) so the model
-    # sees the style as "this is how we've been talking" rather than buried
-    # system-block content. ⚠️ DO NOT revert to system-block injection —
-    # buried style examples were silently ignored. (changes.md May 14 2026.)
+    # 🎭 Example dialogue is parsed into user/assistant-shaped sample lines,
+    # then appended to the tail of the system block inside <STYLE_EXAMPLES>.
+    # Keeping it at the high-attention tail preserves the style effect, while
+    # the explicit wrapper tells the model these are voice samples, not live
+    # conversation history.
     _fake_turns = []
     has_paragraph_style = False  # used by example dialogue style rules block below
 
@@ -3600,15 +3669,13 @@ def chat():
         ex = ex.strip()
         print(f"🧹 Example dialogue speaker line breaks normalised")
 
-        # 🎭 PARSE EXAMPLE DIALOGUE INTO FAKE CONVERSATION TURNS
-        # Models follow conversation patterns far more strongly than buried
-        # system-block instructions. Parse the raw example_dialogue into
-        # {role, content} pairs and inject them at the START of the
-        # conversation history (after messages[0]) so the style reads as
-        # "this is how we've been talking", not "here is an instruction".
+        # 🎭 PARSE EXAMPLE DIALOGUE INTO USER/ASSISTANT-SHAPED SAMPLES
+        # Models follow turn-shaped examples strongly. Parse the raw
+        # example_dialogue into {role, content} pairs so the final
+        # <STYLE_EXAMPLES> block keeps the conversational rhythm without
+        # making those examples indistinguishable from real history.
         # Handles both: "{{user}}:" / "{{char}}:" alternating lines AND
         # "<START>" block separators (case-insensitive).
-        # ⚠️ DO NOT revert to ex_block in the system block. (changes.md.)
         # Labels derived once near the top of chat(); reuse them here so this
         # is the SAME substitution definition every other field uses.
         _ex_subst = substitute_placeholders(ex, _char_label, _user_label)
@@ -3730,11 +3797,9 @@ def chat():
                     messages[0]["content"] += f"\n\n[OOC: Author note — {_an_sys}]"
                     print(f"✅ Author's Note appended to system block ({len(_an_sys)} chars)")
 
-            # Example dialogue is NOT appended here. It is parsed into fake
-            # user/assistant turns and injected into messages[] immediately
-            # after the time injection below. ⚠️ DO NOT re-append example
-            # dialogue text to the system block — buried style examples were
-            # silently ignored. (changes.md May 14 2026.)
+            # Example dialogue is NOT appended here. It is parsed above and
+            # appended later as a delimited <STYLE_EXAMPLES> block at the
+            # system tail, after time/session anchors.
 
     # 🕐 CURRENT LOCAL TIME — injected near the end of the system block so the
     # time-of-day signal sits close to the conversation turns. Date-only at the
@@ -3774,8 +3839,8 @@ def chat():
     #
     # This is NOT the May-14 "buried system-block injection" that was silently
     # ignored. The May-14 failure was undelimited prose, mid-block, with no
-    # attention cue. This block is (1) explicitly delimited with <START> + a
-    # header/footer frame, (2) appended at the very END of the system content
+    # attention cue. This block is (1) explicitly delimited with semantic
+    # <STYLE_EXAMPLES> / <CURRENT_CONVERSATION> tags, (2) appended at the very END of the system content
     # (the highest-attention slot, closest to the generation point), and (3)
     # pointed at by the depth-0 [OOC] style reminder folded into the last user
     # turn below. Those three differences target the exact "buried/ignored"
@@ -3790,14 +3855,22 @@ def chat():
             _ex_lines.append(f"{_spk}: {_ft['content']}")
         _ex_block_text = "\n".join(_ex_lines)
         messages[0]["content"] += (
-            "\n\n═══ SPEAKING-STYLE EXAMPLE — REFERENCE ONLY, NOT REAL HISTORY ═══\n"
-            "The exchange below is an illustrative sample of how you talk — tone, "
-            "rhythm, vocabulary, length. It is NOT part of your conversation with "
-            "the user and none of it actually happened. Never refer to its topics, "
-            "people, or events as real; mirror only the STYLE.\n"
+            "\n\n<STYLE_EXAMPLES>\n"
+            "These are fictional demonstrations of voice, rhythm, tone, pacing, "
+            "warmth, humour, emotional response, and conversational behaviour only.\n"
+            "They are not conversation history, memories, facts about the user, "
+            "active topics, or unfinished conversations.\n"
+            "Do not reference, continue, revisit, save, or allude to their subject "
+            "matter unless the current user explicitly brings up the same subject.\n"
+            "Imitate the conversational behaviour, not the literal topics: copy the "
+            "manner, not the matter.\n"
             "<START>\n"
             f"{_ex_block_text}\n"
-            "═══ END EXAMPLE — the real conversation begins after this line ═══"
+            "</STYLE_EXAMPLES>\n"
+            "<CURRENT_CONVERSATION>\n"
+            "The real conversation begins in the user/assistant turns after this "
+            "system message. Treat only those turns as live conversational history.\n"
+            "</CURRENT_CONVERSATION>"
         )
         print(f"🎭 Injected {len(_fake_turns)} example turn(s) as a delimited "
               f"system-level style block (not as live conversation turns)")
@@ -3911,8 +3984,8 @@ def chat():
     #                              SillyTavern-style)
     # Empty fields are skipped; if none are set the packet isn't built.
     # The style reminder is a pointer, not a re-injection — the example
-    # dialogue samples themselves live as fake conversation turns inserted
-    # right after messages[0] (~25 tokens here vs. hundreds for re-injecting
+    # dialogue samples themselves live in the delimited <STYLE_EXAMPLES>
+    # block at the system tail (~25 tokens here vs. hundreds for re-injecting
     # the samples every turn).
     # NOTE: character_note and author_note are NOT in this packet — they are
     # appended to the system block wrapped in [OOC: …] labels. Moving them
@@ -3923,7 +3996,8 @@ def chat():
     if char_data.get("example_dialogue", "").strip():
         _reply_instr_items.append(
             "[OOC: Match the speaking-style example in your instructions — "
-            "tone, vocabulary, rhythm, formatting. Write fresh content; never paraphrase the examples.]"
+            "tone, vocabulary, rhythm, formatting, warmth, humour, and pacing. "
+            "Copy the manner, not the matter; write fresh content and never paraphrase or continue the examples.]"
         )
 
     _ph_val = char_data.get("post_history", "").strip()
@@ -4527,7 +4601,16 @@ def chat():
             if not _ant_key:
                 return "⚠️ Anthropic backend selected but no API key set. Check config page.", 500
 
-            print(f"☁️ ANTHROPIC PATH: model={_ant_model}", flush=True)
+            # Extended-thinking toggle (config page). When on, the stream emits a
+            # reasoning block before the answer; the frontend renders it collapsibly.
+            _ant_thinking = bool(_oaist.get('anthropic_thinking', False))
+            try:
+                _ant_think_budget = int(_oaist.get('anthropic_thinking_budget', 2048) or 2048)
+            except (TypeError, ValueError):
+                _ant_think_budget = 2048
+
+            print(f"☁️ ANTHROPIC PATH: model={_ant_model}, thinking={_ant_thinking}"
+                  f"{f'/{_ant_think_budget}' if _ant_thinking else ''}", flush=True)
 
             # System goes in the top-level `system` param; messages are convo-only.
             _ant_system   = system_text + ("\n\n" + memory if memory else "")
@@ -4550,6 +4633,8 @@ def chat():
                             top_p       = sampling["top_p"],
                             user_input  = user_input,
                             system      = _ant_system,
+                            thinking        = _ant_thinking,
+                            thinking_budget = _ant_think_budget,
                         ))),
                         content_type="text/event-stream; charset=utf-8",
                     )
@@ -4582,6 +4667,8 @@ def chat():
                         max_tokens  = sampling["max_tokens"],
                         top_p       = sampling["top_p"],
                         system      = _ant_system,
+                        thinking        = _ant_thinking,
+                        thinking_budget = _ant_think_budget,
                     ):
                         _rolling += _chunk
                         _ti = _rolling.find(_TAG)
@@ -6135,6 +6222,7 @@ def chat():
                             _buf = _re3_inner.sub(r'\n(?:user|assistant|system)\b[^\n]*$', '', _buf, flags=_re3_inner.IGNORECASE)
                             if _buf:
                                 yield _buf
+
                 resp = Response(
                     stream_with_context(_strip_ooc_stream(_filtered_stream())),
                     content_type="text/event-stream; charset=utf-8",
@@ -6808,6 +6896,26 @@ def save_lora_path():
         return jsonify({"status": "error", "error": str(e)}), 500
 
 
+@app.route("/save_mmproj_path", methods=["POST"])
+def save_mmproj_path():
+    """Persist mmproj_path to settings.json. Empty string clears it (no vision)."""
+    try:
+        data = request.get_json(force=True) or {}
+        mmproj_path = (data.get('mmproj_path') or '').strip()
+        _path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.json')
+        with open(_path, 'r', encoding='utf-8') as f:
+            s = json.load(f)
+        s['mmproj_path'] = mmproj_path
+        import tempfile as _mptmp, shutil as _mpsh
+        _tmpf = _path + '.tmp'
+        with open(_tmpf, 'w', encoding='utf-8') as f:
+            json.dump(s, f, indent=2)
+        _mpsh.move(_tmpf, _path)
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
 @app.route("/auto_detect_mmproj", methods=["POST"])
 def auto_detect_mmproj():
     """Given a model path, look for a matching mmproj file in the same folder
@@ -7189,6 +7297,106 @@ def delete_last_messages(character):
 
 
 # --------------------------------------------------
+# File Edit (model-driven structured file updates)
+# --------------------------------------------------
+_FILE_EDIT_WHITELISTED_DIRS = ['global_documents', 'memories', 'projects', 'session_summaries']
+
+
+def parse_file_edit_tag(response_text):
+    """Extract (entry_title, content) from a [FILE EDIT: t | c] tag, or return None."""
+    m = re.search(
+        r'\[FILE EDIT:\s*([^|\]]+?)\s*\|\s*([\s\S]+?)\s*\]',
+        response_text
+    )
+    if not m:
+        return None
+    return m.group(1).strip(), m.group(2).strip()
+
+
+def apply_file_edit(entry_title, content, filename=None):
+    """Write content into the named section of a whitelisted file.
+
+    If filename is provided it is used directly (must resolve inside a whitelisted
+    directory — use this for global_documents/ targets).  Otherwise the target is
+    resolved automatically: active project → projects/{project}/memory.txt,
+    no active project → memories/{character}_memory.txt.
+
+    Returns None on success, an error string on failure.
+    """
+    base = os.path.dirname(os.path.abspath(__file__))
+
+    if filename:
+        if os.path.isabs(filename):
+            return "Absolute paths are not allowed"
+        full_path = os.path.realpath(os.path.join(base, os.path.normpath(filename)))
+    else:
+        from project_routes import get_active_project
+        from character_routes import get_active_character
+        active_project = get_active_project()
+        if active_project:
+            full_path = os.path.realpath(
+                os.path.join(base, 'projects', active_project, 'memory.txt')
+            )
+        else:
+            active_character = get_active_character()
+            if not active_character:
+                return "No active project or character — cannot determine target file"
+            full_path = os.path.realpath(
+                os.path.join(base, 'memories', f"{active_character.lower()}_memory.txt")
+            )
+
+    allowed = any(
+        full_path.startswith(os.path.realpath(os.path.join(base, d)) + os.sep)
+        for d in _FILE_EDIT_WHITELISTED_DIRS
+    )
+    if not allowed:
+        return "Resolved path is outside whitelisted directories"
+
+    if not os.path.isfile(full_path):
+        return f"File not found: {os.path.relpath(full_path, base)}"
+
+    with open(full_path, 'r', encoding='utf-8') as f:
+        text = f.read()
+
+    # Match any heading line (any # depth) that contains the entry title
+    hm = re.search(
+        r'^(#+[^\n]*' + re.escape(entry_title) + r'[^\n]*)[ \t]*$',
+        text,
+        re.MULTILINE | re.IGNORECASE
+    )
+    if not hm:
+        return f"Section containing '{entry_title}' not found"
+
+    # Next section boundary: the next heading line at any level
+    nm = re.search(r'^#+', text[hm.end():], re.MULTILINE)
+    section_end = hm.end() + nm.start() if nm else len(text)
+
+    separator = "\n" if nm else ""
+    new_block = f"{hm.group(0)}\n{content.rstrip()}\n{separator}"
+
+    with open(full_path, 'w', encoding='utf-8') as f:
+        f.write(text[:hm.start()] + new_block + text[section_end:])
+
+    return None
+
+
+@app.route('/file_edit', methods=['POST'])
+def file_edit():
+    data = request.get_json(silent=True) or {}
+    entry_title = (data.get('entry_title') or '').strip()
+    content = (data.get('content') or '').strip()
+    filename = (data.get('filename') or '').strip() or None  # optional explicit target
+
+    if not entry_title or not content:
+        return jsonify({'error': 'entry_title and content are required'}), 400
+
+    error = apply_file_edit(entry_title, content, filename=filename)
+    if error:
+        return jsonify({'error': error}), 400
+    return jsonify({'status': 'ok'})
+
+
+# --------------------------------------------------
 # Run Server
 # --------------------------------------------------
 if __name__ == '__main__':
@@ -7208,7 +7416,7 @@ if __name__ == '__main__':
     else:
         print('🌐 No SSL certs — running HTTP (local mode)')
         ssl_context = None
-    app.run(debug=False, use_reloader=False, host='0.0.0.0', port=8081,
+    app.run(debug=False, use_reloader=False, host='0.0.0.0', port=FLASK_PORT,
             ssl_context=ssl_context)
 
 # --------------------------------------------------

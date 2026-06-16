@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <title>Helcyon-WebUI</title>
-  <link rel="stylesheet" href="/style.css?v=19">
+  <link rel="stylesheet" href="/style.css?v=20">
   <link rel="stylesheet" href="/theme-files/midnight.css" id="active-theme-link">
   <style>
     /* Cog dropdown menu — converted from the old #settings-link <a>.
@@ -506,7 +506,7 @@
 
           <!-- Hidden file input -->
           <input type="file" id="chat-image-input" accept="image/*" multiple style="display:none;" onchange="handleImageAttach(this)" />
-          <input type="file" id="chat-document-input" accept=".txt,.md,.pdf,.docx,.odt" multiple style="display:none;" onchange="handleDocumentAttach(this)" />
+          <input type="file" id="chat-document-input" accept=".txt,.md,.pdf,.docx,.odt,.py,.html" multiple style="display:none;" onchange="handleDocumentAttach(this)" />
 
           <!-- Floating pill -->
           <div id="input-row" style="pointer-events:all;display:flex;flex-direction:row;align-items:center;gap:6px;background:var(--container-bg,#131922);border:1px solid var(--sidebar-border,#2a2a2a);border-radius:16px;padding:8px 10px;box-shadow:0 4px 24px rgba(0,0,0,0.5);width:100%;max-width:700px;box-sizing:border-box;overflow:visible;">
@@ -752,7 +752,7 @@ Examples:
 
             <label>Project Documents</label>
             <small style="color:#888;display:block;margin-bottom:10px;">Upload files the model can reference in conversation.</small>
-            <input type="file" id="document-upload" accept=".txt,.md,.pdf,.docx,.odt" style="display:none;">
+            <input type="file" id="document-upload" accept=".txt,.md,.pdf,.docx,.odt,.py,.html" style="display:none;">
             <button onclick="document.getElementById('document-upload').click()" class="upload-doc-btn">📁 Upload Document</button>
             <div id="documents-list" style="margin-top:12px;"></div>
           </div>
@@ -1274,6 +1274,74 @@ function stripChatMLOutsideCodeBlocks(text, charName, userName) {
       .replace(/^MEMORY[_ ]ADD:[^\n]*$/gim, '')
       .replace(/^[ \t]+/gm, '');
   }).join('');
+}
+
+
+// ── Extended-thinking stream demux (Anthropic) ──────────────────────────────
+// The Anthropic backend wraps reasoning deltas in STX sentinels so the shared
+// stream readers can peel them off the answer text and show the reasoning in a
+// collapsible panel. These markers appear ONLY on the Anthropic path with
+// thinking enabled; every other backend never emits them, so splitThinking()
+// returns the text unchanged as the answer and behaviour is identical.
+// MUST stay byte-for-byte identical to THINK_OPEN/THINK_CLOSE in app.py.
+const _STX = String.fromCharCode(2);   // STX delimiter (matches app.py THINK sentinels)
+const THINK_OPEN  = _STX + _STX + "THINK" + _STX + _STX;
+const THINK_CLOSE = _STX + _STX + "/THINK" + _STX + _STX;
+function _thinkTrailingPartial(buf, token) {
+  // Longest k (0<k<token.length) such that buf ends with token[0:k] — lets the
+  // reader hold back a sentinel that was split across two network chunks.
+  const max = Math.min(buf.length, token.length - 1);
+  for (let k = max; k > 0; k--) {
+    if (buf.slice(buf.length - k) === token.slice(0, k)) return k;
+  }
+  return 0;
+}
+// Split the accumulated raw stream into { thinking, answer, open }. Robust to a
+// sentinel split across chunks (a trailing partial is held back from output so
+// stray marker fragments never flash in the UI).
+function splitThinking(raw) {
+  const o = raw.indexOf(THINK_OPEN);
+  if (o === -1) {
+    const hb = _thinkTrailingPartial(raw, THINK_OPEN);
+    return { thinking: "", answer: hb ? raw.slice(0, raw.length - hb) : raw, open: false };
+  }
+  const afterOpen = o + THINK_OPEN.length;
+  const before = raw.slice(0, o);   // normally empty (thinking precedes answer)
+  const c = raw.indexOf(THINK_CLOSE, afterOpen);
+  if (c === -1) {
+    let think = raw.slice(afterOpen);
+    const hb = _thinkTrailingPartial(think, THINK_CLOSE);
+    if (hb) think = think.slice(0, think.length - hb);
+    return { thinking: think, answer: before, open: true };
+  }
+  const thinking = raw.slice(afterOpen, c);
+  const answer = before + raw.slice(c + THINK_CLOSE.length);
+  return { thinking, answer, open: false };
+}
+// Lazily build + update a collapsible thinking panel inside a model message,
+// inserted directly above the answer element. Plain-text body (reasoning shown
+// verbatim, pre-wrap CSS keeps newlines) — never parsed as HTML/markdown, so it
+// cannot inject markup.
+function renderThinkingPanel(msgDiv, answerEl, text, chatEl) {
+  if (!text || !msgDiv) return;
+  let panel = msgDiv._thinkPanel;
+  if (!panel) {
+    panel = document.createElement('details');
+    panel.className = 'think-block';
+    panel.open = true;   // open while streaming; collapsed when the turn ends
+    const sum = document.createElement('summary');
+    sum.className = 'think-summary';
+    sum.textContent = '💭 Thinking';
+    const body = document.createElement('div');
+    body.className = 'think-body';
+    panel.appendChild(sum);
+    panel.appendChild(body);
+    msgDiv.insertBefore(panel, answerEl || null);
+    msgDiv._thinkPanel = panel;
+    panel._body = body;
+  }
+  panel._body.textContent = text;
+  if (chatEl) chatEl.scrollTop = chatEl.scrollHeight;
 }
 
 
@@ -3242,7 +3310,7 @@ async function openChat(filename) {
 
           var modelContinueBtn = document.createElement("button");
           modelContinueBtn.title = "Continue";
-          modelContinueBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>';
+          modelContinueBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"></polyline></svg>';
           modelContinueBtn.onclick = function() { continueLast(); };
 
           var modelReplayBtn = document.createElement("button");
@@ -3564,16 +3632,46 @@ async function openChat(filename) {
 // ==================================================
 // MEMORY-SAVE INTENT GATE
 // ==================================================
-  // The model can emit a [MEMORY ADD: …] tag inside an otherwise unrelated
-  // reply (a hallucinated tool call). This mirrors the server-side web-search
-  // suppression: only let that tag surface the save-confirm bar when the
-  // user's own message this turn actually asked for something to be
-  // remembered. Pure keyword check — no model call, no latency.
-  // Returns true = honour (show the bar), false = suppress.
+  // Only honour a trained [MEMORY ADD] response when the user's own message
+  // asked for a save. Valid tags are now written immediately; this gate also
+  // protects the legacy confirmation fallback if automatic capture is unavailable.
   function memoryIntentGate(userMsg) {
     if (!userMsg || typeof userMsg !== 'string') return false;
     const MEMORY_INTENT_RE = /\b(?:remember (?:this|that|to)|save (?:this|that)(?: to memory)?|(?:make|take) a note|don['’]?t forget|for (?:future|later) reference|add to memory|note this down|keep (?:this|that) in mind|save to memory|put (?:it |this |that )?in(?:to)? (?:your )?memory|(?:can you )?memorize (?:this|that|it)|keep a record|log (?:this|that|it)|store (?:this|that|it)(?: in memory)?|jot (?:this|that|it) down|note (?:this|that|it) down|(?:please )?save (?:this|that|it))\b/i;
     return MEMORY_INTENT_RE.test(userMsg);
+  }
+
+  async function captureAutomaticMemory(userText, assistantText) {
+    try {
+      const recentMessages = (window.loadedChat || []).filter(msg => !msg.hidden).slice(-6).map(msg => ({
+        role: msg.role,
+        content: msg.content
+      }));
+      const character = currentCharacter?.name || currentCharName || '';
+      const response = await fetch('/auto_memory/capture', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          character,
+          user_text: userText,
+          assistant_text: assistantText,
+          recent_messages: recentMessages
+        })
+      });
+      if (!response.ok) {
+        console.warn('Automatic memory capture returned HTTP', response.status);
+        return false;
+      }
+      const result = await response.json();
+      if (result.status === 'saved') {
+        showAutoMemoryToast(character, result.title, result.undo_token);
+        return true;
+      }
+      return memoryIntentGate(userText) && result.reason === 'duplicate';
+    } catch (error) {
+      console.warn('Automatic memory capture skipped:', error);
+      return false;
+    }
   }
 
 // ==================================================
@@ -3753,6 +3851,7 @@ async function openChat(filename) {
         }
         
         await autoSaveCurrentChat();
+        await captureAutomaticMemory(input, message);
 
         // Auto-name if still a "New Chat" — filename guard is the sole trigger
         if (currentChatFilename && currentChatFilename.includes('New Chat')) {
@@ -3819,9 +3918,11 @@ async function openChat(filename) {
       const reader = response.body.getReader();
       window._activeReader = reader;
       const decoder = new TextDecoder("utf-8");
-      let fullMessage = "";       // ALL raw chars received — used by TTS, the empty
-                                  // guard, and memory-tag detection below.
+      let fullMessage = "";       // ANSWER text only (thinking peeled off) — used by
+                                  // TTS, the empty guard, and memory-tag detection.
       let cleanedMessage = "";    // final cleaned text — set when the drip finishes.
+      let rawAll = "";            // raw stream incl. thinking sentinels (pre-demux)
+      let prevAnswerLen = 0;      // answer chars already routed to TTS
 
       // Get user/char names for cleanup
       const userName = activeUserName || "User";
@@ -3909,12 +4010,22 @@ async function openChat(filename) {
         if (done) { console.log('✅ Stream done signal received'); break; }
 
         const chunk = decoder.decode(value, { stream: true });
-        fullMessage += chunk;
+        rawAll += chunk;
+
+        // Demux extended-thinking sentinels: reasoning → collapsible panel,
+        // answer → fullMessage. On every non-thinking backend splitThinking is a
+        // no-op (answer === rawAll), so fullMessage/TTS/cleanedFull behave exactly
+        // as before. answerDelta is the NEW answer text this chunk contributed.
+        const _parts = splitThinking(rawAll);
+        if (_parts.thinking) renderThinkingPanel(msgDiv, streamEl, _parts.thinking, chat);
+        const answerDelta = _parts.answer.slice(prevAnswerLen);
+        prevAnswerLen = _parts.answer.length;
+        fullMessage = _parts.answer;
 
         // Buffer text for TTS on RECEIPT (not on the drip) so audio isn't delayed
-        // by the typewriter. Pass cleaned chunk so sentence splitting works correctly.
-        if (typeof bufferTextForTTS === 'function') {
-          const ttsChunk = chunk
+        // by the typewriter. Only the answer delta is spoken (never the reasoning).
+        if (answerDelta && typeof bufferTextForTTS === 'function') {
+          const ttsChunk = answerDelta
             .replace(/<\|im_start\|>(assistant|user|system)[^\n]*/gi, '')
             .replace(/<\|im_start\|>/gi, '')
             .replace(/<\|im_end\|>/gi, '')
@@ -3936,6 +4047,10 @@ async function openChat(filename) {
       // Signal the drip we're done; it flushes the remainder on its next tick.
       streamDone = true;
       await dripDone;
+
+      // Collapse the thinking panel once the answer is complete (claude.ai-style:
+      // reasoning stays available behind the disclosure, out of the way).
+      if (msgDiv && msgDiv._thinkPanel) msgDiv._thinkPanel.open = false;
 
       // ── Empty response guard ─────────────────────────────────────────
       // Model occasionally fires EOS as first token — retry exactly once.
@@ -3994,6 +4109,11 @@ async function openChat(filename) {
       }
 
       await autoSaveCurrentChat();
+
+      // Save a trained [MEMORY ADD] response immediately. The server uses the
+      // tag's title, keywords, and body directly; its classifier is only a
+      // fallback when an explicit request produced no valid tag.
+      const autoMemoryHandled = await captureAutomaticMemory(input, rawFullMessage);
 
       // Auto-name if still a "New Chat" — filename guard is the sole trigger
       if (currentChatFilename && currentChatFilename.includes('New Chat')) {
@@ -4352,14 +4472,17 @@ async function openChat(filename) {
         const chunk = decoder.decode(value, { stream: true });
         rawFull += chunk;
 
-        const cleaned = stripChatMLOutsideCodeBlocks(rawFull, charName, userName).trim();
+        // Continue extends an existing message, so any thinking is peeled off and
+        // not shown (no panel here) — only the answer text is rendered/saved.
+        const _ans = splitThinking(rawFull).answer;
+        const cleaned = stripChatMLOutsideCodeBlocks(_ans, charName, userName).trim();
 
         streamEl.innerHTML = typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(cleaned)) : cleaned;
         chat.scrollTop = chat.scrollHeight;
       }
       decoder.decode();
 
-      let finalText = stripChatMLOutsideCodeBlocks(rawFull, charName, userName).trim();
+      let finalText = stripChatMLOutsideCodeBlocks(splitThinking(rawFull).answer, charName, userName).trim();
 
       renderModelHTML(streamEl, typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(finalText)) : finalText);
       addCodeCopyButtons(streamEl.parentNode || streamEl);

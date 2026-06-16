@@ -86,8 +86,9 @@ def get_instruction_layer():
         "user asks for — go where the conversation goes.\n\n"
 
         "EXAMPLE DIALOGUE:\n"
-        "Example dialogue shows speaking style only — extract tone, rhythm, and response length. "
-        "Do not reference example topics or treat them as real conversation history.\n\n"
+        "Example dialogue shows speaking style only — extract tone, rhythm, response shape, warmth, humour, and pacing. "
+        "Copy the conversational manner, not the matter: do not reference example topics, treat them as memories, "
+        "continue them, revisit them, or treat them as real conversation history.\n\n"
 
         "INJECTED MEMORY:\n"
         "When the system block contains content marked as your own memory of recent sessions, "

@@ -335,6 +335,9 @@ def get_anthropic_settings_route():
             "anthropic_model":    s.get("anthropic_model", ""),
             "anthropic_base_url": (s.get("anthropic_base_url", "") or "").strip() or get_anthropic_base_url(),
             "cloud_api_enabled":  bool(s.get("cloud_api_enabled", False)),
+            # Extended-thinking toggle + token budget (display of Claude's reasoning).
+            "anthropic_thinking":        bool(s.get("anthropic_thinking", False)),
+            "anthropic_thinking_budget": int(s.get("anthropic_thinking_budget", 2048) or 2048),
         })
     except Exception as e:
         return jsonify({
@@ -342,6 +345,8 @@ def get_anthropic_settings_route():
             "anthropic_api_key": "",
             "anthropic_model": "",
             "anthropic_base_url": "https://api.anthropic.com/v1",
+            "anthropic_thinking": False,
+            "anthropic_thinking_budget": 2048,
             "error": str(e),
         })
 
@@ -367,6 +372,16 @@ def save_anthropic_settings_route():
         s["anthropic_model"]    = data.get("anthropic_model", "").strip()
         _incoming_base = (data.get("anthropic_base_url", "") or "").strip().rstrip("/")
         s["anthropic_base_url"] = _incoming_base or "https://api.anthropic.com/v1"
+        # Extended thinking — only written when the field is present in the POST,
+        # so a save from any other code path can't silently flip it.
+        if "anthropic_thinking" in data:
+            s["anthropic_thinking"] = bool(data.get("anthropic_thinking"))
+        if "anthropic_thinking_budget" in data:
+            try:
+                _b = int(data.get("anthropic_thinking_budget") or 2048)
+            except (TypeError, ValueError):
+                _b = 2048
+            s["anthropic_thinking_budget"] = max(1024, _b)   # API minimum is 1024
         import tempfile, shutil
         tmp = SETTINGS_FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:

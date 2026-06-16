@@ -9,20 +9,29 @@ def _read_ctx_size() -> int:
     except Exception:
         return 16384
 
+
+def _read_max_prompt_tokens() -> int:
+    """Read the prompt-size cap live from settings.json for the active backend_mode.
+
+    The cap is stored under max_prompt_tokens.{mode} so each backend has its own
+    configurable ceiling.  Falls back to 8500 (the safe local ceiling) if the key
+    is absent — local Mistral Nemo has an EOS cliff at ~10,000-10,500 tokens
+    evaluated and 8500 is the documented safe ceiling for that backend.
+    """
+    try:
+        _sf = os.path.join(os.path.dirname(__file__), "settings.json")
+        with open(_sf, "r", encoding="utf-8") as f:
+            s = json.load(f)
+        mode = s.get("backend_mode", "local")
+        caps = s.get("max_prompt_tokens", {})
+        return int(caps.get(mode, caps.get("local", 8500)))
+    except Exception:
+        return 8500
+
+
 CONTEXT_WINDOW     = _read_ctx_size()  # read live from settings.json at import time
 GENERATION_RESERVE = 2048   # tokens reserved for the model response
 SYSTEM_BUFFER      = 200    # small safety margin for ChatML overhead tokens
-# ⚠️ Hard cap: Helcyon (Mistral Nemo) exhibits EOS cliff at ~10,000-10,500
-# tokens evaluated regardless of ctx_size setting. Keeping total prompt under
-# this threshold eliminates the cutoff. llama.cpp still runs with full ctx_size
-# for KV cache headroom — this only governs how much history HWUI sends.
-# DO NOT raise above 8500 without retesting long conversations first.
-# ⚠️ DO NOT REVERT to 12000 (or any value ≥ ~10000): Mistral Nemo emits EOS
-# mid-response once tokens_evaluated approaches the ~10,000-10,500 cliff, which
-# surfaces as the model cutting off mid-word/mid-number in long chats. 8500 is
-# the documented safe ceiling — it keeps the real prompt comfortably below the
-# cliff after TOKEN_FUDGE. Raising it re-opens the mid-response truncation bug.
-MAX_PROMPT_TOKENS  = 8500
 TOKEN_FUDGE        = 1.4    # rough_token_count undercounts BPE by ~35-40% on
                             # emoji/separator/ChatML-heavy prompts (measured:
                             # 35516-char prompt → rough=7245, real=~10000 →
@@ -58,18 +67,19 @@ def trim_chat_history(messages, token_budget: int = None, extra_system_overhead:
     print(f"📊 System message: ~{system_tokens} tokens")
 
     # Dynamically calculate how much room is left for conversation history
+    max_prompt_tokens = _read_max_prompt_tokens()  # live read — varies by backend_mode
     prompt_budget = int((CONTEXT_WINDOW - GENERATION_RESERVE - SYSTEM_BUFFER) / TOKEN_FUDGE)
     conversation_budget = max(prompt_budget - system_tokens - extra_system_overhead, 1024)  # never go below 1024
 
-    # Hard cap: clamp total prompt to MAX_PROMPT_TOKENS to stay under the
-    # Helcyon EOS cliff at ~10,000-10,500 tokens. The cap is in REAL tokens
-    # but conversation_budget is in rough tokens, so we convert the cap to
-    # rough-token space before comparing (divide by TOKEN_FUDGE).
-    # Without this, rough undercounting means the cap fires too late.
-    max_prompt_rough = int(MAX_PROMPT_TOKENS / TOKEN_FUDGE)
+    # Hard cap: clamp total prompt to max_prompt_tokens to stay under backend limits.
+    # For local Mistral Nemo this guards the EOS cliff at ~10,000-10,500 tokens;
+    # for cloud backends the cap is much higher (see max_prompt_tokens in settings.json).
+    # The cap is in REAL tokens but conversation_budget is in rough tokens, so we
+    # convert the cap to rough-token space before comparing (divide by TOKEN_FUDGE).
+    max_prompt_rough = int(max_prompt_tokens / TOKEN_FUDGE)
     max_convo_from_cap = max(max_prompt_rough - system_tokens - extra_system_overhead, 1024)
     if conversation_budget > max_convo_from_cap:
-        print(f"📊 Conversation budget clamped by MAX_PROMPT_TOKENS: {conversation_budget} → {max_convo_from_cap} (rough tokens, cap={MAX_PROMPT_TOKENS} real)")
+        print(f"📊 Conversation budget clamped by max_prompt_tokens: {conversation_budget} → {max_convo_from_cap} (rough tokens, cap={max_prompt_tokens} real)")
         conversation_budget = max_convo_from_cap
 
     # Allow caller to override if needed

@@ -1,4 +1,5 @@
 {
+  "port": 8081,
   "temperature": 0.8,
   "max_tokens": 4096,
   "top_p": 0.95,
@@ -12,6 +13,10 @@
   "dry_penalty_last_n": -1,
   "frequency_penalty": 0,
   "presence_penalty": 0,
+  "auto_memory": {
+    "enabled": true,
+    "local_only": true
+  },
   "ignore_eos": false,
   "eos_logit_bias": -3.0,
   "llama_server_exe": "",
@@ -39,5 +44,10 @@
   "anthropic_api_key": "",
   "anthropic_model": "",
   "anthropic_base_url": "https://api.anthropic.com/v1",
-  "brave_api_key": ""
+  "brave_api_key": "",
+  "max_prompt_tokens": {
+    "local": 8500,
+    "openai": 32000,
+    "anthropic": 100000
+  }
 }
