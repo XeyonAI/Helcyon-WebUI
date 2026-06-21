@@ -3704,37 +3704,7 @@ async function openChat(filename) {
   }
 
   async function captureAutomaticMemory(userText, assistantText) {
-    try {
-      const recentMessages = (window.loadedChat || []).filter(msg => !msg.hidden).slice(-6).map(msg => ({
-        role: msg.role,
-        content: msg.content
-      }));
-      const character = currentCharacter?.name || currentCharName || '';
-      const response = await fetch('/auto_memory/capture', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          character,
-          user_name: activeUserName || localStorage.getItem('activeUserName') || 'Chris',
-          user_text: userText,
-          assistant_text: assistantText,
-          recent_messages: recentMessages
-        })
-      });
-      if (!response.ok) {
-        console.warn('Automatic memory capture returned HTTP', response.status);
-        return false;
-      }
-      const result = await response.json();
-      if (result.status === 'saved') {
-        showAutoMemoryToast(character, result.title, result.undo_token);
-        return true;
-      }
-      return memoryIntentGate(userText) && result.reason === 'duplicate';
-    } catch (error) {
-      console.warn('Automatic memory capture skipped:', error);
-      return false;
-    }
+    return false;
   }
 
 // ==================================================

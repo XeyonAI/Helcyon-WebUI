@@ -332,13 +332,7 @@
       <label>Presence Penalty:</label>
       <input type="number" id="presence_penalty" step="0.01" min="0" max="2" />
 
-      <label style="display:flex;align-items:center;gap:8px;margin:10px 0 4px;cursor:pointer;">
-        <input type="checkbox" id="auto-memory-enabled" style="width:15px;height:15px;">
-        Automatic local memory
-      </label>
-      <div style="font-size:11px;color:#777;line-height:1.4;margin-bottom:10px;">
-        Uses a short local-model pass after suitable turns. Saves conservatively and shows an Undo notice.
-      </div>
+      <input type="checkbox" id="auto-memory-enabled" style="display:none;" disabled>
 
       <!-- Sampling Presets -->
       <div style="border-top:1px solid #2a2a2a; padding-top:8px; margin-top:4px;">
@@ -1929,7 +1923,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       document.getElementById('repeat_penalty').value    = settings.repeat_penalty    ?? 1.1;
       document.getElementById('frequency_penalty').value = settings.frequency_penalty ?? 0.0;
       document.getElementById('presence_penalty').value  = settings.presence_penalty  ?? 0.0;
-      document.getElementById('auto-memory-enabled').checked = settings.auto_memory?.enabled === true;
+      document.getElementById('auto-memory-enabled').checked = false;
       
       console.log('✅ Loaded sampling settings:', settings);
     } catch (err) {
@@ -1945,7 +1939,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       // fallback. See the CHANGES.md "DO NOT revert" note.
       const settings = buildSamplingPresetFromFields();
       settings.auto_memory = {
-        enabled: document.getElementById('auto-memory-enabled').checked,
+        enabled: false,
         local_only: true
       };
       

@@ -183,7 +183,7 @@ const marked={parse:function(txt){
         <span id="tts-label">TTS</span>
       </button>
       <button onclick="openModelPicker()" title="Switch Model" style="flex-shrink:0;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:6px 9px;color:var(--text-dim);font-size:16px;cursor:pointer;line-height:1;">🧠</button>
-      <button onclick="endSession()" title="End Session" style="flex-shrink:0;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:6px 9px;color:var(--text-dim);font-size:16px;cursor:pointer;line-height:1;">💾</button>
+      <button onclick="showMobileProNotice()" title="Memory summaries are available in HWUI Pro" style="flex-shrink:0;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:6px 9px;color:var(--text-dim);font-size:16px;cursor:pointer;line-height:1;">⭐</button>
     </div>
     <!-- Row 2: Character + Project selectors -->
     <div id="header-row2">
@@ -932,21 +932,11 @@ async function newMobileChat(){
 }
 
 async function endSession(){
-  if(!chatHistory.length){showToast('Nothing to summarise');return;}
-  setStatus('Summarising...');
-  showToast('Ending session...');
-  try{
-    const res=await fetch('/generate_session_summary',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({character:charFilename,messages:chatHistory,user_name:userName})});
-    if(res.ok){
-      const d=await res.json();
-      showToast(d.status==='ok'?'✅ Session saved to memory':'⚠️ '+d.error);
-    }else{
-      const d=await res.json().catch(()=>({}));
-      showToast('⚠️ Summary failed: '+(d.error||res.status));
-    }
-  }catch(e){showToast('⚠️ Error: '+e.message);}
-  setStatus('Ready');
+  showMobileProNotice();
+}
+
+function showMobileProNotice(){
+  showToast('Memory summaries are available in HWUI Pro.');
 }
 
 async function displayOpeningLineInChat(){

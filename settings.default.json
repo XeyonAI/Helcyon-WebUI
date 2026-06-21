@@ -14,7 +14,7 @@
   "frequency_penalty": 0,
   "presence_penalty": 0,
   "auto_memory": {
-    "enabled": true,
+    "enabled": false,
     "local_only": true
   },
   "ignore_eos": false,

@@ -1,6 +1,20 @@
 > **Older entries archived by month:** [March 2026](changes-archive-2026-03.md) · [April 2026](changes-archive-2026-04.md) · [May 2026 (pre-31)](changes-archive-2026-05.md)
 > This file holds the current (May 31 – June 1 2026) entries only.
 
+## Session: Jun 21 2026 - Free build memory strip verification
+
+**`templates/config.html`:** Hid the leftover Automatic local memory toggle in the free build while keeping the checkbox element in place for settings-script compatibility. The settings load/save path now forces `auto_memory.enabled` to `false`.
+
+**`templates/index.html`:** Stubbed automatic memory capture to return `false` locally so the free build no longer attempts to call the removed `/auto_memory/capture` Pro route after replies.
+
+**`settings.default.json`:** Changed the clean-install `auto_memory.enabled` default to `false` for the free build.
+
+**`templates/mobile.html`:** Replaced the mobile End Session memory-summary action with a Pro notice so the free build no longer points at the unregistered `/generate_session_summary` route.
+
+**`strip_for_free.py`:** Moved the strip script into the free build and updated it to handle the missed free-build cleanup automatically: it now works from either the parent folder or repo root, disables automatic memory defaults, hides and forces off the automatic-memory setting, stubs desktop automatic memory capture, replaces the mobile End Session memory-summary action with a Pro notice, avoids a comment-only `_parse_memory_blocks` false positive, and uses UTF-8 console output on Windows.
+
+---
+
 ## Session: Jun 21 2026 - Message action row outside bubbles
 
 **`templates/index.html`:** Moved the rendered user/model message action bars out of the `.message` bubble and into a sibling `.message-stack` row directly underneath the bubble. The existing copy, regenerate, continue, replay audio, edit, delete, and branch handlers are unchanged.
