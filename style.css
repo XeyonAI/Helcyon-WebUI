@@ -1503,6 +1503,33 @@ body {
   opacity: 1;
 }
 
+.message-stack {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.message-stack > .message {
+  max-width: 100%;
+}
+
+.message-stack > .msg-action-bar {
+  margin-top: 1px;
+  margin-left: 4px;
+}
+
+.user-wrapper .message-stack {
+  align-items: flex-end;
+  flex: 0 1 60%;
+}
+
+.user-wrapper .message-stack > .msg-action-bar {
+  margin-left: 0;
+  margin-right: 4px;
+}
+
 .msg-action-bar button {
   background: transparent !important;
   border: none !important;

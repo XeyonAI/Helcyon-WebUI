@@ -42,6 +42,143 @@
     .config-tab-panel.active {
       display: block;
     }
+    #advanced-settings-overlay {
+      position: fixed;
+      inset: 60px 0 0 260px;
+      display: none;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 72px 64px 32px;
+      background: rgba(0, 0, 0, 0.58);
+      z-index: 1200;
+      box-sizing: border-box;
+      overflow-y: auto;
+    }
+    #advanced-settings-overlay.open {
+      display: flex;
+    }
+    #advanced-settings-modal {
+      width: min(1440px, 100%);
+      max-height: calc(100vh - 164px);
+      overflow-y: auto;
+      background: var(--modal-bg, #1a1f2a);
+      border: 1px solid var(--modal-border, #2d394b);
+      border-radius: 12px;
+      box-shadow: 0 18px 60px rgba(0, 0, 0, 0.65);
+      padding: 22px;
+      box-sizing: border-box;
+    }
+    .advanced-settings-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      padding-bottom: 16px;
+      margin-bottom: 18px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .advanced-settings-title {
+      margin: 0 0 5px;
+      color: #fff;
+      font-size: 20px;
+      line-height: 1.2;
+    }
+    .advanced-settings-subtitle {
+      margin: 0;
+      color: #8f9baa;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .advanced-settings-close {
+      width: 32px;
+      height: 32px;
+      border-radius: 7px;
+      border: 1px solid var(--modal-border, #2d394b);
+      background: rgba(255,255,255,0.04);
+      color: #cdd6e0;
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 1;
+      flex: 0 0 auto;
+    }
+    .advanced-settings-close:hover {
+      background: rgba(255,255,255,0.08);
+      color: #fff;
+    }
+    .advanced-settings-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      align-items: start;
+    }
+    .advanced-settings-column {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-width: 0;
+    }
+    .advanced-settings-card {
+      width: 100%;
+      background: rgba(255,255,255,0.025);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      padding: 12px;
+      box-sizing: border-box;
+    }
+    .advanced-settings-card h3 {
+      margin: 0 0 12px;
+      font-size: 15px;
+    }
+    .advanced-settings-card label {
+      margin-top: 4px;
+      margin-bottom: 2px;
+    }
+    .advanced-settings-card input,
+    .advanced-settings-card select {
+      min-width: 0;
+    }
+    .advanced-settings-card button {
+      min-width: 0;
+    }
+    .advanced-settings-card hr {
+      border-color: rgba(255,255,255,0.08) !important;
+    }
+    #advanced-settings-btn {
+      width: 100%;
+      margin-top: 10px;
+      background: #1f3a5a;
+      border: 1px solid #245080;
+      color: #eaf3ff;
+      border-radius: 5px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+    @media (max-width: 1400px) {
+      #advanced-settings-overlay {
+        left: 220px;
+      }
+    }
+    @media (max-width: 1024px) {
+      #advanced-settings-overlay {
+        left: 180px;
+      }
+      .advanced-settings-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+    @media (max-width: 768px) {
+      #advanced-settings-overlay {
+        inset: 60px 0 0 0;
+        padding: 14px;
+      }
+      #advanced-settings-modal {
+        max-height: calc(100vh - 88px);
+        padding: 16px;
+      }
+      .advanced-settings-grid {
+        grid-template-columns: 1fr;
+      }
+    }
   </style>
   <link rel="stylesheet" href="/theme-files/midnight.css" id="active-theme-link" />
   <script>
@@ -138,8 +275,9 @@
     <div id="sampling-sidebar">
       <style>
         /* Hover/focus info bubble — replaces the old always-on sampling banner. */
+        #sampling-sidebar h3 { position: relative; }
         .sampling-info-icon {
-          position: relative; display: inline-flex; align-items: center; justify-content: center;
+          position: static; display: inline-flex; align-items: center; justify-content: center;
           width: 16px; height: 16px; border-radius: 50%; font-size: 12px; line-height: 1;
           color: #7ab4f5; cursor: help; font-style: normal; font-weight: normal; opacity: 0.75;
           transition: opacity .15s ease;
@@ -147,7 +285,7 @@
         .sampling-info-icon:hover, .sampling-info-icon:focus { opacity: 1; outline: none; }
         .sampling-info-tip {
           position: absolute; top: calc(100% + 8px); left: 0; z-index: 60;
-          width: 248px; padding: 9px 11px; font-size: 11px; line-height: 1.5;
+          width: 100%; box-sizing: border-box; padding: 9px 11px; font-size: 11px; line-height: 1.5;
           font-weight: normal; letter-spacing: 0.2px; text-transform: none;
           color: #cdd6e0; background: #141b27; border: 1px solid #245080; border-radius: 6px;
           box-shadow: 0 6px 22px rgba(0,0,0,0.55);
@@ -220,224 +358,214 @@
 
       <button id="saveSettingsBtn" style="background-color: #1f5a3a; border-color: #248050; color: white;">💾 Save & Apply</button>
 
-      <hr style="margin: 20px 0; border-color: #333;">
+      <button id="advanced-settings-btn" type="button" onclick="openAdvancedSettings()">Advanced Settings</button>
+    </div>
 
-      <h3>TTS Engine</h3>
-
-      <label>Engine:</label>
-      <select id="tts-engine-select" style="width:100%; margin-bottom:8px;">
-        <option value="f5">F5-TTS</option>
-        <option value="xtts">XTTS v2</option>
-        <option value="chatterbox">Chatterbox</option>
-        <option value="kokoro">Kokoro</option>
-        <option value="none">None (Disabled)</option>
-      </select>
-
-      <div id="tts-engine-status" style="font-size:12px; color:#aaa; margin-bottom:10px;"></div>
-
-      <button id="saveTTSEngineBtn" style="background-color: #1f3a5a; border-color: #245080; color: white; width:100%;">💾 Save TTS Engine</button>
-
-      <hr style="margin: 20px 0; border-color: #333;">
-
-      <h3>Llama.cpp</h3>
-
-      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Server Executable Path</label>
-      <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">
-        <input id="llama-exe" type="text" placeholder="C:\path\to\llama-server.exe" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
-        <button onclick="browseFile('llama-exe')" title="Browse for file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">📁</button>
-      </div>
-
-      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Models Folder</label>
-      <div style="display:flex; align-items:center; gap:6px; margin-bottom:12px;">
-        <input id="llama-models-dir" type="text" placeholder="C:\path\to\models" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
-        <button onclick="browseFolder('llama-models-dir')" title="Browse for folder" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">📁</button>
-      </div>
-
-      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Vision Projector — mmproj <span style="color:#777;">(optional — leave blank for no vision)</span></label>
-      <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
-        <input id="llama-mmproj-path" type="text" placeholder="C:\path\to\model.mmproj.gguf" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
-        <button onclick="browseFile('llama-mmproj-path','gguf')" title="Browse for an mmproj .gguf file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">📁</button>
-        <button onclick="attachMmproj()" title="Save the mmproj path (applied on next llama.cpp launch)" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Attach</button>
-        <button onclick="detachMmproj()" title="Clear the mmproj path" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Detach</button>
-      </div>
-      <div style="margin-bottom:12px;">
-        <button onclick="autoDetectMmproj()" title="Scan the Models Folder and its subfolders for a matching mmproj file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; white-space:nowrap;">🔍 Auto-Detect</button>
-      </div>
-
-      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">LoRA <span style="color:#777;">(optional — adapter applied on next llama.cpp launch)</span></label>
-      <div style="display:flex; align-items:center; gap:6px; margin-bottom:12px;">
-        <input id="llama-lora-path" type="text" placeholder="C:\path\to\adapter.gguf" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
-        <button onclick="browseFile('llama-lora-path','lora',document.getElementById('llama-models-dir').value.trim())" title="Browse for a LoRA adapter .gguf file (starts in the configured Models Folder)" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">📁</button>
-        <button onclick="attachLora()" title="Save the LoRA path (applied on next llama.cpp launch)" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Attach</button>
-        <button onclick="detachLora()" title="Clear the LoRA path" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Detach</button>
-      </div>
-
-      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:6px; font-weight:600;">Launch Arguments</label>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px 10px; margin-bottom:10px;">
-        <div>
-          <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">GPU Layers</label>
-          <input id="llama-gpu-layers" type="number" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
-        </div>
-        <div>
-          <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Context Size</label>
-          <input id="llama-ctx-size" type="number" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
-        </div>
-        <div style="grid-column: 1 / -1;">
-          <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Chat Template</label>
-          <select id="llama-chat-template" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
-            <option value="chatml">ChatML — Mistral 3, Llama 3.2-3B, most fine-tunes</option>
-            <option value="llama3">Llama 3 — Meta Llama 3 / 3.1 / 3.3 / 3.2-8B+</option>
-            <option value="llama2">Llama 2 — legacy [INST] format</option>
-            <option value="gemma">Gemma — Google Gemma 2 / 3</option>
-            <option value="qwen2">Qwen 2 / 3 — Qwen2.5, QwQ, Qwen3</option>
-            <option value="mistral">Mistral — Mistral v0.1 / Mixtral</option>
-            <option value="phi3">Phi-3 / Phi-4 — Microsoft Phi-3/4</option>
-            <option value="zephyr">Zephyr — HF Zephyr / ORPO fine-tunes</option>
-            <option value="deepseek2">DeepSeek — DeepSeek V2 / V3 / R1</option>
-            <option value="command-r">Command R — Cohere Command R/R+</option>
-            <option value="openchat">OpenChat — OpenChat 3.5 / 3.6</option>
-            <option value="vicuna">Vicuna — Vicuna / WizardLM</option>
-            <option value="jinja">Jinja — use model's built-in template</option>
-          </select>
-        </div>
-      </div>
-      <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:#aaa; margin-bottom:10px; cursor:pointer;">
-        <input type="checkbox" id="llama-show-console" style="width:14px; height:14px; cursor:pointer;">
-        Show llama.cpp console window
-      </label>
-      <div id="llama-config-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:16px;"></div>
-      <button onclick="saveLlamaConfig()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:6px;">💾 Save Llama Config</button>
-      <button onclick="resetToDefault()" title="Wipe settings.json and restore from settings.default.json" style="background:#3a1a1a; border:1px solid #6a2a2a; color:#e88; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">↺ Reset All Settings to Default</button>
-
-      <!-- Llama Config Presets -->
-      <div style="border-top:1px solid #2a2a2a; padding-top:8px;">
-        <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:#666; margin-bottom:6px;">Config Presets</div>
-        <div style="display:flex; gap:4px; margin-bottom:6px;">
-          <select id="llama-preset-select" style="flex:1; background:#1a1a2a; border:1px solid #444; color:#ccc; border-radius:3px; font-size:12px; padding:3px 4px;">
-            <option value="">— select preset —</option>
-          </select>
-          <button onclick="loadLlamaPreset()" style="background:#1f3a5a; border:1px solid #245080; color:white; border-radius:3px; padding:3px 7px; font-size:12px; cursor:pointer; align-self:stretch;">Load</button>
-          <button onclick="deleteLlamaPreset()" style="background:#5a1f1f; border:1px solid #8a2424; color:white; border-radius:3px; padding:3px 7px; font-size:12px; cursor:pointer; align-self:stretch;">🗑️</button>
-        </div>
-        <input id="llama-preset-name" type="text" placeholder="Preset name..." style="background:#111; border:1px solid #333; color:#ccc; border-radius:3px; font-size:12px; padding:3px 6px; width:100%; box-sizing:border-box; margin-bottom:4px;">
-        <button onclick="saveLlamaPreset()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; border-radius:3px; padding:4px 7px; font-size:12px; cursor:pointer; width:100%; margin-bottom:4px;">💾 Save Preset</button>
-        <div id="llama-preset-status" style="font-size:11px; color:#aaa; min-height:14px;"></div>
-      </div>
-
-
-      <hr style="margin: 20px 0; border-color: #333;">
-
-      <h3>🔍 Web Search</h3>
-      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">
-        Brave Search API Key
-        <span style="color:#666; font-weight:normal;">
-          — <a href="https://api.search.brave.com" target="_blank" style="color:#7ab4f5;">get free key</a> (2000/month)
-        </span>
-      </label>
-      <input id="brave-api-key" type="password" placeholder="BSA..." style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:6px;">
-      <div id="brave-key-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
-      <button onclick="saveBraveKey()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:4px;">💾 Save Search Key</button>
-      <button onclick="clearBraveKey()" style="background:#3a1a1a; border:1px solid #6a2a2a; color:#e88; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">✕ Clear Key (use DDG fallback)</button>
-
-      <hr style="margin: 20px 0; border-color: #333;">
-
-      <h3>☁️ Cloud Backend</h3>
-      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:6px;">Backend Mode</label>
-      <div style="display:flex; gap:0; margin-bottom:10px; border:1px solid #333; border-radius:4px; overflow:hidden;">
-        <button id="mode-local-btn" onclick="selectLocalMode()"
-          style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#1a3a2a; color:#6f6; font-weight:bold;">
-          🖥️ Local
-        </button>
-        <button id="mode-openai-btn" onclick="setBackendMode('openai')"
-          style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#111; color:#888;">
-          ☁️ OpenAI
-        </button>
-        <button id="mode-anthropic-btn" onclick="setBackendMode('anthropic')"
-          style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#111; color:#888;">
-          🧠 Anthropic
-        </button>
-      </div>
-
-      <!-- Cloud connect — ALWAYS visible, directly under the selector. Greyed +
-           disabled when Local; green "🌐 Connect" when a cloud provider is
-           selected and disconnected; red "🔴 Disconnect" when connected.
-           Connecting confirms first; disconnecting is immediate. Only this
-           button connects — saving provider settings just saves the preference.
-           (changes.md.) -->
-      <button id="cloud-connect-btn" onclick="onCloudConnectClick()"
-        style="width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; font-weight:bold; margin-bottom:10px; background:#1a3a2a; border:1px solid #2a6a4a; color:white;">
-        🌐 Connect
-      </button>
-
-      <!-- Cloud CONNECT confirmation modal — same slick style as the old mode-
-           switch modal (now repurposed; the selector switches silently). Opened
-           by the Connect button. (changes.md.) -->
-      <div id="cloud-confirm-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:9999; align-items:center; justify-content:center;">
-        <div style="background:#1a1f2a; border:1px solid #3a5a7a; border-radius:10px; padding:24px 20px; max-width:300px; width:90%; box-shadow:0 8px 32px rgba(0,0,0,0.6);">
-          <div style="font-size:22px; text-align:center; margin-bottom:10px;">⚠️</div>
-          <div id="cloud-confirm-title" style="font-size:14px; color:#ddd; text-align:center; margin-bottom:8px; font-weight:bold;">Connect to cloud?</div>
-          <div id="cloud-confirm-message" style="font-size:12px; color:#999; text-align:center; margin-bottom:20px; line-height:1.5;">You are about to connect to this provider. Your messages will be sent to an external server. Continue?</div>
-          <div style="display:flex; gap:8px;">
-            <button onclick="cancelCloudConnect()" style="flex:1; padding:8px 0; background:#2a1a1a; border:1px solid #6a2a2a; color:#e88; border-radius:6px; font-size:13px; cursor:pointer;">✕ Cancel</button>
-            <button onclick="confirmCloudConnectOK()" style="flex:1; padding:8px 0; background:#1a2a4a; border:1px solid #2a4a8a; color:#7ab4f5; border-radius:6px; font-size:13px; cursor:pointer; font-weight:bold;">☁️ Connect</button>
+    <div id="advanced-settings-overlay" aria-hidden="true" onclick="onAdvancedSettingsOverlayClick(event)">
+      <div id="advanced-settings-modal" role="dialog" aria-modal="true" aria-labelledby="advanced-settings-title">
+        <div class="advanced-settings-header">
+          <div>
+            <h2 id="advanced-settings-title" class="advanced-settings-title">Advanced Settings</h2>
+            <p class="advanced-settings-subtitle">Model runtime, TTS, LoRA, search and backend configuration.</p>
           </div>
+          <button class="advanced-settings-close" type="button" onclick="closeAdvancedSettings()" aria-label="Close Advanced Settings">&times;</button>
+        </div>
+
+        <div class="advanced-settings-grid">
+          <div class="advanced-settings-column">
+          <section class="advanced-settings-card">
+            <h3>&#9729;&#65039; Cloud Backend</h3>
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:6px;">Backend Mode</label>
+            <div style="display:flex; gap:0; margin-bottom:10px; border:1px solid #333; border-radius:4px; overflow:hidden;">
+              <button id="mode-local-btn" onclick="selectLocalMode()" style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#1a3a2a; color:#6f6; font-weight:bold;">&#128421;&#65039; Local</button>
+              <button id="mode-openai-btn" onclick="setBackendMode('openai')" style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#111; color:#888;">&#9729;&#65039; OpenAI</button>
+              <button id="mode-anthropic-btn" onclick="setBackendMode('anthropic')" style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#111; color:#888;">&#129504; Anthropic</button>
+            </div>
+            <button id="cloud-connect-btn" onclick="onCloudConnectClick()" style="width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; font-weight:bold; margin-bottom:10px; background:#1a3a2a; border:1px solid #2a6a4a; color:white;">&#127760; Connect</button>
+
+            <div id="cloud-confirm-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:9999; align-items:center; justify-content:center;">
+              <div style="background:#1a1f2a; border:1px solid #3a5a7a; border-radius:10px; padding:24px 20px; max-width:300px; width:90%; box-shadow:0 8px 32px rgba(0,0,0,0.6);">
+                <div style="font-size:22px; text-align:center; margin-bottom:10px;">&#9888;&#65039;</div>
+                <div id="cloud-confirm-title" style="font-size:14px; color:#ddd; text-align:center; margin-bottom:8px; font-weight:bold;">Connect to cloud?</div>
+                <div id="cloud-confirm-message" style="font-size:12px; color:#999; text-align:center; margin-bottom:20px; line-height:1.5;">You are about to connect to this provider. Your messages will be sent to an external server. Continue?</div>
+                <div style="display:flex; gap:8px;">
+                  <button onclick="cancelCloudConnect()" style="flex:1; padding:8px 0; background:#2a1a1a; border:1px solid #6a2a2a; color:#e88; border-radius:6px; font-size:13px; cursor:pointer;">&#10005; Cancel</button>
+                  <button onclick="confirmCloudConnectOK()" style="flex:1; padding:8px 0; background:#1a2a4a; border:1px solid #2a4a8a; color:#7ab4f5; border-radius:6px; font-size:13px; cursor:pointer; font-weight:bold;">&#9729;&#65039; Connect</button>
+                </div>
+              </div>
+            </div>
+
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">OpenAI-Compatible Endpoint</label>
+            <input id="openai-base-url" type="text" placeholder="https://api.openai.com/v1" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:2px;">
+            <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Base URL up to <code style="background:#222; padding:0 3px; border-radius:2px;">/v1</code> - leave default for OpenAI. Examples: <code style="background:#222; padding:0 3px; border-radius:2px;">https://api.anthropic.com/v1</code>, <code style="background:#222; padding:0 3px; border-radius:2px;">https://api.x.ai/v1</code>, <code style="background:#222; padding:0 3px; border-radius:2px;">https://openrouter.ai/api/v1</code></div>
+
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">OpenAI API Key</label>
+            <input id="openai-api-key" type="password" placeholder="sk-..." style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:6px;">
+
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Model</label>
+            <div style="display:flex; gap:6px; align-items:center; margin-bottom:4px;">
+              <select id="openai-model" style="flex:1; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; height:28px;">
+                <option value="gpt-4o">gpt-4o</option>
+              </select>
+              <button onclick="fetchOpenAIModels()" title="Fetch models from OpenAI" style="background:#1a2a3a; border:1px solid #2a4a6a; color:#7ab4f5; border-radius:4px; padding:0 8px; font-size:12px; cursor:pointer; height:28px; white-space:nowrap; flex-shrink:0;">&#128260; Fetch</button>
+            </div>
+            <div style="font-size:10px; color:#555; margin-bottom:8px;">Click Fetch to load your available models</div>
+            <div id="openai-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
+            <button onclick="saveOpenAISettings()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">&#128190; Save OpenAI Settings</button>
+
+            <hr style="margin:14px 0; border-color:#333;">
+
+            <h3>&#129504; Anthropic (Claude)</h3>
+            <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Native Anthropic API - keep both keys saved here and flip the Backend Mode toggle above to switch. No re-pasting.</div>
+
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Anthropic Endpoint</label>
+            <input id="anthropic-base-url" type="text" placeholder="https://api.anthropic.com/v1" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:2px;">
+            <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Base URL up to <code style="background:#222; padding:0 3px; border-radius:2px;">/v1</code> - leave default for Anthropic. Must be a native Anthropic-format endpoint.</div>
+
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Anthropic API Key</label>
+            <input id="anthropic-api-key" type="password" placeholder="sk-ant-..." style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:6px;">
+
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Model</label>
+            <div style="display:flex; gap:6px; align-items:center; margin-bottom:4px;">
+              <select id="anthropic-model" style="flex:1; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; height:28px;">
+                <option value="claude-sonnet-4-5">claude-sonnet-4-5</option>
+              </select>
+              <button onclick="fetchAnthropicModels()" title="Fetch models from Anthropic" style="background:#1a2a3a; border:1px solid #2a4a6a; color:#7ab4f5; border-radius:4px; padding:0 8px; font-size:12px; cursor:pointer; height:28px; white-space:nowrap; flex-shrink:0;">&#128260; Fetch</button>
+            </div>
+            <div style="font-size:10px; color:#555; margin-bottom:8px;">Click Fetch to load your available Claude models</div>
+
+            <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:#ccc; margin-bottom:4px; cursor:pointer;">
+              <input id="anthropic-thinking" type="checkbox" style="width:15px; height:15px; cursor:pointer;">
+              <span>&#128173; Show extended thinking</span>
+            </label>
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+              <label for="anthropic-thinking-budget" style="font-size:11px; color:#aaa;">Thinking budget (tokens)</label>
+              <input id="anthropic-thinking-budget" type="number" min="1024" step="1024" value="2048" style="width:90px; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:12px;">
+            </div>
+            <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Streams Claude's reasoning into a collapsible panel above each reply. Only supported models emit it. Budget must be &gt;= 1024 and below your max-tokens; temperature is ignored while thinking is on.</div>
+            <div id="anthropic-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
+            <button onclick="saveAnthropicSettings()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">&#128190; Save Anthropic Settings</button>
+          </section>
+
+          </div>
+
+          <div class="advanced-settings-column">
+          <section class="advanced-settings-card">
+            <h3>TTS Engine</h3>
+            <label>Engine:</label>
+            <select id="tts-engine-select" style="width:100%; margin-bottom:8px;">
+              <option value="f5">F5-TTS</option>
+              <option value="xtts">XTTS v2</option>
+              <option value="chatterbox">Chatterbox</option>
+              <option value="kokoro">Kokoro</option>
+              <option value="none">None (Disabled)</option>
+            </select>
+            <div id="tts-engine-status" style="font-size:12px; color:#aaa; margin-bottom:10px;"></div>
+            <button id="saveTTSEngineBtn" style="background-color:#1f3a5a; border-color:#245080; color:white; width:100%;">&#128190; Save TTS Engine</button>
+          </section>
+
+          <section class="advanced-settings-card">
+            <h3>Web Search</h3>
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">
+              Brave Search API Key
+              <span style="color:#666; font-weight:normal;">- <a href="https://api.search.brave.com" target="_blank" style="color:#7ab4f5;">get free key</a> (2000/month)</span>
+            </label>
+            <input id="brave-api-key" type="password" placeholder="BSA..." style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:6px;">
+            <div id="brave-key-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
+            <button onclick="saveBraveKey()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:4px;">&#128190; Save Search Key</button>
+            <button onclick="clearBraveKey()" style="background:#3a1a1a; border:1px solid #6a2a2a; color:#e88; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">&#10005; Clear Key (use DDG fallback)</button>
+          </section>
+          </div>
+          <div class="advanced-settings-column">
+          <section class="advanced-settings-card">
+            <h3>Llama.cpp</h3>
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Server Executable Path</label>
+            <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">
+              <input id="llama-exe" type="text" placeholder="C:\path\to\llama-server.exe" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
+              <button onclick="browseFile('llama-exe')" title="Browse for file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">&#128193;</button>
+            </div>
+
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Models Folder</label>
+            <div style="display:flex; align-items:center; gap:6px; margin-bottom:12px;">
+              <input id="llama-models-dir" type="text" placeholder="C:\path\to\models" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
+              <button onclick="browseFolder('llama-models-dir')" title="Browse for folder" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">&#128193;</button>
+            </div>
+
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Vision Projector - mmproj <span style="color:#777;">(optional - leave blank for no vision)</span></label>
+            <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+              <input id="llama-mmproj-path" type="text" placeholder="C:\path\to\model.mmproj.gguf" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
+              <button onclick="browseFile('llama-mmproj-path','gguf')" title="Browse for an mmproj .gguf file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">&#128193;</button>
+              <button onclick="attachMmproj()" title="Save the mmproj path (applied on next llama.cpp launch)" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Attach</button>
+              <button onclick="detachMmproj()" title="Clear the mmproj path" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Detach</button>
+            </div>
+            <div style="margin-bottom:12px;">
+              <button onclick="autoDetectMmproj()" title="Scan the Models Folder and its subfolders for a matching mmproj file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; white-space:nowrap;">&#128269; Auto-Detect</button>
+            </div>
+
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">LoRA <span style="color:#777;">(optional - adapter applied on next llama.cpp launch)</span></label>
+            <div style="display:flex; align-items:center; gap:6px; margin-bottom:12px;">
+              <input id="llama-lora-path" type="text" placeholder="C:\path\to\adapter.gguf" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
+              <button onclick="browseFile('llama-lora-path','lora',document.getElementById('llama-models-dir').value.trim())" title="Browse for a LoRA adapter .gguf file (starts in the configured Models Folder)" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">&#128193;</button>
+              <button onclick="attachLora()" title="Save the LoRA path (applied on next llama.cpp launch)" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Attach</button>
+              <button onclick="detachLora()" title="Clear the LoRA path" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Detach</button>
+            </div>
+
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:6px; font-weight:600;">Launch Arguments</label>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px 10px; margin-bottom:10px;">
+              <div>
+                <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">GPU Layers</label>
+                <input id="llama-gpu-layers" type="number" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
+              </div>
+              <div>
+                <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Context Size</label>
+                <input id="llama-ctx-size" type="number" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
+              </div>
+              <div style="grid-column:1 / -1;">
+                <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Chat Template</label>
+                <select id="llama-chat-template" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
+                  <option value="chatml">ChatML - Mistral 3, Llama 3.2-3B, most fine-tunes</option>
+                  <option value="llama3">Llama 3 - Meta Llama 3 / 3.1 / 3.3 / 3.2-8B+</option>
+                  <option value="llama2">Llama 2 - legacy [INST] format</option>
+                  <option value="gemma">Gemma - Google Gemma 2 / 3</option>
+                  <option value="qwen2">Qwen 2 / 3 - Qwen2.5, QwQ, Qwen3</option>
+                  <option value="mistral">Mistral - Mistral v0.1 / Mixtral</option>
+                  <option value="phi3">Phi-3 / Phi-4 - Microsoft Phi-3/4</option>
+                  <option value="zephyr">Zephyr - HF Zephyr / ORPO fine-tunes</option>
+                  <option value="deepseek2">DeepSeek - DeepSeek V2 / V3 / R1</option>
+                  <option value="command-r">Command R - Cohere Command R/R+</option>
+                  <option value="openchat">OpenChat - OpenChat 3.5 / 3.6</option>
+                  <option value="vicuna">Vicuna - Vicuna / WizardLM</option>
+                  <option value="jinja">Jinja - use model's built-in template</option>
+                </select>
+              </div>
+            </div>
+            <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:#aaa; margin-bottom:10px; cursor:pointer;">
+              <input type="checkbox" id="llama-show-console" style="width:14px; height:14px; cursor:pointer;">
+              Show llama.cpp console window
+            </label>
+            <div id="llama-config-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:16px;"></div>
+            <button onclick="saveLlamaConfig()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:6px;">&#128190; Save Llama Config</button>
+            <button onclick="resetToDefault()" title="Wipe settings.json and restore from settings.default.json" style="background:#3a1a1a; border:1px solid #6a2a2a; color:#e88; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">&#8634; Reset All Settings to Default</button>
+
+            <div style="border-top:1px solid #2a2a2a; padding-top:8px;">
+              <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:#666; margin-bottom:6px;">Config Presets</div>
+              <div style="display:flex; gap:4px; margin-bottom:6px;">
+                <select id="llama-preset-select" style="flex:1; background:#1a1a2a; border:1px solid #444; color:#ccc; border-radius:3px; font-size:12px; padding:3px 4px;">
+                  <option value="">-- select preset --</option>
+                </select>
+                <button onclick="loadLlamaPreset()" style="background:#1f3a5a; border:1px solid #245080; color:white; border-radius:3px; padding:3px 7px; font-size:12px; cursor:pointer; align-self:stretch;">Load</button>
+                <button onclick="deleteLlamaPreset()" style="background:#5a1f1f; border:1px solid #8a2424; color:white; border-radius:3px; padding:3px 7px; font-size:12px; cursor:pointer; align-self:stretch;">&#128465;&#65039;</button>
+              </div>
+              <input id="llama-preset-name" type="text" placeholder="Preset name..." style="background:#111; border:1px solid #333; color:#ccc; border-radius:3px; font-size:12px; padding:3px 6px; width:100%; box-sizing:border-box; margin-bottom:4px;">
+              <button onclick="saveLlamaPreset()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; border-radius:3px; padding:4px 7px; font-size:12px; cursor:pointer; width:100%; margin-bottom:4px;">&#128190; Save Preset</button>
+              <div id="llama-preset-status" style="font-size:11px; color:#aaa; min-height:14px;"></div>
+            </div>
+          </section>
+
+          </div>
+
         </div>
       </div>
-
-      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">OpenAI-Compatible Endpoint</label>
-      <input id="openai-base-url" type="text" placeholder="https://api.openai.com/v1" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:2px;">
-      <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Base URL up to <code style="background:#222; padding:0 3px; border-radius:2px;">/v1</code> — leave default for OpenAI. Examples: <code style="background:#222; padding:0 3px; border-radius:2px;">https://api.anthropic.com/v1</code>, <code style="background:#222; padding:0 3px; border-radius:2px;">https://api.x.ai/v1</code>, <code style="background:#222; padding:0 3px; border-radius:2px;">https://openrouter.ai/api/v1</code></div>
-
-      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">OpenAI API Key</label>
-      <input id="openai-api-key" type="password" placeholder="sk-..." style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:6px;">
-
-      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Model</label>
-      <div style="display:flex; gap:6px; align-items:center; margin-bottom:4px;">
-        <select id="openai-model" style="flex:1; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; height:28px;">
-          <option value="gpt-4o">gpt-4o</option>
-        </select>
-        <button onclick="fetchOpenAIModels()" title="Fetch models from OpenAI" style="background:#1a2a3a; border:1px solid #2a4a6a; color:#7ab4f5; border-radius:4px; padding:0 8px; font-size:12px; cursor:pointer; height:28px; white-space:nowrap; flex-shrink:0;">🔄 Fetch</button>
-      </div>
-      <div style="font-size:10px; color:#555; margin-bottom:8px;">Click 🔄 Fetch to load your available models</div>
-
-      <div id="openai-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
-      <button onclick="saveOpenAISettings()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">💾 Save OpenAI Settings</button>
-
-      <hr style="margin: 20px 0; border-color: #333;">
-
-      <h3>🧠 Anthropic (Claude)</h3>
-      <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Native Anthropic API — keep both keys saved here and flip the Backend Mode toggle above to switch. No re-pasting.</div>
-
-      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Anthropic Endpoint</label>
-      <input id="anthropic-base-url" type="text" placeholder="https://api.anthropic.com/v1" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:2px;">
-      <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Base URL up to <code style="background:#222; padding:0 3px; border-radius:2px;">/v1</code> — leave default for Anthropic. Must be a native Anthropic-format endpoint (not an OpenAI gateway).</div>
-
-      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Anthropic API Key</label>
-      <input id="anthropic-api-key" type="password" placeholder="sk-ant-..." style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:6px;">
-
-      <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Model</label>
-      <div style="display:flex; gap:6px; align-items:center; margin-bottom:4px;">
-        <select id="anthropic-model" style="flex:1; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; height:28px;">
-          <option value="claude-sonnet-4-5">claude-sonnet-4-5</option>
-        </select>
-        <button onclick="fetchAnthropicModels()" title="Fetch models from Anthropic" style="background:#1a2a3a; border:1px solid #2a4a6a; color:#7ab4f5; border-radius:4px; padding:0 8px; font-size:12px; cursor:pointer; height:28px; white-space:nowrap; flex-shrink:0;">🔄 Fetch</button>
-      </div>
-      <div style="font-size:10px; color:#555; margin-bottom:8px;">Click 🔄 Fetch to load your available Claude models</div>
-
-      <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:#ccc; margin-bottom:4px; cursor:pointer;">
-        <input id="anthropic-thinking" type="checkbox" style="width:15px; height:15px; cursor:pointer;">
-        <span>💭 Show extended thinking</span>
-      </label>
-      <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
-        <label for="anthropic-thinking-budget" style="font-size:11px; color:#aaa;">Thinking budget (tokens)</label>
-        <input id="anthropic-thinking-budget" type="number" min="1024" step="1024" value="2048"
-               style="width:90px; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:12px;">
-      </div>
-      <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Streams Claude's reasoning into a collapsible panel above each reply. Only supported models (e.g. Opus 4.x, Sonnet 4.x) emit it. Budget must be ≥ 1024 and below your max-tokens; temperature is ignored while thinking is on.</div>
-
-      <div id="anthropic-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
-      <button onclick="saveAnthropicSettings()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">💾 Save Anthropic Settings</button>
-
     </div>
 
     <!-- Main Center Column -->
@@ -799,6 +927,41 @@
     const container = document.getElementById('container');
     if (container) container.scrollTop = 0;
   }
+
+  function openAdvancedSettings() {
+    const overlay = document.getElementById('advanced-settings-overlay');
+    if (!overlay) return;
+    overlay.classList.add('open');
+    overlay.setAttribute('aria-hidden', 'false');
+    const modal = document.getElementById('advanced-settings-modal');
+    if (modal) modal.scrollTop = 0;
+    const closeBtn = overlay.querySelector('.advanced-settings-close');
+    if (closeBtn) closeBtn.focus({ preventScroll: true });
+  }
+
+  function closeAdvancedSettings() {
+    const overlay = document.getElementById('advanced-settings-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('open');
+    overlay.setAttribute('aria-hidden', 'true');
+    const trigger = document.getElementById('advanced-settings-btn');
+    if (trigger) trigger.focus({ preventScroll: true });
+  }
+
+  function onAdvancedSettingsOverlayClick(event) {
+    if (event.target && event.target.id === 'advanced-settings-overlay') {
+      closeAdvancedSettings();
+    }
+  }
+
+  document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') {
+      const overlay = document.getElementById('advanced-settings-overlay');
+      if (overlay && overlay.classList.contains('open')) {
+        closeAdvancedSettings();
+      }
+    }
+  });
 </script>
 </body>
 </html>
@@ -3043,7 +3206,16 @@ async function persistSamplingPreset(name, preset) {
   if (!res.ok) {
     throw new Error((body && body.error) || `save failed (HTTP ${res.status})`);
   }
-  samplingPresets[name] = preset;
+  if (body && body.presets && typeof body.presets === 'object') {
+    samplingPresets = body.presets;
+  } else {
+    const verifyRes = await fetch('/sampling_presets');
+    if (!verifyRes.ok) throw new Error(`save verified poorly (HTTP ${verifyRes.status})`);
+    samplingPresets = (await verifyRes.json()) || {};
+  }
+  if (!samplingPresets[name]) {
+    throw new Error('save verified poorly: preset missing after server read-back');
+  }
   console.log(`[SP]   cache['${name}'].top_p now = ${samplingPresets[name].top_p}`);
 }
 

@@ -462,7 +462,7 @@ def clean_text(text):
     text = re.sub(r'\bread\b', 'reed', text, flags=re.IGNORECASE)
     text = re.sub(r'\bdone\b', 'Dunne', text, flags=re.IGNORECASE)
     text = re.sub(r'\bvs\.?\b', 'versus', text, flags=re.IGNORECASE)
-    text = re.sub(r'\bx+\b', '', text, flags=re.IGNORECASE)  # strip kiss x's (xx, xxx etc)
+    text = re.sub(r'\bx+\b', '.', text, flags=re.IGNORECASE)  # kiss x's (xx, xxx etc) should close the sentence
     # GTA — single unified pattern covers GTA, GTA5, GTA 5, GTAV, GTA V, GTA VI, GTA 6 etc.
     _GTA_ROMAN = {'I':'1','II':'2','III':'3','IV':'4','V':'5','VI':'6'}
     def _gta_rep(m, _r=_GTA_ROMAN):

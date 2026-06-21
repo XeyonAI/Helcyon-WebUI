@@ -537,7 +537,7 @@
             <!-- Textarea -->
             <textarea id="user-input" placeholder="Type your message here..."
               style="flex:1 1 0%;width:0;min-width:0;max-width:none;min-height:40px;max-height:320px;resize:vertical;border-radius:10px;padding:8px 12px;font-size:15px;box-sizing:border-box;margin:0;line-height:1.5;align-self:center;overflow-y:auto;"
-              oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,320)+'px';"></textarea>
+              oninput="resizeChatInput(this); saveChatInputDraft();"></textarea>
 
             <!-- Right buttons -->
             <div id="input-right" style="display:flex;flex-direction:row;align-items:center;gap:5px;flex-shrink:0;line-height:0;">
@@ -898,6 +898,59 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
   let currentCharName = '';  
   let lastPrompt = localStorage.getItem('lastPrompt') || '';
   let isCreatingNewChat = false;
+  const CHAT_INPUT_DRAFT_KEY = 'hwui_chat_input_draft';
+
+  function getChatInputDraftContext() {
+    const dropdown = document.getElementById('character-select');
+    return {
+      chat: currentChatFilename || localStorage.getItem('currentChatFilename') || '',
+      character: (currentCharacter && currentCharacter.name) || currentCharName || (dropdown && dropdown.value) || localStorage.getItem('lastCharacter') || ''
+    };
+  }
+
+  function resizeChatInput(inputBox) {
+    if (!inputBox) return;
+    inputBox.style.height = 'auto';
+    inputBox.style.height = Math.min(inputBox.scrollHeight, 320) + 'px';
+  }
+
+  function saveChatInputDraft(event) {
+    const inputBox = document.getElementById('user-input');
+    if (!inputBox) return;
+    const text = inputBox.value || '';
+    if (!text) {
+      if (event && event.type === 'input') clearChatInputDraft();
+      return;
+    }
+    const context = getChatInputDraftContext();
+    localStorage.setItem(CHAT_INPUT_DRAFT_KEY, JSON.stringify({
+      text,
+      chat: context.chat,
+      character: context.character,
+      updatedAt: Date.now()
+    }));
+  }
+
+  function clearChatInputDraft() {
+    localStorage.removeItem(CHAT_INPUT_DRAFT_KEY);
+  }
+
+  function restoreChatInputDraft() {
+    const inputBox = document.getElementById('user-input');
+    if (!inputBox || inputBox.value) return;
+
+    let draft = null;
+    try {
+      draft = JSON.parse(localStorage.getItem(CHAT_INPUT_DRAFT_KEY) || 'null');
+    } catch (e) {
+      clearChatInputDraft();
+      return;
+    }
+    if (!draft || !draft.text) return;
+
+    inputBox.value = draft.text;
+    resizeChatInput(inputBox);
+  }
 
   // ── Chat-sync stale-write guard (June 10 2026) ──────────────────────────
   // _chatDirty: has THIS tab mutated window.loadedChat since it last loaded
@@ -3244,7 +3297,6 @@ async function openChat(filename) {
 
           div.appendChild(userStrong);
           div.appendChild(userSpan);
-          div.appendChild(userActionBar);
           div.appendChild(makeTimestampEl(msg.timestamp));
 
           // Attached-document cards — appended to the chat ABOVE this user
@@ -3253,8 +3305,13 @@ async function openChat(filename) {
             chat.appendChild(makeDocumentCardRow(attachedDocsForRender));
           }
 
+          var userMessageStack = document.createElement("div");
+          userMessageStack.className = "message-stack";
+          userMessageStack.appendChild(div);
+          userMessageStack.appendChild(userActionBar);
+
           wrapper.appendChild(userAvatar);
-          wrapper.appendChild(div);
+          wrapper.appendChild(userMessageStack);
 
         } else if (role === "model" || role === "assistant") {
           assistantCount++;  // this is the Nth assistant turn (1-based)
@@ -3348,7 +3405,6 @@ async function openChat(filename) {
 
           div.appendChild(modelStrong);
           div.appendChild(modelSpan);
-          div.appendChild(modelActionBar);
           div.appendChild(makeTimestampEl(msg.timestamp));
           // Span is now in DOM — render HTML with code blocks as proper siblings
           if (modelSpan._pendingHtml !== undefined) {
@@ -3357,8 +3413,13 @@ async function openChat(filename) {
             delete modelSpan._pendingHtml;
           }
                     
+          var modelMessageStack = document.createElement("div");
+          modelMessageStack.className = "message-stack";
+          modelMessageStack.appendChild(div);
+          modelMessageStack.appendChild(modelActionBar);
+
           wrapper.appendChild(modelAvatar);
-          wrapper.appendChild(div);
+          wrapper.appendChild(modelMessageStack);
           
         }
         
@@ -3622,6 +3683,7 @@ async function openChat(filename) {
     
     box.value = '';
     box.style.height = 'auto';
+    clearChatInputDraft();
     try {
       await fetchAndDisplayResponse(input, chat);
     } catch (err) {
@@ -3632,12 +3694,12 @@ async function openChat(filename) {
 // ==================================================
 // MEMORY-SAVE INTENT GATE
 // ==================================================
-  // Only honour a trained [MEMORY ADD] response when the user's own message
-  // asked for a save. Valid tags are now written immediately; this gate also
-  // protects the legacy confirmation fallback if automatic capture is unavailable.
+  // Only honour trained memory output when the user's own message asked for a
+  // save. Valid memory objects/tags are written immediately; this gate protects
+  // against unsolicited save-shaped output.
   function memoryIntentGate(userMsg) {
     if (!userMsg || typeof userMsg !== 'string') return false;
-    const MEMORY_INTENT_RE = /\b(?:remember (?:this|that|to)|save (?:this|that)(?: to memory)?|(?:make|take) a note|don['’]?t forget|for (?:future|later) reference|add to memory|note this down|keep (?:this|that) in mind|save to memory|put (?:it |this |that )?in(?:to)? (?:your )?memory|(?:can you )?memorize (?:this|that|it)|keep a record|log (?:this|that|it)|store (?:this|that|it)(?: in memory)?|jot (?:this|that|it) down|note (?:this|that|it) down|(?:please )?save (?:this|that|it))\b/i;
+    const MEMORY_INTENT_RE = /\b(?:remember (?:this|that|to)|save (?:this|that)(?: to memory)?|save .{0,80}for (?:later|future reference)|(?:make|take) a note|don['’]?t forget|for (?:future|later) reference|add to memory|note this down|keep (?:this|that) in mind|save to memory|put (?:it |this |that )?in(?:to)? (?:your )?memory|(?:can you )?memorize (?:this|that|it)|keep a record|log (?:this|that|it)|store (?:this|that|it)(?: in memory)?|jot (?:this|that|it) down|note (?:this|that|it) down|(?:please )?save (?:this|that|it))\b/i;
     return MEMORY_INTENT_RE.test(userMsg);
   }
 
@@ -3653,6 +3715,7 @@ async function openChat(filename) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           character,
+          user_name: activeUserName || localStorage.getItem('activeUserName') || 'Chris',
           user_text: userText,
           assistant_text: assistantText,
           recent_messages: recentMessages
@@ -4110,9 +4173,9 @@ async function openChat(filename) {
 
       await autoSaveCurrentChat();
 
-      // Save a trained [MEMORY ADD] response immediately. The server uses the
-      // tag's title, keywords, and body directly; its classifier is only a
-      // fallback when an explicit request produced no valid tag.
+      // Save trained memory output immediately. The server uses the model's
+      // title, keywords, and summary directly; its classifier is only a
+      // fallback when an explicit request produced no valid memory object/tag.
       const autoMemoryHandled = await captureAutomaticMemory(input, rawFullMessage);
 
       // Auto-name if still a "New Chat" — filename guard is the sole trigger
@@ -5082,7 +5145,8 @@ async function stopGeneration() {
   }
 
   function copyMessage(button) {
-      const messageDiv = button.closest('.message');
+      const messageDiv = button.closest('.message') || button.closest('.message-wrapper')?.querySelector('.message');
+      if (!messageDiv) return;
       const contentEl = messageDiv.querySelector('.model-text, .user-text');
       
       let messageText = '';
@@ -5381,7 +5445,10 @@ async function branchMessage(assistantIndex) {
     // and an immediate focus() loses the race against Chromium's restore-time focus
     // handling. Matches the main.js did-navigate + 300ms defer. The activeElement
     // guard inside focusChatInputIfIdle still prevents stealing focus from a modal.
-    window.addEventListener('pageshow', () => setTimeout(focusChatInputIfIdle, 300));
+    window.addEventListener('pageshow', () => setTimeout(() => {
+      restoreChatInputDraft();
+      focusChatInputIfIdle();
+    }, 300));
     // ───────────────────────────────────────────────────────────────────────
 
     // First-run banner: show if llama exe path hasn't been customised yet
@@ -5491,6 +5558,15 @@ async function branchMessage(assistantIndex) {
         sendPrompt();
       }
     };
+    inputBox.addEventListener('input', saveChatInputDraft);
+    document.querySelectorAll('a[href="/config"]').forEach((link) => {
+      link.addEventListener('click', saveChatInputDraft, true);
+      link.addEventListener('mousedown', saveChatInputDraft, true);
+    });
+    window.addEventListener('pagehide', saveChatInputDraft);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') saveChatInputDraft();
+    });
     
      await loadChats(); // ✅ Wait for chat list to fully load first
     
@@ -5533,6 +5609,7 @@ async function branchMessage(assistantIndex) {
     } else {
       restoreLastChat();
     }
+    restoreChatInputDraft();
     
   });
   

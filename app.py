@@ -3610,7 +3610,7 @@ def chat():
     
     # (project instructions are already in the system message above - no need to repeat)
 
-    # 🎭 Example dialogue is parsed into user/assistant-shaped sample lines,
+    # 🎭 Example dialogue is parsed into fictional user/assistant-shaped sample lines,
     # then appended to the tail of the system block inside <STYLE_EXAMPLES>.
     # Keeping it at the high-attention tail preserves the style effect, while
     # the explicit wrapper tells the model these are voice samples, not live
@@ -3669,7 +3669,7 @@ def chat():
         ex = ex.strip()
         print(f"🧹 Example dialogue speaker line breaks normalised")
 
-        # 🎭 PARSE EXAMPLE DIALOGUE INTO USER/ASSISTANT-SHAPED SAMPLES
+        # 🎭 PARSE EXAMPLE DIALOGUE INTO FICTIONAL USER/ASSISTANT-SHAPED SAMPLES
         # Models follow turn-shaped examples strongly. Parse the raw
         # example_dialogue into {role, content} pairs so the final
         # <STYLE_EXAMPLES> block keeps the conversational rhythm without
@@ -3847,11 +3847,12 @@ def chat():
     # failure mode while removing the example content from referenceable
     # conversation history.
     if _fake_turns and messages and messages[0].get("role") == "system":
-        # _char_label / _user_label are derived once near the top of chat()
-        # (~line 2578) and are in scope here — no local re-derivation.
         _ex_lines = []
         for _ft in _fake_turns:
-            _spk = _char_label if _ft["role"] == "assistant" else _user_label
+            # Use fictional labels in the packaged sample so the model does
+            # not bind the real user's name, character name, or relationship
+            # context to the example topics.
+            _spk = "STYLE_SAMPLE_ASSISTANT" if _ft["role"] == "assistant" else "STYLE_SAMPLE_USER"
             _ex_lines.append(f"{_spk}: {_ft['content']}")
         _ex_block_text = "\n".join(_ex_lines)
         messages[0]["content"] += (
@@ -3864,9 +3865,20 @@ def chat():
             "matter unless the current user explicitly brings up the same subject.\n"
             "Imitate the conversational behaviour, not the literal topics: copy the "
             "manner, not the matter.\n"
-            "<START>\n"
+            "<STYLE_SAMPLE_TRANSCRIPT>\n"
             f"{_ex_block_text}\n"
+            "</STYLE_SAMPLE_TRANSCRIPT>\n"
             "</STYLE_EXAMPLES>\n"
+            "<STYLE_EXAMPLE_SEMANTIC_FIREWALL>\n"
+            "Before answering the current user, discard every entity, topic, "
+            "scenario, object, claim, and implied relationship from "
+            "STYLE_EXAMPLES. They are not available as facts, memories, context, "
+            "evidence, callbacks, or conversation threads. If a possible reply "
+            "would mention or allude to something that appears only in "
+            "STYLE_EXAMPLES, do not write it. Keep only the voice behaviour: "
+            "tone, warmth, humour, pacing, rhythm, response shape, and level of "
+            "emotional attunement.\n"
+            "</STYLE_EXAMPLE_SEMANTIC_FIREWALL>\n"
             "<CURRENT_CONVERSATION>\n"
             "The real conversation begins in the user/assistant turns after this "
             "system message. Treat only those turns as live conversational history.\n"
@@ -3995,9 +4007,10 @@ def chat():
 
     if char_data.get("example_dialogue", "").strip():
         _reply_instr_items.append(
-            "[OOC: Match the speaking-style example in your instructions — "
+            "[OOC: Use the speaking-style examples only as a voice guide — "
             "tone, vocabulary, rhythm, formatting, warmth, humour, and pacing. "
-            "Copy the manner, not the matter; write fresh content and never paraphrase or continue the examples.]"
+            "Ignore their subjects completely. Copy the manner, not the matter; "
+            "write fresh content and never paraphrase, continue, revisit, or allude to the examples.]"
         )
 
     _ph_val = char_data.get("post_history", "").strip()
@@ -4247,6 +4260,52 @@ def chat():
     print("\n===== FINAL PROMPT SENT TO MODEL =====")
     print(prompt[:1500])  # print first 1500 chars for sanity check
     print("======================================\n")
+
+    def _project_instruction_packet():
+        if not project_instructions or not project_instructions.strip():
+            return ""
+        return f"[OOC: Reminder — project context: {project_instructions.strip()}]"
+
+    def _prepend_to_last_user_message(message_list, packet, label):
+        """Return a copied messages list with packet prepended to the final user turn."""
+        if not packet:
+            return message_list
+        copied = [dict(m) for m in message_list]
+        for i in range(len(copied) - 1, -1, -1):
+            if copied[i].get("role") != "user":
+                continue
+
+            msg = dict(copied[i])
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                parts = []
+                inserted = False
+                for part in content:
+                    if not isinstance(part, dict):
+                        parts.append(part)
+                        continue
+                    new_part = dict(part)
+                    if not inserted and new_part.get("type") == "text":
+                        new_part["text"] = packet + "\n\n" + new_part.get("text", "")
+                        inserted = True
+                    parts.append(new_part)
+                if not inserted:
+                    parts.insert(0, {"type": "text", "text": packet})
+                msg["content"] = parts
+            else:
+                text = content if isinstance(content, str) else str(content)
+                msg["content"] = packet + ("\n\n" + text if text else "")
+
+            copied[i] = msg
+            print(f"📌 {label}: project instructions prepended to last user turn "
+                  f"({len(packet)} chars)", flush=True)
+            return copied
+
+        print(f"⚠️ {label}: project instructions set but no user turn found", flush=True)
+        return copied
+
+    _cloud_project_packet = _project_instruction_packet()
+
     # --- Load current sampling config ---
     sampling = load_sampling_settings()
    
@@ -4499,6 +4558,10 @@ def chat():
                 if _content:
                     _oai_messages.append({"role": _role, "content": _content})
 
+            _oai_messages = _prepend_to_last_user_message(
+                _oai_messages, _cloud_project_packet, "OpenAI"
+            )
+
             # ── Web-search toggle (OpenAI branch only) ───────────────
             # Read use_web_search here so the OpenAI path can route through
             # _web_search_stream_openai when enabled. The local path reads the
@@ -4617,6 +4680,10 @@ def chat():
             _ant_messages = _anthropic_normalize(active_chat)
             if not _ant_messages:
                 return "⚠️ No user message to send to Anthropic.", 400
+
+            _ant_messages = _prepend_to_last_user_message(
+                _ant_messages, _cloud_project_packet, "Anthropic"
+            )
 
             _ant_use_web_search = char_data.get("use_web_search", False)
             try:
@@ -5848,6 +5915,18 @@ def chat():
                             _tag_found = True
                             _search_query = _match.group(1).strip()
                             break  # stop streaming, go do the search
+                        _artifact = _re.search(
+                            r"\[\s*WEB\s+SEARCH(?:\s+(?:RESULT|RESULTS|QUERY))?\b",
+                            _rolling,
+                            _re.IGNORECASE,
+                        )
+                        if _artifact:
+                            safe = _rolling[:_artifact.start()].rstrip()
+                            if safe:
+                                yield safe
+                            else:
+                                yield "I'm ready when you are."
+                            return
                         yield chunk  # stream chunk live to frontend
                 except Exception as e:
                     yield f"⚠️ Model error: {e}"
@@ -5928,8 +6007,8 @@ def chat():
                         # the tag. The forming-tag prefix is held in _tail by the
                         # normal path's _TAIL_LEN holdback, so it can't leak before
                         # this fires.
-                        if not _halted[0] and '[WEB SEARCH:' in _rolling:
-                            _ws_tag_match = _re3_inner.search(r'\[WEB SEARCH:', _rolling, _re3_inner.IGNORECASE)
+                        if not _halted[0] and _re3_inner.search(r'\[\s*WEB\s+SEARCH\b', _rolling, _re3_inner.IGNORECASE):
+                            _ws_tag_match = _re3_inner.search(r'\[\s*WEB\s+SEARCH\b', _rolling, _re3_inner.IGNORECASE)
                             if _ws_tag_match:
                                 # Real prose before the tag. The client has already
                                 # received the whole stream EXCEPT the _TAIL_LEN

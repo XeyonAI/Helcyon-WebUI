@@ -1,6 +1,74 @@
 > **Older entries archived by month:** [March 2026](changes-archive-2026-03.md) · [April 2026](changes-archive-2026-04.md) · [May 2026 (pre-31)](changes-archive-2026-05.md)
 > This file holds the current (May 31 – June 1 2026) entries only.
 
+## Session: Jun 21 2026 - Message action row outside bubbles
+
+**`templates/index.html`:** Moved the rendered user/model message action bars out of the `.message` bubble and into a sibling `.message-stack` row directly underneath the bubble. The existing copy, regenerate, continue, replay audio, edit, delete, and branch handlers are unchanged.
+
+**`style.css`:** Added `.message-stack` layout rules so the action row aligns under the bubble while still fading in on message hover. `copyMessage()` now resolves the adjacent bubble when the clicked button lives outside `.message`.
+
+**Follow-up:** Restored user-message right alignment by making `.user-wrapper .message-stack` align to the right and inherit the previous 60% user-bubble width constraint, so the new outside action row does not pull user bubbles left.
+
+---
+
+## Session: Jun 21 2026 - Config sampling info tooltip visibility
+
+**`templates/config.html`:** Repositioned the Sampling Settings info tooltip relative to the sidebar header instead of the small info icon, and made the tooltip use the available header/sidebar width. The explanatory text now wraps inside the sampling sidebar instead of being clipped off to the right.
+
+---
+
+## Session: Jun 20 2026 - Sampling preset save hardening
+
+**`sampling_routes.py`:** Pinned `sampling_presets.json` to the HWUI dev build folder using the route module's absolute path instead of the process working directory. This prevents presets from being saved to or loaded from a different folder when HWUI is launched through a wrapper or alternate working directory. Also converted the preset route debug logs to ASCII so a Windows cp1252 console cannot crash `/sampling_presets` while printing a Unicode arrow/emoji.
+
+**`templates/config.html`:** After `/sampling_presets/save` succeeds, the client now refreshes its preset cache from the server's read-back payload (or performs a verification GET fallback) and treats a missing preset as a failed save. This stops the UI from reporting a saved preset that is not actually present in the disk-backed preset list.
+
+**Verification:** `sampling_routes.py` compiles with the available Python runtime. A temporary route-level preset was saved and deleted through the Flask blueprint test client; the existing `sampling_presets.json` content was restored afterward.
+
+---
+
+## Session: Jun 18 2026 - Admin character creation shards
+
+**`admin shards/character_creation_chatml_001.txt`:** Added a first ChatML training shard for collaborative character creation. The examples teach minimal-detail expansion into `Main Prompt`, `Description`, `Character note`, and a follow-up question.
+
+**`admin shards/character_creation_dialogue_chatml_002.txt`:** Added a second ChatML training shard that combines character creation with sample dialogue, including emotionally aware dialogue patterns using `{{user}}` / `{{char}}` turns.
+
+**Follow-up:** Replaced the first two draft shards with 30 compact ChatML shards kept below the 1024-token target: 10 character-card-only shards, 10 character-card-plus-dialogue shards, and 10 example-dialogue-only shards.
+
+**Follow-up:** Added 10 expansion-request shards: 5 where the user asks to expand rough character-card notes, and 5 where the user asks to expand thin example dialogue into richer `{{user}}` / `{{char}}` samples. Verified the folder remains under the 1024-token target per shard.
+
+**Follow-up:** Added a 16-shard base-training set with `base_` filenames: 4 character-card-only shards, 4 character-card-plus-dialogue shards, 4 example-dialogue-only shards, and 4 expansion shards that expand both rough character info and sample dialogue. Verified the largest base shard is 331 tokens.
+
+---
+
+## Session: Jun 18 2026 - HWUI Launcher build removal
+
+**`HWUI-Launcher/picker.html`:** Added a remove control to each build row in the launcher picker.
+
+Clicking the remove control opens an in-app confirmation modal, then calls the existing `window.hwui.removeBuild()` bridge to unregister the selected build from `builds.json`. The modal clarifies that this only removes the launcher entry and leaves the folder on disk untouched.
+
+---
+
+## Session: Jun 18 2026 - Settings Advanced Settings modal
+
+**`templates/config.html`:** Refactored the settings sidebar so the quick sampling controls and Sampling Presets stay visible, with a new **Advanced Settings** button beneath them.
+
+Moved the lower-frequency technical sections into a large themed modal over the main settings workspace: TTS Engine, llama.cpp paths/runtime arguments, LoRA/mmproj controls, llama config presets, Web Search, and cloud/API backend settings. The existing control IDs, saved keys, localStorage names, API routes, and event handlers remain in place; the controls were moved rather than duplicated.
+
+The modal uses the existing dark app styling, subtle borders, rounded corners, a responsive two-column card layout, dimmed page background, top-right close button, outside-click close, and Escape-to-close behavior.
+
+**Follow-up:** Tightened the Advanced Settings card packing after screenshot review. The initial two-column packed layout was superseded by the three-column compact layout below after further review.
+
+**Follow-up:** Reworked the modal into explicit compact three-column lanes: TTS Engine and Web Search stack together in the first column, llama.cpp/LoRA/Launch Arguments/Config Presets sit in the second, and Cloud/API backend settings sit in the third. Repaired the settings page Unicode encoding so icons and punctuation render normally again, and switched the modal's added icons to HTML entities to avoid future mojibake from editor/shell encoding quirks.
+
+**Follow-up:** Swapped the Advanced Settings column order after final layout review: Cloud/API backend settings now occupy the first column, llama.cpp remains in the middle, and the shorter TTS Engine plus Web Search blocks sit together on the right.
+
+**Follow-up:** Final visual-balance tweak: Cloud/API backend stays on the left, TTS Engine plus Web Search move to the middle, and llama.cpp moves to the right so the two longer columns frame the shorter one.
+
+**Verification:** Inline script blocks parse successfully, targeted moved-control IDs remain unique, and file-level checks confirm the modal trigger, overlay, responsive grid, Escape handler, and outside-click handler are present. Browser verification was attempted but the in-app browser runtime failed to start in this environment before the page could be loaded.
+
+---
+
 ## Session: Jun 15 2026 — Automatic local memory capture
 
 **`app.py`:** Added a conservative local-model memory classifier that runs after suitable turns, emits strict JSON internally, rejects secrets and unsolicited sensitive details, deduplicates existing character memories, and appends compatible `# Memory:` blocks. Explicit legacy `[MEMORY ADD]` output remains compatible but is no longer required.
@@ -11,7 +79,11 @@
 
 **Follow-up:** The hidden classifier now receives the exact current user message and assistant reply as explicit fields in addition to recent history. This fixes ambiguous “save this” turns and closes the non-streaming reply path that previously skipped capture entirely.
 
-**Streamlined trained-tag flow:** Local models retain their trained `[MEMORY ADD]` behavior. After the model shows the proposed memory content, HWUI uses that tag's title, keywords, and body directly, saves it without an approval bar, and shows the **Memory updated** notice with **Undo**. The hidden classifier remains a fallback when an explicit request produces no valid tag. The old Save/Cancel bar is no longer shown even on a write failure; HWUI reports the failure instead.
+**Streamlined trained-memory flow:** Local models can produce either the legacy `[MEMORY ADD]` tag or the newer plain memory object (`Title:`, `Keywords:`, `Summary:`). HWUI uses the model's title, keywords, and body/summary directly, saves it without an approval bar, and shows the **Memory updated** notice with **Undo**. The hidden classifier remains a fallback when an explicit request produces no valid trained memory output. The old Save/Cancel bar is no longer shown even on a write failure; HWUI reports the failure instead.
+
+**Prompt-bleed fix:** Removed the detailed memory tag template from the always-on chat instruction layer. Normal chats now only receive a short guard saying memory-save output should appear when explicitly requested, and never expose keywords, summaries, or internal memory formatting during ordinary conversation.
+
+**Web-search bleed fix:** Removed the exact web-search tag template and example queries from the always-on chat instruction layer, leaving only a plain behavioural rule about when live search is appropriate. The streaming filters now also catch malformed web-search control artefacts such as `WEB SEARCH RESULT` or `WEB SEARCH QUERY` so those internal fragments do not appear in chat.
 
 **Safety:** Capture is candidate-gated, fails closed on classifier errors, never auto-saves credentials, requires explicit intent for sensitive categories, and serializes memory writes with a lock.
 
