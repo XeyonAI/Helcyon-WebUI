@@ -3609,15 +3609,23 @@ async function openChat(filename) {
     userCopyBtn.className = "copy-btn";
     userCopyBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
     userCopyBtn.onclick = function() { copyMessage(this); };
+
+    const userActionBar = document.createElement("div");
+    userActionBar.className = "msg-action-bar";
+    userActionBar.appendChild(userCopyBtn);
     
     userDiv.appendChild(userStrong);
     userDiv.appendChild(userSpan);
-    userDiv.appendChild(userCopyBtn);
     userDiv.appendChild(makeTimestampEl(new Date().toISOString()));
 
-    // Assemble wrapper: avatar + message bubble
+    const userMessageStack = document.createElement("div");
+    userMessageStack.className = "message-stack";
+    userMessageStack.appendChild(userDiv);
+    userMessageStack.appendChild(userActionBar);
+
+    // Assemble wrapper: avatar + message bubble/action row
     userWrapper.appendChild(userAvatar);
-    userWrapper.appendChild(userDiv);
+    userWrapper.appendChild(userMessageStack);
 
     // Document cards render in the chat ABOVE the user message
     if (hasDocs) {
@@ -3856,13 +3864,21 @@ async function openChat(filename) {
         copyBtn.textContent = "📋";
         copyBtn.onclick = function() { copyMessage(this); };
 
+        const modelActionBar = document.createElement("div");
+        modelActionBar.className = "msg-action-bar";
+        modelActionBar.appendChild(copyBtn);
+
         msgDiv.appendChild(nameStrong);
         msgDiv.appendChild(spanText);
-        msgDiv.appendChild(copyBtn);
         msgDiv.appendChild(makeTimestampEl(new Date().toISOString()));
+
+        const modelMessageStack = document.createElement("div");
+        modelMessageStack.className = "message-stack";
+        modelMessageStack.appendChild(msgDiv);
+        modelMessageStack.appendChild(modelActionBar);
         
         modelWrapper.appendChild(modelAvatar);
-        modelWrapper.appendChild(msgDiv);
+        modelWrapper.appendChild(modelMessageStack);
         
         console.log('📍 NON-STREAMING: Appending wrapper to DOM');
         chat.appendChild(modelWrapper);
@@ -3930,13 +3946,21 @@ async function openChat(filename) {
       </svg>`;
       copyBtn.onclick = function() { copyMessage(this); };
       
+      const modelActionBar = document.createElement("div");
+      modelActionBar.className = "msg-action-bar";
+      modelActionBar.appendChild(copyBtn);
+
       msgDiv.appendChild(nameStrong);
       msgDiv.appendChild(spanText);
-      msgDiv.appendChild(copyBtn);
       msgDiv.appendChild(makeTimestampEl(new Date().toISOString()));
+
+      const modelMessageStack = document.createElement("div");
+      modelMessageStack.className = "message-stack";
+      modelMessageStack.appendChild(msgDiv);
+      modelMessageStack.appendChild(modelActionBar);
       
       modelWrapper.appendChild(modelAvatar);
-      modelWrapper.appendChild(msgDiv);
+      modelWrapper.appendChild(modelMessageStack);
       
       console.log('📍 STREAMING: Appending wrapper to DOM');
       chat.appendChild(modelWrapper);
@@ -4479,11 +4503,18 @@ async function openChat(filename) {
         copyBtn.className = 'copy-btn';
         copyBtn.textContent = '\ud83d\udccb';
         copyBtn.onclick = function() { copyMessage(this); };
+        const modelActionBar = document.createElement('div');
+        modelActionBar.className = 'msg-action-bar';
+        modelActionBar.appendChild(copyBtn);
         msgDiv.appendChild(nameStrong);
         msgDiv.appendChild(streamEl);
-        msgDiv.appendChild(copyBtn);
+        msgDiv.appendChild(makeTimestampEl(new Date().toISOString()));
+        const modelMessageStack = document.createElement('div');
+        modelMessageStack.className = 'message-stack';
+        modelMessageStack.appendChild(msgDiv);
+        modelMessageStack.appendChild(modelActionBar);
         modelWrapper.appendChild(modelAvatar);
-        modelWrapper.appendChild(msgDiv);
+        modelWrapper.appendChild(modelMessageStack);
         chat.appendChild(modelWrapper);
       }
       chat.scrollTop = chat.scrollHeight;

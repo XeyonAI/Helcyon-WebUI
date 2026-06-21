@@ -49,6 +49,7 @@
   --field-bg: #0a0d10;
   --field-border: #1d3349;
   --field-border-focus: #2a3f50;
+  --app-font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
 
   /* ── Chat column width — SINGLE SOURCE OF TRUTH ──────────────────────
      Change this ONE value to resize the chat column on every theme.
@@ -58,7 +59,7 @@
 }
 
 body {
-  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  font-family: var(--app-font-family, "Segoe UI", Tahoma, Geneva, Verdana, sans-serif);
   color: #eee;
   margin: 0;
   padding: 0;
@@ -653,7 +654,7 @@ button:hover {
 button {
   padding: 6px 12px;
   font-size: 15px;
-  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  font-family: var(--app-font-family, "Segoe UI", Tahoma, Geneva, Verdana, sans-serif);
   border-radius: 6px;
   border: 1px solid #333;
   background-color: #1f1f1f;
@@ -947,7 +948,7 @@ button {
 }
 
 #config-page * {
-  font-family: "Inter", system-ui, sans-serif !important;
+  font-family: var(--app-font-family, "Segoe UI", Tahoma, Geneva, Verdana, sans-serif) !important;
   font-size: 15px;
   line-height: 1.5;
 }
@@ -1010,7 +1011,7 @@ small {
 }
 #user-input,
 .message {
-  font-family: 'Segoe UI', 'Roboto', 'Helvetica Neue', sans-serif;
+  font-family: var(--app-font-family, "Segoe UI", Tahoma, Geneva, Verdana, sans-serif);
 }
 
 }
@@ -1323,7 +1324,7 @@ small {
 
 
 body {
-  font-family: "Inter", system-ui, sans-serif;
+  font-family: var(--app-font-family, "Segoe UI", Tahoma, Geneva, Verdana, sans-serif);
   color: #eee;
   margin: 0;
   padding: 0;
@@ -2099,7 +2100,7 @@ hr.msg-separator {
 #opening-line-btn,
 #author-note-btn,
 #global-docs-btn {
-  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif; !important;
+  font-family: var(--app-font-family, "Segoe UI", Tahoma, Geneva, Verdana, sans-serif) !important;
 }
 
 #edit-project-name {
@@ -3259,7 +3260,7 @@ button.code-copy-btn,
   border-radius: 4px !important;
   padding: 2px 10px !important;
   font-size: 11px !important;
-  font-family: 'Segoe UI', sans-serif !important;
+  font-family: var(--app-font-family, "Segoe UI", Tahoma, Geneva, Verdana, sans-serif) !important;
   cursor: pointer !important;
   margin: 0 0 0 auto !important;
   flex-shrink: 0 !important;

@@ -1,17 +1,13 @@
 > **Older entries archived by month:** [March 2026](changes-archive-2026-03.md) · [April 2026](changes-archive-2026-04.md) · [May 2026 (pre-31)](changes-archive-2026-05.md)
 > This file holds the current (May 31 – June 1 2026) entries only.
 
-## Session: Jun 21 2026 - Free build memory strip verification
+## Session: Jun 21 2026 - Theme editor app font dropdown
 
-**`templates/config.html`:** Hid the leftover Automatic local memory toggle in the free build while keeping the checkbox element in place for settings-script compatibility. The settings load/save path now forces `auto_memory.enabled` to `false`.
+**`templates/config.html`:** Added a **Typography** section to the Theme Editor with an app font dropdown. The dropdown uses the browser/Electron local font API when available so installed fonts can be browsed, with a built-in fallback list if font enumeration is unavailable or denied. Font selection previews live, saves through the existing theme save route, and is included when saving/updating theme presets.
 
-**`templates/index.html`:** Stubbed automatic memory capture to return `false` locally so the free build no longer attempts to call the removed `/auto_memory/capture` Pro route after replies.
+**`style.css`:** Added the `--app-font-family` theme variable and routed the main page, config page, buttons, and project modal text through it so the selected font applies uniformly across HWUI while preserving the Segoe UI fallback stack.
 
-**`settings.default.json`:** Changed the clean-install `auto_memory.enabled` default to `false` for the free build.
-
-**`templates/mobile.html`:** Replaced the mobile End Session memory-summary action with a Pro notice so the free build no longer points at the unregistered `/generate_session_summary` route.
-
-**`strip_for_free.py`:** Moved the strip script into the free build and updated it to handle the missed free-build cleanup automatically: it now works from either the parent folder or repo root, disables automatic memory defaults, hides and forces off the automatic-memory setting, stubs desktop automatic memory capture, replaces the mobile End Session memory-summary action with a Pro notice, avoids a comment-only `_parse_memory_blocks` false positive, and uses UTF-8 console output on Windows.
+**Follow-up:** Added favourite fonts to the Theme Editor font dropdown. The star button beside the font picker stores favourites in local browser storage and keeps them pinned at the top of the dropdown while browsing installed fonts.
 
 ---
 
@@ -22,6 +18,8 @@
 **`style.css`:** Added `.message-stack` layout rules so the action row aligns under the bubble while still fading in on message hover. `copyMessage()` now resolves the adjacent bubble when the clicked button lives outside `.message`.
 
 **Follow-up:** Restored user-message right alignment by making `.user-wrapper .message-stack` align to the right and inherit the previous 60% user-bubble width constraint, so the new outside action row does not pull user bubbles left.
+
+**Follow-up:** Removed the post-reply layout jolt by giving live-created user/model bubbles the same `.message-stack` plus outside `.msg-action-bar` structure used after `renderChatMessages()` re-renders the saved chat. During streaming the outside row carries the copy button only, reserving the same under-bubble space before the richer saved-message buttons replace it.
 
 ---
 

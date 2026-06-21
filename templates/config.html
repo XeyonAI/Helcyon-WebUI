@@ -331,7 +331,6 @@
 
       <label>Presence Penalty:</label>
       <input type="number" id="presence_penalty" step="0.01" min="0" max="2" />
-
       <input type="checkbox" id="auto-memory-enabled" style="display:none;" disabled>
 
       <!-- Sampling Presets -->
@@ -2571,6 +2570,9 @@ function setBgMode(mode) {
 // --- THEME EDITOR ---
 
 const THEME_VARS = [
+  { group: 'Typography', vars: [
+    { key: '--app-font-family', label: 'App Font', type: 'font' },
+  ]},
   { group: 'Top Bar', vars: [
     { key: '--topbar-bg', label: 'Top Bar BG' },
   ]},
@@ -2631,6 +2633,124 @@ const THEME_VARS = [
 let originalTheme = {};
 let themePresets = {};
 
+const FALLBACK_FONT_NAMES = [
+  'Segoe UI', 'Arial', 'Calibri', 'Cambria', 'Candara', 'Cascadia Code',
+  'Cascadia Mono', 'Consolas', 'Courier New', 'Georgia', 'Inter', 'Tahoma',
+  'Times New Roman', 'Trebuchet MS', 'Verdana'
+];
+const FONT_FAVOURITES_KEY = 'hwui_favourite_fonts';
+
+function escapeCssFontName(name) {
+  return String(name || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function fontStackFor(name) {
+  return `"${escapeCssFontName(name)}", "Segoe UI", Tahoma, Geneva, Verdana, sans-serif`;
+}
+
+function primaryFontFromStack(stack) {
+  const text = String(stack || '').trim();
+  const quoted = text.match(/^"((?:\\"|[^"])*)"/);
+  if (quoted) return quoted[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  return (text.split(',')[0] || 'Segoe UI').trim().replace(/^['"]|['"]$/g, '');
+}
+
+function getFavouriteFonts() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(FONT_FAVOURITES_KEY) || '[]');
+    if (Array.isArray(parsed)) return parsed.filter(Boolean);
+  } catch(e) {
+    console.warn('Could not read favourite fonts:', e);
+  }
+  return [];
+}
+
+function saveFavouriteFonts(fonts) {
+  localStorage.setItem(FONT_FAVOURITES_KEY, JSON.stringify(Array.from(new Set(fonts)).sort((a, b) => a.localeCompare(b))));
+}
+
+function updateFontFavouriteButton(button, fontName) {
+  if (!button) return;
+  const isFavourite = getFavouriteFonts().includes(fontName);
+  button.textContent = isFavourite ? '★' : '☆';
+  button.title = isFavourite ? 'Remove from favourite fonts' : 'Add to favourite fonts';
+  button.style.color = isFavourite ? '#ffd36a' : '#888';
+}
+
+async function toggleFontFavourite(select, button) {
+  const fontName = primaryFontFromStack(select.value);
+  if (!fontName) return;
+  const favourites = getFavouriteFonts();
+  const next = favourites.includes(fontName)
+    ? favourites.filter(name => name !== fontName)
+    : [...favourites, fontName];
+  saveFavouriteFonts(next);
+  await populateFontDropdown(select, select.value);
+  updateFontFavouriteButton(button, primaryFontFromStack(select.value));
+}
+
+function collectThemeUpdates() {
+  const updates = {};
+  for (const section of THEME_SECTIONS) {
+    for (const v of section.vars) {
+      const val = getComputedStyle(document.documentElement).getPropertyValue(v.key).trim();
+      if (val) updates[v.key] = val;
+    }
+  }
+  document.querySelectorAll('.cp-swatch-btn').forEach(inp => {
+    if (!updates[inp.dataset.var]) updates[inp.dataset.var] = inp.dataset.hex;
+  });
+  document.querySelectorAll('.theme-font-select').forEach(sel => {
+    if (sel.dataset.var && sel.value) updates[sel.dataset.var] = sel.value;
+  });
+  return updates;
+}
+
+async function getAvailableFontNames() {
+  const names = new Set(FALLBACK_FONT_NAMES);
+  if ('queryLocalFonts' in window) {
+    try {
+      const fonts = await window.queryLocalFonts();
+      fonts.forEach(font => {
+        if (font.family) names.add(font.family);
+      });
+    } catch(e) {
+      console.warn('Installed font list unavailable, using fallback fonts:', e);
+    }
+  }
+  return Array.from(names).sort((a, b) => a.localeCompare(b));
+}
+
+async function populateFontDropdown(select, currentStack) {
+  const currentName = primaryFontFromStack(currentStack);
+  const fonts = await getAvailableFontNames();
+  if (currentName) fonts.push(currentName);
+  const favourites = getFavouriteFonts();
+  favourites.forEach(name => fonts.push(name));
+  const uniqueFonts = Array.from(new Set(fonts)).sort((a, b) => a.localeCompare(b));
+  const favouriteSet = new Set(favourites);
+  const favouriteFonts = uniqueFonts.filter(name => favouriteSet.has(name));
+  const regularFonts = uniqueFonts.filter(name => !favouriteSet.has(name));
+  select.innerHTML = '';
+  const addOption = (name, prefix = '') => {
+    const opt = document.createElement('option');
+    opt.value = fontStackFor(name);
+    opt.textContent = prefix + name;
+    opt.style.fontFamily = opt.value;
+    select.appendChild(opt);
+  };
+  favouriteFonts.forEach(name => addOption(name, '★ '));
+  if (favouriteFonts.length && regularFonts.length) {
+    const separator = document.createElement('option');
+    separator.disabled = true;
+    separator.textContent = '────────';
+    select.appendChild(separator);
+  }
+  regularFonts.forEach(name => addOption(name));
+  select.value = fontStackFor(currentName || 'Segoe UI');
+  if (select.selectedIndex < 0 && select.options.length) select.selectedIndex = 0;
+}
+
 async function loadTheme() {
   try {
     const res = await fetch('/get_theme');
@@ -2668,9 +2788,11 @@ async function loadPreset() {
   const name = document.getElementById('theme-preset-select').value;
   if (!name || !themePresets[name]) { hwuiToast('Pick a preset first.', 'info'); return; }
   const colours = themePresets[name];
-  renderThemeEditor({ ...originalTheme, ...colours });
+  const currentFont = getComputedStyle(document.documentElement).getPropertyValue('--app-font-family').trim();
+  const updates = { '--app-font-family': currentFont, ...colours };
+  renderThemeEditor({ ...originalTheme, ...updates });
   // Live preview
-  Object.entries(colours).forEach(([k, v]) => {
+  Object.entries(updates).forEach(([k, v]) => {
     document.documentElement.style.setProperty(k, v);
   });
   // Persist selection and write to style.css
@@ -2679,7 +2801,7 @@ async function loadPreset() {
     const res = await fetch('/save_theme', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(colours)
+      body: JSON.stringify(updates)
     });
     const data = await res.json();
     if (data.status !== 'ok') {
@@ -2693,9 +2815,7 @@ async function loadPreset() {
 async function updatePreset() {
   const name = document.getElementById('theme-preset-select').value;
   if (!name) { hwuiToast('Pick a preset first.', 'info'); return; }
-  const inputs = document.querySelectorAll('.cp-swatch-btn');
-  const colours = {};
-  inputs.forEach(inp => { colours[inp.dataset.var] = inp.dataset.hex; });
+  const colours = collectThemeUpdates();
   try {
     const res = await fetch('/theme_presets/save', {
       method: 'POST',
@@ -2722,9 +2842,7 @@ async function updatePreset() {
 async function saveAsPreset() {
   const name = await hwuiPrompt('Preset name:');
   if (!name || !name.trim()) return;
-  const inputs = document.querySelectorAll('.cp-swatch-btn');
-  const colours = {};
-  inputs.forEach(inp => { colours[inp.dataset.var] = inp.dataset.hex; });
+  const colours = collectThemeUpdates();
   try {
     const res = await fetch('/theme_presets/save', {
       method: 'POST',
@@ -2889,17 +3007,7 @@ function hwuiPrompt(message, defaultValue = '', opts = {}) {
 
 async function saveTheme() {
   // Read from live CSS vars — authoritative source, never stale
-  const updates = {};
-  for (const section of THEME_SECTIONS) {
-    for (const v of section.vars) {
-      const val = getComputedStyle(document.documentElement).getPropertyValue(v.key).trim();
-      if (val) updates[v.key] = val;
-    }
-  }
-  // Fallback: also pick up any swatch values not in THEME_SECTIONS
-  document.querySelectorAll('.cp-swatch-btn').forEach(inp => {
-    if (!updates[inp.dataset.var]) updates[inp.dataset.var] = inp.dataset.hex;
-  });
+  const updates = collectThemeUpdates();
   try {
     const res = await fetch('/save_theme', {
       method: 'POST',
@@ -3924,6 +4032,20 @@ document.getElementById('theme-modal-overlay').addEventListener('mousedown', fun
 const THEME_SECTIONS = [
 
   {
+    title: 'Typography',
+    vars: [
+      { key: '--app-font-family', label: 'App Font', type: 'font' },
+    ],
+    preview: (el) => {
+      el.innerHTML = `
+        <div style="border-radius:6px; border:1px solid #222; background:var(--container-bg); padding:14px; font-family:var(--app-font-family); color:#ddd;">
+          <div style="font-size:16px; font-weight:700; margin-bottom:6px;">The quick brown fox jumps over the lazy dog.</div>
+          <div style="font-size:13px; color:#aaa;">This previews the font used across HWUI text, buttons, inputs, and modals.</div>
+        </div>`;
+    }
+  },
+
+  {
     title: 'Top Bar',
     vars: [
       { key: '--topbar-bg', label: 'Background' },
@@ -4162,6 +4284,46 @@ function renderThemeModal(data) {
       if (seen.has(v.key)) continue;
       seen.add(v.key);
       const raw = data[v.key] || '#000000';
+      if (v.type === 'font') {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex; flex-direction:column; gap:5px;';
+
+        const label = document.createElement('label');
+        label.style.cssText = 'font-size:12px; color:#ccc; margin:0;';
+        label.textContent = v.label;
+
+        const select = document.createElement('select');
+        select.className = 'theme-font-select';
+        select.dataset.var = v.key;
+        select.style.cssText = 'flex:1; min-width:0; background:var(--field-bg); border:1px solid var(--field-border); color:#eee; border-radius:4px; font-size:13px; padding:6px 8px; width:100%;';
+        select.innerHTML = '<option>Loading fonts...</option>';
+        select.onchange = function() {
+          _applyThemeVar(v.key, this.value);
+          previewThemeVar(v.key, this.value);
+          updateFontFavouriteButton(favBtn, primaryFontFromStack(this.value));
+        };
+        const fontRow = document.createElement('div');
+        fontRow.style.cssText = 'display:flex; align-items:center; gap:6px; width:100%;';
+        const favBtn = document.createElement('button');
+        favBtn.type = 'button';
+        favBtn.style.cssText = 'width:32px; height:32px; flex:0 0 32px; padding:0; border-radius:4px; border:1px solid var(--field-border); background:var(--field-bg); font-size:17px; line-height:1; cursor:pointer;';
+        favBtn.onclick = function() { toggleFontFavourite(select, favBtn); };
+        populateFontDropdown(select, raw).catch(e => {
+          console.warn('Could not populate font dropdown:', e);
+          select.innerHTML = '';
+          const opt = document.createElement('option');
+          opt.value = fontStackFor('Segoe UI');
+          opt.textContent = 'Segoe UI';
+          select.appendChild(opt);
+        }).finally(() => updateFontFavouriteButton(favBtn, primaryFontFromStack(select.value)));
+
+        row.appendChild(label);
+        fontRow.appendChild(select);
+        fontRow.appendChild(favBtn);
+        row.appendChild(fontRow);
+        grid.appendChild(row);
+        continue;
+      }
       const hex = toHex(raw);
 
       const row = document.createElement('div');

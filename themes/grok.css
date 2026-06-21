@@ -6,6 +6,7 @@
    ============================================================ */
 
 :root {
+  --app-font-family: "Inter", "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
   --topbar-bg: #0c0c0c;
   --container-bg: #000000;
   --chat-bg: #000000;
@@ -13,16 +14,16 @@
   --sidebar-bg: #000000;
   --chat-item-bg: #171717;
   --sidebar-button-hover: #3a3a3a;
-  --new-chat-btn-bg: #000000;
-  --new-chat-btn-text: #000000;
+  --new-chat-btn-bg: #0b184c;
+  --new-chat-btn-text: #f9f9f9;
   --char-dropdown-bg: #000000;
   --char-dropdown-border: #303030;
   --sidebar-footer-btn-bg: #000000;
   --sidebar-footer-btn-border: #6d6d6d;
   --user-msg-bg: #131719;
-  --user-msg-text: #dadada;
+  --user-msg-text: #ffffff;
   --model-msg-bg: #000000;
-  --model-msg-text: #dadada;
+  --model-msg-text: #ffffff;
   --msg-border: #000000;
   --hr-color: #353535;
   --input-bg: #000000;
