@@ -7155,6 +7155,76 @@ def save_chat_manual():
         print(f"❌ Failed to export chat: {e}")
         return jsonify({"status": "error", "error": str(e)}), 500
         
+@app.route("/shards/export", methods=["POST"])
+def export_shards_to_folder():
+    """Write generated shard code blocks into numbered text files."""
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        raw_prefix = (data.get("prefix") or "").strip()
+        shards = data.get("shards") or []
+
+        if not raw_prefix:
+            return jsonify({"error": "Prefix is required."}), 400
+        if not isinstance(shards, list) or not shards:
+            return jsonify({"error": "No shards were provided."}), 400
+
+        safe_prefix = re.sub(r"[^A-Za-z0-9_-]+", "_", raw_prefix).strip("_")
+        if not safe_prefix:
+            return jsonify({"error": "Prefix must contain at least one letter or number."}), 400
+
+        cleaned_shards = []
+        for shard in shards:
+            if not isinstance(shard, str):
+                continue
+            text = shard.replace("\r\n", "\n").replace("\r", "\n").strip()
+            if text:
+                cleaned_shards.append(text)
+
+        if not cleaned_shards:
+            return jsonify({"error": "All shard blocks were empty."}), 400
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        shards_dir = os.path.join(base_dir, "shards")
+        os.makedirs(shards_dir, exist_ok=True)
+
+        width = max(2, len(str(len(cleaned_shards))))
+        candidate_prefix = safe_prefix
+        suffix = 2
+
+        def _target_paths(prefix):
+            return [
+                os.path.join(shards_dir, f"{prefix}_shard_{idx:0{width}d}.txt")
+                for idx in range(1, len(cleaned_shards) + 1)
+            ]
+
+        paths = _target_paths(candidate_prefix)
+        while any(os.path.exists(path) for path in paths):
+            candidate_prefix = f"{safe_prefix}_{suffix}"
+            suffix += 1
+            paths = _target_paths(candidate_prefix)
+
+        written = []
+        for path, text in zip(paths, cleaned_shards):
+            if not text.endswith("\n"):
+                text += "\n"
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                f.write(text)
+            written.append(os.path.basename(path))
+
+        print(f"Exported {len(written)} shard file(s) to {shards_dir} using prefix {candidate_prefix}")
+        return jsonify({
+            "status": "ok",
+            "count": len(written),
+            "folder": "shards",
+            "prefix": candidate_prefix,
+            "files": written,
+        })
+
+    except Exception as e:
+        print(f"Failed to export shards: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 # --------------------------------------------------
 # Sampling Settings Management (UNIFIED)
 # --------------------------------------------------

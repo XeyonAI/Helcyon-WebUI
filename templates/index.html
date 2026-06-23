@@ -1446,7 +1446,7 @@ if (typeof marked === "undefined") {
         const langLabel = lang ? `<span class="code-lang">${lang}</span>` : '';
         const html =
           `<div class="code-block-wrapper">` +
-            `<div class="code-block-header">${langLabel}<button class="code-copy-btn" onclick="copyCodeBlock(this)">Copy</button></div>` +
+            `<div class="code-block-header">${langLabel}<button class="code-copy-btn" onpointerdown="copyCodeBlock(this, event)" onclick="copyCodeBlock(this, event)">Copy</button></div>` +
             `<pre><code>${escaped}</code></pre>` +
           `</div>`;
         const placeholder = `\x00CODE${_codeBlocks.length}\x00`;
@@ -2593,8 +2593,12 @@ function persistChatState() {
   // EDIT SPECIFIC MESSAGE (inline)
   // ==================================================
   function editSpecificMessage(messageIndex, spanElement, originalContent) {
-    // Don't open a second editor if one's already open
-    if (spanElement.querySelector('.edit-msg-textarea')) return;
+    const messageDiv = spanElement.closest('.message');
+    if (!messageDiv) return;
+
+    // Don't open a second editor if one's already open in this bubble.
+    if (messageDiv.classList.contains('editing-msg') || messageDiv.querySelector('.edit-msg-textarea')) return;
+    messageDiv.classList.add('editing-msg');
 
     // Hide the span text, replace with textarea
     const textarea = document.createElement('textarea');
@@ -2618,8 +2622,8 @@ function persistChatState() {
 
     // Hide the original span content, insert editor
     spanElement.style.display = 'none';
-    spanElement.parentElement.appendChild(textarea);
-    spanElement.parentElement.appendChild(btnRow);
+    messageDiv.appendChild(textarea);
+    messageDiv.appendChild(btnRow);
     textarea.focus();
 
     // Save handler
@@ -2680,6 +2684,7 @@ function persistChatState() {
       textarea.remove();
       btnRow.remove();
       spanElement.style.display = '';
+      messageDiv.classList.remove('editing-msg');
     };
   }
 
@@ -3395,6 +3400,14 @@ async function openChat(filename) {
             modelBranchBtn.onclick = function() { branchMessage(assistantIdx); };
           })(assistantCount);
 
+          var modelShardExportBtn = null;
+          if (messageHasShardCodeBlocks(content)) {
+            modelShardExportBtn = document.createElement("button");
+            modelShardExportBtn.title = "Export code blocks as shard files";
+            modelShardExportBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>';
+            modelShardExportBtn.onclick = function() { exportShardBlocksFromButton(this); };
+          }
+
           modelActionBar.appendChild(modelCopyBtn);
           modelActionBar.appendChild(modelRegenBtn);
           modelActionBar.appendChild(modelContinueBtn);
@@ -3402,6 +3415,7 @@ async function openChat(filename) {
           modelActionBar.appendChild(modelEditBtn);
           modelActionBar.appendChild(modelDeleteBtn);
           modelActionBar.appendChild(modelBranchBtn);
+          if (modelShardExportBtn) modelActionBar.appendChild(modelShardExportBtn);
 
           div.appendChild(modelStrong);
           div.appendChild(modelSpan);
@@ -4012,7 +4026,7 @@ async function openChat(filename) {
           renderModelHTML(streamEl, html);
           addCodeCopyButtons(streamEl.parentNode || streamEl);
         } else {
-          streamEl.innerHTML = html;
+          renderLiveModelHTML(streamEl, html);
         }
         chat.scrollTop = chat.scrollHeight;
       }
@@ -4525,7 +4539,7 @@ async function openChat(filename) {
       // persists head + prefix + new tokens — i.e. the original text is never lost.
       let rawFull = retainedHead + continuePrefix;
       const userName = activeUserName || 'User';
-      streamEl.innerHTML = typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(rawFull)) : rawFull;
+      renderLiveModelHTML(streamEl, typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(rawFull)) : rawFull);
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder('utf-8');
@@ -4541,7 +4555,7 @@ async function openChat(filename) {
         const _ans = splitThinking(rawFull).answer;
         const cleaned = stripChatMLOutsideCodeBlocks(_ans, charName, userName).trim();
 
-        streamEl.innerHTML = typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(cleaned)) : cleaned;
+        renderLiveModelHTML(streamEl, typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(cleaned)) : cleaned);
         chat.scrollTop = chat.scrollHeight;
       }
       decoder.decode();
@@ -5042,16 +5056,45 @@ async function stopGeneration() {
   // ==================================================
   // COPY MESSAGE
   // ==================================================
-  function copyCodeBlock(btn) {
+  function getCodeBlockText(wrapper) {
+    const code = wrapper && wrapper.querySelector('code');
+    if (!code) return '';
+    return code.innerText || code.textContent || '';
+  }
+
+  function applyCodeCopyFeedback(wrapper) {
+    const state = window._lastCodeCopyFeedback;
+    if (!state || Date.now() > state.until) return;
+    const btn = wrapper && wrapper.querySelector('.code-copy-btn');
+    if (!btn) return;
+    if (getCodeBlockText(wrapper) !== state.text) return;
+    btn.textContent = state.ok ? '✓ Copied' : '✗ Failed';
+    btn.style.color = state.ok ? '#6f6' : '#f66';
+  }
+
+  function copyCodeBlock(btn, event) {
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.type === 'click' && btn.dataset.pointerCopyHandled === '1') {
+        btn.dataset.pointerCopyHandled = '';
+        return;
+      }
+      if (event.type === 'pointerdown') btn.dataset.pointerCopyHandled = '1';
+    }
     const code = btn.closest('.code-block-wrapper').querySelector('code');
     if (!code) return;
-    navigator.clipboard.writeText(code.innerText).then(() => {
+    const codeText = code.innerText || code.textContent || '';
+    navigator.clipboard.writeText(codeText).then(() => {
+      window._lastCodeCopyFeedback = { text: codeText, ok: true, until: Date.now() + 1800 };
       btn.textContent = '✓ Copied';
       btn.style.color = '#6f6';
       setTimeout(() => { btn.textContent = 'Copy'; btn.style.color = ''; }, 1800);
     }).catch(() => {
+      window._lastCodeCopyFeedback = { text: codeText, ok: false, until: Date.now() + 1800 };
       btn.textContent = '✗ Failed';
-      setTimeout(() => { btn.textContent = 'Copy'; }, 1800);
+      btn.style.color = '#f66';
+      setTimeout(() => { btn.textContent = 'Copy'; btn.style.color = ''; }, 1800);
     });
   }
 
@@ -5071,6 +5114,24 @@ async function stopGeneration() {
   // html    — the full marked.parse() output string
   // After this call, spanEl contains only inline content; code blocks are siblings after it.
   function renderModelHTML(spanEl, html) {
+    // Clear prior live/final render siblings before rebuilding the model message.
+    // Code blocks are inserted as siblings of spanEl, so stream updates need to
+    // remove the previous pass or old blocks linger under the growing reply.
+    let sibling = spanEl.nextSibling;
+    while (sibling) {
+      const next = sibling.nextSibling;
+      if (
+        sibling.nodeType === Node.ELEMENT_NODE &&
+        sibling.classList &&
+        (sibling.classList.contains('code-block-wrapper') || sibling.classList.contains('model-text-cont'))
+      ) {
+        sibling.remove();
+        sibling = next;
+        continue;
+      }
+      break;
+    }
+
     // Build a throwaway container to parse the HTML properly.
     const tmp = document.createElement('div');
     tmp.innerHTML = html;
@@ -5127,6 +5188,14 @@ async function stopGeneration() {
     }
   }
 
+  function renderLiveModelHTML(spanEl, html) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+    addCodeCopyButtons(tmp);
+    tmp.querySelectorAll('.code-block-wrapper').forEach(applyCodeCopyFeedback);
+    renderModelHTML(spanEl, tmp.innerHTML);
+  }
+
   // Wrap every <pre><code> block inside an element with a Copy button header.
   // Called after marked.parse() sets innerHTML — works with both real marked and the fallback parser.
   function addCodeCopyButtons(el) {
@@ -5139,9 +5208,10 @@ async function stopGeneration() {
       const wrapper = document.createElement('div');
       wrapper.className = 'code-block-wrapper';
       wrapper.innerHTML =
-        `<div class="code-block-header">${langLabel}<button class="code-copy-btn" onclick="copyCodeBlock(this)">Copy</button></div>`;
+        `<div class="code-block-header">${langLabel}<button class="code-copy-btn" onpointerdown="copyCodeBlock(this, event)" onclick="copyCodeBlock(this, event)">Copy</button></div>`;
       pre.parentNode.insertBefore(wrapper, pre);
       wrapper.appendChild(pre);
+      applyCodeCopyFeedback(wrapper);
     });
   }
 
@@ -5265,6 +5335,123 @@ async function stopGeneration() {
           button.textContent = '✗';
           setTimeout(() => button.innerHTML = originalHTML, 1500);
       });
+  }
+
+  function messageHasShardCodeBlocks(content) {
+      return /(^|\n)(```|~~~)/.test(content || '');
+  }
+
+  function collectShardBlocksFromMessage(messageDiv) {
+      if (!messageDiv) return [];
+      return Array.from(messageDiv.querySelectorAll('.code-block-wrapper code'))
+          .map(code => (code.innerText || code.textContent || '').trim())
+          .filter(Boolean);
+  }
+
+  function promptShardExportPrefix(count) {
+      return new Promise((resolve) => {
+          const prevFocus = document.activeElement;
+          const backdrop = document.createElement('div');
+          backdrop.style.cssText = 'position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.62);';
+
+          const panel = document.createElement('div');
+          panel.style.cssText = 'background:var(--modal-bg,#1a1f2a);border:1px solid var(--modal-border,#444);border-radius:10px;padding:18px 20px;max-width:440px;width:calc(100% - 48px);box-shadow:0 8px 32px rgba(0,0,0,0.6);color:var(--modal-text,#ddd);font-size:14px;';
+
+          const title = document.createElement('div');
+          title.textContent = 'Export shard files';
+          title.style.cssText = 'font-weight:700;font-size:15px;margin-bottom:8px;color:#fff;';
+
+          const help = document.createElement('div');
+          help.textContent = count + ' code block' + (count === 1 ? '' : 's') + ' will be saved as numbered .txt files in the shards folder.';
+          help.style.cssText = 'color:#aaa;line-height:1.45;margin-bottom:12px;';
+
+          const input = document.createElement('input');
+          input.type = 'text';
+          input.placeholder = 'personality';
+          input.autocomplete = 'off';
+          input.style.cssText = 'width:100%;box-sizing:border-box;background:var(--field-bg,#111);border:1px solid var(--field-border,#333);color:#eee;border-radius:7px;padding:9px 10px;font-size:14px;margin-bottom:14px;';
+
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;';
+
+          const cancelBtn = document.createElement('button');
+          cancelBtn.textContent = 'Cancel';
+          cancelBtn.style.cssText = 'background:#2a2a38;border:1px solid #555;color:#ccc;border-radius:6px;padding:7px 16px;font-size:13px;cursor:pointer;';
+
+          const saveBtn = document.createElement('button');
+          saveBtn.textContent = 'Save shards';
+          saveBtn.style.cssText = 'background:#1f5a3a;border:1px solid #248050;color:#fff;border-radius:6px;padding:7px 16px;font-size:13px;font-weight:600;cursor:pointer;';
+
+          row.append(cancelBtn, saveBtn);
+          panel.append(title, help, input, row);
+          backdrop.appendChild(panel);
+          document.body.appendChild(backdrop);
+
+          function cleanup(value) {
+              document.removeEventListener('keydown', onKey, true);
+              backdrop.remove();
+              try { if (prevFocus && prevFocus.focus) prevFocus.focus(); } catch (_) {}
+              resolve(value);
+          }
+          function submit() {
+              const value = input.value.trim();
+              if (!value) {
+                  input.style.borderColor = '#8a2424';
+                  input.focus();
+                  return;
+              }
+              cleanup(value);
+          }
+          function onKey(e) {
+              if (e.key === 'Escape') { e.preventDefault(); cleanup(null); }
+              else if (e.key === 'Enter') { e.preventDefault(); submit(); }
+          }
+
+          document.addEventListener('keydown', onKey, true);
+          backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) cleanup(null); });
+          cancelBtn.addEventListener('click', () => cleanup(null));
+          saveBtn.addEventListener('click', submit);
+          setTimeout(() => input.focus(), 0);
+      });
+  }
+
+  async function exportShardBlocksFromButton(button) {
+      const stack = button.closest('.message-stack');
+      const messageDiv = stack ? stack.querySelector('.message.model-msg') : button.closest('.message');
+      const shards = collectShardBlocksFromMessage(messageDiv);
+      if (!shards.length) {
+          hwuiToast('No shard code blocks found in this message.', 'info');
+          return;
+      }
+
+      const prefix = await promptShardExportPrefix(shards.length);
+      if (!prefix) return;
+
+      const originalHTML = button.innerHTML;
+      button.disabled = true;
+      button.textContent = 'Saving';
+      try {
+          const res = await fetch('/shards/export', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ prefix, shards })
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || data.error) {
+              throw new Error(data.error || 'Failed to save shards.');
+          }
+          button.textContent = 'Saved';
+          hwuiToast('Saved ' + data.count + ' shard file' + (data.count === 1 ? '' : 's') + ' to ' + data.folder + '/', 'success', 3800);
+      } catch (err) {
+          console.error('Shard export failed:', err);
+          button.textContent = 'Failed';
+          hwuiToast('Shard export failed: ' + err.message, 'error', 5000);
+      } finally {
+          setTimeout(() => {
+              button.disabled = false;
+              button.innerHTML = originalHTML;
+          }, 1800);
+      }
   }
   
   // ==================================================
@@ -6653,7 +6840,7 @@ function makeTimestampEl(isoString) {
     .msg-timestamp {
       display: block;
       font-size: 10px;
-      color: #555;
+      color: var(--msg-timestamp-text, #555);
       margin-top: 4px;
       letter-spacing: 0.3px;
       user-select: none;

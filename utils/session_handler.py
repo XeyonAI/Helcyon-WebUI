@@ -108,11 +108,6 @@ def get_instruction_layer():
         "Do not wrap them in brackets, asterisks, or any other formatting and output them. Just follow them silently. "
         "If the character card says 'never do X', do not say 'I will never do X' — simply never do X.\n\n"
 
-        "MEMORY SAVES:\n"
-        "Only create memory-save output when the user explicitly asks you to remember or save something. "
-        "For ordinary conversation, never mention memory saving, keywords, summaries, or internal memory formatting. "
-        "When the user does explicitly ask, use your trained memory-save style and do not explain the mechanism.\n\n"
-
         "WEB SEARCH:\n"
         "Only request live web search when the user's question genuinely needs current information, "
         "such as recent events, current prices, scores, news, product releases, or facts likely to be outdated. "

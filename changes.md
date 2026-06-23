@@ -1,6 +1,56 @@
 > **Older entries archived by month:** [March 2026](changes-archive-2026-03.md) · [April 2026](changes-archive-2026-04.md) · [May 2026 (pre-31)](changes-archive-2026-05.md)
 > This file holds the current (May 31 – June 1 2026) entries only.
 
+## Session: Jun 23 2026 - Secondary text theme controls
+
+**`style.css`:** Added default theme variables for secondary UI text: `--text-muted`, `--text-dim`, `--theme-editor-heading-text`, `--theme-preview-muted-text`, and `--msg-timestamp-text`.
+
+**`templates/config.html`:** Added a **Secondary Text** section to the Theme Editor for muted/dim UI text plus Theme Editor headings and preview placeholder text. Added **Timestamp Text** to the Messages section and updated the modal previews so those grey labels are visibly controlled by the new pickers.
+
+**`templates/index.html`:** Routed chat message timestamps through `--msg-timestamp-text` instead of the hardcoded `#555`, so the faint timestamp inside user/model bubbles can be brightened from the Theme Editor.
+
+---
+
+## Session: Jun 23 2026 - Theme font persistence fix
+
+**`templates/config.html`:** Cache-busted the active theme stylesheet on the config page when the page loads, when a theme is switched, and immediately after a successful Theme Editor save. This prevents the font dropdown from appearing to revert because the config page kept using a cached copy of the old theme CSS.
+
+**`theme_routes.py`:** Hardened `/save_theme` so `--app-font-family` is preserved when a save payload does not include it, instead of allowing a later save/preset action to drop the font variable and fall back to Segoe UI.
+
+**Verification:** `theme_routes.py` compiles and the `templates/config.html` script blocks parse successfully.
+
+---
+
+## Session: Jun 23 2026 - Dataset search ignore terms
+
+**`search_dataset.py`:** Added an optional ignore prompt after the search phrase. Entering one or more comma-separated words/text snippets filters out matching lines that also contain those ignored terms, so a search for `Oof` can skip lines containing `proof`.
+
+The interactive loop is now behind a normal script entry point, making the search helpers importable for small verification runs without launching the full workspace scan.
+
+**Follow-up:** `Search_Dataset.bat` now prompts for both the search phrase and the optional ignored word/text before running the search, then loops for another search until `exit` or `quit`. `search_dataset.py` also accepts those two values as command-line arguments so the launcher can pass them through cleanly.
+
+---
+
+## Session: Jun 22 2026 - Live code-block copy while streaming
+
+**`templates/index.html`:** Updated the live streaming renderer so completed fenced code blocks are wrapped with the same copy-button header before the full model response finishes. This lets generated shards be copied as soon as their closing fence has appeared, while the next shard or surrounding reply text can keep streaming.
+
+The live renderer now reuses the final code-block layout path during streaming and clears prior generated block siblings before each rebuild, preventing duplicate wrappers as the reply grows. Code block copy buttons also copy on pointer-down as well as click so a streaming re-render cannot remove the button between press and release.
+
+**Follow-up:** Preserved the `✓ Copied` / `✗ Failed` button feedback across live streaming re-renders by keeping a short-lived copy-feedback state keyed to the copied code text. Completed shards now visibly confirm the copy action even while the next shard is still generating.
+
+---
+
+## Session: Jun 22 2026 - Export generated shards to files
+
+**`templates/index.html`:** Added an assistant-message action button for replies that contain fenced code blocks. Clicking it opens an in-page prefix prompt, collects the code blocks from that one assistant message, and sends them for export as shard files. Native `prompt()` is avoided so Electron focus stays stable.
+
+**`app.py`:** Added `/shards/export`, which writes the submitted blocks into the workspace `shards/` folder as numbered UTF-8 `.txt` files using the requested prefix, for example `personality_shard_01.txt`, `personality_shard_02.txt`. If that prefix already exists, the export automatically uses a suffixed prefix such as `personality_2_shard_01.txt` instead of overwriting old files.
+
+**Verification:** `app.py` compiles, the updated chat page scripts parse cleanly, and a temporary write check confirmed files can be created in `shards/` and removed afterward. A Flask restart is required for the new route to become live.
+
+---
+
 ## Session: Jun 21 2026 - Theme editor app font dropdown
 
 **`templates/config.html`:** Added a **Typography** section to the Theme Editor with an app font dropdown. The dropdown uses the browser/Electron local font API when available so installed fonts can be browsed, with a built-in fallback list if font enumeration is unavailable or denied. Font selection previews live, saves through the existing theme save route, and is included when saving/updating theme presets.
@@ -20,6 +70,8 @@
 **Follow-up:** Restored user-message right alignment by making `.user-wrapper .message-stack` align to the right and inherit the previous 60% user-bubble width constraint, so the new outside action row does not pull user bubbles left.
 
 **Follow-up:** Removed the post-reply layout jolt by giving live-created user/model bubbles the same `.message-stack` plus outside `.msg-action-bar` structure used after `renderChatMessages()` re-renders the saved chat. During streaming the outside row carries the copy button only, reserving the same under-bubble space before the richer saved-message buttons replace it.
+
+**Follow-up:** Fixed inline editing after the action-row move. The duplicate-editor guard now checks the whole message bubble instead of only the hidden text span, and edit mode gives the bubble a stable full stack width so the textarea does not collapse the message.
 
 ---
 
@@ -94,6 +146,8 @@ The modal uses the existing dark app styling, subtle borders, rounded corners, a
 **Streamlined trained-memory flow:** Local models can produce either the legacy `[MEMORY ADD]` tag or the newer plain memory object (`Title:`, `Keywords:`, `Summary:`). HWUI uses the model's title, keywords, and body/summary directly, saves it without an approval bar, and shows the **Memory updated** notice with **Undo**. The hidden classifier remains a fallback when an explicit request produces no valid trained memory output. The old Save/Cancel bar is no longer shown even on a write failure; HWUI reports the failure instead.
 
 **Prompt-bleed fix:** Removed the detailed memory tag template from the always-on chat instruction layer. Normal chats now only receive a short guard saying memory-save output should appear when explicitly requested, and never expose keywords, summaries, or internal memory formatting during ordinary conversation.
+
+**Prompt-token cleanup:** Removed the remaining memory-save instruction block from `utils/session_handler.py`. The shared chat instruction layer no longer describes the old `[MEMORY ADD]` method or any memory-save formatting; trained model behaviour and HWUI's parser handle explicit saves instead.
 
 **Web-search bleed fix:** Removed the exact web-search tag template and example queries from the always-on chat instruction layer, leaving only a plain behavioural rule about when live search is appropriate. The streaming filters now also catch malformed web-search control artefacts such as `WEB SEARCH RESULT` or `WEB SEARCH QUERY` so those internal fragments do not appear in chat.
 

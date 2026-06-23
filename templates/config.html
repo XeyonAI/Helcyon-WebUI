@@ -186,7 +186,7 @@
     fetch('/themes/list').then(r=>r.json()).then(d=>{
       const name = d.active || 'midnight';
       const link = document.getElementById('active-theme-link');
-      if (link && name !== 'midnight') link.href = '/theme-files/' + name + '.css';
+      if (link) link.href = '/theme-files/' + name + '.css?v=' + Date.now();
     }).catch(()=>{}); // silent fail — default midnight.css already loaded above
   </script>
 </head>
@@ -2573,6 +2573,12 @@ const THEME_VARS = [
   { group: 'Typography', vars: [
     { key: '--app-font-family', label: 'App Font', type: 'font' },
   ]},
+  { group: 'Secondary Text', vars: [
+    { key: '--text-muted',                 label: 'Muted Text' },
+    { key: '--text-dim',                   label: 'Dim Text' },
+    { key: '--theme-editor-heading-text',  label: 'Theme Editor Headings' },
+    { key: '--theme-preview-muted-text',   label: 'Preview Muted Text' },
+  ]},
   { group: 'Top Bar', vars: [
     { key: '--topbar-bg', label: 'Top Bar BG' },
   ]},
@@ -2598,6 +2604,7 @@ const THEME_VARS = [
     { key: '--user-msg-text',  label: 'Your Msg Text' },
     { key: '--model-msg-bg',   label: 'AI Reply BG' },
     { key: '--model-msg-text', label: 'AI Reply Text' },
+    { key: '--msg-timestamp-text', label: 'Message Timestamp' },
     { key: '--msg-border',     label: 'Message Border' },
     { key: '--hr-color',        label: 'Section Divider' },
   ], preview: 'messages' },
@@ -3016,6 +3023,9 @@ async function saveTheme() {
     });
     const result = await res.json();
     if (result.status === 'ok') {
+      const link = document.getElementById('active-theme-link');
+      const themeName = (document.getElementById('theme-file-select') || {}).value || _activeThemeName || 'midnight';
+      if (link) link.href = '/theme-files/' + themeName + '.css?v=' + Date.now();
       hwuiToast('✅ Theme saved! Refresh the chat page to see changes.', 'success');
     } else {
       hwuiToast('❌ Save failed: ' + (result.error || 'Unknown error'), 'error');
@@ -3959,7 +3969,7 @@ async function switchThemeFile(name) {
     _activeThemeName = name;
     // Swap the loaded stylesheet
     const existing = document.getElementById('active-theme-link');
-    if (existing) existing.href = '/theme-files/' + name + '.css';
+    if (existing) existing.href = '/theme-files/' + name + '.css?v=' + Date.now();
     // Flag whether this theme uses a flat background (no wallpaper)
     if (FLAT_BG_THEMES.includes(name)) {
       localStorage.setItem('hwui_flat_bg_theme', '1');
@@ -4040,7 +4050,26 @@ const THEME_SECTIONS = [
       el.innerHTML = `
         <div style="border-radius:6px; border:1px solid #222; background:var(--container-bg); padding:14px; font-family:var(--app-font-family); color:#ddd;">
           <div style="font-size:16px; font-weight:700; margin-bottom:6px;">The quick brown fox jumps over the lazy dog.</div>
-          <div style="font-size:13px; color:#aaa;">This previews the font used across HWUI text, buttons, inputs, and modals.</div>
+          <div style="font-size:13px; color:var(--text-muted);">This previews the font used across HWUI text, buttons, inputs, and modals.</div>
+        </div>`;
+    }
+  },
+
+  {
+    title: 'Secondary Text',
+    vars: [
+      { key: '--text-muted', label: 'Muted Text' },
+      { key: '--text-dim', label: 'Dim Text' },
+      { key: '--theme-editor-heading-text', label: 'Theme Editor Headings' },
+      { key: '--theme-preview-muted-text', label: 'Preview Muted Text' },
+    ],
+    preview: (el) => {
+      el.innerHTML = `
+        <div style="border-radius:6px; border:1px solid #222; background:var(--container-bg); padding:14px;">
+          <div style="font-size:11px; text-transform:uppercase; letter-spacing:1px; color:var(--theme-editor-heading-text); margin-bottom:8px;">Theme section heading</div>
+          <div style="font-size:13px; color:var(--text-muted); margin-bottom:6px;">Muted helper text, inactive labels, and secondary descriptions.</div>
+          <div style="font-size:12px; color:var(--text-dim); margin-bottom:6px;">Dim low-priority text used for quieter UI details.</div>
+          <div style="font-size:11px; color:var(--theme-preview-muted-text);">Preview placeholder text, like the small hints inside theme previews.</div>
         </div>`;
     }
   },
@@ -4055,7 +4084,7 @@ const THEME_SECTIONS = [
         <div style="border-radius:6px; overflow:hidden; border:1px solid #222;">
           <div style="background:var(--topbar-bg); padding:10px 16px; display:flex; justify-content:space-between; align-items:center;">
             <span style="font-weight:700; font-size:14px; color:#fff;">Helcyon-WebUI</span>
-            <span style="color:#aaa; font-size:12px;">Model: helcyon-4o ⟳ ⚙</span>
+            <span style="color:var(--text-muted); font-size:12px;">Model: helcyon-4o ⟳ ⚙</span>
           </div>
         </div>`;
     }
@@ -4075,7 +4104,7 @@ const THEME_SECTIONS = [
             <span>📁</span><span style="font-weight:600;">General</span>
           </div>
           <div style="background:var(--chat-bg); border-radius:0 0 6px 6px; padding:12px; min-height:48px;">
-            <span style="font-size:11px; color:#555;">← Chat messages appear here</span>
+            <span style="font-size:11px; color:var(--theme-preview-muted-text);">← Chat messages appear here</span>
           </div>
         </div>`;
     }
@@ -4102,7 +4131,7 @@ const THEME_SECTIONS = [
             <div style="background:var(--new-chat-btn-bg); color:var(--new-chat-btn-text); padding:3px 10px; border-radius:4px; font-size:11px; font-weight:600;">＋ New</div>
           </div>
           <div style="background:var(--sidebar-button-hover); border-radius:4px; padding:7px 10px; font-size:12px; color:#fff; font-weight:600;">Nebula - New Chat ← active</div>
-          <div style="background:var(--chat-item-bg); border-radius:4px; padding:7px 10px; font-size:12px; color:#aaa;">Jarvis - New Chat ← default</div>
+          <div style="background:var(--chat-item-bg); border-radius:4px; padding:7px 10px; font-size:12px; color:var(--text-muted);">Jarvis - New Chat ← default</div>
           <div style="border-top:1px solid #333; margin-top:4px; padding-top:8px; display:flex; flex-direction:column; gap:4px;">
             <div style="background:var(--sidebar-footer-btn-bg); border:1px solid var(--sidebar-footer-btn-border); border-radius:4px; padding:5px 10px; font-size:11px; color:#ccc; text-align:center;">📁 Projects</div>
             <div style="background:var(--sidebar-footer-btn-bg); border:1px solid var(--sidebar-footer-btn-border); border-radius:4px; padding:5px 10px; font-size:11px; color:#ccc; text-align:center;">🧠 Memory</div>
@@ -4119,6 +4148,7 @@ const THEME_SECTIONS = [
       { key: '--user-msg-text',  label: 'Your Message Text' },
       { key: '--model-msg-bg',   label: 'AI Reply BG' },
       { key: '--model-msg-text', label: 'AI Reply Text' },
+      { key: '--msg-timestamp-text', label: 'Timestamp Text' },
       { key: '--msg-border',     label: 'Message Border' },
       { key: '--hr-color',        label: 'Section Divider' },
     ],
@@ -4129,6 +4159,7 @@ const THEME_SECTIONS = [
             <div style="width:36px; height:44px; border-radius:5px; background:#223; flex-shrink:0; border:1px solid rgba(100,200,255,0.2); display:flex; align-items:center; justify-content:center; font-size:9px; color:rgba(100,200,255,0.5); text-align:center; line-height:1.2;">user<br>img</div>
             <div style="background:var(--user-msg-bg); color:var(--user-msg-text); border:1px solid var(--msg-border); border-radius:6px; padding:10px 14px; font-size:13px; flex:1;">
               <strong>User:</strong><br>Hey, what's the capital of France?
+              <div style="font-size:10px; color:var(--msg-timestamp-text); margin-top:4px;">Today, 12:20</div>
             </div>
           </div>
           <div style="display:flex; gap:8px; align-items:flex-start;">
@@ -4155,14 +4186,14 @@ const THEME_SECTIONS = [
     preview: (el) => {
       el.innerHTML = `
         <div style="display:flex; flex-direction:column; gap:8px;">
-          <div style="background:var(--input-bg); border:1px solid var(--input-border); border-radius:8px; padding:10px 14px; font-size:13px; color:#666; min-height:42px;">
+          <div style="background:var(--input-bg); border:1px solid var(--input-border); border-radius:8px; padding:10px 14px; font-size:13px; color:var(--text-dim); min-height:42px;">
             Type a message... &nbsp;<span style="opacity:0.4">← Chat input box</span>
           </div>
           <div style="background:var(--container-bg); border-radius:6px; padding:10px; display:flex; flex-direction:column; gap:6px;">
-            <div style="font-size:10px; color:#555; text-transform:uppercase; letter-spacing:0.6px; margin-bottom:2px;">Config page form fields</div>
-            <input type="text" disabled placeholder="e.g. Character name..." style="background:var(--field-bg); border:1px solid var(--field-border); border-radius:4px; padding:6px 10px; font-size:13px; color:#666; width:100%; box-sizing:border-box;">
-            <textarea disabled placeholder="Short bio or purpose..." style="background:var(--field-bg); border:1px solid var(--field-border); border-radius:4px; padding:6px 10px; font-size:13px; color:#666; width:100%; box-sizing:border-box; resize:none; height:52px;"></textarea>
-            <div style="font-size:10px; color:#555; margin-top:2px;">Focus border: <span style="color:var(--field-border-focus);">■</span> var(--field-border-focus)</div>
+            <div style="font-size:10px; color:var(--theme-preview-muted-text); text-transform:uppercase; letter-spacing:0.6px; margin-bottom:2px;">Config page form fields</div>
+            <input type="text" disabled placeholder="e.g. Character name..." style="background:var(--field-bg); border:1px solid var(--field-border); border-radius:4px; padding:6px 10px; font-size:13px; color:var(--text-dim); width:100%; box-sizing:border-box;">
+            <textarea disabled placeholder="Short bio or purpose..." style="background:var(--field-bg); border:1px solid var(--field-border); border-radius:4px; padding:6px 10px; font-size:13px; color:var(--text-dim); width:100%; box-sizing:border-box; resize:none; height:52px;"></textarea>
+            <div style="font-size:10px; color:var(--theme-preview-muted-text); margin-top:2px;">Focus border: <span style="color:var(--field-border-focus);">■</span> var(--field-border-focus)</div>
           </div>
         </div>`;
     }
@@ -4184,11 +4215,11 @@ const THEME_SECTIONS = [
         <div style="background:var(--modal-bg); border:1px solid var(--modal-border); border-radius:8px; overflow:hidden; max-width:420px;">
           <div style="padding:14px 18px; border-bottom:1px solid var(--modal-border); display:flex; justify-content:space-between;">
             <span style="font-size:15px; font-weight:700; color:var(--modal-text);">Character Memory</span>
-            <span style="color:#666;">✕</span>
+            <span style="color:var(--text-dim);">✕</span>
           </div>
           <div style="padding:10px 14px; display:flex; gap:8px; border-bottom:1px solid var(--modal-border);">
             <div style="flex:1; padding:6px; border-radius:4px; text-align:center; font-size:12px; background:var(--memory-tab-active-bg); color:#fff; font-weight:600;">👤 Character</div>
-            <div style="flex:1; padding:6px; border-radius:4px; text-align:center; font-size:12px; background:var(--modal-bg-hover); color:#aaa; border:1px solid var(--modal-border);">🌐 Global</div>
+            <div style="flex:1; padding:6px; border-radius:4px; text-align:center; font-size:12px; background:var(--modal-bg-hover); color:var(--text-muted); border:1px solid var(--modal-border);">🌐 Global</div>
           </div>
           <div style="padding:10px 14px; display:flex; flex-direction:column; gap:6px;">
             <div style="background:var(--memory-entry-bg); border:1px solid var(--modal-border); border-radius:5px; padding:8px 12px;">
@@ -4221,7 +4252,7 @@ const THEME_SECTIONS = [
             <span style="font-size:15px; font-weight:700; color:var(--modal-text);">Project Management</span>
           </div>
           <div style="padding:10px 14px; display:flex; flex-direction:column; gap:6px;">
-            <div style="background:var(--project-header-bg); border-radius:4px; padding:5px 10px; font-size:10px; color:#888; text-transform:uppercase; letter-spacing:0.6px;">Your Projects</div>
+            <div style="background:var(--project-header-bg); border-radius:4px; padding:5px 10px; font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.6px;">Your Projects</div>
             <div style="background:var(--project-item-bg); border:1px solid var(--project-item-border); border-radius:5px; padding:8px 12px; display:flex; justify-content:space-between; align-items:center;">
               <span style="font-size:13px; color:#ddd;">Admin and Shard Creation</span>
               <div style="display:flex; gap:4px;">
@@ -4272,7 +4303,7 @@ function renderThemeModal(data) {
     left.style.cssText = 'flex:0 0 260px; min-width:0;';
 
     const title = document.createElement('div');
-    title.style.cssText = 'font-size:11px; text-transform:uppercase; letter-spacing:1px; color:#666; margin-bottom:10px; padding-bottom:5px; border-bottom:1px solid #2a2a2a;';
+    title.style.cssText = 'font-size:11px; text-transform:uppercase; letter-spacing:1px; color:var(--theme-editor-heading-text); margin-bottom:10px; padding-bottom:5px; border-bottom:1px solid #2a2a2a;';
     title.textContent = section.title;
     left.appendChild(title);
 
@@ -4350,7 +4381,7 @@ function renderThemeModal(data) {
     const right = document.createElement('div');
     right.style.cssText = 'flex:1; min-width:0;';
     const previewLabel = document.createElement('div');
-    previewLabel.style.cssText = 'font-size:10px; color:#555; text-transform:uppercase; letter-spacing:0.6px; margin-bottom:8px;';
+    previewLabel.style.cssText = 'font-size:10px; color:var(--theme-editor-heading-text); text-transform:uppercase; letter-spacing:0.6px; margin-bottom:8px;';
     previewLabel.textContent = 'Preview';
     right.appendChild(previewLabel);
     const previewWrap = document.createElement('div');

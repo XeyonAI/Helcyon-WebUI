@@ -70,7 +70,7 @@ def get_theme():
 def save_theme():
     """Write updated CSS custom properties into :root in the active theme file."""
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
         path = get_active_theme_path()
         print(f"💾 save_theme: writing to {path}, {len(data)} variables")
         if os.path.exists(path):
@@ -79,6 +79,13 @@ def save_theme():
         else:
             print(f"⚠️  save_theme: file not found, creating new")
             css = ":root {\n}\n"
+
+        if "--app-font-family" not in data:
+            font_match = re.search(r'--app-font-family\s*:\s*([^;]+);', css)
+            if font_match:
+                data["--app-font-family"] = font_match.group(1).strip()
+            else:
+                data["--app-font-family"] = '"Segoe UI", Tahoma, Geneva, Verdana, sans-serif'
 
         # Build fresh :root block from incoming data
         root_vars = "\n".join(f"  {var}: {value};" for var, value in data.items())

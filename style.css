@@ -50,6 +50,11 @@
   --field-border: #1d3349;
   --field-border-focus: #2a3f50;
   --app-font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  --text-muted: #aaaaaa;
+  --text-dim: #666666;
+  --theme-editor-heading-text: #666666;
+  --theme-preview-muted-text: #555555;
+  --msg-timestamp-text: #555555;
 
   /* ── Chat column width — SINGLE SOURCE OF TRUTH ──────────────────────
      Change this ONE value to resize the chat column on every theme.
@@ -1599,6 +1604,14 @@ body {
   resize: vertical;
   box-sizing: border-box;
   margin-top: 6px;
+}
+
+.message.editing-msg {
+  width: 100%;
+}
+
+.message.editing-msg .edit-msg-textarea {
+  min-width: 0;
 }
 
 .edit-msg-textarea:focus {
