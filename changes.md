@@ -1,6 +1,18 @@
 > **Older entries archived by month:** [March 2026](changes-archive-2026-03.md) · [April 2026](changes-archive-2026-04.md) · [May 2026 (pre-31)](changes-archive-2026-05.md)
 > This file holds the current (May 31 – June 1 2026) entries only.
 
+## Session: Jun 24 2026 - Compact sampling sidebar fields
+
+**`templates/config.html`:** Added a `sampling-field-label` class to the quick sampling setting labels so those controls can be laid out as compact rows without affecting the memory checkbox or preset controls.
+
+**`style.css`:** Changed the sampling sidebar number fields to label-left/input-right rows with shorter inputs, using the empty space on the right side of the sidebar and reducing vertical height so the settings fit better without scrolling.
+
+**Follow-up:** Wrapped each quick sampling label/input pair in an explicit row and switched the CSS to a two-column grid so every field aligns consistently instead of only the local-only block lining up.
+
+**Follow-up:** Reworked the Sampling Presets action row into a grid with fixed Load/delete button columns and a constrained dropdown so the three controls align neatly.
+
+---
+
 ## Session: Jun 23 2026 - Secondary text theme controls
 
 **`style.css`:** Added default theme variables for secondary UI text: `--text-muted`, `--text-dim`, `--theme-editor-heading-text`, `--theme-preview-muted-text`, and `--msg-timestamp-text`.
@@ -8,6 +20,8 @@
 **`templates/config.html`:** Added a **Secondary Text** section to the Theme Editor for muted/dim UI text plus Theme Editor headings and preview placeholder text. Added **Timestamp Text** to the Messages section and updated the modal previews so those grey labels are visibly controlled by the new pickers.
 
 **`templates/index.html`:** Routed chat message timestamps through `--msg-timestamp-text` instead of the hardcoded `#555`, so the faint timestamp inside user/model bubbles can be brightened from the Theme Editor.
+
+**Follow-up:** Left the timestamp control in the Messages section and made its default fallback follow `--text-dim` instead of a separate hardcoded dark grey.
 
 ---
 
@@ -148,6 +162,8 @@ The modal uses the existing dark app styling, subtle borders, rounded corners, a
 **Prompt-bleed fix:** Removed the detailed memory tag template from the always-on chat instruction layer. Normal chats now only receive a short guard saying memory-save output should appear when explicitly requested, and never expose keywords, summaries, or internal memory formatting during ordinary conversation.
 
 **Prompt-token cleanup:** Removed the remaining memory-save instruction block from `utils/session_handler.py`. The shared chat instruction layer no longer describes the old `[MEMORY ADD]` method or any memory-save formatting; trained model behaviour and HWUI's parser handle explicit saves instead.
+
+**Roleplay project memory-write gate:** Disabled memory saving while the active project folder has RP mode enabled. Automatic capture, the manual Add Memory panel, and the legacy confirm-bar save helper all refuse writes in RP projects with a clear notice, while memory recall remains unchanged.
 
 **Web-search bleed fix:** Removed the exact web-search tag template and example queries from the always-on chat instruction layer, leaving only a plain behavioural rule about when live search is appropriate. The streaming filters now also catch malformed web-search control artefacts such as `WEB SEARCH RESULT` or `WEB SEARCH QUERY` so those internal fragments do not appear in chat.
 

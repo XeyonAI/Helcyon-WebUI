@@ -303,41 +303,57 @@
         <span class="sampling-info-icon" tabindex="0" role="button" aria-label="About sampling parameters">ⓘ<span class="sampling-info-tip">Some cloud reasoning models ignore sampling parameters and filter them out automatically — Anthropic Opus 4.7+ and OpenAI's o-series / GPT-5-class models. Use prompting and the effort / reasoning setting instead.</span></span>
       </h3>
 
-      <label>Temperature:</label>
-      <input type="number" id="temperature" step="0.05" min="0" max="2" />
+      <div class="sampling-field-row">
+        <label class="sampling-field-label">Temperature:</label>
+        <input type="number" id="temperature" step="0.05" min="0" max="2" />
+      </div>
 
-      <label>Max Tokens:</label>
-      <input type="number" id="max_tokens" step="50" min="50" max="8192" />
+      <div class="sampling-field-row">
+        <label class="sampling-field-label">Max Tokens:</label>
+        <input type="number" id="max_tokens" step="50" min="50" max="8192" />
+      </div>
 
-      <label>Top P:</label>
-      <input type="number" id="top_p" step="0.05" min="0" max="1" />
+      <div class="sampling-field-row">
+        <label class="sampling-field-label">Top P:</label>
+        <input type="number" id="top_p" step="0.05" min="0" max="1" />
+      </div>
 
       <div id="local-only-params">
-        <label>Min P:</label>
-        <input type="number" id="min_p" step="0.01" min="0" max="1" />
+        <div class="sampling-field-row">
+          <label class="sampling-field-label">Min P:</label>
+          <input type="number" id="min_p" step="0.01" min="0" max="1" />
+        </div>
 
-        <label>Top K:</label>
-        <input type="number" id="top_k" step="1" min="0" max="100" />
+        <div class="sampling-field-row">
+          <label class="sampling-field-label">Top K:</label>
+          <input type="number" id="top_k" step="1" min="0" max="100" />
+        </div>
 
-        <label>Repeat Penalty:</label>
-        <input type="number" id="repeat_penalty" step="0.01" min="0.8" max="2" />
+        <div class="sampling-field-row">
+          <label class="sampling-field-label">Repeat Penalty:</label>
+          <input type="number" id="repeat_penalty" step="0.01" min="0.8" max="2" />
+        </div>
       </div>
       <div id="local-only-note" style="display:none; font-size:11px; color:#666; margin-bottom:10px; padding:5px 8px; background:rgba(255,255,255,0.03); border-radius:4px; border:1px solid #2a2a2a;">
         ⚠️ Min P, Top K and Repeat Penalty are not used by OpenAI
       </div>
 
-      <label>Frequency Penalty:</label>
-      <input type="number" id="frequency_penalty" step="0.01" min="0" max="2" />
+      <div class="sampling-field-row">
+        <label class="sampling-field-label">Frequency Penalty:</label>
+        <input type="number" id="frequency_penalty" step="0.01" min="0" max="2" />
+      </div>
 
-      <label>Presence Penalty:</label>
-      <input type="number" id="presence_penalty" step="0.01" min="0" max="2" />
+      <div class="sampling-field-row">
+        <label class="sampling-field-label">Presence Penalty:</label>
+        <input type="number" id="presence_penalty" step="0.01" min="0" max="2" />
+      </div>
       <input type="checkbox" id="auto-memory-enabled" style="display:none;" disabled>
 
       <!-- Sampling Presets -->
       <div style="border-top:1px solid #2a2a2a; padding-top:8px; margin-top:4px;">
         <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:#666; margin-bottom:6px;">Sampling Presets</div>
-        <div style="display:flex; gap:4px; margin-bottom:6px;">
-          <select id="sampling-preset-select" onchange="onSamplingPresetSelect()" style="flex:1; background:#1a1a2a; border:1px solid #444; color:#ccc; border-radius:3px; font-size:12px; padding:3px 4px;">
+        <div class="sampling-preset-row">
+          <select id="sampling-preset-select" class="sampling-preset-select" onchange="onSamplingPresetSelect()">
             <option value="">— select preset —</option>
           </select>
           <button onclick="loadSamplingPreset()" style="background:#1f3a5a; border:1px solid #245080; color:white; border-radius:3px; padding:3px 7px; font-size:12px; cursor:pointer; align-self:stretch;">Load</button>

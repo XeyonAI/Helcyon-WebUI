@@ -54,7 +54,7 @@
   --text-dim: #666666;
   --theme-editor-heading-text: #666666;
   --theme-preview-muted-text: #555555;
-  --msg-timestamp-text: #555555;
+  --msg-timestamp-text: var(--text-dim);
 
   /* ── Chat column width — SINGLE SOURCE OF TRUTH ──────────────────────
      Change this ONE value to resize the chat column on every theme.
@@ -217,6 +217,21 @@ body {
   margin-top: 5px;
   margin-bottom: 2px;
 }
+#sampling-sidebar .sampling-field-row {
+  display: grid;
+  grid-template-columns: minmax(0, 128px) minmax(0, 1fr);
+  align-items: center;
+  column-gap: 10px;
+  margin: 4px 0;
+}
+#sampling-sidebar .sampling-field-label {
+  display: flex;
+  align-items: center;
+  min-height: 26px;
+  margin: 0;
+  color: var(--text-muted, #aaa);
+  white-space: nowrap;
+}
 #sampling-sidebar input[type="number"],
 #sampling-sidebar input[type="text"],
 #sampling-sidebar input[type="password"] {
@@ -230,11 +245,54 @@ body {
   width: 100%;
   margin-bottom: 2px;
 }
+#sampling-sidebar .sampling-field-label + input[type="number"] {
+  width: 100%;
+  margin: 0;
+}
 #sampling-sidebar select {
   font-size: 12px !important;
   padding: 3px 4px !important;
   height: 26px !important;
   box-sizing: border-box !important;
+}
+#sampling-sidebar .sampling-preset-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 48px 34px;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+#sampling-sidebar .sampling-preset-select {
+  width: 100% !important;
+  min-width: 0;
+  background: #1a1a2a !important;
+  border: 1px solid #444 !important;
+  color: #ccc !important;
+  border-radius: 3px !important;
+}
+#sampling-sidebar .sampling-preset-row button {
+  width: 100% !important;
+  min-width: 0;
+  align-self: center !important;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  margin: 0 !important;
+  padding: 0 6px !important;
+}
+#sampling-sidebar .sampling-preset-row button[onclick="loadSamplingPreset()"] {
+  background: #1f3a5a !important;
+  border: 1px solid #245080 !important;
+  color: white !important;
+  border-radius: 3px !important;
+  cursor: pointer;
+}
+#sampling-sidebar .sampling-preset-row button[onclick="deleteSamplingPreset()"] {
+  background: #5a1f1f !important;
+  border: 1px solid #8a2424 !important;
+  color: white !important;
+  border-radius: 3px !important;
+  cursor: pointer;
 }
 #sampling-sidebar button {
   margin-top: 0;
