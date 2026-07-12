@@ -1,0 +1,679 @@
+# project_routes.py
+import os
+import re
+import json
+from flask import Blueprint, jsonify, request
+from datetime import datetime
+
+print("✅ project_routes blueprint loaded")
+
+project_bp = Blueprint("project_bp", __name__)
+PROJECTS_DIR = os.path.join(os.getcwd(), "projects")
+
+def ensure_projects_dir():
+    """Ensure projects directory exists."""
+    if not os.path.exists(PROJECTS_DIR):
+        os.makedirs(PROJECTS_DIR)
+        print(f"📁 Created projects directory: {PROJECTS_DIR}")
+
+def get_active_project():
+    """Get the currently active project name from state file."""
+    state_file = os.path.join(PROJECTS_DIR, "_active_project.json")
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("active_project")
+        except Exception as e:
+            print(f"⚠️ Failed to read active project: {e}")
+    return None
+
+def set_active_project(project_name):
+    """Set the currently active project."""
+    ensure_projects_dir()
+    state_file = os.path.join(PROJECTS_DIR, "_active_project.json")
+    try:
+        with open(state_file, "w", encoding="utf-8") as f:
+            json.dump({"active_project": project_name}, f, indent=2)
+        print(f"✅ Active project set to: {project_name}")
+        return True
+    except Exception as e:
+        print(f"❌ Failed to set active project: {e}")
+        return False
+
+# --------------------------------------------------
+# List all projects
+# --------------------------------------------------
+@project_bp.route("/projects/list")
+def list_projects():
+    ensure_projects_dir()
+    
+    try:
+        projects = []
+        for item in os.listdir(PROJECTS_DIR):
+            project_path = os.path.join(PROJECTS_DIR, item)
+            
+            # Skip the state file
+            if item == "_active_project.json":
+                continue
+            
+            # Only include directories
+            if os.path.isdir(project_path):
+                config_path = os.path.join(project_path, "config.json")
+                
+                # Load project config if it exists
+                if os.path.exists(config_path):
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        config = json.load(f)
+                else:
+                    config = {"name": item, "instructions": ""}
+                
+                projects.append({
+                    "name": item,
+                    "display_name": config.get("name", item),
+                    "instructions": config.get("instructions", ""),
+                    "rp_mode": config.get("rp_mode", False),
+                    "rp_opener": config.get("rp_opener", "")
+                })
+        
+        return jsonify({"projects": projects, "active": get_active_project()})
+        
+    except Exception as e:
+        print(f"❌ Failed to list projects: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# --------------------------------------------------
+# Create new project
+# --------------------------------------------------
+@project_bp.route("/projects/create", methods=["POST"])
+def create_project():
+    try:
+        data = request.json
+        name = data.get("name", "").strip()
+        instructions = data.get("instructions", "").strip()
+        
+        if not name:
+            return jsonify({"error": "Project name required"}), 400
+        
+        # Sanitize project name for filesystem
+        safe_name = "".join(c for c in name if c.isalnum() or c in (' ', '-', '_')).strip()
+        
+        if not safe_name:
+            return jsonify({"error": "Invalid project name"}), 400
+        
+        ensure_projects_dir()
+        
+        project_path = os.path.join(PROJECTS_DIR, safe_name)
+        
+        if os.path.exists(project_path):
+            return jsonify({"error": "Project already exists"}), 409
+        
+        # Create project directory structure
+        os.makedirs(project_path)
+        chats_dir = os.path.join(project_path, "chats")
+        os.makedirs(chats_dir)
+        
+        # Create config file
+        config = {
+            "name": name,
+            "instructions": instructions,
+            "rp_mode": data.get("rp_mode", False),
+            "rp_opener": data.get("rp_opener", "").strip(),
+            "created": datetime.now().isoformat()
+        }
+        
+        config_path = os.path.join(project_path, "config.json")
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        
+        # Set as active project
+        set_active_project(safe_name)
+        
+        print(f"📁 Created project: {safe_name}")
+        return jsonify({"success": True, "name": safe_name})
+        
+    except Exception as e:
+        print(f"❌ Failed to create project: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# --------------------------------------------------
+# Get project details
+# --------------------------------------------------
+@project_bp.route("/projects/get/<n>")
+def get_project(n):
+    try:
+        ensure_projects_dir()
+        project_path = os.path.join(PROJECTS_DIR, n)
+        
+        if not os.path.exists(project_path):
+            return jsonify({"error": "Project not found"}), 404
+        
+        config_path = os.path.join(project_path, "config.json")
+        
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+        else:
+            config = {"name": n, "instructions": ""}
+        
+        return jsonify(config)
+        
+    except Exception as e:
+        print(f"❌ Failed to get project: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# --------------------------------------------------
+# Update project
+# --------------------------------------------------
+@project_bp.route("/projects/update/<n>", methods=["POST"])
+def update_project(n):
+    try:
+        data = request.json
+        
+        ensure_projects_dir()
+        project_path = os.path.join(PROJECTS_DIR, n)
+        
+        if not os.path.exists(project_path):
+            return jsonify({"error": "Project not found"}), 404
+        
+        config_path = os.path.join(project_path, "config.json")
+        
+        # Load existing config
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+        else:
+            config = {"name": n}
+        
+        # Update fields
+        if "instructions" in data:
+            config["instructions"] = data["instructions"]
+        if "display_name" in data:
+            config["name"] = data["display_name"]
+        if "rp_mode" in data:
+            config["rp_mode"] = data["rp_mode"]
+        if "rp_opener" in data:
+            config["rp_opener"] = data["rp_opener"].strip()
+        
+        # Save updated config
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        
+        print(f"✅ Updated project: {n}")
+        return jsonify({"success": True})
+        
+    except Exception as e:
+        print(f"❌ Failed to update project: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# --------------------------------------------------
+# Switch active project
+# --------------------------------------------------
+@project_bp.route("/projects/switch", methods=["POST"])
+def switch_project():
+    try:
+        data = request.json
+        name = data.get("name")
+        
+        ensure_projects_dir()
+        
+        if name:
+            project_path = os.path.join(PROJECTS_DIR, name)
+            
+            if not os.path.exists(project_path):
+                return jsonify({"error": "Project not found"}), 404
+        
+        set_active_project(name)
+        
+        return jsonify({"success": True, "active": name})
+        
+    except Exception as e:
+        print(f"❌ Failed to switch project: {e}")
+        return jsonify({"error": str(e)}), 500
+        
+# --------------------------------------------------
+# Delete project
+# --------------------------------------------------
+@project_bp.route("/projects/delete/<n>", methods=["DELETE"])
+def delete_project(n):
+    try:
+        ensure_projects_dir()
+        project_path = os.path.join(PROJECTS_DIR, n)
+        
+        if not os.path.exists(project_path):
+            return jsonify({"error": "Project not found"}), 404
+        
+        if get_active_project() == n:
+            set_active_project(None)
+        
+        import shutil
+        shutil.rmtree(project_path)
+        
+        print(f"🗑️ Deleted project: {n}")
+        return jsonify({"success": True})
+        
+    except Exception as e:
+        print(f"❌ Failed to delete project: {e}")
+        return jsonify({"error": str(e)}), 500
+        
+        
+# --------------------------------------------------
+# Upload document to project
+# --------------------------------------------------
+@project_bp.route("/projects/<project_name>/documents/upload", methods=["POST"])
+def upload_document(project_name):
+    try:
+        if 'file' not in request.files:
+            return jsonify({"error": "No file provided"}), 400
+        
+        file = request.files['file']
+        
+        if file.filename == '':
+            return jsonify({"error": "No file selected"}), 400
+        
+        allowed_extensions = {'.txt', '.md', '.pdf', '.docx', '.odt'}
+        file_ext = os.path.splitext(file.filename)[1].lower()
+        
+        if file_ext not in allowed_extensions:
+            return jsonify({"error": f"File type not supported. Allowed: {', '.join(allowed_extensions)}"}), 400
+        
+        project_path = os.path.join(PROJECTS_DIR, project_name)
+        docs_dir = os.path.join(project_path, "documents")
+        os.makedirs(docs_dir, exist_ok=True)
+        
+        filepath = os.path.join(docs_dir, file.filename)
+        file.save(filepath)
+        
+        print(f"📄 Uploaded document: {file.filename} to {project_name}")
+        return jsonify({"success": True, "filename": file.filename})
+        
+    except Exception as e:
+        print(f"❌ Upload failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# --------------------------------------------------
+# List documents in project
+# --------------------------------------------------
+@project_bp.route("/projects/<project_name>/documents/list")
+def list_documents(project_name):
+    try:
+        project_path = os.path.join(PROJECTS_DIR, project_name)
+        docs_dir = os.path.join(project_path, "documents")
+        
+        if not os.path.exists(docs_dir):
+            return jsonify({"documents": []})
+        
+        documents = []
+        for filename in os.listdir(docs_dir):
+            filepath = os.path.join(docs_dir, filename)
+            if os.path.isfile(filepath):
+                file_size = os.path.getsize(filepath)
+                documents.append({
+                    "filename": filename,
+                    "size": file_size
+                })
+        
+        return jsonify({"documents": documents})
+        
+    except Exception as e:
+        print(f"❌ Failed to list documents: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# --------------------------------------------------
+# Delete document from project
+# --------------------------------------------------
+@project_bp.route("/projects/<project_name>/documents/<filename>", methods=["DELETE"])
+def delete_document(project_name, filename):
+    try:
+        project_path = os.path.join(PROJECTS_DIR, project_name)
+        docs_dir = os.path.join(project_path, "documents")
+        filepath = os.path.join(docs_dir, filename)
+        
+        if not os.path.exists(filepath):
+            return jsonify({"error": "Document not found"}), 404
+        
+        os.remove(filepath)
+        print(f"🗑️ Deleted document: {filename} from {project_name}")
+        
+        return jsonify({"success": True})
+        
+    except Exception as e:
+        print(f"❌ Delete failed: {e}")
+        return jsonify({"error": str(e)}), 500
+
+# --------------------------------------------------
+# Toggle sticky docs
+# --------------------------------------------------
+@project_bp.route("/projects/toggle-sticky-docs/<project_name>", methods=["POST"])
+def toggle_sticky_docs(project_name):
+    """Toggle sticky document mode. Clears pinned doc when turning off.
+    Auto-pins if only one document exists when turning on."""
+    config_path = os.path.join(PROJECTS_DIR, project_name, "config.json")
+    
+    if not os.path.exists(config_path):
+        return jsonify({"error": "Project not found"}), 404
+    
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    
+    current = config.get("sticky_docs", False)
+    config["sticky_docs"] = not current
+    
+    # Clear pinned doc when turning sticky OFF
+    if not config["sticky_docs"]:
+        config["sticky_doc_file"] = None
+        print(f"📌 Sticky docs disabled for: {project_name} - pinned doc cleared")
+    else:
+        # Turning ON - if only one doc exists, auto-pin it immediately
+        docs_dir = os.path.join(PROJECTS_DIR, project_name, "documents")
+        if os.path.exists(docs_dir):
+            all_docs = [f for f in os.listdir(docs_dir) if os.path.isfile(os.path.join(docs_dir, f))]
+            if len(all_docs) == 1:
+                config["sticky_doc_file"] = all_docs[0]
+                print(f"📌 Sticky docs enabled for: {project_name} - auto-pinned: {all_docs[0]}")
+            else:
+                print(f"📌 Sticky docs enabled for: {project_name} - waiting for doc trigger ({len(all_docs)} docs)")
+        else:
+            print(f"📌 Sticky docs enabled for: {project_name} - no documents folder yet")
+    
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+    
+    return jsonify({
+        "sticky_docs": config["sticky_docs"],
+        "sticky_doc_file": config.get("sticky_doc_file")
+    })
+
+
+# --------------------------------------------------
+# Get sticky docs state
+# --------------------------------------------------
+@project_bp.route("/projects/get-sticky-docs/<project_name>")
+def get_sticky_docs(project_name):
+    """Get sticky doc state and currently pinned filename.
+    Auto-pins single doc if sticky is ON but nothing pinned yet."""
+    config_path = os.path.join(PROJECTS_DIR, project_name, "config.json")
+    
+    if not os.path.exists(config_path):
+        return jsonify({"sticky_docs": False, "sticky_doc_file": None})
+    
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    # If sticky is ON but nothing pinned, check if there's only one doc - auto-pin it
+    if config.get("sticky_docs") and not config.get("sticky_doc_file"):
+        docs_dir = os.path.join(PROJECTS_DIR, project_name, "documents")
+        if os.path.exists(docs_dir):
+            all_docs = [f for f in os.listdir(docs_dir) if os.path.isfile(os.path.join(docs_dir, f))]
+            if len(all_docs) == 1:
+                config["sticky_doc_file"] = all_docs[0]
+                with open(config_path, "w", encoding="utf-8") as f:
+                    json.dump(config, f, indent=2)
+                print(f"📌 Auto-pinned single doc on state read: {all_docs[0]}")
+    
+    return jsonify({
+        "sticky_docs": config.get("sticky_docs", False),
+        "sticky_doc_file": config.get("sticky_doc_file")
+    })
+
+
+# --------------------------------------------------
+# Save pinned sticky doc (called by backend after successful trigger load)
+# --------------------------------------------------
+@project_bp.route("/projects/set-sticky-doc/<project_name>", methods=["POST"])
+def set_sticky_doc(project_name):
+    """Save which document got pinned by sticky mode."""
+    config_path = os.path.join(PROJECTS_DIR, project_name, "config.json")
+    
+    if not os.path.exists(config_path):
+        return jsonify({"error": "Project not found"}), 404
+    
+    data = request.json
+    filename = data.get("filename")
+    
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    
+    config["sticky_doc_file"] = filename
+    
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+    
+    print(f"📌 Pinned doc set to: {filename} for project: {project_name}")
+    return jsonify({"success": True, "sticky_doc_file": filename})
+
+
+# --------------------------------------------------
+# Project Groups (manual subfolders)
+# _groups.json: { "groupName": ["projectName", ...], ... }
+# --------------------------------------------------
+GROUPS_FILE = os.path.join(os.getcwd(), "projects", "_groups.json")
+
+def load_groups():
+    if os.path.exists(GROUPS_FILE):
+        try:
+            with open(GROUPS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def save_groups(groups):
+    ensure_projects_dir()
+    with open(GROUPS_FILE, "w", encoding="utf-8") as f:
+        json.dump(groups, f, indent=2, ensure_ascii=False)
+
+@project_bp.route("/projects/groups", methods=["GET"])
+def get_groups():
+    return jsonify(load_groups())
+
+@project_bp.route("/projects/groups/save", methods=["POST"])
+def save_groups_route():
+    data = request.json
+    groups = data.get("groups", {})
+    save_groups(groups)
+    print(f"📂 Groups saved: {list(groups.keys())}")
+    return jsonify({"success": True})
+
+
+# --------------------------------------------------
+# Project folder colours (server-side persistence)
+# project_colours.json: { "projectName": "#hexcolour", ... }
+# --------------------------------------------------
+# Stored server-side (not in localStorage) so folder colours survive switching
+# between http/https, the Electron launcher, and browser-storage clears.
+PROJECT_COLOURS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "project_colours.json")
+
+
+def load_project_colours():
+    if os.path.exists(PROJECT_COLOURS_FILE):
+        try:
+            with open(PROJECT_COLOURS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"⚠️ Failed to read project colours: {e}")
+    return {}
+
+
+@project_bp.route("/projects/colours", methods=["GET"])
+def get_project_colours():
+    return jsonify(load_project_colours())
+
+
+@project_bp.route("/projects/colours/save", methods=["POST"])
+def save_project_colours():
+    data = request.json or {}
+    colours = data.get("colours", {})
+    if not isinstance(colours, dict):
+        return jsonify({"error": "colours must be an object"}), 400
+    try:
+        with open(PROJECT_COLOURS_FILE, "w", encoding="utf-8") as f:
+            json.dump(colours, f, indent=2, ensure_ascii=False)
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+    print(f"🎨 Project colours saved: {list(colours.keys())}")
+    return jsonify({"success": True})
+
+
+# --------------------------------------------------
+# Global Documents — UI for the global_documents/ folder
+# --------------------------------------------------
+# These documents are keyword-matched and injected by load_global_documents()
+# in app.py whenever a query matches their filename or leading 'Keywords:' line,
+# regardless of the active project. That loader is unchanged — this section only
+# adds a UI to upload (via /parse_document → text), edit, and delete them.
+# Everything stored here is plain editable text (.txt/.md); the leading
+# 'Keywords:' line is the retrieval tag and is stripped before injection.
+# Matches app.py's resolution of the folder (same directory as this package).
+GLOBAL_DOCS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "global_documents")
+
+
+def ensure_global_docs_dir():
+    if not os.path.exists(GLOBAL_DOCS_DIR):
+        os.makedirs(GLOBAL_DOCS_DIR)
+        print(f"🌐 Created global_documents directory: {GLOBAL_DOCS_DIR}")
+
+
+def _split_keywords_line(content):
+    """Split an optional leading 'Keywords: a, b, c' line from the body.
+
+    Mirrors app.py's _extract_doc_keywords convention: only the first few
+    non-empty lines are scanned, case-insensitive. Returns (keywords, body).
+    """
+    lines = content.split('\n')
+    seen = 0
+    for i, line in enumerate(lines):
+        if not line.strip():
+            continue
+        seen += 1
+        if seen > 4:
+            break
+        m = re.match(r'^\s*keywords\s*[:;]\s*(.+)$', line.strip(), re.IGNORECASE)
+        if m:
+            kw = m.group(1).strip()
+            body = '\n'.join(lines[:i] + lines[i + 1:]).strip()
+            return kw, body
+    return "", content.strip()
+
+
+def _safe_doc_name(filename):
+    """Sanitise a filename and force a .txt/.md extension (everything is editable text)."""
+    safe = "".join(c for c in os.path.basename(filename)
+                    if c.isalnum() or c in (' ', '-', '_', '.')).strip()
+    if not safe:
+        return None
+    if not safe.lower().endswith(('.txt', '.md')):
+        safe += '.txt'
+    return safe
+
+
+@project_bp.route("/global_documents/list")
+def list_global_documents():
+    """List global documents with their keywords and a short body preview."""
+    ensure_global_docs_dir()
+    docs = []
+    try:
+        for fn in sorted(os.listdir(GLOBAL_DOCS_DIR)):
+            fp = os.path.join(GLOBAL_DOCS_DIR, fn)
+            if not os.path.isfile(fp):
+                continue
+            try:
+                with open(fp, "r", encoding="utf-8-sig") as f:
+                    content = f.read()
+            except (UnicodeDecodeError, OSError):
+                # A non-text file dropped in manually (e.g. a stray .pdf). Still
+                # injected by the loader, but not editable in this UI.
+                docs.append({
+                    "filename": fn, "keywords": "",
+                    "preview": "(non-text file — open the folder to edit)",
+                    "editable": False, "size": os.path.getsize(fp),
+                })
+                continue
+            kw, body = _split_keywords_line(content)
+            preview = re.sub(r'\s+', ' ', body).strip()[:160]
+            docs.append({
+                "filename": fn, "keywords": kw, "preview": preview,
+                "editable": True, "size": os.path.getsize(fp),
+            })
+        return jsonify({"documents": docs})
+    except Exception as e:
+        print(f"❌ Failed to list global documents: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@project_bp.route("/global_documents/get/<path:filename>")
+def get_global_document(filename):
+    """Return a global document split into keywords + body for editing."""
+    ensure_global_docs_dir()
+    fp = os.path.join(GLOBAL_DOCS_DIR, os.path.basename(filename))
+    if not os.path.isfile(fp):
+        return jsonify({"error": "Document not found"}), 404
+    try:
+        with open(fp, "r", encoding="utf-8-sig") as f:
+            content = f.read()
+    except (UnicodeDecodeError, OSError):
+        return jsonify({"error": "File is not editable text"}), 400
+    kw, body = _split_keywords_line(content)
+    return jsonify({"filename": os.path.basename(filename), "keywords": kw, "body": body})
+
+
+@project_bp.route("/global_documents/save", methods=["POST"])
+def save_global_document():
+    """Create or overwrite a global document.
+
+    Stores `Keywords: …` as the leading line (the retrieval tag) followed by the
+    body. `original_filename` (optional) lets an edit rename the file, deleting
+    the old one. Always written as plain editable text.
+    """
+    ensure_global_docs_dir()
+    data = request.json or {}
+    filename = (data.get("filename") or "").strip()
+    keywords = (data.get("keywords") or "").strip()
+    body = (data.get("body") or "").strip()
+    original = (data.get("original_filename") or "").strip()
+
+    if not filename:
+        return jsonify({"error": "Filename required"}), 400
+    if not body:
+        return jsonify({"error": "Document content required"}), 400
+
+    safe = _safe_doc_name(filename)
+    if not safe:
+        return jsonify({"error": "Invalid filename"}), 400
+
+    if keywords:
+        content = f"Keywords: {keywords}\n\n{body}\n"
+    else:
+        content = body + "\n"
+
+    fp = os.path.join(GLOBAL_DOCS_DIR, safe)
+    try:
+        with open(fp, "w", encoding="utf-8") as f:
+            f.write(content)
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+
+    # If an edit renamed the file, remove the old one.
+    if original:
+        old = os.path.join(GLOBAL_DOCS_DIR, os.path.basename(original))
+        if os.path.basename(original) != safe and os.path.isfile(old):
+            try:
+                os.remove(old)
+            except OSError:
+                pass
+
+    print(f"🌐 Saved global document: {safe} (keywords={'yes' if keywords else 'none'})")
+    return jsonify({"success": True, "filename": safe})
+
+
+@project_bp.route("/global_documents/<path:filename>", methods=["DELETE"])
+def delete_global_document(filename):
+    fp = os.path.join(GLOBAL_DOCS_DIR, os.path.basename(filename))
+    if not os.path.isfile(fp):
+        return jsonify({"error": "Document not found"}), 404
+    try:
+        os.remove(fp)
+        print(f"🗑️ Deleted global document: {os.path.basename(filename)}")
+        return jsonify({"success": True})
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500

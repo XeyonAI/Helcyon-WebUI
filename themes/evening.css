@@ -1,0 +1,67 @@
+/* ==================== HWUI THEME FILE ====================
+   This file is managed by the Theme Editor.
+   DO NOT manually edit — use the Theme Editor in config.html.
+   This file is intentionally separate from style.css so that
+   style.css can be updated freely without wiping your theme.
+========================================================== */
+
+:root {
+  /* === MAIN PAGE - STRUCTURE === */
+  --topbar-bg: #3b1e0c;
+  --container-bg: #2c1616;
+  --chat-bg: #180c0c;
+  --sidebar-bg: #2d1515;
+
+  /* === SIDEBAR === */
+  --chat-item-bg: #392820;
+  --sidebar-button-hover: #6d4b38;
+  --new-chat-btn-bg: #008505;
+  --new-chat-btn-text: #ffffff;
+  --memory-tab-active-bg: #471f15;
+  --memory-entry-bg: #0f0b08;
+  --memory-entry-text: #cccccc;
+
+  /* === MESSAGES === */
+  --user-msg-bg: #210b0b;
+  --user-msg-text: #f0f0f0;
+  --model-msg-bg: #382518;
+  --model-msg-text: #e0e0e0;
+  --msg-border: #524831;
+  --msg-border-width: 1px;
+
+  /* === INPUT BOX === */
+  --input-bg: #1c0d03;
+
+  /* === DROPDOWNS & SELECTS === */
+  --char-dropdown-bg: #251d11;
+  --char-dropdown-border: #7d6b46;
+
+  /* === MODALS (Memory, Projects, Opening Line, etc.) === */
+  --modal-bg: #2f1e16;
+  --modal-bg-hover: #423124;
+  --modal-border: #000000;
+  --modal-text: #fefefe;
+
+  /* === MODAL BUTTONS === */
+  --button-border-light: #694f12;
+  --button-border-dark: #771010;
+  --sidebar-footer-btn-bg: #3d2517;
+  --sidebar-footer-btn-border: #7c5313;
+
+  /* === PROJECT ITEMS === */
+  --project-header-bg: #040506;
+  --project-item-bg: #0e0a07;
+  --project-item-hover: #5c4222;
+
+  /* === ICON BUTTONS (Edit, Delete, Duplicate) === */
+  --icon-button-bg: #510c0c;
+  --icon-button-hover: #9f5e0d;
+
+  /* === BORDERS === */
+  --sidebar-border: #1a2530;
+  --project-item-border: #1a2530;
+  --input-border: #54220e;
+  --field-bg: #130905;
+  --field-border: #49341d;
+  --field-border-focus: #533a24;
+}
