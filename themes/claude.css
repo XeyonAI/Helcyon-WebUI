@@ -6,6 +6,11 @@
    ============================================================ */
 
 :root {
+  --app-font-family: "Inter", "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  --text-muted: #aaaaaa;
+  --text-dim: #666666;
+  --theme-editor-heading-text: #666666;
+  --theme-preview-muted-text: #555555;
   --topbar-bg: #282828;
   --container-bg: #2e2e2e;
   --chat-bg: #1a1a1a;
@@ -23,6 +28,8 @@
   --user-msg-text: #dadada;
   --model-msg-bg: #212121;
   --model-msg-text: #dadada;
+  --message-preview-bg: #0a0d10;
+  --msg-timestamp-text: #666666;
   --msg-border: #383838;
   --hr-color: #333333;
   --input-bg: #3e3e3e;
@@ -40,6 +47,8 @@
   --memory-entry-bg: #181818;
   --memory-entry-text: #929292;
   --project-item-bg: #1b1b1b;
+  --project-edit-workspace-bg: #222222;
+  --project-edit-bg: #0a0d10;
   --project-item-hover: #4f3603;
   --icon-button-bg: #791b00;
   --icon-button-hover: #8d7c03;

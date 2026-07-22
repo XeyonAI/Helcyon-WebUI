@@ -264,6 +264,7 @@
       <div id="model-picker-status" style="display:none; padding:8px 14px; border-top:1px solid var(--modal-border, #2d394b); color:#8ab4d4; font-size:12px; text-align:center;"></div>
       <div id="picker-actual-model" style="padding:5px 12px 5px 12px; border-top:1px solid var(--modal-border, #2d394b); color:#555; font-size:10px; font-family:monospace; word-break:break-all; line-height:1.4;"></div>
       <div style="padding: 8px 10px; border-top: 1px solid var(--modal-border, #2d394b); display:flex; gap:6px; justify-content:flex-end;">
+        <button onclick="reloadModel()" style="background:transparent; border:1px solid var(--modal-border, #2d394b); color:#aaa; border-radius:6px; padding:3px 10px; font-size:11px; cursor:pointer; margin:0;">↻ Reload</button>
         <button onclick="unloadModel()" style="background:rgba(100,30,30,0.4); border:1px solid #6a2a2a; color:#e88; border-radius:6px; padding:3px 10px; font-size:11px; cursor:pointer; margin:0;">⏹ Unload</button>
         <button onclick="closeModelPicker()" style="background:transparent; border:1px solid var(--modal-border, #2d394b); color:#aaa; border-radius:6px; padding:3px 10px; font-size:11px; cursor:pointer; margin:0;">Close</button>
       </div>
@@ -347,7 +348,14 @@
         <label class="sampling-field-label">Presence Penalty:</label>
         <input type="number" id="presence_penalty" step="0.01" min="0" max="2" />
       </div>
-      <input type="checkbox" id="auto-memory-enabled" style="display:none;" disabled>
+
+      <label style="display:flex;align-items:center;gap:8px;margin:10px 0 4px;cursor:pointer;">
+        <input type="checkbox" id="auto-memory-enabled" style="width:15px;height:15px;">
+        Automatic local memory
+      </label>
+      <div style="font-size:11px;color:#777;line-height:1.4;margin-bottom:10px;">
+        Uses a short local-model pass after suitable turns. Saves conservatively and shows an Undo notice.
+      </div>
 
       <!-- Sampling Presets -->
       <div style="border-top:1px solid #2a2a2a; padding-top:8px; margin-top:4px;">
@@ -466,6 +474,7 @@
               <option value="f5">F5-TTS</option>
               <option value="xtts">XTTS v2</option>
               <option value="chatterbox">Chatterbox</option>
+              <option value="qwen-fast">Qwen3-TTS Fast (Streaming)</option>
               <option value="kokoro">Kokoro</option>
               <option value="none">None (Disabled)</option>
             </select>
@@ -655,7 +664,13 @@
       <div id="tab-character" class="config-tab-panel">
 	  <div id="character-select-bar">
 		<h3>Select Character <span id="char-bind-indicator" style="display:none; font-size:13px; color:#6a9; margin-left:6px;" title="System prompt bound">🔗 Bound</span></h3>
-	    <select id="character-select"></select>
+        <div style="display:flex; align-items:center; gap:12px;">
+          <select id="character-select" style="width:244px; height:36px; flex:0 0 244px;"></select>
+          <select id="preferred-model-select" aria-label="Preferred local model" onchange="markPreferredModelDirty()" title="Automatically load this local model when the character is selected in chat" style="width:244px; height:36px; flex:0 0 244px;">
+            <option value="">— No preferred model —</option>
+          </select>
+          <button id="apply-preferred-model-btn" type="button" onclick="saveCharacterPreferredModel()" disabled style="width:68px; height:36px; flex:0 0 68px; margin:0; padding:0 10px; border-radius:3px; background:#1a3a2a; border-color:#2a6a4a; color:#6f6;">Apply</button>
+        </div>
 	  </div>
 
       <label>Name:</label>
@@ -680,16 +695,18 @@
         </label>
       </div>
 
-      <!-- Memory checkboxes hidden in free version — kept for JS compatibility -->
-      <input type="checkbox" id="use-personal-memory" style="display:none;" />
-      <input type="checkbox" id="use-global-memory" style="display:none;" />
+      <div style="margin: 8px 0 4px 0; display:flex; align-items:center; gap:8px;">
+        <input type="checkbox" id="use-personal-memory" style="width:16px; height:16px; cursor:pointer;" />
+        <label for="use-personal-memory" style="margin:0; cursor:pointer; font-size:13px; color:#ccc;">
+          👤 Use personal memory <span style="color:#888; font-size:11px;">(character's own memory file)</span>
+        </label>
+      </div>
 
-      <div style="margin: 8px 0 12px 0; padding: 10px 14px; background: rgba(102,126,234,0.08); border: 1px solid rgba(102,126,234,0.25); border-radius: 8px; display:flex; align-items:center; justify-content:space-between; gap:12px;">
-        <div>
-          <div style="font-size:13px; color:#ccc;">🧠 <strong style="color:#fff;">Character Memory</strong></div>
-          <div style="font-size:11px; color:#888; margin-top:2px;">Characters that remember you — Pro feature</div>
-        </div>
-        <button onclick="window.open('https://xeyonai.gumroad.com/l/bsmupk','_blank')" style="background:linear-gradient(135deg,#667eea,#764ba2); border:none; color:#fff; font-size:12px; font-weight:600; padding:6px 14px; border-radius:6px; cursor:pointer; white-space:nowrap;">⭐ Go Pro</button>
+      <div style="margin: 4px 0 12px 0; display:flex; align-items:center; gap:8px;">
+        <input type="checkbox" id="use-global-memory" style="width:16px; height:16px; cursor:pointer;" />
+        <label for="use-global-memory" style="margin:0; cursor:pointer; font-size:13px; color:#ccc;">
+          🌐 Use global memory <span style="color:#888; font-size:11px;">(shared memory file for all opted-in characters)</span>
+        </label>
       </div>
 
       <div style="margin: 4px 0 12px 0; display:flex; align-items:center; gap:8px;">
@@ -903,8 +920,8 @@
 
         <!-- Colour mode info -->
         <div id="bg-colour-section">
-          <p style="font-size:12px; color:#888; margin:0 0 10px;">Background colour is controlled by <strong style="color:#aaa;">Chat Panel BG</strong> in the Theme Editor.</p>
-          <button onclick="openThemeModal()" style="background:#1e3a4a; border:1px solid #2a5068; color:#a0c8d8; width:100%; font-size:13px; padding:10px 0; border-radius:6px; cursor:pointer;">🎨 Open Theme Editor</button>
+          <p style="font-size:12px; color:#888; margin:0 0 10px;">Create and customise themes with the visual Theme Editor in HWUI Pro.</p>
+          <button onclick="window.open('https://xeyonai.gumroad.com/l/bsmupk','_blank')" style="background:#1e3a4a; border:1px solid #2a5068; color:#a0c8d8; width:100%; font-size:13px; padding:10px 0; border-radius:6px; cursor:pointer;">🎨 Get Theme Editor — Pro £10</button>
         </div>
 
         <!-- Image mode -->
@@ -1330,6 +1347,93 @@
   }
 
   // --- CHARACTER MANAGEMENT ---
+  async function loadPreferredModelOptions() {
+    const select = document.getElementById("preferred-model-select");
+    if (!select) return;
+
+    select.innerHTML = '<option value="">— No preferred model —</option>';
+    try {
+      const response = await fetch("/list_models");
+      const data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.error || "Failed to fetch model list");
+
+      const labels = data.labels || {};
+      const groups = data.groups || [{ folder: null, models: data.models || [] }];
+      groups.forEach(group => {
+        const parent = group.folder ? document.createElement("optgroup") : select;
+        if (group.folder) parent.label = group.folder;
+
+        (group.models || []).forEach(filename => {
+          const option = document.createElement("option");
+          option.value = group.folder ? `${group.folder}/${filename}` : filename;
+          option.textContent = labels[filename] || filename.replace(/\.gguf$/i, "");
+          parent.appendChild(option);
+        });
+
+        if (group.folder && parent.children.length) select.appendChild(parent);
+      });
+      select.disabled = false;
+    } catch (err) {
+      console.warn("Failed to load preferred-model options:", err);
+      select.disabled = true;
+    }
+  }
+
+  function setPreferredModelValue(modelId) {
+    const select = document.getElementById("preferred-model-select");
+    if (!select) return;
+    const value = String(modelId || "").trim();
+    const exists = Array.from(select.options).some(option => option.value === value);
+    if (value && !exists) {
+      const missing = document.createElement("option");
+      missing.value = value;
+      missing.textContent = `(Missing) ${value}`;
+      select.appendChild(missing);
+      select.disabled = false;
+    }
+    select.value = value;
+    const button = document.getElementById("apply-preferred-model-btn");
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Apply";
+    }
+  }
+
+  function markPreferredModelDirty() {
+    const button = document.getElementById("apply-preferred-model-btn");
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Apply";
+    }
+  }
+
+  async function saveCharacterPreferredModel() {
+    const name = document.getElementById("character-select").value;
+    const select = document.getElementById("preferred-model-select");
+    const button = document.getElementById("apply-preferred-model-btn");
+    if (!name || !select || !button) return;
+
+    button.disabled = true;
+    button.textContent = "Saving...";
+    try {
+      const response = await fetch(`/character_preferred_model/${encodeURIComponent(name)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preferred_model_id: select.value })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.error || "Save failed");
+      currentCharacter.preferred_model_id = data.preferred_model_id || "";
+      button.textContent = "Saved";
+      hwuiToast(data.preferred_model_id ? "Preferred model pairing saved." : "Preferred model pairing cleared.", "success");
+    } catch (err) {
+      console.error("Failed to save preferred model pairing:", err);
+      button.disabled = false;
+      button.textContent = "Apply";
+      hwuiToast("Failed to save preferred model pairing.", "error");
+    }
+  }
+
   async function loadCharacterList() {
     const select = document.getElementById("character-select");
     try {
@@ -1390,6 +1494,7 @@
       document.getElementById("post-history").value = data.post_history || "";
       document.getElementById("character-note").value = data.character_note || "";
       document.getElementById("example-dialog").value = data.example_dialogue || "";
+      setPreferredModelValue(data.preferred_model_id);
       document.getElementById("image").value = data.image || "";
       updateImagePreview();
       renderExtraImages(data.images || [], data.image || "");
@@ -1555,6 +1660,7 @@
       post_history: document.getElementById("post-history").value,
       character_note: document.getElementById("character-note").value,
       example_dialogue: document.getElementById("example-dialog").value,
+      preferred_model_id: document.getElementById("preferred-model-select").value,
       image: document.getElementById("image").value,
       images: (currentCharacter && currentCharacter.images) ? currentCharacter.images : undefined,
       // system_prompt is NOT sent here — the editor has no SP control, and the
@@ -1571,6 +1677,7 @@
         body: JSON.stringify(updated),
       });
       if (!res.ok) throw new Error(await res.text());
+      currentCharacter.preferred_model_id = updated.preferred_model_id;
       hwuiToast("Character saved successfully.", 'success');
     } catch (err) {
       console.error(err);
@@ -1938,7 +2045,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       document.getElementById('repeat_penalty').value    = settings.repeat_penalty    ?? 1.1;
       document.getElementById('frequency_penalty').value = settings.frequency_penalty ?? 0.0;
       document.getElementById('presence_penalty').value  = settings.presence_penalty  ?? 0.0;
-      document.getElementById('auto-memory-enabled').checked = false;
+      document.getElementById('auto-memory-enabled').checked = settings.auto_memory?.enabled === true;
       
       console.log('✅ Loaded sampling settings:', settings);
     } catch (err) {
@@ -1954,7 +2061,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       // fallback. See the CHANGES.md "DO NOT revert" note.
       const settings = buildSamplingPresetFromFields();
       settings.auto_memory = {
-        enabled: false,
+        enabled: document.getElementById('auto-memory-enabled').checked,
         local_only: true
       };
       
@@ -2001,6 +2108,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     // the global-active template showing). Single-loader rule, changes.md May 19.
     (async () => {
       await loadGlobalSystemPrompt();
+      await loadPreferredModelOptions();
       await loadCharacterList();
     })();
 
@@ -2457,6 +2565,7 @@ function updateTTSEngineStatus(engine) {
     f5: '🟢 F5-TTS — fast, good quality',
     xtts: '🟢 XTTS v2 — voice cloning',
     chatterbox: '🟢 Chatterbox — voice cloning, expressive',
+    'qwen-fast': '🟢 Qwen3-TTS Fast — cloned voice, genuine low-latency streaming (restart launcher after switching)',
     kokoro: '🟢 Kokoro — lightweight, natural',
     none: '🔴 TTS disabled'
   };
@@ -2620,6 +2729,7 @@ const THEME_VARS = [
     { key: '--user-msg-text',  label: 'Your Msg Text' },
     { key: '--model-msg-bg',   label: 'AI Reply BG' },
     { key: '--model-msg-text', label: 'AI Reply Text' },
+    { key: '--message-preview-bg', label: 'Preview Panel BG' },
     { key: '--msg-timestamp-text', label: 'Message Timestamp' },
     { key: '--msg-border',     label: 'Message Border' },
     { key: '--hr-color',        label: 'Section Divider' },
@@ -2643,7 +2753,8 @@ const THEME_VARS = [
   ]},
   { group: 'Project List (inside modal)', vars: [
     { key: '--project-item-bg',     label: 'Project Row BG' },
-    { key: '--project-edit-bg',     label: 'Project Edit Panel BG' },
+    { key: '--project-edit-workspace-bg', label: 'Project Edit Workspace BG' },
+    { key: '--project-edit-bg',     label: 'Project Edit Form BG' },
     { key: '--project-item-hover',  label: 'Project Row Hover' },
     { key: '--project-item-border', label: 'Project Row Border' },
   ], preview: 'project' },
@@ -3316,13 +3427,28 @@ function buildSamplingPresetFromFields() {
   return preset;
 }
 
+async function fetchSamplingPresetJson(url, options) {
+  try {
+    return await fetch(url, options);
+  } catch (e) {
+    if (e && e.message && e.message.toLowerCase().includes('failed to fetch')) {
+      const target = new URL(url, window.location.href);
+      const httpsHint = window.location.protocol === 'http:'
+        ? ` Reopen HWUI at https://${window.location.host}${window.location.pathname}; this build runs HTTPS when the local certs are present.`
+        : '';
+      throw new Error(`Connection failed before HWUI answered (${target.pathname}).${httpsHint}`);
+    }
+    throw e;
+  }
+}
+
 // POST one preset to disk. Throws on failure. The in-memory cache is only updated
 // AFTER the server confirms the write, so the UI never reports a "saved" preset
 // that didn't actually persist.
 async function persistSamplingPreset(name, preset) {
   const payload = JSON.stringify({ name, preset });
   console.log(`[SP] persistSamplingPreset POST /sampling_presets/save payload=${payload}`);
-  const res = await fetch('/sampling_presets/save', {
+  const res = await fetchSamplingPresetJson('/sampling_presets/save', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: payload,
@@ -3337,7 +3463,7 @@ async function persistSamplingPreset(name, preset) {
   if (body && body.presets && typeof body.presets === 'object') {
     samplingPresets = body.presets;
   } else {
-    const verifyRes = await fetch('/sampling_presets');
+    const verifyRes = await fetchSamplingPresetJson('/sampling_presets');
     if (!verifyRes.ok) throw new Error(`save verified poorly (HTTP ${verifyRes.status})`);
     samplingPresets = (await verifyRes.json()) || {};
   }
@@ -3352,7 +3478,7 @@ async function persistSamplingPreset(name, preset) {
 // up so presets created before this change aren't lost.
 async function loadSamplingPresetsFromServer() {
   try {
-    const res = await fetch('/sampling_presets');
+    const res = await fetchSamplingPresetJson('/sampling_presets');
     samplingPresets = (await res.json()) || {};
     console.log('[SP] loadSamplingPresetsFromServer hydrated cache:', JSON.stringify(samplingPresets));
   } catch (e) {
@@ -3488,7 +3614,7 @@ async function deleteSamplingPreset() {
   if (!name) { status.style.color = '#e88'; status.textContent = '❌ Select a preset first'; setTimeout(() => status.textContent = '', 2000); return; }
   if (!await hwuiConfirm(`Delete preset "${name}"?`)) return;
   try {
-    const res = await fetch('/sampling_presets/delete', {
+    const res = await fetchSamplingPresetJson('/sampling_presets/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
@@ -4164,13 +4290,14 @@ const THEME_SECTIONS = [
       { key: '--user-msg-text',  label: 'Your Message Text' },
       { key: '--model-msg-bg',   label: 'AI Reply BG' },
       { key: '--model-msg-text', label: 'AI Reply Text' },
+      { key: '--message-preview-bg', label: 'Preview Panel BG' },
       { key: '--msg-timestamp-text', label: 'Timestamp Text' },
       { key: '--msg-border',     label: 'Message Border' },
       { key: '--hr-color',        label: 'Section Divider' },
     ],
     preview: (el) => {
       el.innerHTML = `
-        <div style="display:flex; flex-direction:column; gap:8px; background:#0a0d10; border-radius:6px; padding:12px; border:1px solid #222;">
+        <div style="display:flex; flex-direction:column; gap:8px; background:var(--message-preview-bg); border-radius:6px; padding:12px; border:1px solid #222;">
           <div style="display:flex; gap:8px; align-items:flex-start;">
             <div style="width:36px; height:44px; border-radius:5px; background:#223; flex-shrink:0; border:1px solid rgba(100,200,255,0.2); display:flex; align-items:center; justify-content:center; font-size:9px; color:rgba(100,200,255,0.5); text-align:center; line-height:1.2;">user<br>img</div>
             <div style="background:var(--user-msg-bg); color:var(--user-msg-text); border:1px solid var(--msg-border); border-radius:6px; padding:10px 14px; font-size:13px; flex:1;">
@@ -4256,7 +4383,8 @@ const THEME_SECTIONS = [
     vars: [
       { key: '--project-header-bg',  label: 'Header BG' },
       { key: '--project-item-bg',    label: 'Project Row BG' },
-      { key: '--project-edit-bg',    label: 'Project Edit Panel BG' },
+      { key: '--project-edit-workspace-bg', label: 'Edit Workspace BG' },
+      { key: '--project-edit-bg',    label: 'Edit Form BG' },
       { key: '--project-item-hover', label: 'Project Row Hover' },
       { key: '--icon-button-bg',     label: 'Icon Btn BG' },
       { key: '--icon-button-hover',  label: 'Icon Btn Hover' },
@@ -4281,6 +4409,13 @@ const THEME_SECTIONS = [
               <div style="display:flex; gap:4px;">
                 <div style="width:22px; height:22px; background:var(--icon-button-hover); border-radius:3px;"></div>
                 <div style="width:22px; height:22px; background:var(--icon-button-hover); border-radius:3px;"></div>
+              </div>
+            </div>
+            <div style="background:var(--project-edit-workspace-bg, var(--modal-bg)); border-radius:5px; padding:10px;">
+              <div style="background:var(--project-edit-bg); border-radius:5px; padding:12px; display:flex; flex-direction:column; gap:8px;">
+                <div style="font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.6px;">Project edit form</div>
+                <div style="background:var(--field-bg); border:1px solid var(--field-border); border-radius:4px; padding:7px 9px; color:#ddd; font-size:12px;">Law of Assumption</div>
+                <div style="background:var(--field-bg); border:1px solid var(--field-border); border-radius:4px; padding:7px 9px; color:var(--text-muted); font-size:12px; min-height:32px;">Instructions...</div>
               </div>
             </div>
           </div>
@@ -4991,6 +5126,8 @@ function previewThemeVar(varName, value) {
           const isActive = label === currentName || stem === currentName;
           const row = document.createElement('div');
           row.title = stem;
+          row.dataset.modelPath = fullPath;
+          row.dataset.activeModel = isActive ? 'true' : 'false';
           row.style.cssText = 'padding:4px 10px 4px ' + (group.folder ? '20px' : '12px') + '; margin:0; font-size:13px; cursor:pointer; color:' + (isActive ? '#6dbf8a' : '#ccc') + '; background:' + (isActive ? 'rgba(40,80,50,0.25)' : 'transparent') + '; display:flex; align-items:center; gap:6px; transition:background 0.12s; line-height:1.4;';
           const editBtn = document.createElement('button');
           editBtn.className = 'model-edit-btn';
@@ -5008,7 +5145,7 @@ function previewThemeVar(varName, value) {
           const labelSpan = document.createElement('span');
           labelSpan.textContent = label;
           labelSpan.style.cssText = 'flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
-          row.onclick = (e) => { if (e.target.closest('.model-edit-btn')) return; loadModel(fullPath); };
+          row.onclick = (e) => { if (e.target.closest('.model-edit-btn') || isActive) return; loadModel(fullPath); };
           row.appendChild(tick); row.appendChild(labelSpan); row.appendChild(editBtn);
           list.appendChild(row);
         });
@@ -5092,6 +5229,12 @@ function previewThemeVar(varName, value) {
       status.textContent = `❌ Request failed: ${e}`;
       list.style.opacity = '1'; list.style.pointerEvents = 'all';
     }
+  }
+
+  function reloadModel() {
+    const activeRow = document.querySelector('#model-picker-list [data-active-model="true"]');
+    const filename = activeRow ? activeRow.dataset.modelPath : localStorage.getItem('llama_last_model');
+    if (filename) loadModel(filename);
   }
 
   async function unloadModel() {

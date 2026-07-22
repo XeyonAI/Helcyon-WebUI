@@ -1,5 +1,5 @@
 # chat_routes.py
-import os, json, re, shutil
+import os, json, re, shutil, subprocess
 from flask import Blueprint, jsonify, request
 from datetime import datetime
 
@@ -37,6 +37,28 @@ def _atomic_write_text(filepath, text):
         raise
 
 
+_SPEAKERISH_CONTINUATION_RE = re.compile(r"^[^:\n]{1,29}:\s*")
+
+
+def _escape_chat_content_for_disk(content):
+    """Indent continuation lines that look like speaker labels.
+
+    The disk format uses unindented ``Speaker: text`` lines as turn markers.
+    If a user pastes another persona/model label inside their message, such as
+    ``GPT-4o:``, that line must remain content rather than becoming a new turn
+    when the chat is loaded again.
+    """
+    text = "" if content is None else str(content)
+    lines = text.split("\n")
+    escaped = []
+    for i, line in enumerate(lines):
+        if i > 0 and line and not line.startswith((" ", "\t")) and _SPEAKERISH_CONTINUATION_RE.match(line):
+            escaped.append(" " + line)
+        else:
+            escaped.append(line)
+    return "\n".join(escaped)
+
+
 def _format_chat_messages(messages, char_name):
     """Serialise a message list into the on-disk chat-file format.
 
@@ -59,6 +81,7 @@ def _format_chat_messages(messages, char_name):
                 content = f"{content} [image]"
         else:
             content = raw_content
+        content = _escape_chat_content_for_disk(content)
         speaker = msg.get("speaker") or ("User" if role == "user" else char_name)
         prefix = f"[{timestamp}] " if timestamp else ""
         lines.append(f"{prefix}{speaker}: {content}\n\n")
@@ -101,6 +124,29 @@ def ensure_chats_dir():
     chats_dir = get_chats_dir()
     if not os.path.exists(chats_dir):
         os.makedirs(chats_dir)
+
+@chat_bp.route("/chats/open_folder", methods=["POST"])
+def open_chats_folder():
+    try:
+        chats_dir = os.path.abspath(get_chats_dir())
+        workspace_root = os.path.abspath(os.getcwd())
+
+        if os.path.commonpath([workspace_root, chats_dir]) != workspace_root:
+            return jsonify({"error": "Chat folder resolved outside the HWUI workspace"}), 400
+
+        if os.name == "nt":
+            os.startfile(chats_dir)
+        elif os.name == "posix":
+            opener = "open" if os.uname().sysname == "Darwin" else "xdg-open"
+            subprocess.Popen([opener, chats_dir])
+        else:
+            return jsonify({"error": "Opening folders is not supported on this OS"}), 500
+
+        return jsonify({"success": True, "path": chats_dir})
+
+    except Exception as e:
+        print(f"Failed to open chats folder: {e}")
+        return jsonify({"error": str(e)}), 500
 
 # --------------------------------------------------
 # List chats
@@ -247,7 +293,10 @@ def _parse_chat_file(filepath, filename, verbose=True):
         # Speaker pattern check — gated on inside_doc. Inside a document
         # span, names that happen to look like speakers are content, not
         # turn boundaries.
-        if not inside_doc and ":" in stripped and not stripped.startswith(" "):
+        # Check indentation on the raw line, not on ``stripped``. Continuation
+        # lines saved with a leading space are pasted content, not speakers.
+        is_indented_continuation = line.startswith((" ", "\t"))
+        if not inside_doc and not is_indented_continuation and ":" in stripped:
             potential_speaker = stripped.split(":")[0].strip()
 
             # ✅ Check against dynamic lists instead of hard-coded names
@@ -348,6 +397,29 @@ def _check_stale_save(filepath, filename, incoming_count, base_count):
     if disk_count > base_count and incoming_count <= disk_count:
         return disk_count
     return None
+
+
+def _dedupe_adjacent_duplicate_messages(messages):
+    """Drop exact adjacent duplicate turns before rendering or saving chats."""
+    deduped = []
+    prev_key = None
+    for msg in messages or []:
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if isinstance(content, list):
+            content_key = " ".join(
+                str(part.get("text", ""))
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+        else:
+            content_key = content
+        key = (msg.get("role"), content_key) if isinstance(msg, dict) else None
+        if key == prev_key:
+            print("⚠️ Adjacent duplicate chat turn suppressed")
+            continue
+        deduped.append(msg)
+        prev_key = key
+    return deduped
 
 
 @chat_bp.route("/chats/open/<filename>")
@@ -628,7 +700,6 @@ def save_chat_messages():
             return jsonify({"error": "No filename provided"}), 400
         if messages is None:
             return jsonify({"error": "No messages provided"}), 400
-
         chats_dir = get_chats_dir()
         filepath = os.path.join(chats_dir, filename)
 
@@ -847,8 +918,10 @@ def branch_chat():
             ts_match = _TS_PREFIX_RE.match(line)
             if ts_match:
                 line = line[ts_match.end():]
+            if line.startswith((" ", "\t")):
+                return None
             stripped = line.strip()
-            if ":" not in stripped or stripped.startswith(" "):
+            if ":" not in stripped:
                 return None
             speaker = stripped.split(":")[0].strip()
             if len(speaker) >= 30:

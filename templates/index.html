@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <title>Helcyon-WebUI</title>
-  <link rel="stylesheet" href="/style.css?v=20">
+  <link rel="stylesheet" href="/style.css?v=21">
   <link rel="stylesheet" href="/theme-files/midnight.css" id="active-theme-link">
   <style>
     /* Cog dropdown menu — converted from the old #settings-link <a>.
@@ -111,6 +111,14 @@
     </div>
   </div>
 
+  <div id="preferred-model-loading-overlay" role="dialog" aria-modal="true" aria-live="polite" tabindex="-1" style="display:none; position:fixed; inset:0; z-index:200000; align-items:center; justify-content:center; background:rgba(0,0,0,0.72); backdrop-filter:blur(1px); cursor:wait;">
+    <div style="min-width:300px; max-width:440px; padding:22px 28px; text-align:center; background:var(--modal-bg, #1a1f2a); border:1px solid #2a6a4a; border-radius:8px; box-shadow:0 18px 60px rgba(0,0,0,0.7);">
+      <div style="font-size:18px; font-weight:700; color:#fff; margin-bottom:8px;">Model loading &mdash; please wait</div>
+      <div id="preferred-model-loading-detail" style="font-size:13px; color:#8fd3a8; margin-bottom:7px;"></div>
+      <div style="font-size:12px; color:#888;">Please let things settle before choosing another chat.</div>
+    </div>
+  </div>
+
   <!-- Top Bar -->
   <div id="top-bar" style="position:fixed; top:0; left:0; right:0; z-index:1000;">
     <!-- Title doubles as the active-folder indicator: shows the current project
@@ -135,6 +143,40 @@
            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <polyline points="23 4 23 10 17 10"></polyline>
         <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+      </svg>
+    </button>
+    <button id="helcyon-bench-export-btn" onclick="exportCurrentChatForHelcyonBench()" title="Export current chat for Helcyon-Bench"
+      style="position:fixed; top:218px; right:12px; z-index:1001;
+             width:26px; height:26px; display:flex; align-items:center; justify-content:center;
+             border-radius:6px; border:1px solid var(--modal-border,#2d394b);
+             background:rgba(255,255,255,0.06); color:#e8e8e8; cursor:pointer;
+             -webkit-app-region:no-drag; padding:0; line-height:0;">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+        <polyline points="7 10 12 15 17 10"></polyline>
+        <line x1="12" y1="15" x2="12" y2="3"></line>
+      </svg>
+    </button>
+    <!-- Shard generator — asks the model for a JSON batch of shards and writes
+         .txt files straight to disk, bypassing chat/code-fence parsing entirely
+         (nested fences inside shard content can't break formatting). -->
+    <button id="shard-generator-btn" onclick="openShardGeneratorModal()" title="Generate shards with the model"
+      style="position:fixed; top:263px; right:12px; z-index:1001;
+             width:26px; height:26px; display:flex; align-items:center; justify-content:center;
+             border-radius:6px; border:1px solid var(--modal-border,#2d394b);
+             background:rgba(255,255,255,0.06); color:#e8e8e8; cursor:pointer;
+             -webkit-app-region:no-drag; padding:0; line-height:0;">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 3v3"></path>
+        <path d="M18.4 5.6l-2.1 2.1"></path>
+        <path d="M21 12h-3"></path>
+        <path d="M12 8a4 4 0 1 0 4 4"></path>
+        <path d="M12 21v-3"></path>
+        <path d="M5.6 18.4l2.1-2.1"></path>
+        <path d="M3 12h3"></path>
+        <path d="M5.6 5.6l2.1 2.1"></path>
       </svg>
     </button>
     <script>
@@ -204,6 +246,7 @@
       <div id="model-picker-status" style="display:none; padding:8px 14px; border-top:1px solid var(--modal-border, #2d394b); color:#8ab4d4; font-size:12px; text-align:center;"></div>
       <div id="picker-actual-model" style="padding:5px 12px 5px 12px; border-top:1px solid var(--modal-border, #2d394b); color:#555; font-size:10px; font-family:monospace; word-break:break-all; line-height:1.4;"></div>
       <div style="padding: 8px 10px; border-top: 1px solid var(--modal-border, #2d394b); display:flex; gap:6px; justify-content:flex-end;">
+        <button onclick="reloadModel()" style="background:transparent; border:1px solid var(--modal-border, #2d394b); color:#aaa; border-radius:6px; padding:3px 10px; font-size:11px; cursor:pointer; margin:0;">↻ Reload</button>
         <button onclick="unloadModel()" style="background:rgba(100,30,30,0.4); border:1px solid #6a2a2a; color:#e88; border-radius:6px; padding:3px 10px; font-size:11px; cursor:pointer; margin:0;">⏹ Unload</button>
         <button onclick="closeModelPicker()" style="background:transparent; border:1px solid var(--modal-border, #2d394b); color:#aaa; border-radius:6px; padding:3px 10px; font-size:11px; cursor:pointer; margin:0;">Close</button>
       </div>
@@ -329,8 +372,8 @@
   <script>
     // ── Token monitor wiring ──────────────────────────────────────────────
     // Open/close (persisted), fetch GET /token_stats, paint the readout.
-    // refreshTokenMonitor() is a no-op while the panel is closed, so it's cheap
-    // to call from the chat-stream finally blocks after every turn.
+    // refreshTokenMonitor() fetches only while visible. Opening adds the
+    // visible class first, then fetches so the readout paints immediately.
     function _tmFmt(n) { return (typeof n === 'number' && isFinite(n)) ? n.toLocaleString('en-US') : '––'; }
 
     function paintTokenMonitor(d) {
@@ -385,7 +428,7 @@
 
     async function refreshTokenMonitor() {
       const panel = document.getElementById('token-monitor');
-      if (!panel || !panel.classList.contains('tm-open')) return;  // closed → skip the fetch
+      if (!panel || !panel.classList.contains('tm-open')) return;
       try {
         const r = await fetch('/token_stats', { cache: 'no-store' });
         if (!r.ok) return;
@@ -402,10 +445,12 @@
       if (open) {
         panel.style.display = 'block';
         positionTokenMonitor();   // centre on the chat bar before it animates in
-        requestAnimationFrame(() => panel.classList.add('tm-open'));
+        requestAnimationFrame(() => {
+          panel.classList.add('tm-open');
+          refreshTokenMonitor();
+        });
         panel.setAttribute('aria-hidden', 'false');
         if (btn) { btn.style.borderColor = '#1cff9a'; btn.style.color = '#1cff9a'; }
-        refreshTokenMonitor();
       } else {
         panel.classList.remove('tm-open');
         panel.setAttribute('aria-hidden', 'true');
@@ -429,7 +474,10 @@
     <!-- Sidebar -->
     <div id="sidebar">      
       <div class="sidebar-header">
-        <h2>Chats</h2>
+        <div class="chat-heading-row">
+          <h2>Chats</h2>
+          <button id="open-chat-folder-btn" onclick="openChatsFolder()" title="Open chat folder">📂 Open folder</button>
+        </div>
           <div class="sidebar-controls">
             <select id="chat-sort-select" onchange="sortChats()">
               <option value="newest">Newest First</option>
@@ -446,7 +494,7 @@
         <button id="projects-btn" onclick="openProjectModal()">📁 Projects</button>
         <button id="opening-line-btn" onclick="openOpeningLineModal()">💬 Opening Line</button>
         <button id="author-note-btn" onclick="openAuthorNote()">📝 Author's Note</button>
-        <button id="memory-btn" onclick="showUpgradeModal('memory')">🧠 Memory ⭐ Pro Version</button>
+        <button id="memory-btn" onclick="openMemoryModal()">🧠 Memory</button>
         <button id="global-docs-btn" onclick="openGlobalDocsModal()">📚 Documents</button>
       </div>
       
@@ -525,7 +573,8 @@
                 <button onclick="openPasteTranscriptModal(); closeInputMenu()" title="Paste a transcript or text snippet as reference material">📋 Paste Transcript</button>
                 <div class="input-menu-divider"></div>
                 <button onclick="manualSaveChat(); closeInputMenu()" id="save-chat-btn">💾 Save Chat</button>
-                <button onclick="showUpgradeModal('memory'); closeInputMenu()" title="Upgrade to HWUI Pro">Memory ⭐Go Pro</button>
+                <button onclick="endSession(); closeInputMenu()" title="Generate a memory summary">🧠 End Session</button>
+                <button onclick="clearRuntimeState(); closeInputMenu()" title="Clear the live page state and reload this chat from disk">Clear Runtime State</button>
                 <div class="input-menu-divider"></div>
                 <button onclick="regenerate(); closeInputMenu()">🔄 Regenerate</button>
                 <div class="input-menu-divider"></div>
@@ -721,6 +770,14 @@ Examples:
 
             <hr>
 
+            <label>Folder Theme</label>
+            <select id="edit-project-theme">
+              <option value="">No folder theme</option>
+            </select>
+            <small>When set, this theme is applied whenever you switch into this project.</small>
+
+            <hr>
+
             <!-- RP Mode Toggle -->
             <div class="edit-toggle-row">
               <span style="font-size:16px;">🎭</span>
@@ -752,8 +809,11 @@ Examples:
 
             <label>Project Documents</label>
             <small style="color:#888;display:block;margin-bottom:10px;">Upload files the model can reference in conversation.</small>
-            <input type="file" id="document-upload" accept=".txt,.md,.pdf,.docx,.odt,.py,.html" style="display:none;">
-            <button onclick="document.getElementById('document-upload').click()" class="upload-doc-btn">📁 Upload Document</button>
+            <input type="file" id="document-upload" accept=".txt,.md,.pdf,.docx,.odt" style="display:none;">
+            <div class="project-doc-actions">
+              <button onclick="openProjectDocumentUploadPicker()" class="upload-doc-btn">📁 Upload Document</button>
+              <button onclick="openProjectDocumentsFolder()" class="upload-doc-btn">📂 Open Folder</button>
+            </div>
             <div id="documents-list" style="margin-top:12px;"></div>
           </div>
           <div id="project-edit-panel-footer">
@@ -764,7 +824,8 @@ Examples:
 
       </div>
 
-      <div class="modal-footer">
+      <div class="modal-footer project-modal-footer">
+        <button onclick="openGlobalDocumentsFolder()" class="save-btn">📂 Open Global Documents</button>
         <button onclick="closeProjectModal()" class="cancel-btn">Close</button>
       </div>
     </div>
@@ -815,21 +876,33 @@ Examples:
   </div>
 </div>
 
-<!-- Upgrade to Pro Modal -->
-<div id="upgrade-modal" class="modal">
+<div id="memory-modal" class="modal">
   <div class="modal-content">
     <div class="modal-header">
-      <h3>Upgrade to HWUI Pro</h3>
-      <span class="close" onclick="closeUpgradeModal()">&times;</span>
+      <h3 id="memory-modal-title">Character Memory</h3>
+      <span class="close" onclick="closeMemoryModal()">&times;</span>
     </div>
+
+    <div style="display:flex; gap:6px; padding: 8px 16px 0;">
+      <button id="memory-tab-character" onclick="setMemoryTab('character')" class="save-btn" style="flex:1;">👤 Character</button>
+      <button id="memory-tab-global" onclick="setMemoryTab('global')" class="cancel-btn" style="flex:1;">🌐 Global</button>
+    </div>
+    
     <div class="modal-body">
-      <div id="upgrade-content"></div>
-      <p style="text-align: center; margin-top: 20px; color: #888; font-size: 14px;">
-        One-time payment. No subscription. Yours forever.
-      </p>
-      <button class="upgrade-btn" onclick="window.open('https://xeyonai.gumroad.com/l/bsmupk', '_blank')">
-        Get Pro Version - £25
-      </button>
+      <div id="memory-list"></div>
+      <div id="memory-add-panel" style="display:none;">
+        <input id="memory-add-title" type="text" placeholder="Title" class="memory-add-input" style="font-size:13px; font-family:inherit;" />
+        <input id="memory-add-keywords" type="text" placeholder="Keywords (comma separated)" class="memory-add-input" style="font-size:13px; font-family:inherit;" />
+        <textarea id="memory-add-body" rows="4" placeholder="Memory content..." class="memory-add-input" style="font-size:13px; font-family:inherit; resize:vertical;"></textarea>
+        <button onclick="submitAddMemory()" class="save-btn">💾 Save Entry</button>
+        <button onclick="toggleMemoryAddPanel()" class="cancel-btn">Cancel</button>
+      </div>
+    </div>
+    
+    <div class="modal-footer">
+      <button onclick="loadCharacterMemory()" class="save-btn">🔄 Refresh</button>
+      <button onclick="toggleMemoryAddPanel()" class="save-btn">➕ Add Entry</button>
+      <button onclick="closeMemoryModal()" class="cancel-btn">Close</button>
     </div>
   </div>
 </div>
@@ -1085,6 +1158,27 @@ function renderImagePreviews() {
     wrapper.appendChild(removeBtn);
     strip.appendChild(wrapper);
   });
+}
+
+function makeChatImageThumbnail(previewUrl) {
+  const thumb = document.createElement('img');
+  thumb.src = previewUrl;
+  thumb.alt = 'Attached image';
+  thumb.title = 'Click to view full image';
+  thumb.tabIndex = 0;
+  thumb.setAttribute('role', 'button');
+  thumb.style.cssText = 'width:80px;height:80px;object-fit:cover;border-radius:6px;border:1px solid #444;margin-top:6px;margin-right:6px;display:inline-block;vertical-align:top;cursor:zoom-in;';
+  thumb.onclick = function(e) {
+    e.stopPropagation();
+    openAvatarLightbox(previewUrl);
+  };
+  thumb.onkeydown = function(e) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      openAvatarLightbox(previewUrl);
+    }
+  };
+  return thumb;
 }
 
 // ================================================
@@ -1626,6 +1720,8 @@ if (typeof marked === "undefined") {
 
           const row = document.createElement('div');
           row.title = stem;
+          row.dataset.modelPath = fullPath;
+          row.dataset.activeModel = isActive ? 'true' : 'false';
           row.style.cssText = 'padding:4px 10px 4px ' + (group.folder ? '20px' : '12px') + '; margin:0; font-size:13px; cursor:pointer; color:' + (isActive ? '#6dbf8a' : '#ccc') + '; background:' + (isActive ? 'rgba(40,80,50,0.25)' : 'transparent') + '; display:flex; align-items:center; gap:6px; transition:background 0.12s; line-height:1.4;';
 
           const editBtn = document.createElement('button');
@@ -1652,6 +1748,7 @@ if (typeof marked === "undefined") {
           row.onclick = (e) => {
             // Don't load model if clicking the edit button or anything inside it
             if (e.target.closest('.model-edit-btn')) return;
+            if (isActive) return;
             loadModel(fullPath);
           };
           row.appendChild(tick);
@@ -1713,17 +1810,22 @@ if (typeof marked === "undefined") {
       .catch(() => {});
   }
 
-  function applyThemeFromCog(name) {
+  async function applyThemeByName(name) {
+    if (!name) return;
     const link = document.getElementById('active-theme-link');
     if (link) link.href = '/theme-files/' + name + '.css?v=' + Date.now();
-    fetch('/themes/switch', {
+    await fetch('/themes/switch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: name })
-    }).catch(() => {});
+    });
     document.querySelectorAll('#cog-theme-list .cog-theme-btn').forEach(b => {
       b.classList.toggle('active', b.dataset.theme === name);
     });
+  }
+
+  function applyThemeFromCog(name) {
+    applyThemeByName(name).catch(() => {});
   }
 
   // Close the cog dropdown when clicking anywhere outside it
@@ -1792,6 +1894,7 @@ if (typeof marked === "undefined") {
     const list = document.getElementById('model-picker-list');
     const display = document.getElementById('model-display');
     status.style.display = 'block';
+    status.style.color = '#8ab4d4';
     status.textContent = `⏳ Loading ${filename.replace(/\.gguf$/i,'')}...`;
     list.style.opacity = '0.4';
     list.style.pointerEvents = 'none';
@@ -1811,6 +1914,7 @@ if (typeof marked === "undefined") {
         list.style.pointerEvents = 'all';
         await loadModelDisplay();
         setTimeout(() => closeModelPicker(), 1200);
+        return true;
       } else {
         status.style.color = '#e88';
         status.textContent = `❌ ${data.error}`;
@@ -1818,13 +1922,89 @@ if (typeof marked === "undefined") {
         if (nameSpanF) { nameSpanF.textContent = 'Load failed'; nameSpanF.style.color = '#a05050'; }
         list.style.opacity = '1';
         list.style.pointerEvents = 'all';
+        return false;
       }
     } catch(e) {
       status.style.color = '#e88';
       status.textContent = `❌ Request failed: ${e}`;
       list.style.opacity = '1';
       list.style.pointerEvents = 'all';
+      return false;
     }
+  }
+
+  function preferredModelName(modelId) {
+    return String(modelId || '').split(/[\\/]/).pop().replace(/\.gguf$/i, '');
+  }
+
+  function showPreferredModelLoadingOverlay(modelName, characterName) {
+    const overlay = document.getElementById('preferred-model-loading-overlay');
+    const detail = document.getElementById('preferred-model-loading-detail');
+    window._preferredModelLoading = true;
+    if (detail) detail.textContent = `Loading ${modelName} for ${characterName || 'character'}...`;
+    if (overlay) {
+      overlay.style.display = 'flex';
+      overlay.focus();
+    }
+  }
+
+  function hidePreferredModelLoadingOverlay() {
+    const overlay = document.getElementById('preferred-model-loading-overlay');
+    if (overlay) overlay.style.display = 'none';
+    window._preferredModelLoading = false;
+  }
+
+  async function loadCharacterPreferredModel(characterData) {
+    const preferred = String(characterData?.preferred_model_id || '').trim();
+    if (!preferred) return true;
+
+    const displayName = preferredModelName(preferred);
+    const preferredId = preferred.replace(/\\/g, '/').toLowerCase();
+    const rememberedId = String(localStorage.getItem('llama_last_model') || '').replace(/\\/g, '/').toLowerCase();
+    let overlayShown = false;
+    if (!rememberedId || rememberedId !== preferredId) {
+      showPreferredModelLoadingOverlay(displayName, characterData.name);
+      overlayShown = true;
+    }
+    try {
+      const currentRes = await fetch('/get_model');
+      if (currentRes.ok) {
+        const current = await currentRes.json();
+        const currentId = String(current.model_id || '').replace(/\\/g, '/').toLowerCase();
+        const sameModel = currentId
+          ? currentId === preferredId
+          : preferredModelName(current.model).toLowerCase() === displayName.toLowerCase();
+        if (sameModel) {
+          localStorage.setItem('llama_last_model', preferred);
+          return true;
+        }
+      }
+
+      if (!overlayShown) {
+        showPreferredModelLoadingOverlay(displayName, characterData.name);
+        overlayShown = true;
+      }
+      hwuiToast(`Loading ${displayName} for ${characterData.name || 'character'}...`, 'info');
+      const loaded = await loadModel(preferred);
+      if (loaded) {
+        hwuiToast(`Loaded ${displayName} for ${characterData.name || 'character'}.`, 'success');
+        return true;
+      }
+      hwuiToast(`Could not load the preferred model for ${characterData.name || 'this character'}.`, 'error');
+      return false;
+    } catch (e) {
+      console.error('Preferred model load failed:', e);
+      hwuiToast(`Could not load the preferred model for ${characterData.name || 'this character'}.`, 'error');
+      return false;
+    } finally {
+      if (overlayShown) hidePreferredModelLoadingOverlay();
+    }
+  }
+
+  function reloadModel() {
+    const activeRow = document.querySelector('#model-picker-list [data-active-model="true"]');
+    const filename = activeRow ? activeRow.dataset.modelPath : localStorage.getItem('llama_last_model');
+    if (filename) loadModel(filename);
   }
 
   async function unloadModel() {
@@ -2005,6 +2185,7 @@ if (typeof marked === "undefined") {
   async function loadCharacterList() {
     const select = document.getElementById('character-select');
     try {
+      await loadCharacterGroups();
       // Use /list_characters (directory scan) rather than the static
       // /characters/index.json file: it returns the same array-of-names shape
       // but is always fresh AND triggers the server-side index.json self-heal
@@ -2013,12 +2194,7 @@ if (typeof marked === "undefined") {
       if (!response.ok) throw new Error('Failed to fetch character list');
       const characters = await response.json();
 
-      // Sort: favourites first (alpha), then rest (alpha)
-      const favs = getFavouriteCharacters();
-      const sorted = [
-        ...characters.filter(n => favs.includes(n)).sort((a,b) => a.localeCompare(b)),
-        ...characters.filter(n => !favs.includes(n)).sort((a,b) => a.localeCompare(b))
-      ];
+      const sorted = characters.slice().sort((a, b) => a.localeCompare(b));
 
       select.innerHTML = '';
       sorted.forEach(name => {
@@ -2031,15 +2207,21 @@ if (typeof marked === "undefined") {
       // Cache character list for filename parsing
       localStorage.setItem('characterListCache', JSON.stringify(sorted));
 
-      // Initial character resolution: server-side active character (shared
-      // desktop ↔ mobile) → per-device localStorage cache → first in list.
+      // Initial character resolution: saved current chat → server-side active
+      // character (shared desktop ↔ mobile) → local cache → first in list.
       let activeChar = null;
       try {
         const acRes = await fetch('/active_character');
         if (acRes.ok) activeChar = (await acRes.json()).active_character;
       } catch (e) { console.warn('active_character fetch failed:', e); }
       const lastChar = localStorage.getItem('lastCharacter');
+      // A saved chat is the final character authority on this page. Resolve it
+      // before the shared active-character fallback so returning from /config
+      // cannot briefly load a stale character and its paired model first.
+      const savedChatFilename = localStorage.getItem('currentChatFilename');
+      const savedChatChar = savedChatFilename ? extractCharacterFromFilename(savedChatFilename) : null;
       const initialChar =
+        (savedChatChar && sorted.includes(savedChatChar)) ? savedChatChar :
         (activeChar && sorted.includes(activeChar)) ? activeChar :
         (lastChar && sorted.includes(lastChar)) ? lastChar :
         sorted[0];
@@ -2052,21 +2234,132 @@ if (typeof marked === "undefined") {
     }
   }
 
-  // ==================================================
-  // FAVOURITES HELPERS
-  // ==================================================
-  function getFavouriteCharacters() {
-    try { return JSON.parse(localStorage.getItem('characterFavourites') || '[]'); }
-    catch { return []; }
+  let characterGroupsState = { groups: [], assignments: {}, collapsed: {} };
+  let characterGroupsSaveQueue = Promise.resolve();
+
+  function getCharacterGroups() {
+    return characterGroupsState;
   }
-  function setFavouriteCharacters(favs) {
-    localStorage.setItem('characterFavourites', JSON.stringify(favs));
+
+  async function loadCharacterGroups() {
+    try {
+      const response = await fetch('/character_groups', { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const saved = await response.json();
+      characterGroupsState = {
+        groups: Array.isArray(saved.groups) ? saved.groups.filter(g => g && g.id && g.name) : [],
+        assignments: saved.assignments && typeof saved.assignments === 'object' ? saved.assignments : {},
+        collapsed: saved.collapsed && typeof saved.collapsed === 'object' ? saved.collapsed : {}
+      };
+    } catch (error) {
+      characterGroupsState = { groups: [], assignments: {}, collapsed: {} };
+      console.error('Failed to load character groups:', error);
+      hwuiToast('Could not load this build\'s character groups.', 'error');
+    }
   }
-  function toggleFavouriteCharacter(name) {
-    const favs = getFavouriteCharacters();
-    const idx = favs.indexOf(name);
-    if (idx === -1) favs.push(name); else favs.splice(idx, 1);
-    setFavouriteCharacters(favs);
+
+  function setCharacterGroups(state) {
+    const snapshot = JSON.parse(JSON.stringify(state));
+    characterGroupsState = snapshot;
+    characterGroupsSaveQueue = characterGroupsSaveQueue.then(async () => {
+      const response = await fetch('/character_groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(snapshot)
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.success) throw new Error(result.error || `HTTP ${response.status}`);
+    }).catch(error => {
+      console.error('Failed to save character groups:', error);
+      hwuiToast('Could not save this build\'s character groups.', 'error');
+    });
+  }
+
+  function createCharacterGroup(name) {
+    if (!name || !name.trim()) return null;
+    const state = getCharacterGroups();
+    const cleanName = name.trim();
+    if (state.groups.some(g => g.name.toLowerCase() === cleanName.toLowerCase())) {
+      hwuiToast('A character group with that name already exists.', 'info');
+      return null;
+    }
+    const group = { id: 'group-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7), name: cleanName };
+    state.groups.push(group);
+    setCharacterGroups(state);
+    return group;
+  }
+
+  function assignCharacterGroup(characterName, groupId) {
+    const state = getCharacterGroups();
+    if (groupId) state.assignments[characterName] = groupId;
+    else delete state.assignments[characterName];
+    setCharacterGroups(state);
+    buildCustomSelect();
+  }
+
+  function renameCharacterGroup(groupId, name) {
+    const state = getCharacterGroups();
+    const group = state.groups.find(g => g.id === groupId);
+    if (!group || !name || !name.trim()) return false;
+    if (name.trim() === group.name) return true;
+    const cleanName = name.trim();
+    if (state.groups.some(g => g.id !== groupId && g.name.toLowerCase() === cleanName.toLowerCase())) {
+      hwuiToast('A character group with that name already exists.', 'info');
+      return false;
+    }
+    group.name = cleanName;
+    setCharacterGroups(state);
+    return true;
+  }
+
+  function deleteCharacterGroup(groupId) {
+    const state = getCharacterGroups();
+    const group = state.groups.find(g => g.id === groupId);
+    if (!group) return;
+    state.groups = state.groups.filter(g => g.id !== groupId);
+    Object.keys(state.assignments).forEach(name => {
+      if (state.assignments[name] === groupId) delete state.assignments[name];
+    });
+    delete state.collapsed[groupId];
+    setCharacterGroups(state);
+    buildCustomSelect();
+  }
+
+  function showCharacterGroupEditor(container, initialValue, onSave) {
+    container.innerHTML = '';
+    container.classList.add('character-group-editor');
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = initialValue || '';
+    input.placeholder = 'Group name';
+    input.maxLength = 40;
+
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.textContent = 'Save';
+
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = 'Cancel';
+
+    const submit = () => {
+      const name = input.value.trim();
+      if (!name) return;
+      if (onSave(name) !== false) buildCustomSelect();
+    };
+
+    input.addEventListener('click', e => e.stopPropagation());
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); submit(); }
+      if (e.key === 'Escape') { e.preventDefault(); buildCustomSelect(); }
+    });
+    save.addEventListener('click', e => { e.stopPropagation(); submit(); });
+    cancel.addEventListener('click', e => { e.stopPropagation(); buildCustomSelect(); });
+
+    container.append(input, save, cancel);
+    input.focus();
+    input.select();
   }
 
   // ==================================================
@@ -2076,66 +2369,142 @@ if (typeof marked === "undefined") {
     const select = document.getElementById('character-select');
     const selected = document.getElementById('char-custom-selected');
     const optList = document.getElementById('char-custom-options');
-    const favs = getFavouriteCharacters();
+    const groupState = getCharacterGroups();
 
     optList.innerHTML = '';
     const allOpts = Array.from(select.options);
-    const favOpts = allOpts.filter(o => favs.includes(o.value));
-    const nonFavOpts = allOpts.filter(o => !favs.includes(o.value));
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'character-group-toolbar';
+    const toolbarLabel = document.createElement('span');
+    toolbarLabel.textContent = 'Groups';
+    const addGroup = document.createElement('button');
+    addGroup.type = 'button';
+    addGroup.textContent = '+ New group';
+    addGroup.title = 'Create a character group';
+    addGroup.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showCharacterGroupEditor(toolbar, '', name => !!createCharacterGroup(name));
+    });
+    toolbar.append(toolbarLabel, addGroup);
+    optList.appendChild(toolbar);
 
     function renderItem(opt) {
-      const isFav = favs.includes(opt.value);
       const item = document.createElement('div');
-      item.className = 'custom-select-item' + (opt.value === select.value ? ' active' : '');
+      item.className = 'custom-select-item character-select-item' + (opt.value === select.value ? ' active' : '');
       item.dataset.value = opt.value;
-      item.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:6px;';
 
       const label = document.createElement('span');
       label.textContent = opt.textContent;
-      label.style.cssText = 'flex:1; overflow:hidden; text-overflow:ellipsis;';
+      label.className = 'character-option-label';
 
-      const star = document.createElement('span');
-      star.textContent = '★';
-      star.title = isFav ? 'Remove from favourites' : 'Add to favourites';
-      star.style.cssText = `cursor:pointer; font-size:14px; flex-shrink:0; color:${isFav ? '#f5c518' : '#444'}; transition:color 0.15s;`;
-      star.addEventListener('mouseenter', () => { if (!favs.includes(opt.value)) star.style.color = '#888'; });
-      star.addEventListener('mouseleave', () => { if (!favs.includes(opt.value)) star.style.color = '#444'; });
-      star.addEventListener('click', async (e) => {
+      const actions = document.createElement('span');
+      actions.className = 'character-option-actions';
+
+      const folder = document.createElement('button');
+      folder.type = 'button';
+      folder.className = 'character-folder-button';
+      folder.textContent = '\uD83D\uDCC1';
+      folder.hidden = groupState.groups.length === 0;
+      const assignedGroup = groupState.groups.find(g => g.id === groupState.assignments[opt.value]);
+      folder.title = assignedGroup ? `Move from ${assignedGroup.name}` : 'Move to a group';
+      folder.addEventListener('click', (e) => {
         e.stopPropagation();
-        toggleFavouriteCharacter(opt.value);
-        await loadCharacterList();
-        buildCustomSelect();
+        const existingMenu = item.querySelector('.character-group-menu');
+        optList.querySelectorAll('.character-group-menu').forEach(menu => menu.remove());
+        if (existingMenu) return;
+
+        const menu = document.createElement('div');
+        menu.className = 'character-group-menu';
+        const choices = [{ id: '', name: 'Ungrouped' }, ...groupState.groups];
+        choices.forEach(group => {
+          const choice = document.createElement('button');
+          choice.type = 'button';
+          choice.textContent = (groupState.assignments[opt.value] || '') === group.id ? `\u2713 ${group.name}` : group.name;
+          choice.addEventListener('click', (event) => {
+            event.stopPropagation();
+            assignCharacterGroup(opt.value, group.id);
+          });
+          menu.appendChild(choice);
+        });
+        item.appendChild(menu);
       });
 
-      item.appendChild(label);
-      item.appendChild(star);
+      actions.appendChild(folder);
+      item.append(label, actions);
       item.addEventListener('click', () => {
         select.value = opt.value;
         select.dispatchEvent(new Event('change'));
-        const curFavs = getFavouriteCharacters();
-        selected.textContent = (curFavs.includes(opt.value) ? '★ ' : '') + opt.textContent;
-        optList.querySelectorAll('.custom-select-item').forEach(i => i.classList.remove('active'));
+        selected.textContent = opt.textContent;
+        optList.querySelectorAll('.character-select-item').forEach(i => i.classList.remove('active'));
         item.classList.add('active');
         closeCustomSelect();
       });
-      optList.appendChild(item);
+      return item;
     }
 
-    favOpts.forEach(renderItem);
-    if (favOpts.length > 0 && nonFavOpts.length > 0) {
-      const divider = document.createElement('div');
-      divider.style.cssText = 'border-top:1px solid #2a2a2a; margin:3px 0;';
-      optList.appendChild(divider);
-    }
-    nonFavOpts.forEach(renderItem);
+    function renderSection(title, options, sectionId, groupId = null) {
+      if (!options.length && !groupId) return;
+      const header = document.createElement('div');
+      header.className = 'character-group-header';
+      const isCollapsed = !!groupState.collapsed[sectionId];
 
-    // Update displayed value
+      const heading = document.createElement('button');
+      heading.type = 'button';
+      heading.className = 'character-group-heading';
+      heading.textContent = `${isCollapsed ? '\u25B8' : '\u25BE'} ${title} (${options.length})`;
+      heading.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const state = getCharacterGroups();
+        state.collapsed[sectionId] = !state.collapsed[sectionId];
+        setCharacterGroups(state);
+        buildCustomSelect();
+      });
+      header.appendChild(heading);
+
+      if (groupId) {
+        const controls = document.createElement('span');
+        controls.className = 'character-group-controls';
+        const rename = document.createElement('button');
+        rename.type = 'button';
+        rename.textContent = '\u270E';
+        rename.title = 'Rename group';
+        rename.addEventListener('click', (e) => {
+          e.stopPropagation();
+          showCharacterGroupEditor(header, title, name => renameCharacterGroup(groupId, name));
+        });
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.textContent = '\u00D7';
+        remove.title = 'Delete group';
+        let deleteArmed = false;
+        remove.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (!deleteArmed) {
+            deleteArmed = true;
+            remove.textContent = 'Delete?';
+            remove.classList.add('delete-confirm');
+            return;
+          }
+          deleteCharacterGroup(groupId);
+        });
+        controls.append(rename, remove);
+        header.appendChild(controls);
+      }
+
+      optList.appendChild(header);
+      if (!isCollapsed) options.forEach(opt => optList.appendChild(renderItem(opt)));
+    }
+
+    groupState.groups.forEach(group => {
+      renderSection(group.name, allOpts.filter(opt => groupState.assignments[opt.value] === group.id), group.id, group.id);
+    });
+    const knownGroupIds = new Set(groupState.groups.map(group => group.id));
+    const ungrouped = allOpts.filter(opt => !knownGroupIds.has(groupState.assignments[opt.value]));
+    renderSection(groupState.groups.length ? 'Ungrouped' : 'Characters', ungrouped, 'ungrouped');
+
     const cur = select.options[select.selectedIndex];
-    if (cur) {
-      selected.textContent = (favs.includes(cur.value) ? '★ ' : '') + cur.textContent;
-    } else {
-      selected.textContent = '—';
-    }
+    selected.textContent = cur ? cur.textContent : '\u2014';
   }
 
   function openCustomSelect() {
@@ -2169,8 +2538,7 @@ if (typeof marked === "undefined") {
       if (selected) {
         const cur = sel.options[sel.selectedIndex];
         if (cur) {
-          const favs = getFavouriteCharacters();
-          selected.textContent = (favs.includes(cur.value) ? '★ ' : '') + cur.textContent;
+          selected.textContent = cur.textContent;
           document.querySelectorAll('.custom-select-item').forEach(i => {
             i.classList.toggle('active', i.dataset.value === sel.value);
           });
@@ -2254,6 +2622,11 @@ async function loadCharacter(name, skipChatHistory = false) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active_character: name })
       }).catch(e => console.warn('active_character save failed:', e));
+
+      // Optional canonical character/model pairing. This deliberately reuses
+      // the existing model loader; characters without a pairing behave exactly
+      // as before, and a failed load does not block the character switch.
+      await loadCharacterPreferredModel(data);
 
       // Load this character's saved TTS voice — server first (shared with mobile), localStorage fallback
       try {
@@ -2416,6 +2789,31 @@ function persistChatState() {
   // ==================================================
   // SIDE BAR CHAT LIST (with sorting)
   // ==================================================
+  window._chatFolderRefreshOnFocus = false;
+  window.addEventListener('focus', () => {
+    if (!window._chatFolderRefreshOnFocus) return;
+    loadChats();
+  });
+
+  async function openChatsFolder() {
+    try {
+      const res = await fetch('/chats/open_folder', { method: 'POST' });
+      const data = await res.json();
+
+      if (data.error) {
+        hwuiToast('Failed to open chat folder: ' + data.error, 'error');
+        return;
+      }
+
+      window._chatFolderRefreshOnFocus = true;
+      hwuiToast('Chat folder opened', 'success');
+      setTimeout(() => loadChats(), 500);
+    } catch (err) {
+      console.error('Open chat folder error:', err);
+      hwuiToast('Failed to open chat folder', 'error');
+    }
+  }
+
   async function loadChats() {
     const res = await fetch('/chats/list');
     const chats = await res.json();
@@ -2503,11 +2901,9 @@ function persistChatState() {
           
           console.log('✅ Chat duplicated:', result.new_filename);
 
-          // Inherit the source chat's colour on the new (duplicated) chat
-          const _dupColors = getChatColors();
-          if (_dupColors[chat.filename]) {
-            setChatColor(result.new_filename, _dupColors[chat.filename]);
-          }
+          // Inherit the source chat's colour on the new (duplicated) chat.
+          // This copies the key and explicitly preserves the source tint.
+          copyChatColor(chat.filename, result.new_filename);
 
           await loadChats();
           await openChat(result.new_filename);
@@ -3005,6 +3401,8 @@ function persistChatState() {
       document.getElementById('character-name').textContent = characterData.name;
       document.getElementById('system-prompt').textContent = characterData.tagline || (characterData.main_prompt ? characterData.main_prompt.split('\n')[0] : '');
 
+      await loadCharacterPreferredModel(characterData);
+
       // Load this character's saved TTS voice
       const savedVoice = localStorage.getItem(`tts-voice-${option.value}`);
       if (savedVoice) {
@@ -3032,6 +3430,7 @@ function persistChatState() {
 // OPEN CHAT
 // ==================================================
 async function openChat(filename) {
+  if (window._preferredModelLoading) return;
   // 🔒 BLOCK if we're creating a new chat AND this isn't the new chat file
   if (isCreatingNewChat && filename !== currentChatFilename) {
     console.log('⛔ Blocked openChat - new chat creation in progress');
@@ -3264,10 +3663,7 @@ async function openChat(filename) {
             imgContainer.style.cssText = 'margin-top:8px;';
             if (msg.previewUrls && msg.previewUrls.length > 0) {
               msg.previewUrls.forEach(function(url) {
-                var thumb = document.createElement('img');
-                thumb.src = url;
-                thumb.style.cssText = 'width:120px;height:120px;object-fit:cover;border-radius:6px;border:1px solid #444;margin-right:6px;display:inline-block;vertical-align:top;';
-                imgContainer.appendChild(thumb);
+                imgContainer.appendChild(makeChatImageThumbnail(url));
               });
             } else {
               imgContainer.style.cssText += 'display:flex;align-items:center;gap:6px;color:#8ab4d4;font-size:12px;';
@@ -3522,8 +3918,21 @@ async function openChat(filename) {
       return;
     }
     window._sendPromptInFlight = true;
-    setTimeout(() => { window._sendPromptInFlight = false; }, 500);
-    
+    try {
+
+    const box = document.getElementById('user-input');
+    const input = box.value.trim();
+
+    if (saveDocumentIntentGate(input)) {
+      await saveAsDocumentFromChat(input, box);
+      return;
+    }
+
+    if (memoryIntentGate(input)) {
+      await saveMemoryFromChat(input, box);
+      return;
+    }
+     
     if (!currentChatFilename) {
       
       var dropdown = document.getElementById('character-select');
@@ -3575,8 +3984,6 @@ async function openChat(filename) {
       }
     }
 
-    const box = document.getElementById('user-input');
-    const input = box.value.trim();
     const chat = document.getElementById('chat');
     const hasImages = window.attachedImages && window.attachedImages.length > 0;
     const hasDocs = window.attachedDocuments && window.attachedDocuments.length > 0;
@@ -3672,10 +4079,7 @@ async function openChat(filename) {
       
       // Show thumbnails in the user message bubble
       window.attachedImages.forEach(img => {
-        const thumb = document.createElement('img');
-        thumb.src = img.previewUrl;
-        thumb.style.cssText = 'width:80px;height:80px;object-fit:cover;border-radius:6px;margin-top:6px;display:block;';
-        userDiv.appendChild(thumb);
+        userDiv.appendChild(makeChatImageThumbnail(img.previewUrl));
       });
 
       // Clear attached images after sending
@@ -3707,10 +4111,13 @@ async function openChat(filename) {
     box.style.height = 'auto';
     clearChatInputDraft();
     try {
-      await fetchAndDisplayResponse(input, chat);
+      await fetchAndDisplayResponse(input, chat, false, modelText);
     } catch (err) {
       console.error("⚠️ sendPrompt error:", err);
       chat.innerHTML += '<div class="message error-msg">⚠️ Error sending message.</div>';
+    }
+    } finally {
+      window._sendPromptInFlight = false;
     }
   }
 // ==================================================
@@ -3721,18 +4128,178 @@ async function openChat(filename) {
   // against unsolicited save-shaped output.
   function memoryIntentGate(userMsg) {
     if (!userMsg || typeof userMsg !== 'string') return false;
-    const MEMORY_INTENT_RE = /\b(?:remember (?:this|that|to)|save (?:this|that)(?: to memory)?|save .{0,80}for (?:later|future reference)|(?:make|take) a note|don['’]?t forget|for (?:future|later) reference|add to memory|note this down|keep (?:this|that) in mind|save to memory|put (?:it |this |that )?in(?:to)? (?:your )?memory|(?:can you )?memorize (?:this|that|it)|keep a record|log (?:this|that|it)|store (?:this|that|it)(?: in memory)?|jot (?:this|that|it) down|note (?:this|that|it) down|(?:please )?save (?:this|that|it))\b/i;
-    return MEMORY_INTENT_RE.test(userMsg);
+    const text = userMsg.replace(/\r\n/g, '\n').trim();
+    const compact = text.replace(/\s+/g, ' ');
+    if (!compact) return false;
+    const MEMORY_INTENT_RE = /\b(?:remember (?:this|that|it|to|my|the)|save (?:this|that|it)(?: to (?:your )?memory)?|save .{0,80}for (?:later|future reference)|(?:make|take) a note|don['’]?t forget|for (?:future|later) reference|add (?:(?:this|that|it) )?to (?:your )?memory|note this down|keep (?:this|that|it) in mind|save to (?:your )?memory|put (?:it |this |that )?(?:in(?:to)?|to) (?:your )?memory|(?:can you )?memorize (?:this|that|it)|keep a record|log (?:this|that|it)|store (?:this|that|it)(?: in memory)?|jot (?:this|that|it) down|note (?:this|that|it) down|(?:please )?save (?:this|that|it))\b/i;
+    const LEADING_MEMORY_INTENT_RE = /^(?:(?:please|can you|could you|would you|i want you to)\s+)*(?:remember (?:this|that|it|to|my|the)|save (?:this|that|it)(?: to (?:your )?memory)?|save .{0,80}for (?:later|future reference)|(?:make|take) a note|don['â€™]?t forget|for (?:future|later) reference|add (?:(?:this|that|it) )?to (?:your )?memory|note this down|keep (?:this|that|it) in mind|save to (?:your )?memory|put (?:it |this |that )?(?:in(?:to)?|to) (?:your )?memory|memorize (?:this|that|it)|keep a record|log (?:this|that|it)|store (?:this|that|it)(?: in memory)?|jot (?:this|that|it) down|note (?:this|that|it) down|save (?:this|that|it))\b/i;
+    return LEADING_MEMORY_INTENT_RE.test(compact);
+  }
+
+  function recentVisibleChatForMemory() {
+    return (window.loadedChat || []).filter(msg => !msg.hidden).slice(-8).map(msg => {
+      let content = msg.content;
+      if (Array.isArray(content)) {
+        content = content.filter(p => p && p.type === 'text').map(p => p.text || '').join(' ');
+      }
+      return { role: msg.role, content: String(content || '').trim() };
+    }).filter(msg => (msg.role === 'user' || msg.role === 'assistant') && msg.content);
+  }
+
+  function memoryTranscriptFromMessages(messages) {
+    const speakerFor = (msg) => msg.role === 'user'
+      ? (activeUserName || localStorage.getItem('activeUserName') || 'User')
+      : (currentCharacter?.name || currentCharName || 'Assistant');
+    return messages.map(msg => `${speakerFor(msg)}: ${msg.content}`).join('\n\n');
+  }
+
+  async function saveMemoryFromChat(commandText, inputBox) {
+    const history = recentVisibleChatForMemory();
+    if (!history.length) {
+      hwuiToast('No conversation to save to memory yet.', 'info');
+      return;
+    }
+    const dropdown = document.getElementById('character-select');
+    const character = dropdown ? dropdown.value : (currentCharacter?.name || currentCharName || '');
+    if (!character) {
+      hwuiToast('No character selected.', 'info');
+      return;
+    }
+    if (inputBox) {
+      inputBox.value = '';
+      inputBox.style.height = 'auto';
+    }
+    clearChatInputDraft();
+    hwuiToast('Saving memory...');
+    try {
+      const res = await fetch('/auto_memory/capture', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          character,
+          user_name: activeUserName || localStorage.getItem('activeUserName') || 'Chris',
+          user_text: 'remember this',
+          assistant_text: memoryTranscriptFromMessages(history),
+          recent_messages: history,
+          force_save: true
+        })
+      });
+      const result = await res.json().catch(() => ({}));
+      if (res.ok && result.status === 'saved') {
+        hwuiToast(`Memory saved: ${result.title || 'Saved memory'}`);
+        if (typeof loadCharacterMemory === 'function') {
+          try { loadCharacterMemory(); } catch (e) {}
+        }
+      } else if (result.reason === 'duplicate') {
+        hwuiToast('That memory is already saved.', 'info');
+      } else if (result.reason === 'roleplay_project') {
+        hwuiToast('Memory saving is disabled in roleplay projects.', 'info');
+      } else {
+        hwuiToast(result.error || result.reason || 'Failed to save memory.', 'error');
+      }
+    } catch (err) {
+      console.error('Save memory failed:', err);
+      hwuiToast('Failed to contact server: ' + err.message, 'error');
+    }
+  }
+
+  function saveDocumentIntentGate(userMsg) {
+    if (!userMsg || typeof userMsg !== 'string') return false;
+    const SAVE_DOC_RE = /\b(?:save|write|turn|make|convert|store|put)\b.{0,80}\b(?:as|to|into|in)\b.{0,30}\b(?:a\s+)?(?:global\s+)?(?:reference\s+)?doc(?:ument)?\b|\b(?:save|write|store)\s+(?:that|this|it)\s+(?:as|to|into)\s+(?:a\s+)?(?:global\s+)?(?:reference\s+)?doc(?:ument)?\b/i;
+    return SAVE_DOC_RE.test(userMsg);
+  }
+
+  function recentVisibleChatForDocument() {
+    return (window.loadedChat || []).filter(msg => !msg.hidden).slice(-40).map(msg => {
+      let content = msg.content;
+      if (Array.isArray(content)) {
+        content = content.filter(p => p && p.type === 'text').map(p => p.text || '').join(' ');
+      }
+      return { role: msg.role, content: content || '' };
+    }).filter(msg => (msg.role === 'user' || msg.role === 'assistant') && String(msg.content || '').trim());
+  }
+
+  async function saveAsDocumentFromChat(commandText, inputBox) {
+    const history = recentVisibleChatForDocument();
+    if (!history.length) {
+      hwuiToast('No conversation to save as a document yet.', 'info');
+      return;
+    }
+    if (inputBox) {
+      inputBox.value = '';
+      inputBox.style.height = 'auto';
+    }
+    clearChatInputDraft();
+    hwuiToast('Saving document...');
+    try {
+      const res = await fetch('/global_documents/save_from_chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: history,
+          user_name: activeUserName || localStorage.getItem('activeUserName') || 'User',
+          instruction: commandText
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        hwuiToast(`Document saved: ${data.filename}`);
+        if (typeof loadGlobalDocs === 'function') {
+          try { loadGlobalDocs(); } catch (e) {}
+        }
+      } else {
+        hwuiToast(data.error || 'Failed to save document.', 'error');
+      }
+    } catch (err) {
+      console.error('Save as document failed:', err);
+      hwuiToast('Failed to contact server: ' + err.message, 'error');
+    }
   }
 
   async function captureAutomaticMemory(userText, assistantText) {
-    return false;
+    try {
+      const recentMessages = (window.loadedChat || []).filter(msg => !msg.hidden).slice(-6).map(msg => ({
+        role: msg.role,
+        content: msg.content
+      }));
+      const character = currentCharacter?.name || currentCharName || '';
+      const response = await fetch('/auto_memory/capture', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          character,
+          user_name: activeUserName || localStorage.getItem('activeUserName') || 'Chris',
+          user_text: userText,
+          assistant_text: assistantText,
+          recent_messages: recentMessages
+        })
+      });
+      if (!response.ok) {
+        console.warn('Automatic memory capture returned HTTP', response.status);
+        return false;
+      }
+      const result = await response.json();
+      if (result.status === 'saved') {
+        showAutoMemoryToast(character, result.title, result.undo_token);
+        return true;
+      }
+      if (result.reason === 'roleplay_project') {
+        if (memoryIntentGate(userText)) {
+          showToast('Memory saving is disabled in roleplay projects.', 5000);
+        }
+        return true;
+      }
+      return memoryIntentGate(userText) && result.reason === 'duplicate';
+    } catch (error) {
+      console.warn('Automatic memory capture skipped:', error);
+      return false;
+    }
   }
 
 // ==================================================
 // FETCH AND DISPLAY RESPONSE (WITH DEBUG LOGS)
 // ==================================================
-  async function fetchAndDisplayResponse(input, chat, isRegenerate = false) {
+  async function fetchAndDisplayResponse(input, chat, isRegenerate = false, modelTextForSend = null) {
     console.log('🚀🚀🚀 fetchAndDisplayResponse CALLED', new Date().getTime(), 'isRegenerate:', isRegenerate);
     console.trace();
     
@@ -3784,6 +4351,28 @@ async function openChat(filename) {
       // chatToSend includes hidden messages (e.g. memory confirm) so the model has context,
       // but strips the hidden flag so the backend treats them as normal turns
       const chatForSend = window.loadedChat.map(msg => msg.hidden ? {...msg, hidden: undefined} : msg);
+      if (modelTextForSend && typeof modelTextForSend === 'string') {
+        for (let i = chatForSend.length - 1; i >= 0; i--) {
+          if (chatForSend[i] && chatForSend[i].role === 'user') {
+            if (Array.isArray(chatForSend[i].content)) {
+              let replacedText = false;
+              const parts = chatForSend[i].content.map(part => {
+                if (!replacedText && part && part.type === 'text') {
+                  replacedText = true;
+                  return { ...part, text: modelTextForSend };
+                }
+                return part;
+              });
+              chatForSend[i] = replacedText
+                ? { ...chatForSend[i], content: parts }
+                : { ...chatForSend[i], content: [{ type: 'text', text: modelTextForSend }, ...chatForSend[i].content] };
+            } else {
+              chatForSend[i] = { ...chatForSend[i], content: modelTextForSend };
+            }
+            break;
+          }
+        }
+      }
       let lastImageIdx = -1;
       for (let i = visibleChat.length - 1; i >= 0; i--) {
         if (Array.isArray(visibleChat[i].content)) {
@@ -4197,8 +4786,27 @@ async function openChat(filename) {
       // Guard: skip re-render for memory confirmation responses — the live bubble is already
       // correctly in the DOM, and a full re-render risks clearing it if currentCharacter
       // is briefly stale (which causes renderChatMessages to bail and leave the DOM empty)
-      renderChatMessages(window.loadedChat);
+      if (!window._suppressMemoryDetection && currentCharacter && currentCharacter.name) {
+        renderChatMessages(window.loadedChat);
+      }
 
+      // ── Memory command detection ──────────────────────────────────────
+      // Runs AFTER renderChatMessages so the bubble is in the live DOM
+      // Uses rawFullMessage (pre-strip) so MEMORY ADD tags are still detectable
+      // even though they've been stripped from the displayed cleanedMessage
+      if (window._suppressMemoryDetection) {
+        window._suppressMemoryDetection = false;
+      } else if (autoMemoryHandled) {
+        console.log('Trained memory tag saved automatically; approval UI suppressed.');
+      } else {
+        const hadMemoryOutput = /\[?MEMORY[_ ]ADD:/i.test(rawFullMessage) ||
+          /^\s*Title\s*:/im.test(rawFullMessage);
+        if (hadMemoryOutput && memoryIntentGate(input)) {
+          console.error('Trained memory output was produced but could not be saved automatically.');
+          showToast('Memory could not be saved.', 5000);
+        }
+      } // end suppress check
+      // ─────────────────────────────────────────────────────────────────
 
       console.log('🔍 DEBUG END OF GENERATION:');
       console.log('window.loadedChat length:', window.loadedChat.length);
@@ -4216,7 +4824,7 @@ async function openChat(filename) {
       // now in window.loadedChat (or was empty), so drop the partial mirror so a
       // later pagehide doesn't re-append stale text.
       window._streamingPartial = "";
-      // Refresh the token monitor with this turn's budget (no-op if closed).
+      // Refresh the token monitor with this turn's budget when visible.
       if (window.refreshTokenMonitor) window.refreshTokenMonitor();
     }
   }
@@ -4575,7 +5183,7 @@ async function openChat(filename) {
     } finally {
       window.isSending = false;
       if (stopBtn) stopBtn.style.display = 'none';
-      // Refresh the token monitor with this turn's budget (no-op if closed).
+      // Refresh the token monitor with this turn's budget when visible.
       if (window.refreshTokenMonitor) window.refreshTokenMonitor();
     }
   }
@@ -4873,6 +5481,47 @@ async function stopGeneration() {
 // ==================================================
 // CLEAR CHAT (clear the actual file contents)
 // ==================================================
+  async function clearRuntimeState() {
+    try {
+      if (window.isSending) {
+        try { await fetch('/abort_generation', { method: 'POST' }); } catch (e) {}
+      }
+
+      window.isSending = false;
+      window.isSaving = false;
+      window._sendPromptInFlight = false;
+      window._suppressMemoryDetection = false;
+      window._memoryConfirmNote = false;
+      window._memoryConfirmMaxTokens = null;
+      window._chatDirty = false;
+      window._chatBaseCount = 0;
+      window.attachedImages = [];
+      window.attachedDocuments = [];
+
+      if (typeof renderImagePreviews === 'function') renderImagePreviews();
+      if (typeof renderDocumentPreviews === 'function') renderDocumentPreviews();
+      if (typeof clearChatInputDraft === 'function') clearChatInputDraft();
+
+      const stopBtn = document.getElementById('stop-btn');
+      if (stopBtn) stopBtn.style.display = 'none';
+
+      if (currentChatFilename) {
+        await openChat(currentChatFilename);
+      } else {
+        window.loadedChat = [];
+        const chat = document.getElementById('chat');
+        if (chat) chat.innerHTML = '';
+        displayOpeningLineInChat();
+        displayRpOpenerInChat();
+      }
+
+      hwuiToast('Runtime state cleared. Chat reloaded from disk.', 'success');
+    } catch (err) {
+      console.error('Failed to clear runtime state:', err);
+      hwuiToast('Failed to clear runtime state: ' + err.message, 'error');
+    }
+  }
+
   async function clearChat() {
     if (!currentChatFilename) {
       hwuiToast('No chat selected to clear.', 'info');
@@ -4932,53 +5581,60 @@ async function stopGeneration() {
   }
 
   // ==================================================
+  // END SESSION — generate + store character memory summary
   // ==================================================
-  // UPGRADE MODAL (Pro features)
-  // ==================================================
-  function showUpgradeModal(feature) {
-    const modal = document.getElementById('upgrade-modal');
-    const content = document.getElementById('upgrade-content');
-    const features = {
-      memory: {
-        icon: "🧠",
-        title: "Character Memory",
-        description: "Characters remember past conversations, important facts, and context across all chats.",
-        benefits: [
-          "Persistent cross-session memory",
-          "End Session — generate a memory summary any time",
-          "Memory editor — view, edit and delete stored memories",
-          "Builds deeper, more coherent conversations over time"
-        ]
+  async function endSession() {
+    if (!currentCharacter || !currentCharacter.name) {
+      hwuiToast('No character loaded.', 'info');
+      return;
+    }
+    if (!window.loadedChat || window.loadedChat.length === 0) {
+      hwuiToast('No conversation to summarise.', 'info');
+      return;
+    }
+    if (!await hwuiConfirm(`End session with ${currentCharacter.name}?\n\nThis will generate a memory summary so she remembers this conversation next time.`)) {
+      return;
+    }
+
+    const btn = document.querySelector('.end-session-btn');
+    const originalText = btn ? btn.textContent : '';
+    if (btn) { btn.textContent = '⏳ Summarising...'; btn.disabled = true; }
+
+    try {
+      const res = await fetch('/generate_session_summary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          character: currentCharacter.name,
+          messages: window.loadedChat,
+          user_name: activeUserName || localStorage.getItem('activeUserName') || 'User'
+        })
+      });
+
+      const raw = await res.text();
+      let result = {};
+      try {
+        result = raw ? JSON.parse(raw) : {};
+      } catch (_) {
+        result = {
+          status: 'error',
+          error: `Server returned ${res.status} ${res.statusText || ''}`.trim()
+        };
       }
-    };
-    const f = features[feature] || features.memory;
-    content.innerHTML = `
-      <div style="text-align: center; margin-bottom: 20px;">
-        <div style="font-size: 64px; margin-bottom: 16px;">${f.icon}</div>
-        <h2 style="margin: 0 0 12px 0; color: #fff;">${f.title}</h2>
-        <p style="color: #aaa; font-size: 15px; line-height: 1.6;">${f.description}</p>
-      </div>
-      <ul style="list-style: none; padding: 0; margin: 20px 0;">
-        ${f.benefits.map(b => `
-          <li style="padding: 8px 0; color: #ccc; font-size: 14px;">
-            <span style="color: #667eea; margin-right: 8px;">✓</span>${b}
-          </li>
-        `).join('')}
-      </ul>
-    `;
-    modal.style.display = 'block';
+
+      if (res.ok && result.status === 'ok') {
+        showToast(`🧠 Session memory saved for ${currentCharacter.name}`);
+        console.log('✅ Session summary:', result.summary);
+      } else {
+        hwuiToast('Failed to generate summary: ' + (result.error || 'Unknown error'), 'error');
+      }
+    } catch (err) {
+      console.error('❌ endSession error:', err);
+      hwuiToast('Failed to contact server: ' + err.message, 'error');
+    } finally {
+      if (btn) { btn.textContent = originalText; btn.disabled = false; }
+    }
   }
-
-  function closeUpgradeModal() {
-    document.getElementById('upgrade-modal').style.display = 'none';
-  }
-
-  function openMemoryModal() { showUpgradeModal('memory'); }
-
-  window.addEventListener('click', (e) => {
-    const modal = document.getElementById('upgrade-modal');
-    if (e.target === modal) closeUpgradeModal();
-  });
 
   // ==================================================
   // DELETE LAST MESSAGE
@@ -5215,6 +5871,62 @@ async function stopGeneration() {
     });
   }
 
+  function cleanClipboardHtml(root) {
+      root.querySelectorAll('button, svg, .copy-btn, .code-copy-btn, .code-block-header, .msg-timestamp').forEach(el => el.remove());
+      root.querySelectorAll('script, style').forEach(el => el.remove());
+      root.querySelectorAll('[contenteditable]').forEach(el => el.removeAttribute('contenteditable'));
+      root.querySelectorAll('[class]').forEach(el => el.removeAttribute('class'));
+      root.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+      root.querySelectorAll('a[href]').forEach(a => {
+          a.setAttribute('target', '_blank');
+          a.setAttribute('rel', 'noopener noreferrer');
+      });
+  }
+
+  function buildRichMessageHTML(nodesToWalk) {
+      const container = document.createElement('div');
+
+      nodesToWalk.forEach(node => {
+          if (node.nodeType === Node.TEXT_NODE) {
+              if (node.textContent.trim()) container.appendChild(document.createTextNode(node.textContent));
+              return;
+          }
+
+          if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+          if (node.classList && node.classList.contains('code-block-wrapper')) {
+              const pre = node.querySelector('pre');
+              if (pre) container.appendChild(pre.cloneNode(true));
+              return;
+          }
+
+          container.appendChild(node.cloneNode(true));
+      });
+
+      cleanClipboardHtml(container);
+      const html = container.innerHTML.trim();
+      if (!html) return '';
+      return '<!DOCTYPE html><html><body>' + html + '</body></html>';
+  }
+
+  async function writeMessageClipboard(plainText, richHtml) {
+      if (richHtml && navigator.clipboard && window.ClipboardItem) {
+          try {
+              await navigator.clipboard.write([
+                  new ClipboardItem({
+                      'text/html': new Blob([richHtml], { type: 'text/html' }),
+                      'text/plain': new Blob([plainText], { type: 'text/plain' })
+                  })
+              ]);
+              return;
+          } catch (err) {
+              console.warn('Rich clipboard copy failed, falling back to text:', err);
+          }
+      }
+
+      await navigator.clipboard.writeText(plainText);
+  }
+
   function copyMessage(button) {
       const messageDiv = button.closest('.message') || button.closest('.message-wrapper')?.querySelector('.message');
       if (!messageDiv) return;
@@ -5247,7 +5959,7 @@ async function stopGeneration() {
           if (node.nodeType === Node.ELEMENT_NODE) {
               // Code block — extract language and raw text, wrap in fences
               if (node.classList && node.classList.contains('code-block-wrapper')) {
-                  const langEl = node.querySelector('.code-block-lang');
+                  const langEl = node.querySelector('.code-lang, .code-block-lang');
                   const lang = langEl ? langEl.textContent.trim() : '';
                   const codeEl = node.querySelector('pre code') || node.querySelector('pre') || node.querySelector('code');
                   const code = codeEl ? codeEl.textContent : node.textContent;
@@ -5267,6 +5979,15 @@ async function stopGeneration() {
               }
               else if (node.tagName === 'EM' || node.tagName === 'I') {
                   messageText += `*${node.textContent.trim()}*`;
+              }
+              else if (/^H[1-6]$/.test(node.tagName)) {
+                  const text = node.textContent.trim();
+                  if (text.length > 0) {
+                      messageText += text + '\n\n';
+                  }
+              }
+              else if (node.tagName === 'HR') {
+                  messageText += '---\n\n';
               }
               else if (node.tagName === 'P') {
                   const text = node.innerHTML
@@ -5322,10 +6043,11 @@ async function stopGeneration() {
       messageText = messageText
           .replace(/\n{3,}/g, '\n\n')
           .trim();
+      const messageHtml = buildRichMessageHTML(nodesToWalk);
       
       const originalHTML = button.innerHTML;
       
-      navigator.clipboard.writeText(messageText).then(() => {
+      writeMessageClipboard(messageText, messageHtml).then(() => {
           button.textContent = '✓';
           setTimeout(() => {
               button.innerHTML = originalHTML;
@@ -5453,6 +6175,310 @@ async function stopGeneration() {
           }, 1800);
       }
   }
+
+  // ── Shard generator ──────────────────────────────────────────────────
+  // Model-direct shard batches: sends format/count/brief to /shards/generate,
+  // which prompts the active backend for a raw JSON array and writes one .txt
+  // per shard. No code-fence parsing, so shards containing nested fences
+  // (ChatML samples, code snippets) can't break. Coexists with the per-message
+  // "export code blocks as shard files" button above.
+  function openShardGeneratorModal() {
+      const prevFocus = document.activeElement;
+      const backdrop = document.createElement('div');
+      backdrop.style.cssText = 'position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.62);';
+
+      const panel = document.createElement('div');
+      panel.style.cssText = 'background:var(--modal-bg,#1a1f2a);border:1px solid var(--modal-border,#444);border-radius:10px;padding:18px 20px;max-width:520px;width:calc(100% - 48px);max-height:calc(100vh - 80px);overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,0.6);color:var(--modal-text,#ddd);font-size:14px;';
+
+      const title = document.createElement('div');
+      title.textContent = 'Generate shards';
+      title.style.cssText = 'font-weight:700;font-size:15px;margin-bottom:8px;color:#fff;';
+
+      const help = document.createElement('div');
+      help.textContent = 'Asks the model for a JSON batch and writes one .txt per shard — no code-fence parsing, so nested code inside shards is safe.';
+      help.style.cssText = 'color:#aaa;line-height:1.45;margin-bottom:14px;';
+
+      const fieldCss = 'width:100%;box-sizing:border-box;background:var(--field-bg,#111);border:1px solid var(--field-border,#333);color:#eee;border-radius:7px;padding:9px 10px;font-size:14px;';
+      const labelCss = 'display:block;font-size:12px;color:#8ab4d4;margin:0 0 4px 1px;';
+
+      function labelled(text, el) {
+          const wrap = document.createElement('div');
+          wrap.style.marginBottom = '12px';
+          const lab = document.createElement('label');
+          lab.textContent = text;
+          lab.style.cssText = labelCss;
+          wrap.append(lab, el);
+          return wrap;
+      }
+
+      const formatSel = document.createElement('select');
+      formatSel.style.cssText = fieldCss;
+      [['cx', 'CX'], ['dpo', 'DPO'], ['chatml', 'ChatML teaching']].forEach(([val, lab]) => {
+          const opt = document.createElement('option');
+          opt.value = val;
+          opt.textContent = lab;
+          formatSel.appendChild(opt);
+      });
+
+      const countInput = document.createElement('input');
+      countInput.type = 'number';
+      countInput.min = '1';
+      countInput.max = '25';
+      countInput.value = '5';
+      countInput.style.cssText = fieldCss;
+
+      const briefInput = document.createElement('textarea');
+      briefInput.rows = 4;
+      briefInput.placeholder = 'Topic/theme for this batch, e.g. "Ableton sidechain compression setups, real device names and settings"';
+      briefInput.style.cssText = fieldCss + 'resize:vertical;min-height:70px;font-family:inherit;';
+
+      const folderInput = document.createElement('input');
+      folderInput.type = 'text';
+      folderInput.value = 'shards';
+      folderInput.autocomplete = 'off';
+      folderInput.style.cssText = fieldCss;
+
+      // Status area: progress text, written-file list, or raw model output on failure
+      const statusBox = document.createElement('div');
+      statusBox.style.cssText = 'display:none;margin-bottom:12px;line-height:1.5;';
+
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;';
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.textContent = 'Close';
+      cancelBtn.style.cssText = 'background:#2a2a38;border:1px solid #555;color:#ccc;border-radius:6px;padding:7px 16px;font-size:13px;cursor:pointer;';
+
+      const genBtn = document.createElement('button');
+      genBtn.textContent = 'Generate';
+      genBtn.style.cssText = 'background:#1f5a3a;border:1px solid #248050;color:#fff;border-radius:6px;padding:7px 16px;font-size:13px;font-weight:600;cursor:pointer;';
+
+      row.append(cancelBtn, genBtn);
+      panel.append(
+          title, help,
+          labelled('Format', formatSel),
+          labelled('Count', countInput),
+          labelled('Brief', briefInput),
+          labelled('Output folder', folderInput),
+          statusBox, row
+      );
+      backdrop.appendChild(panel);
+      document.body.appendChild(backdrop);
+
+      let busy = false;
+      function cleanup() {
+          if (busy) return; // don't tear down mid-generation
+          document.removeEventListener('keydown', onKey, true);
+          backdrop.remove();
+          try { if (prevFocus && prevFocus.focus) prevFocus.focus(); } catch (_) {}
+      }
+      function onKey(e) {
+          if (e.key === 'Escape') { e.preventDefault(); cleanup(); }
+      }
+      function showStatus(html, color) {
+          statusBox.style.display = 'block';
+          statusBox.style.color = color || '#aaa';
+          statusBox.innerHTML = html;
+      }
+      function escapeHtml(s) {
+          return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      }
+
+      async function generate() {
+          const count = parseInt(countInput.value, 10);
+          const brief = briefInput.value.trim();
+          if (!brief) {
+              briefInput.style.borderColor = '#8a2424';
+              briefInput.focus();
+              return;
+          }
+          if (!count || count < 1 || count > 25) {
+              countInput.style.borderColor = '#8a2424';
+              countInput.focus();
+              return;
+          }
+          briefInput.style.borderColor = '';
+          countInput.style.borderColor = '';
+
+          busy = true;
+          genBtn.disabled = true;
+          cancelBtn.disabled = true;
+          genBtn.textContent = 'Generating…';
+          showStatus('Waiting on the model — this can take a while for larger batches.');
+
+          try {
+              const res = await fetch('/shards/generate', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                      format: formatSel.value,
+                      count: count,
+                      brief: brief,
+                      folder: folderInput.value.trim()
+                  })
+              });
+              const data = await res.json().catch(() => ({}));
+              if (!res.ok || data.status !== 'ok') {
+                  // Show the raw model output so the user can see what went
+                  // wrong rather than a silent/generic error.
+                  let html = '<div style="color:#e88;">' + escapeHtml(data.error || ('Request failed (' + res.status + ')')) + '</div>';
+                  if (data.raw) {
+                      html += '<div style="color:#8ab4d4;margin-top:8px;font-size:12px;">Raw model output:</div>'
+                           + '<pre style="max-height:220px;overflow:auto;background:var(--field-bg,#111);border:1px solid var(--field-border,#333);border-radius:7px;padding:8px 10px;font-size:11px;white-space:pre-wrap;word-break:break-word;color:#ccc;margin:4px 0 0;">'
+                           + escapeHtml(data.raw) + '</pre>';
+                  }
+                  showStatus(html);
+                  hwuiToast('Shard generation failed: ' + (data.error || res.status), 'error', 5000);
+                  return;
+              }
+              const fileList = (data.files || []).map(f => '<li style="margin:2px 0;">' + escapeHtml(f) + '</li>').join('');
+              showStatus(
+                  '<div style="color:#4dffaa;">Wrote ' + data.count + ' shard file' + (data.count === 1 ? '' : 's') + ' to ' + escapeHtml(data.folder) + '</div>'
+                  + '<ul style="margin:6px 0 0;padding-left:18px;font-size:12px;color:#ccc;max-height:180px;overflow:auto;">' + fileList + '</ul>'
+              );
+              hwuiToast('Generated ' + data.count + ' shard file' + (data.count === 1 ? '' : 's'), 'success', 3800);
+          } catch (err) {
+              console.error('Shard generation failed:', err);
+              showStatus('<div style="color:#e88;">' + escapeHtml(err.message) + '</div>');
+              hwuiToast('Shard generation failed: ' + err.message, 'error', 5000);
+          } finally {
+              busy = false;
+              genBtn.disabled = false;
+              cancelBtn.disabled = false;
+              genBtn.textContent = 'Generate';
+          }
+      }
+
+      document.addEventListener('keydown', onKey, true);
+      backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) cleanup(); });
+      cancelBtn.addEventListener('click', cleanup);
+      genBtn.addEventListener('click', generate);
+      setTimeout(() => briefInput.focus(), 0);
+  }
+
+  function hwuiExportTextContent(content) {
+      if (Array.isArray(content)) {
+          return content
+              .filter(part => part && part.type === 'text')
+              .map(part => part.text || '')
+              .join('\n');
+      }
+      return content == null ? '' : String(content);
+  }
+
+  function getHelcyonBenchChatTitle() {
+      if (currentChatFilename) {
+          const activeRow = Array.from(document.querySelectorAll('.chat-item.active[data-filename]'))
+              .find(row => row.dataset.filename === currentChatFilename);
+          const activeTitle = activeRow ? activeRow.querySelector('.chat-title') : null;
+          if (activeTitle && activeTitle.textContent.trim()) return activeTitle.textContent.trim();
+          return currentChatFilename.replace(/\.txt$/i, '');
+      }
+      return 'current-chat';
+  }
+
+  function getHelcyonBenchModelName() {
+      const openaiIndicator = document.getElementById('openai-indicator');
+      if (openaiIndicator && openaiIndicator.style.display !== 'none') {
+          const openaiModel = document.getElementById('openai-indicator-model');
+          return openaiModel ? openaiModel.textContent.trim() : '';
+      }
+
+      const anthropicIndicator = document.getElementById('anthropic-indicator');
+      if (anthropicIndicator && anthropicIndicator.style.display !== 'none') {
+          const anthropicModel = document.getElementById('anthropic-indicator-model');
+          return anthropicModel ? anthropicModel.textContent.trim() : '';
+      }
+
+      const modelDisplay = document.getElementById('model-display-name');
+      const label = modelDisplay ? modelDisplay.textContent.trim() : '';
+      if (!label || /^(loading|no model loaded|model unknown)/i.test(label)) return '';
+      return label;
+  }
+
+  function helcyonBenchSlug(value, fallback) {
+      const slug = (value || '')
+          .normalize('NFKD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .slice(0, 80);
+      return slug || fallback;
+  }
+
+  function helcyonBenchFilenameTimestamp(date) {
+      const pad = n => String(n).padStart(2, '0');
+      return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate()) + '-' + pad(date.getHours()) + pad(date.getMinutes());
+  }
+
+  function buildHelcyonBenchMessages(messages) {
+      const visible = (messages || []).filter(msg =>
+          msg && !msg.hidden && !msg.is_opening_line && (msg.role === 'user' || msg.role === 'assistant')
+      );
+      const pairs = [];
+
+      for (let i = 0; i < visible.length - 1; i++) {
+          const promptMsg = visible[i];
+          const responseMsg = visible[i + 1];
+          if (promptMsg.role !== 'user' || responseMsg.role !== 'assistant') continue;
+
+          const response = hwuiExportTextContent(responseMsg.content);
+          if (!response || response.trim().length === 0) continue;
+
+          pairs.push({
+              index: pairs.length + 1,
+              prompt: hwuiExportTextContent(promptMsg.content),
+              response: response
+          });
+          i++;
+      }
+
+      return pairs;
+  }
+
+  function exportCurrentChatForHelcyonBench() {
+      if (!currentChatFilename || !window.loadedChat || !Array.isArray(window.loadedChat)) {
+          hwuiToast('No chat loaded to export.', 'info');
+          return;
+      }
+
+      const pairs = buildHelcyonBenchMessages(window.loadedChat);
+      if (!pairs.length) {
+          hwuiToast('No prompt/response pairs to export.', 'info');
+          return;
+      }
+
+      const now = new Date();
+      const chatTitle = getHelcyonBenchChatTitle();
+      const modelName = getHelcyonBenchModelName();
+      const payload = {
+          schema: 'helcyon_bench_hwui_export_v1',
+          source: 'HWUI',
+          exported_at: now.toISOString(),
+          chat_title: chatTitle,
+          model_name: modelName,
+          messages: pairs
+      };
+
+      const filename = 'helcyon-bench-hwui-' +
+          helcyonBenchSlug(chatTitle, 'chat') + '-' +
+          helcyonBenchSlug(modelName, 'model') + '-' +
+          helcyonBenchFilenameTimestamp(now) + '.json';
+
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+
+      console.log('✅ Helcyon-Bench export:', filename, pairs.length, 'pair(s)');
+      hwuiToast('Exported ' + pairs.length + ' pair' + (pairs.length === 1 ? '' : 's') + ' for Helcyon-Bench', 'success');
+  }
   
   // ==================================================
   // DELETE MESSAGE
@@ -5518,11 +6544,9 @@ async function branchMessage(assistantIndex) {
     const data = await res.json();
     if (data.error) { hwuiToast('Branch failed: ' + data.error, 'error'); return; }
 
-    // Inherit the source chat's colour on the new (branched) chat
-    const _branchColors = getChatColors();
-    if (_branchColors[currentChatFilename]) {
-      setChatColor(data.new_filename, _branchColors[currentChatFilename]);
-    }
+    // Inherit the source chat's colour on the new (branched) chat.
+    // This copies the key and explicitly preserves the source tint.
+    copyChatColor(currentChatFilename, data.new_filename);
 
     await loadChats();
     openChat(data.new_filename);
@@ -5531,6 +6555,503 @@ async function branchMessage(assistantIndex) {
   }
 }
 
+// ==================================================
+// LOAD CHARACTER MEMORY (MODAL VERSION)
+// ==================================================
+async function loadCharacterMemory() {
+  const list = document.getElementById("memory-list");
+  if (!list) {
+    console.error('❌ memory-list element not found');
+    return;
+  }
+
+  const tab = window._memoryTab || 'character';
+  let character;
+  if (tab === 'global') {
+    character = 'global';
+  } else {
+    const dropdown = document.getElementById('character-select');
+    character = dropdown ? dropdown.value : (currentCharacter?.name || '');
+  }
+
+  if (!character) {
+    list.innerHTML = '<p style="color: #666;">No character selected</p>';
+    return;
+  }
+
+  try {
+    const res = await fetch(`/get_character_memory?character=${encodeURIComponent(character)}`);
+    const data = await res.json();
+    
+    list.innerHTML = "";
+
+    if (!data.entries || data.entries.length === 0) {
+      list.innerHTML = '<p style="color: #666; font-size: 13px;">No memories saved yet.</p>';
+      return;
+    }
+
+    data.entries.forEach((entry, i) => {
+      const div = document.createElement("div");
+      div.className = "memory-entry";
+      div.id = `memory-entry-${i}`;
+
+      // Backend splits on "# Memory:" so first line IS the title
+      const lines = entry.split('\n').map(l => l.trim()).filter(l => l && !l.match(/^---+$/));
+      let title = '', keywords = '', bodyLines = [];
+      lines.forEach((line, idx) => {
+        if (idx === 0) title = line;
+        else if (line.toLowerCase().startsWith('keywords:')) keywords = line.replace(/^keywords:\s*/i, '').trim();
+        else bodyLines.push(line);
+      });
+      const body = bodyLines.filter(l => l).join(' ').trim();
+
+      const formatted = `
+        ${title    ? `<div class="mem-title">${title}</div>` : ''}
+        ${keywords ? `<div class="mem-keywords">🔑 ${keywords}</div>` : ''}
+        ${body     ? `<div class="mem-body">${body}</div>` : ''}
+      `.trim();
+
+      div.innerHTML = `
+        <div id="memory-view-${i}">
+          <button onclick="deleteMemory(${i})">✕</button>
+          <button onclick="startEditMemory(${i})" style="right:28px;">✏️</button>
+          ${formatted}
+        </div>
+        <div id="memory-edit-${i}" style="display:none;">
+          <textarea id="memory-edit-text-${i}" rows="6" class="memory-edit-textarea" style="font-size:13px; font-family:inherit; resize:vertical;"># Memory: ${entry}</textarea>
+          <div style="margin-top:6px; display:flex; gap:8px;">
+            <button onclick="saveEditMemory(${i})" class="save-btn mem-edit-btn">💾 Save</button>
+            <button onclick="cancelEditMemory(${i})" class="cancel-btn mem-edit-btn">Cancel</button>
+          </div>
+        </div>`;
+      list.appendChild(div);
+    });
+    
+    console.log(`✅ Loaded ${data.entries.length} memories for ${character}`);
+    
+  } catch (err) {
+    console.error('❌ Failed to load memories:', err);
+    list.innerHTML = '<p style="color: #f55;">Error loading memories</p>';
+  }
+}
+
+async function deleteMemory(index) {
+  const tab = window._memoryTab || 'character';
+  let character;
+  if (tab === 'global') {
+    character = 'global';
+  } else {
+    const dropdown = document.getElementById('character-select');
+    character = dropdown ? dropdown.value : (currentCharacter?.name || '');
+  }
+  
+  if (!character) return;
+  
+  await fetch(`/delete_character_memory`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ character, index })
+  });
+  
+  loadCharacterMemory();
+}
+
+function startEditMemory(index) {
+  document.getElementById(`memory-view-${index}`).style.display = 'none';
+  document.getElementById(`memory-edit-${index}`).style.display = 'block';
+}
+
+function cancelEditMemory(index) {
+  document.getElementById(`memory-edit-${index}`).style.display = 'none';
+  document.getElementById(`memory-view-${index}`).style.display = 'block';
+}
+
+async function saveEditMemory(index) {
+  const tab = window._memoryTab || 'character';
+  let character;
+  if (tab === 'global') {
+    character = 'global';
+  } else {
+    const dropdown = document.getElementById('character-select');
+    character = dropdown ? dropdown.value : (currentCharacter?.name || '');
+  }
+  if (!character) return;
+  const content = document.getElementById(`memory-edit-text-${index}`).value.trim();
+  if (!content) return;
+  const res = await fetch('/edit_character_memory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ character, index, content })
+  });
+  if (res.ok) loadCharacterMemory();
+  else hwuiToast('Failed to save edit.', 'error');
+}
+
+// Track which tab is active: 'character' or 'global'
+window._memoryTab = 'character';
+
+function setMemoryTab(tab) {
+  window._memoryTab = tab;
+  const isChar = tab === 'character';
+  document.getElementById('memory-modal-title').textContent = isChar ? 'Character Memory' : 'Global Memory';
+  document.getElementById('memory-tab-character').className = isChar ? 'save-btn' : 'cancel-btn';
+  document.getElementById('memory-tab-global').className = isChar ? 'cancel-btn' : 'save-btn';
+  // Hide add panel when switching tabs
+  document.getElementById('memory-add-panel').style.display = 'none';
+  loadCharacterMemory();
+}
+
+function openMemoryModal() {
+  const dropdown = document.getElementById('character-select');
+  if (!dropdown || !dropdown.value) {
+    hwuiToast('Please select a character first.', 'info');
+    return;
+  }
+  window._memoryTab = 'character';
+  document.getElementById('memory-modal-title').textContent = 'Character Memory';
+  document.getElementById('memory-tab-character').className = 'save-btn';
+  document.getElementById('memory-tab-global').className = 'cancel-btn';
+  document.getElementById('memory-modal').style.display = 'block';
+  loadCharacterMemory();
+}
+
+function closeMemoryModal() {
+  document.getElementById('memory-modal').style.display = 'none';
+}
+
+function toggleMemoryAddPanel() {
+  const panel = document.getElementById('memory-add-panel');
+  const isHidden = panel.style.display === 'none' || panel.style.display === '';
+  panel.style.display = isHidden ? 'block' : 'none';
+  if (isHidden) {
+    // Scroll the modal body down so the new entry panel is visible
+    const modalBody = panel.closest('.modal-body') || panel.parentElement;
+    setTimeout(() => {
+      panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      // Also scroll the modal body container itself
+      if (modalBody) modalBody.scrollTop = modalBody.scrollHeight;
+    }, 50);
+    // Focus the title field
+    const titleEl = document.getElementById('memory-add-title');
+    if (titleEl) setTimeout(() => titleEl.focus(), 80);
+  }
+}
+
+// ──────────────────────────────────────────────────────────────
+// Global Documents — UI over the global_documents/ keyword-injected pool.
+// Documents are plain editable text; the leading "Keywords:" line is the
+// retrieval tag (stored separately as a field, surfaced as that line on disk).
+// Uploads reuse /parse_document to extract text from PDF/DOCX/ODT.
+// ──────────────────────────────────────────────────────────────
+window._globalDocs = [];
+
+function _gdEsc(s) {
+  return (s == null ? '' : String(s)).replace(/[&<>"]/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+function openGlobalDocsModal() {
+  document.getElementById('global-docs-add-panel').style.display = 'none';
+  document.getElementById('global-docs-modal').style.display = 'block';
+  loadGlobalDocs();
+}
+
+function closeGlobalDocsModal() {
+  document.getElementById('global-docs-modal').style.display = 'none';
+}
+
+async function openGlobalDocumentsFolder() {
+  try {
+    const res = await fetch('/global_documents/open_folder', { method: 'POST' });
+    const data = await res.json();
+
+    if (data.error) {
+      hwuiToast('Failed to open global documents: ' + data.error, 'error');
+      return;
+    }
+
+    hwuiToast('Global documents folder opened', 'success');
+  } catch (err) {
+    console.error('Open global documents folder error:', err);
+    hwuiToast('Failed to open global documents folder', 'error');
+  }
+}
+
+async function loadGlobalDocs() {
+  const list = document.getElementById('global-docs-list');
+  list.innerHTML = '<p style="color:#666;font-size:13px;">Loading…</p>';
+  try {
+    const res = await fetch('/global_documents/list');
+    const data = await res.json();
+    renderGlobalDocs(data.documents || []);
+  } catch (err) {
+    console.error('❌ Failed to load global documents:', err);
+    list.innerHTML = '<p style="color:#f55;">Error loading documents</p>';
+  }
+}
+
+function renderGlobalDocs(docs) {
+  window._globalDocs = docs;
+  const list = document.getElementById('global-docs-list');
+  list.innerHTML = '';
+  if (!docs.length) {
+    list.innerHTML = '<p style="color:#666;font-size:13px;">No global documents yet. Add one or import a file.</p>';
+    return;
+  }
+  docs.forEach((d, i) => {
+    const div = document.createElement('div');
+    div.className = 'memory-entry';
+    const kw = d.keywords
+      ? `<div class="mem-keywords">🔑 ${_gdEsc(d.keywords)}</div>`
+      : `<div class="mem-keywords" style="color:#d98a3d;">⚠️ no keywords — may never be retrieved</div>`;
+    const preview = d.preview
+      ? `<div class="mem-body">${_gdEsc(d.preview)}${d.preview.length >= 160 ? '…' : ''}</div>`
+      : '';
+    const editBtn = d.editable
+      ? `<button onclick="startEditGlobalDoc(${i})" style="right:28px;">✏️</button>` : '';
+    div.innerHTML = `
+      <div id="gdoc-view-${i}">
+        <button onclick="deleteGlobalDoc(${i})">✕</button>
+        ${editBtn}
+        <div class="mem-title">📄 ${_gdEsc(d.filename)}</div>
+        ${kw}
+        ${preview}
+      </div>
+      <div id="gdoc-edit-${i}" style="display:none;">
+        <input id="gdoc-edit-filename-${i}" type="text" class="memory-add-input" style="font-size:13px;font-family:inherit;" />
+        <input id="gdoc-edit-keywords-${i}" type="text" placeholder="Keywords (comma separated)" class="memory-add-input" style="font-size:13px;font-family:inherit;" />
+        <textarea id="gdoc-edit-body-${i}" rows="8" class="memory-add-input" style="font-size:13px;font-family:inherit;resize:vertical;"></textarea>
+        <div style="margin-top:6px;display:flex;gap:8px;">
+          <button onclick="saveEditGlobalDoc(${i})" class="save-btn mem-edit-btn">💾 Save</button>
+          <button onclick="cancelEditGlobalDoc(${i})" class="cancel-btn mem-edit-btn">Cancel</button>
+        </div>
+      </div>`;
+    list.appendChild(div);
+  });
+}
+
+function toggleGlobalDocsAddPanel(show) {
+  const panel = document.getElementById('global-docs-add-panel');
+  panel.style.display = show ? 'block' : 'none';
+  if (show) {
+    document.getElementById('global-docs-add-filename').value = '';
+    document.getElementById('global-docs-add-keywords').value = '';
+    document.getElementById('global-docs-add-body').value = '';
+    setTimeout(() => {
+      panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      document.getElementById('global-docs-add-filename').focus();
+    }, 60);
+  }
+}
+
+async function submitAddGlobalDoc() {
+  const filename = document.getElementById('global-docs-add-filename').value.trim();
+  const keywords = document.getElementById('global-docs-add-keywords').value.trim();
+  const body = document.getElementById('global-docs-add-body').value.trim();
+  if (!filename) { hwuiToast('Filename is required.', 'info'); return; }
+  if (!body) { hwuiToast('Document content is required.', 'info'); return; }
+  const res = await fetch('/global_documents/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename, keywords, body })
+  });
+  const data = await res.json();
+  if (data.success) {
+    toggleGlobalDocsAddPanel(false);
+    loadGlobalDocs();
+  } else {
+    hwuiToast(data.error || 'Failed to save document.', 'error');
+  }
+}
+
+async function importGlobalDocFile(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const res = await fetch('/parse_document', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (data.error) { hwuiToast(data.error, 'error'); input.value = ''; return; }
+    // Suggest a filename without the original extension — it's stored as text.
+    const base = (data.filename || 'document').replace(/\.[^.]+$/, '');
+    document.getElementById('global-docs-add-filename').value = base;
+    document.getElementById('global-docs-add-body').value = data.content || '';
+    document.getElementById('global-docs-add-keywords').focus();
+  } catch (err) {
+    console.error('❌ Failed to import file:', err);
+    hwuiToast('Failed to import file.', 'error');
+  }
+  input.value = '';
+}
+
+async function startEditGlobalDoc(i) {
+  const d = window._globalDocs[i];
+  if (!d) return;
+  try {
+    const res = await fetch(`/global_documents/get/${encodeURIComponent(d.filename)}`);
+    const data = await res.json();
+    if (data.error) { hwuiToast(data.error, 'error'); return; }
+    document.getElementById(`gdoc-edit-filename-${i}`).value = data.filename;
+    document.getElementById(`gdoc-edit-keywords-${i}`).value = data.keywords || '';
+    document.getElementById(`gdoc-edit-body-${i}`).value = data.body || '';
+    document.getElementById(`gdoc-view-${i}`).style.display = 'none';
+    document.getElementById(`gdoc-edit-${i}`).style.display = 'block';
+  } catch (err) {
+    console.error('❌ Failed to load document for edit:', err);
+    hwuiToast('Failed to load document.', 'error');
+  }
+}
+
+function cancelEditGlobalDoc(i) {
+  document.getElementById(`gdoc-edit-${i}`).style.display = 'none';
+  document.getElementById(`gdoc-view-${i}`).style.display = 'block';
+}
+
+async function saveEditGlobalDoc(i) {
+  const d = window._globalDocs[i];
+  const filename = document.getElementById(`gdoc-edit-filename-${i}`).value.trim();
+  const keywords = document.getElementById(`gdoc-edit-keywords-${i}`).value.trim();
+  const body = document.getElementById(`gdoc-edit-body-${i}`).value.trim();
+  if (!filename) { hwuiToast('Filename is required.', 'info'); return; }
+  if (!body) { hwuiToast('Document content is required.', 'info'); return; }
+  const res = await fetch('/global_documents/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename, keywords, body, original_filename: d ? d.filename : '' })
+  });
+  const data = await res.json();
+  if (data.success) loadGlobalDocs();
+  else hwuiToast(data.error || 'Failed to save document.', 'error');
+}
+
+async function deleteGlobalDoc(i) {
+  const d = window._globalDocs[i];
+  if (!d) return;
+  if (!await hwuiConfirm(`Delete "${d.filename}" from the global documents pool?`)) return;
+  const res = await fetch(`/global_documents/${encodeURIComponent(d.filename)}`, { method: 'DELETE' });
+  const data = await res.json();
+  if (data.success) loadGlobalDocs();
+  else hwuiToast(data.error || 'Failed to delete document.', 'error');
+}
+
+async function submitAddMemory() {
+  const tab = window._memoryTab || 'character';
+  let character;
+  if (tab === 'global') {
+    character = 'global';
+  } else {
+    const dropdown = document.getElementById('character-select');
+    character = dropdown ? dropdown.value : (currentCharacter?.name || '');
+  }
+  if (!character) { hwuiToast('No character selected', 'info'); return; }
+  const title = document.getElementById('memory-add-title').value.trim() || 'Untitled';
+  const keywords = document.getElementById('memory-add-keywords').value.trim();
+  const body = document.getElementById('memory-add-body').value.trim();
+  if (!body) { hwuiToast('Memory content is required.', 'info'); return; }
+  const res = await fetch('/add_character_memory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ character, title, keywords, body })
+  });
+  if (res.ok) {
+    document.getElementById('memory-add-title').value = '';
+    document.getElementById('memory-add-keywords').value = '';
+    document.getElementById('memory-add-body').value = '';
+    document.getElementById('memory-add-panel').style.display = 'none';
+    loadCharacterMemory();
+  } else if (res.status === 403) {
+    hwuiToast('Memory saving is disabled in roleplay projects.', 'info');
+  }
+}
+
+function showMemoryConfirmInBubble(msgDiv, character, title, keywords, body) {
+  const existing = msgDiv.querySelector('.memory-confirm-bar');
+  if (existing) existing.remove();
+
+  const bar = document.createElement('div');
+  bar.className = 'memory-confirm-bar';
+  bar.innerHTML = `
+    <span class="memory-confirm-label">🧠 Save "<strong>${title}</strong>" to memory?</span>
+    <button class="memory-confirm-yes save-btn" data-target="character">🧠 Save to Character</button>
+    <button class="memory-confirm-yes save-btn" data-target="global">🌐 Save to Global</button>
+    <button class="memory-confirm-no cancel-btn">✕ Discard</button>
+  `;
+  msgDiv.appendChild(bar);
+
+  // Shared save handler — both buttons hit the same route; only `target` differs.
+  // "character" → memories/<character>_memory.txt; "global" → memories/global_memory.txt.
+  const doSave = (target) => {
+    fetch('/add_character_memory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ character, title, keywords, body, target })
+    }).then(r => {
+      if (r.ok) {
+        bar.remove();
+        // Push hidden user confirmation and trigger a follow-up model response
+        // _suppressMemoryDetection prevents the follow-up from being treated as a new memory tag
+        // _memoryConfirmNote injects a one-sentence author note so the model just confirms briefly
+        const confirmMsg = 'Thats perfect, confirmed.';
+        if (!window.loadedChat) window.loadedChat = [];
+        window.loadedChat.push({ role: 'user', content: confirmMsg, speaker: activeUserName || 'User', hidden: true });
+        window._suppressMemoryDetection = true;
+        window._memoryConfirmNote = true;
+        window._memoryConfirmMaxTokens = 80;
+        const chat = document.getElementById('chat');
+        fetchAndDisplayResponse(confirmMsg, chat);
+      } else {
+        const msg = r.status === 403
+          ? 'Memory saving is disabled in roleplay projects.'
+          : '⚠️ Save failed.';
+        bar.innerHTML = `<span class="memory-confirm-label" style="color:#f88;">${msg}</span>`;
+        setTimeout(() => bar.remove(), 2500);
+      }
+    });
+  };
+
+  bar.querySelectorAll('.memory-confirm-yes').forEach(btn => {
+    btn.onclick = () => doSave(btn.dataset.target);
+  });
+
+  bar.querySelector('.memory-confirm-no').onclick = () => {
+    bar.innerHTML = '<span class="memory-confirm-label" style="color:#888;">Memory discarded.</span>';
+    setTimeout(() => bar.remove(), 1500);
+  };
+}
+
+function showAutoMemoryToast(character, title, undoToken) {
+  const oldToast = document.getElementById('auto-memory-toast');
+  if (oldToast) oldToast.remove();
+  const toast = document.createElement('div');
+  toast.id = 'auto-memory-toast';
+  toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:rgba(30,70,50,.97);color:#fff;padding:8px 10px 8px 14px;border:1px solid #3b8a62;border-radius:18px;font-size:13px;z-index:10000;box-shadow:0 4px 14px rgba(0,0,0,.45);display:flex;align-items:center;gap:10px;';
+  const label = document.createElement('span');
+  label.textContent = `Memory updated: ${title}`;
+  const undo = document.createElement('button');
+  undo.textContent = 'Undo';
+  undo.style.cssText = 'background:transparent;color:#cfead9;border:1px solid #72ad89;border-radius:12px;padding:2px 8px;cursor:pointer;font-size:12px;';
+  undo.onclick = async () => {
+    undo.disabled = true;
+    try {
+      const response = await fetch('/auto_memory/undo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ character, undo_token: undoToken })
+      });
+      label.textContent = response.ok ? 'Memory removed' : 'Could not remove memory';
+    } catch (error) {
+      label.textContent = 'Could not remove memory';
+    }
+    undo.remove();
+    setTimeout(() => toast.remove(), 1800);
+  };
+  toast.append(label, undo);
+  if (typeof hwuiPositionToastHost === 'function') hwuiPositionToastHost(toast);
+  document.body.appendChild(toast);
+  setTimeout(() => { if (toast.isConnected) toast.remove(); }, 9000);
+}
+    
   // ==================================================
   // INITIALISE PAGE (UNIFIED)
   // ==================================================
@@ -5960,6 +7481,13 @@ async function loadProjects() {
       topbarTitle.textContent = data.active ? '📁 ' + data.active : 'Helcyon-WebUI';
     }
 
+    const activeProject = data.active ? (data.projects || []).find(p => p.name === data.active) : null;
+    if (activeProject && activeProject.theme) {
+      applyThemeByName(activeProject.theme).catch(err => {
+        console.warn('Failed to apply project theme:', err);
+      });
+    }
+
     const indicator = document.getElementById('active-project-indicator');
     const nameSpan = document.getElementById('active-project-name');
     if (data.active) {
@@ -6335,6 +7863,34 @@ function closeProjectModal() {
   modal.style.display = 'none';
 }
 
+async function populateProjectThemeSelect(selectedTheme) {
+  const select = document.getElementById('edit-project-theme');
+  if (!select) return;
+
+  select.innerHTML = '<option value="">No folder theme</option>';
+
+  try {
+    const res = await fetch('/themes/list');
+    const data = await res.json();
+    (data.themes || []).forEach(name => {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      select.appendChild(option);
+    });
+    select.value = selectedTheme || '';
+  } catch (err) {
+    console.warn('Failed to load project theme list:', err);
+    if (selectedTheme) {
+      const option = document.createElement('option');
+      option.value = selectedTheme;
+      option.textContent = selectedTheme;
+      select.appendChild(option);
+      select.value = selectedTheme;
+    }
+  }
+}
+
 function openEditProject(projectName) {
   currentEditingProject = projectName;
 
@@ -6344,6 +7900,7 @@ function openEditProject(projectName) {
       document.getElementById('edit-project-name').value = projectName;
       document.getElementById('edit-project-instructions').value = data.instructions || '';
       document.getElementById('project-edit-panel-title').textContent = projectName;
+      populateProjectThemeSelect(data.theme || '');
 
       // Load RP mode state
       const rpMode = data.rp_mode || false;
@@ -6395,12 +7952,13 @@ async function saveProjectEdit() {
   const instructions = document.getElementById('edit-project-instructions').value.trim();
   const rpMode = document.getElementById('rp-mode-btn').textContent.trim() === 'ON';
   const rpOpener = document.getElementById('edit-project-rp-opener').value.trim();
+  const projectTheme = (document.getElementById('edit-project-theme') || {}).value || '';
   
   try {
     const res = await fetch(`/projects/update/${currentEditingProject}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ instructions, rp_mode: rpMode, rp_opener: rpOpener })
+      body: JSON.stringify({ instructions, rp_mode: rpMode, rp_opener: rpOpener, theme: projectTheme })
     });
     
     const data = await res.json();
@@ -6411,6 +7969,15 @@ async function saveProjectEdit() {
     }
     
     console.log('✅ Project updated:', currentEditingProject);
+
+    if (currentEditingProject === activeProjectName && projectTheme) {
+      try {
+        await applyThemeByName(projectTheme);
+      } catch (themeErr) {
+        console.warn('Project saved, but theme apply failed:', themeErr);
+        hwuiToast('Project saved, but the theme could not be applied.', 'info');
+      }
+    }
     
     closeInlineEdit();
     loadProjects();
@@ -6513,6 +8080,16 @@ function setChatColor(filename, color) {
   } else {
     delete colors[filename];
   }
+  localStorage.setItem('chatColors', JSON.stringify(colors));
+}
+
+function copyChatColor(sourceFilename, targetFilename) {
+  if (!sourceFilename || !targetFilename || sourceFilename === targetFilename) return;
+  const colors = getChatColors();
+  const sourceColor = colors[sourceFilename];
+  if (!sourceColor) return;
+  colors[sourceFilename] = sourceColor;
+  colors[targetFilename] = sourceColor;
   localStorage.setItem('chatColors', JSON.stringify(colors));
 }
 
@@ -6872,6 +8449,7 @@ function showToast(message, duration = 3500) {
     `;
     document.body.appendChild(toast);
   }
+  if (typeof hwuiPositionToastHost === 'function') hwuiPositionToastHost(toast);
   toast.textContent = message;
   toast.style.opacity = '1';
   clearTimeout(toast._hideTimeout);

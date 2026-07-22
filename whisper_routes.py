@@ -23,6 +23,7 @@ TRANSCRIPT_FIXES = [
     (r'\bheathsin\b', 'Helcyon'),
     (r"\bHelsing's\b", "Helcyon's"),  # Whisper hears Helcyon's as Helsing's
     (r'\bhelsy\s*(?:and|on)\b', 'Helcyon'),
+    (r'\b(?:hellsy|helsea)\s*(?:and|on)\b', 'Helcyon'),
     (r'\bhealthy\s*and\b', 'Helcyon'),
     (r'\bhealthy\s*on\b', 'Helcyon'),
     # Helcyon WebUI — combined pattern must come BEFORE the standalone Helcyon pattern

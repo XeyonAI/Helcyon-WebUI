@@ -22,6 +22,7 @@
   --user-msg-text: #f0f0f0;
   --model-msg-bg: #131d27;
   --model-msg-text: #e0e0e0;
+  --message-preview-bg: #0a0d10;
   --msg-border: #27394b;
   --hr-color: #ffffff4d;
   --msg-border-width: 1px;
@@ -43,7 +44,7 @@
   --icon-button-hover: #161c2a;
   --sidebar-border: #333;
   --project-item-border: #333;
-  --project-edit-bg: #1a1d22;
+  --project-edit-workspace-bg: var(--modal-bg);
   --project-edit-bg: #0a0d10;
   --input-border: #293d4b;
   --field-bg: #0a0d10;
@@ -1124,6 +1125,29 @@ small {
   font-size: 18px;
 }
 
+.chat-heading-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#open-chat-folder-btn {
+  background: #1f232b;
+  border: 1px solid #333b48;
+  color: #cfd6e2;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 8px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+#open-chat-folder-btn:hover {
+  background: #2a303a;
+  color: #fff;
+}
+
 /* Top row: dropdown + new chat button */
 .sidebar-controls {
   display: flex;
@@ -1877,6 +1901,13 @@ hr.msg-separator {
   text-align: right;
 }
 
+.project-modal-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
 #memory-modal .modal-footer button {
   padding: 6px 12px !important;
   font-size: 13px !important;
@@ -2534,7 +2565,7 @@ hr.msg-separator {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  background: var(--modal-bg);
+  background: var(--project-edit-workspace-bg, var(--modal-bg));
   align-items: center;
   padding: 24px 20px 20px;
 }
@@ -2597,6 +2628,7 @@ hr.msg-separator {
   display: block;
 }
 #project-edit-panel-body input[type="text"],
+#project-edit-panel-body select,
 #project-edit-panel-body textarea {
   width: 100%;
   background: var(--field-bg) !important;
@@ -2608,6 +2640,10 @@ hr.msg-separator {
   box-sizing: border-box;
   resize: vertical;
   font-family: inherit;
+}
+#project-edit-panel-body select {
+  resize: none;
+  cursor: pointer;
 }
 #edit-project-instructions {
   min-height: 160px !important;
@@ -2693,7 +2729,13 @@ hr.msg-separator {
   color: #ccc;
 }
 
-/* Document upload button */
+/* Document upload buttons */
+.project-doc-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .upload-doc-btn {
   background: #3a3b3f;
   border: 1px solid #555;
@@ -2703,6 +2745,8 @@ hr.msg-separator {
   cursor: pointer;
   font-size: 14px;
   transition: background 0.2s;
+  min-width: 0;
+  flex: 1 1 180px;
 }
 
 .upload-doc-btn:hover {
@@ -3101,6 +3145,161 @@ button#stop-btn {
 .custom-select-item.active {
   background: #1f2a35;
   color: #ffffff;
+}
+
+.character-select-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-height: 0;
+  padding: 4px 8px;
+  line-height: 1.25;
+}
+
+.character-group-toolbar,
+.character-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 7px;
+  color: #888;
+  font-size: 11px;
+  border-bottom: 1px solid #242424;
+}
+
+.character-group-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: #0d0d0d;
+}
+
+.character-group-toolbar button,
+.character-group-heading,
+.character-group-controls button,
+.character-folder-button,
+.character-group-menu button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  margin: 0;
+}
+
+.character-group-toolbar button {
+  padding: 2px 6px;
+  border: 1px solid #3a3a3a;
+  border-radius: 4px;
+  color: #bbb;
+}
+
+.character-group-heading {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+  font-weight: 600;
+  letter-spacing: 0.25px;
+}
+
+.character-group-controls,
+.character-option-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+}
+
+.character-group-controls {
+  gap: 3px;
+}
+
+.character-group-controls button {
+  width: 20px;
+  height: 20px;
+  color: #777;
+  font-size: 13px;
+  margin: 0;
+}
+
+.character-group-controls button:hover,
+.character-folder-button:hover {
+  color: #ddd;
+}
+
+.character-option-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.character-folder-button {
+  padding: 0;
+  color: #666;
+  font-size: 13px;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  line-height: 1;
+}
+
+.character-group-editor {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 7px;
+}
+
+.character-group-editor input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  margin: 0;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+.character-group-editor button {
+  margin: 0;
+  padding: 3px 6px;
+  font-size: 11px;
+}
+
+.character-group-controls .delete-confirm {
+  width: auto;
+  color: #e88989;
+  font-size: 10px;
+}
+
+.character-group-menu {
+  position: absolute;
+  right: 6px;
+  top: calc(100% - 1px);
+  z-index: 6;
+  min-width: 150px;
+  padding: 4px;
+  background: #151515;
+  border: 1px solid #444;
+  border-radius: 5px;
+  box-shadow: 0 5px 18px rgba(0,0,0,0.55);
+}
+
+.character-group-menu button {
+  display: block;
+  width: 100%;
+  padding: 5px 7px;
+  color: #ddd;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.character-group-menu button:hover {
+  background: #263341;
 }
 
 #voice-custom-select {

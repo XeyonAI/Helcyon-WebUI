@@ -29,6 +29,16 @@ def _read_max_prompt_tokens() -> int:
         return 8500
 
 
+def _read_backend_mode() -> str:
+    """Read the active backend mode from settings.json."""
+    try:
+        _sf = os.path.join(os.path.dirname(__file__), "settings.json")
+        with open(_sf, "r", encoding="utf-8") as f:
+            return str(json.load(f).get("backend_mode", "local") or "local").lower()
+    except Exception:
+        return "local"
+
+
 CONTEXT_WINDOW     = _read_ctx_size()  # read live from settings.json at import time
 GENERATION_RESERVE = 2048   # tokens reserved for the model response
 SYSTEM_BUFFER      = 200    # small safety margin for ChatML overhead tokens
@@ -66,9 +76,17 @@ def trim_chat_history(messages, token_budget: int = None, extra_system_overhead:
     system_tokens = rough_token_count(system_msg.get("content", "")) if system_msg else 0
     print(f"📊 System message: ~{system_tokens} tokens")
 
-    # Dynamically calculate how much room is left for conversation history
+    # Dynamically calculate how much room is left for conversation history.
+    # Local inference is constrained by llama.cpp ctx_size; cloud backends are
+    # constrained by their configured prompt cap instead, so Claude/OpenAI do
+    # not inherit the local 16k window.
+    backend_mode = _read_backend_mode()
     max_prompt_tokens = _read_max_prompt_tokens()  # live read — varies by backend_mode
-    prompt_budget = int((CONTEXT_WINDOW - GENERATION_RESERVE - SYSTEM_BUFFER) / TOKEN_FUDGE)
+    context_window = _read_ctx_size()
+    if backend_mode in ("openai", "anthropic"):
+        prompt_budget = int(max_prompt_tokens / TOKEN_FUDGE)
+    else:
+        prompt_budget = int((context_window - GENERATION_RESERVE - SYSTEM_BUFFER) / TOKEN_FUDGE)
     conversation_budget = max(prompt_budget - system_tokens - extra_system_overhead, 1024)  # never go below 1024
 
     # Hard cap: clamp total prompt to max_prompt_tokens to stay under backend limits.
@@ -87,7 +105,8 @@ def trim_chat_history(messages, token_budget: int = None, extra_system_overhead:
         conversation_budget = token_budget
 
     print(f"📊 Conversation budget: ~{conversation_budget} tokens "
-          f"(context {CONTEXT_WINDOW} - gen {GENERATION_RESERVE} - buffer {SYSTEM_BUFFER} - system {system_tokens})")
+          f"(backend {backend_mode}, context {context_window}, cap {max_prompt_tokens}, "
+          f"gen {GENERATION_RESERVE}, buffer {SYSTEM_BUFFER}, system {system_tokens})")
 
     # Trim conversation history to fit budget (keep most recent messages).
     # ⚠️ The latest turn (body[-1] — normally the user's current message) is
@@ -113,7 +132,8 @@ def trim_chat_history(messages, token_budget: int = None, extra_system_overhead:
               f"anyway (likely a large attached document); older turns dropped.")
 
     print(f"📊 Kept {len(trimmed)} conversation messages (~{total} tokens)")
-    print(f"📊 Estimated total context: ~{system_tokens + total} / {CONTEXT_WINDOW} tokens")
+    _limit_label = max_prompt_tokens if backend_mode in ("openai", "anthropic") else context_window
+    print(f"📊 Estimated total prompt: ~{system_tokens + total} / {_limit_label} tokens")
 
     # Alternation guard: if the trim stopped mid-pair (first body message is
     # an assistant turn), drop it so the conversation starts with a user

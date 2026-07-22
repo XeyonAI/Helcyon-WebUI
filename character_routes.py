@@ -63,6 +63,88 @@ def active_character_set():
 
 
 # --------------------------------------------------
+# Character Groups — per-build state
+# --------------------------------------------------
+def _character_groups_state_file():
+    return os.path.join(CHARACTERS_DIR, "_character_groups.json")
+
+
+def _empty_character_groups():
+    return {"groups": [], "assignments": {}, "collapsed": {}}
+
+
+@character_bp.route("/character_groups", methods=["GET"])
+def character_groups_get():
+    """Return this build's character grouping state. Never reads browser state."""
+    try:
+        path = _character_groups_state_file()
+        if not os.path.exists(path):
+            return jsonify(_empty_character_groups())
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError("Character group state must be a JSON object")
+        return jsonify({
+            "groups": data.get("groups", []),
+            "assignments": data.get("assignments", {}),
+            "collapsed": data.get("collapsed", {})
+        })
+    except Exception as e:
+        print(f"⚠️ Failed to read character groups: {e}")
+        return jsonify(_empty_character_groups())
+
+
+@character_bp.route("/character_groups", methods=["POST"])
+def character_groups_save():
+    """Validate and atomically save this build's character grouping state."""
+    try:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"success": False, "error": "Invalid group state"}), 400
+
+        raw_groups = data.get("groups", [])
+        raw_assignments = data.get("assignments", {})
+        raw_collapsed = data.get("collapsed", {})
+        if not isinstance(raw_groups, list) or not isinstance(raw_assignments, dict) or not isinstance(raw_collapsed, dict):
+            return jsonify({"success": False, "error": "Invalid group state"}), 400
+
+        groups = []
+        group_ids = set()
+        for raw_group in raw_groups:
+            if not isinstance(raw_group, dict):
+                return jsonify({"success": False, "error": "Invalid group"}), 400
+            group_id = str(raw_group.get("id", "")).strip()[:80]
+            name = str(raw_group.get("name", "")).strip()[:40]
+            if not group_id or not name or group_id in group_ids:
+                return jsonify({"success": False, "error": "Invalid or duplicate group"}), 400
+            group_ids.add(group_id)
+            groups.append({"id": group_id, "name": name})
+
+        assignments = {}
+        for character_name, group_id in raw_assignments.items():
+            if isinstance(character_name, str) and isinstance(group_id, str) and group_id in group_ids:
+                assignments[character_name[:200]] = group_id
+
+        collapsed = {}
+        allowed_sections = group_ids | {"ungrouped"}
+        for section_id, is_collapsed in raw_collapsed.items():
+            if section_id in allowed_sections and isinstance(is_collapsed, bool):
+                collapsed[section_id] = is_collapsed
+
+        state = {"groups": groups, "assignments": assignments, "collapsed": collapsed}
+        os.makedirs(CHARACTERS_DIR, exist_ok=True)
+        path = _character_groups_state_file()
+        temp_path = path + ".tmp"
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+        os.replace(temp_path, path)
+        return jsonify({"success": True, **state})
+    except Exception as e:
+        print(f"❌ Failed to save character groups: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# --------------------------------------------------
 # List Characters (for config dropdown)
 # --------------------------------------------------
 @character_bp.route("/list_characters", methods=["GET"])
@@ -75,8 +157,8 @@ def list_characters():
 
     images_dir = os.path.join(os.path.dirname(__file__), "static", "images")
     for file in os.listdir(char_dir):
-        if file in ("_active_character.json", "index.json"):
-            continue  # internal shared-state file / derived index, not a character
+        if file in ("_active_character.json", "_character_groups.json", "index.json"):
+            continue  # internal state files / derived index, not characters
         if file.endswith(".json"):
             path = os.path.join(char_dir, file)
             try:
@@ -154,6 +236,7 @@ def create_character():
             "scenario": data.get("scenario", ""),
             "post_history": data.get("post_history", ""),
             "character_note": data.get("character_note", ""),
+            "preferred_model_id": data.get("preferred_model_id", ""),
             "image": data.get("image", "")
         }
         with open(char_path, "w", encoding="utf-8") as f:
@@ -205,7 +288,7 @@ def save_character(n):
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     existing = json.load(f)
-                preserved_keys = ["tts_voice", "system_prompt"]
+                preserved_keys = ["tts_voice", "system_prompt", "preferred_model_id"]
                 for key in preserved_keys:
                     if key in existing and key not in data:
                         data[key] = existing[key]
@@ -289,6 +372,27 @@ def get_character_system_prompt(n):
         return jsonify({"system_prompt": data.get("system_prompt", None)})
     except Exception as e:
         return jsonify({"system_prompt": None})
+
+@character_bp.route('/character_preferred_model/<n>', methods=['POST'])
+def set_character_preferred_model(n):
+    """Save only the optional preferred local model, leaving the rest of the card intact."""
+    try:
+        data = request.get_json() or {}
+        preferred_model_id = str(data.get("preferred_model_id", "")).strip()
+        path = os.path.join(CHARACTERS_DIR, f"{n}.json")
+        if not os.path.exists(path):
+            return jsonify({"success": False, "error": "Character not found"}), 404
+        with open(path, "r", encoding="utf-8") as f:
+            char_data = json.load(f)
+        char_data["preferred_model_id"] = preferred_model_id
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(char_data, f, indent=2, ensure_ascii=False)
+        print(f"Preferred model saved for {n}: {preferred_model_id or '(none)'}")
+        return jsonify({"success": True, "preferred_model_id": preferred_model_id})
+    except Exception as e:
+        print(f"Failed to save preferred model for {n}: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
 
 @character_bp.route('/character_system_prompt/<n>', methods=['POST'])
 def set_character_system_prompt(n):

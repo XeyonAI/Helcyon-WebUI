@@ -6,6 +6,11 @@
    ============================================================ */
 
 :root {
+  --app-font-family: "Inter", "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  --text-muted: #aaaaaa;
+  --text-dim: #666666;
+  --theme-editor-heading-text: #666666;
+  --theme-preview-muted-text: #555555;
   --topbar-bg: #1a1a1b;
   --container-bg: #181818;
   --chat-bg: #0f0f0f;
@@ -17,12 +22,14 @@
   --new-chat-btn-text: #c8c8c8;
   --char-dropdown-bg: #121212;
   --char-dropdown-border: #303030;
-  --sidebar-footer-btn-bg: #1e1f20;
-  --sidebar-footer-btn-border: #25497f;
+  --sidebar-footer-btn-bg: #121314;
+  --sidebar-footer-btn-border: #000000;
   --user-msg-bg: #171717;
   --user-msg-text: #f1f1f1;
   --model-msg-bg: #1e1f20;
   --model-msg-text: #f0f0f0;
+  --message-preview-bg: #0a0d10;
+  --msg-timestamp-text: #666666;
   --msg-border: #191919;
   --hr-color: #292929;
   --input-bg: #131313;
@@ -40,6 +47,7 @@
   --memory-entry-bg: #151515;
   --memory-entry-text: #d6d5d5;
   --project-item-bg: #161616;
+  --project-edit-workspace-bg: #1e1f1f;
   --project-edit-bg: #191919;
   --project-item-hover: #0d3248;
   --icon-button-bg: #234468;

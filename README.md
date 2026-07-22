@@ -38,14 +38,14 @@ Optimized for [Helcyon](https://huggingface.co/XeyonAI) models for web search, d
 - **Custom System Prompts** — Full control via `system_prompt.txt`
 - **Markdown Rendering** — Full support for bold, italic, headers, bullet lists, separators and blockquotes
 - **Theme Switcher** — Switch between included themes from the settings menu
+- 🧠 **Memory System** — AI recalls and references past conversations across chats. Your characters actually remember you.
 - 📁 **Project Folders** — Organise chats by topic and inject documents (PDF, DOCX, MD, TXT, ODT) directly into conversation context
 - 🌐 **Web Search** — Real-time web search built in. Works just like Grok and ChatGPT — Helcyon searches and chats about the results. Optimized for Helcyon models (see [XeyonAI on HuggingFace](https://huggingface.co/XeyonAI))
 
-### Pro Version (£25)
+### Pro Version (£10)
 
 Everything in Free, plus:
 
-- 🧠 **Memory System** — AI recalls and references past conversations across all chats. Your characters actually remember you.
 - 🎨 **Theme Editor** — Create and customise your own themes with a full visual editor. Tweak colours, backgrounds, and UI feel to make HWUI truly yours.
 
 👉 **[Get HWUI Pro on Gumroad](https://xeyonai.gumroad.com/l/bsmupk)**
@@ -252,7 +252,7 @@ HWUI Pro is available under a separate proprietary license. See [Gumroad](https:
 - Implement features I don't personally need
 - Answer general coding questions
 
-**Want guaranteed support and advanced features?** → [HWUI Pro (£25)](https://xeyonai.gumroad.com/l/bsmupk) includes Memory, Theme Editor and priority updates.
+**Want to support development and unlock the Theme Editor?** → [HWUI Pro (£10)](https://xeyonai.gumroad.com/l/bsmupk) includes the full visual Theme Editor and priority updates.
 
 **Want to modify it yourself?** → Fork the repo! GPL v3 means you're free to build your own version.
 

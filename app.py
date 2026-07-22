@@ -200,10 +200,12 @@ from project_routes import project_bp
 from theme_routes import theme_bp
 from sampling_routes import sampling_bp
 from system_prompt_routes import sysprompt_bp
+from session_summary_routes import session_summary_bp
 from situation_routes import situation_bp
 from user_routes import user_bp
 from character_routes import character_bp
 from cloud_api_routes import cloud_api_bp
+from shard_gen_routes import shard_gen_bp
 # get_openai_base_url + get_anthropic_base_url live in cloud_api_routes but are
 # called directly by chat()/continue in this module — import them back.
 from cloud_api_routes import get_openai_base_url, get_anthropic_base_url
@@ -213,16 +215,21 @@ from system_prompt_routes import (
     get_system_prompts_dir, get_active_prompt_filename,
     set_active_prompt_filename, resolve_character_prompt_files,
 )
+# select_session_summaries + SESSION_DIVIDER live in session_summary_routes but
+# are called directly by chat() in this module — import them back.
+from session_summary_routes import select_session_summaries, SESSION_DIVIDER
 app.register_blueprint(extra)
 app.register_blueprint(chat_bp)
 app.register_blueprint(project_bp)
 app.register_blueprint(theme_bp)
 app.register_blueprint(sampling_bp)
 app.register_blueprint(sysprompt_bp)
+app.register_blueprint(session_summary_bp)
 app.register_blueprint(situation_bp)
 app.register_blueprint(user_bp)
 app.register_blueprint(character_bp)
 app.register_blueprint(cloud_api_bp)
+app.register_blueprint(shard_gen_bp)
 app.register_blueprint(tts_bp, url_prefix='/api/tts')
 app.register_blueprint(whisper_bp)
 
@@ -907,6 +914,75 @@ def get_current_model():
     except Exception as e:
         CURRENT_MODEL = None
         print(f"❌ Error: {e}")
+
+
+def _proxy_llama_v1_response(method, path, *, json_payload=None, stream=False):
+    """Expose HWUI's managed llama.cpp server through OpenAI-compatible /v1 routes."""
+    upstream_url = f"{API_URL}{path}"
+    try:
+        upstream = requests.request(
+            method,
+            upstream_url,
+            json=json_payload,
+            stream=stream,
+            timeout=(10, None if stream else 600),
+        )
+    except requests.RequestException as e:
+        return jsonify({
+            "error": {
+                "message": f"Local model server unavailable at {upstream_url}: {e}",
+                "type": "server_error",
+                "code": "local_backend_unavailable",
+            }
+        }), 503
+
+    excluded_headers = {
+        "content-encoding", "content-length", "transfer-encoding", "connection"
+    }
+    headers = [
+        (name, value)
+        for name, value in upstream.headers.items()
+        if name.lower() not in excluded_headers
+    ]
+
+    if stream:
+        def generate():
+            try:
+                for chunk in upstream.iter_content(chunk_size=None):
+                    if chunk:
+                        yield chunk
+            finally:
+                upstream.close()
+
+        return Response(generate(), status=upstream.status_code, headers=headers)
+
+    return Response(upstream.content, status=upstream.status_code, headers=headers)
+
+
+@app.route("/v1/models", methods=["GET"])
+def openai_compat_models():
+    """OpenAI-compatible model discovery for tools that point at HWUI itself."""
+    return _proxy_llama_v1_response("GET", "/v1/models")
+
+
+@app.route("/v1/chat/completions", methods=["POST"])
+def openai_compat_chat_completions():
+    """OpenAI-compatible chat completions forwarded to HWUI's local model server."""
+    payload = request.get_json(silent=True)
+    if payload is None:
+        return jsonify({
+            "error": {
+                "message": "Request body must be JSON.",
+                "type": "invalid_request_error",
+                "code": "invalid_json",
+            }
+        }), 400
+    return _proxy_llama_v1_response(
+        "POST",
+        "/v1/chat/completions",
+        json_payload=payload,
+        stream=bool(payload.get("stream")),
+    )
 
 
 def auto_launch_llama():
@@ -1859,6 +1935,225 @@ def _classify_chat_search_intent(user_msg):
 #     matching "starting"/"smart"/"particle"; keyword "garden" double-counting
 #     when "gardening" is also a keyword in the same block)
 
+def _parse_memory_blocks(text):
+    """Parse memory file text into structured blocks.
+
+    Returns list of {title, body, keywords} dicts. The title is pulled from
+    the '# Memory:' header line itself; the body has the title and keywords
+    line stripped, so what gets injected into the prompt is just the prose.
+    """
+    if not text or not text.strip():
+        return []
+    # Capture the title in a group so re.split returns titles between bodies.
+    parts = re.split(r"(?m)^#\s*Memory:\s*([^\n]*)\n", text)
+    # parts = [pre_first_block, title1, body1, title2, body2, ...]
+    blocks = []
+    for i in range(1, len(parts) - 1, 2):
+        title = (parts[i] or "").strip() or "Untitled"
+        body_raw = parts[i + 1]
+        keywords = []
+        body_lines = []
+        for line in body_raw.splitlines():
+            if line.strip().lower().startswith("keywords:"):
+                kwstr = line.split(":", 1)[1]
+                # Allow `,` `;` and `:` as separators (parallel to the now-deleted
+                # alternate loader) — strips per-keyword trailing punctuation
+                # so "Keywords: foo, bar." doesn't end with a literal "bar."
+                for kw in re.split(r"[,;:]+", kwstr):
+                    kw = kw.strip().lower()
+                    kw = re.sub(r"[\.\!\?,;:]+$", "", kw).strip()
+                    if kw:
+                        keywords.append(kw)
+            else:
+                body_lines.append(line)
+        body = "\n".join(body_lines).strip()
+        blocks.append({"title": title, "body": body, "keywords": keywords})
+    return blocks
+
+
+_AUTO_MEMORY_LOCK = threading.Lock()
+_AUTO_MEMORY_EXPLICIT_RE = re.compile(
+    r"\b(?:remember|memorize|save|store|log|note|jot|keep).{0,32}\b(?:this|that|it|memory|record|mind)\b"
+    r"|\bsave\b.{0,80}\b(?:for later|for future reference)\b",
+    re.IGNORECASE,
+)
+_AUTO_MEMORY_CANDIDATE_RE = re.compile(
+    r"\b(?:i am|i'm|i prefer|i like|i love|i hate|i dislike|i live|i work|i study|"
+    r"my (?:name|birthday|job|work|partner|family|project|goal|preference|favourite|favorite|"
+    r"hobby|interests|pronouns|timezone|city|country|pet)|"
+    r"remember|memorize|save|store|log|note|jot|don't forget)\b",
+    re.IGNORECASE,
+)
+_AUTO_MEMORY_SECRET_RE = re.compile(
+    r"\b(?:password|passcode|pin number|api key|secret key|private key|seed phrase|"
+    r"social security|ssn|credit card|debit card|bank account)\b",
+    re.IGNORECASE,
+)
+_AUTO_MEMORY_SENSITIVE_RE = re.compile(
+    r"\b(?:diagnos(?:is|ed)|medication|mental health|sexuality|religion|political|"
+    r"salary|income|debt|exact address)\b",
+    re.IGNORECASE,
+)
+
+
+def _auto_memory_normalize_words(text):
+    return set(re.findall(r"[a-z0-9']+", (text or "").lower()))
+
+
+def _auto_memory_is_duplicate(blocks, title, body):
+    new_words = _auto_memory_normalize_words(body)
+    for block in blocks:
+        if block.get("title", "").strip().lower() == title.strip().lower():
+            return True
+        old_words = _auto_memory_normalize_words(block.get("body", ""))
+        union = new_words | old_words
+        if union and len(new_words & old_words) / len(union) >= 0.72:
+            return True
+    return False
+
+
+def _auto_memory_extract_json(text):
+    if not text:
+        return None
+    cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip(), flags=re.IGNORECASE)
+    try:
+        value = json.loads(cleaned)
+        return value if isinstance(value, dict) else None
+    except Exception:
+        match = re.search(r"\{[\s\S]*\}", cleaned)
+        if not match:
+            return None
+        try:
+            value = json.loads(match.group(0))
+            return value if isinstance(value, dict) else None
+        except Exception:
+            return None
+
+
+def _auto_memory_legacy_tag(text):
+    object_match = re.search(
+        r"(?im)^[ \t]*Title[ \t]*:[ \t]*(?P<title>[^\n]+)[ \t]*\r?\n"
+        r"(?:[ \t]*\r?\n)*^[ \t]*Keywords[ \t]*:[ \t]*(?P<keywords>[^\n]+)[ \t]*\r?\n"
+        r"(?:[ \t]*\r?\n)*^[ \t]*Summary[ \t]*:[ \t]*(?P<summary>[\s\S]+?)\s*$",
+        text or "",
+    )
+    if object_match:
+        return {
+            "save": True,
+            "title": object_match.group("title").strip(),
+            "keywords": [
+                k.strip()
+                for k in re.split(r"[,;]+", object_match.group("keywords"))
+                if k.strip()
+            ],
+            "summary": object_match.group("summary").strip(),
+            "scope": "character",
+        }
+
+    match = re.search(
+        r"\[?MEMORY[_ ]ADD:\s*([^|\n\]]+)\|([^|\n\]]+)\|([^\]]+?)(?:\]|$)",
+        text or "",
+        re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return {
+        "save": True,
+        "title": match.group(1).strip(),
+        "keywords": [k.strip() for k in match.group(2).split(",") if k.strip()],
+        "summary": match.group(3).strip(),
+        "scope": "character",
+    }
+
+
+def _auto_memory_force_fallback_candidate(recent_messages, assistant_text, user_text, user_name):
+    """Last-resort forced memory: save the actual content, not the save command."""
+    source = ""
+    if isinstance(recent_messages, list):
+        for msg in reversed(recent_messages):
+            if not isinstance(msg, dict) or msg.get("role") != "user":
+                continue
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                content = " ".join(
+                    str(part.get("text", "")) for part in content
+                    if isinstance(part, dict) and part.get("type") == "text"
+                )
+            source = str(content).strip()
+            if source:
+                break
+    if not source:
+        source = str(assistant_text or user_text).strip()
+    source = re.sub(r"^(?:User|Chris)\s*:\s*", "", source, flags=re.IGNORECASE)
+    source = re.sub(r"\s+", " ", source).strip()
+    source = re.sub(r"^(?:yeah|yes|yep|no|nah)[,.\s]+", "", source, flags=re.IGNORECASE)
+
+    summary = source
+    replacements = [
+        (r"\bI think\b", f"{user_name} thinks"),
+        (r"\bI believe\b", f"{user_name} believes"),
+        (r"\bI prefer\b", f"{user_name} prefers"),
+        (r"\bI like\b", f"{user_name} likes"),
+        (r"\bI love\b", f"{user_name} loves"),
+        (r"\bI'm\b", f"{user_name} is"),
+        (r"\bI am\b", f"{user_name} is"),
+        (r"\bmy\b", f"{user_name}'s"),
+        (r"\bme\b", user_name),
+    ]
+    for pattern, repl in replacements:
+        summary = re.sub(pattern, repl, summary, flags=re.IGNORECASE)
+    if summary and not re.match(rf"^{re.escape(user_name)}\b", summary, flags=re.IGNORECASE):
+        summary = f"{user_name} believes that {summary[0].lower() + summary[1:]}"
+    summary = summary[:700].strip()
+
+    words = [
+        w for w in re.findall(r"[A-Za-z0-9][A-Za-z0-9'\-]{2,}", source.lower())
+        if w not in {
+            "about", "again", "because", "been", "being", "but", "chat", "context",
+            "could", "from", "have", "just", "memory", "really", "recent", "remember",
+            "save", "that", "the", "their", "there", "this", "think", "with", "would",
+            "yeah", "your",
+        }
+    ]
+    keywords = []
+    for word in words:
+        if word not in keywords:
+            keywords.append(word)
+        if len(keywords) >= 6:
+            break
+    title_words = keywords[:5] or ["saved", "memory"]
+    title = " ".join(word.capitalize() for word in title_words)
+    return {
+        "save": True,
+        "title": title,
+        "keywords": keywords or ["saved memory"],
+        "summary": summary or f"{user_name} has a saved memory from the recent conversation.",
+        "scope": "character",
+    }
+
+
+def _clean_auto_memory_field(text):
+    """Strip ChatML/end-marker fragments before writing memory fields to disk."""
+    text = str(text or "")
+    text = re.sub(r"<\|im_(?:start|end)\|>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?:<\|?|\|)?im_(?:start|end)\|?>?", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"(?:<\||\|>|<|>)\s*$", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _kw_match(kw, text_lower):
+    """Word-boundary, case-insensitive keyword match.
+
+    text_lower must already be .lower()'d by the caller (avoids re-lowering
+    the user message once per keyword). Uses re.escape so keywords containing
+    regex metacharacters (rare but possible — e.g. punctuation, hyphens)
+    don't break the match.
+    """
+    if not kw:
+        return False
+    return re.search(r"\b" + re.escape(kw) + r"\b", text_lower) is not None
+
+
 def do_chat_search(query, current_filename=None):
     """
     Search all chat .txt files for content matching the query keywords.
@@ -2611,6 +2906,7 @@ def _web_search_stream_openai(messages, api_key, model, temperature, max_tokens,
 # prompt to update this table.
 ANTHROPIC_MODEL_SAMPLING_RULES = {
     # Reject ALL sampling params
+    "fable":              {"allow": ["max_tokens", "stop_sequences"], "match": "contains"},
     "claude-opus-4-8":   {"allow": ["max_tokens", "stop_sequences"]},
     "claude-opus-4-7":   {"allow": ["max_tokens", "stop_sequences"]},
     # Accept temperature, but not top_p alongside it
@@ -2624,16 +2920,154 @@ DEFAULT_ANTHROPIC_ALLOW = ["temperature", "max_tokens", "stop_sequences"]
 def _anthropic_allow_for(model_id):
     """Allow-list of params for a model. Exact match, else longest-prefix match
     (so dated IDs like 'claude-opus-4-8-20260101' resolve to 'claude-opus-4-8'),
-    else the safe default."""
+    else substring match for provider families like Fable, else the safe default."""
+    model_id = (model_id or "").strip().lower()
     if model_id in ANTHROPIC_MODEL_SAMPLING_RULES:
         return ANTHROPIC_MODEL_SAMPLING_RULES[model_id]["allow"]
     best = None
-    for key in ANTHROPIC_MODEL_SAMPLING_RULES:
+    for key, rule in ANTHROPIC_MODEL_SAMPLING_RULES.items():
+        if rule.get("match") == "contains":
+            continue
         if model_id.startswith(key) and (best is None or len(key) > len(best)):
             best = key
     if best:
         return ANTHROPIC_MODEL_SAMPLING_RULES[best]["allow"]
+    for key, rule in ANTHROPIC_MODEL_SAMPLING_RULES.items():
+        if rule.get("match") == "contains" and key in model_id:
+            return rule["allow"]
     return DEFAULT_ANTHROPIC_ALLOW
+
+def supports_temperature(model_id):
+    return "temperature" in _anthropic_allow_for(model_id)
+
+def _anthropic_current_datetime_context():
+    import datetime as _dt_ant
+    current_time = _dt_ant.datetime.now().strftime("%A, %d %B %Y %H:%M:%S")
+    return f"Current date and time: {current_time}\n\n"
+
+def _anthropic_strip_leading_time_context(text):
+    text = text or ""
+    match = re.match(r"\ACurrent date(?: and time)?: [^\n]+\n\n", text)
+    if match:
+        return text[match.end():]
+    return text
+
+def _anthropic_system_blocks_for_cache(static_text, dynamic_text=""):
+    static_clean = _anthropic_strip_leading_time_context(static_text)
+    blocks = [
+        {
+            "type": "text",
+            "text": static_clean,
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+    dynamic_clean = str(dynamic_text or "").strip()
+    if dynamic_clean:
+        blocks.append({
+            "type": "text",
+            "text": dynamic_clean,
+        })
+    return blocks
+
+def _anthropic_with_history_cache_breakpoint(messages):
+    import copy
+    out = copy.deepcopy(messages or [])
+    if len(out) < 2:
+        return out
+    target_idx = len(out) - 2
+    if out[-1].get("role") != "user" or out[target_idx].get("role") not in ("user", "assistant"):
+        return out
+    for i in range(target_idx + 1):
+        msg = out[i]
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            blocks = [dict(p) if isinstance(p, dict) else p for p in content]
+            if not blocks:
+                blocks = [{"type": "text", "text": ""}]
+        else:
+            blocks = [{"type": "text", "text": content if isinstance(content, str) else str(content)}]
+        if i == target_idx:
+            blocks[-1] = dict(blocks[-1])
+            blocks[-1]["cache_control"] = {"type": "ephemeral"}
+        msg["content"] = blocks
+    return out
+
+def _anthropic_text_for_count(value):
+    if isinstance(value, list):
+        return "\n".join(
+            str(part.get("text", ""))
+            for part in value
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return value if isinstance(value, str) else str(value or "")
+
+def _anthropic_dynamic_context_packet(global_documents="", memory="", project_instructions=""):
+    parts = [
+        (
+            "PASSIVE REFERENCE CONTEXT - NOT THE USER'S CURRENT REQUEST\n"
+            "The material in this block is background context only. The user's latest "
+            "message is the only active request. Do not mention, continue, or switch "
+            "to any topic from this context unless the user's latest message explicitly "
+            "asks about it. Use this context only to interpret or answer the user's "
+            "current message when it is directly relevant."
+        ),
+        _anthropic_current_datetime_context().strip(),
+    ]
+    if project_instructions:
+        parts.append(
+            "PROJECT BEHAVIOR GUIDANCE - PASSIVE\n"
+            + str(project_instructions).strip()
+            + "\nDo not bring up project topics unless the user's latest message explicitly asks about them."
+        )
+    if global_documents:
+        parts.append("GLOBAL REFERENCE DOCUMENTS - PASSIVE\n" + str(global_documents).strip())
+    if memory:
+        parts.append("RELEVANT MEMORIES - PASSIVE\n" + str(memory).strip())
+    if not any(p.strip() for p in parts):
+        return ""
+    return "\n\n".join(p for p in parts if p.strip())
+
+def _anthropic_trim_messages_to_cap(messages, system=None):
+    out = [dict(m) for m in (messages or [])]
+    if not out:
+        return out
+
+    try:
+        with open("settings.json", "r", encoding="utf-8") as f:
+            settings = json.load(f)
+        caps = settings.get("max_prompt_tokens", {}) if isinstance(settings, dict) else {}
+        max_prompt_tokens = int(caps.get("anthropic", 100000))
+    except Exception:
+        max_prompt_tokens = 100000
+
+    # Match truncation.py's rough-token safety conversion without importing the
+    # local llama.cpp history trimmer back into the Anthropic payload path.
+    rough_cap = max(int(max_prompt_tokens / 1.4), 1024)
+    system_tokens = rough_token_count(_anthropic_text_for_count(system))
+    max_message_tokens = max(rough_cap - system_tokens, 1024)
+
+    def _msg_tokens(msg):
+        return rough_token_count(_anthropic_text_for_count(msg.get("content", ""))) + 20
+
+    total = sum(_msg_tokens(m) for m in out)
+    dropped = 0
+    while len(out) > 1 and total > max_message_tokens:
+        # Preserve the latest user turn. Drop oldest history first; if that
+        # leaves a leading assistant, drop it too to keep Anthropic alternation.
+        removed = out.pop(0)
+        total -= _msg_tokens(removed)
+        dropped += 1
+        while len(out) > 1 and out[0].get("role") == "assistant":
+            removed = out.pop(0)
+            total -= _msg_tokens(removed)
+            dropped += 1
+    if dropped:
+        print(
+            f"✂️ Anthropic prompt trimmed: dropped {dropped} oldest message(s), "
+            f"kept {len(out)} message(s), ~{system_tokens + total}/{max_prompt_tokens} tokens",
+            flush=True,
+        )
+    return out
 
 # --------------------------------------------------
 # OpenAI per-model parameter rules — which token param a model wants and whether
@@ -2716,7 +3150,6 @@ def stream_anthropic_response(messages, api_key, model, temperature, max_tokens,
     # penalty / presence_penalty are never Anthropic params. top_p / top_k are not
     # plumbed into this function (Opus 4.7/4.8 reject them; older models are fine
     # without) — to add later, gate them the same way: `if "top_p" in allow: ...`.
-    allow = _anthropic_allow_for(model)
     # Extended thinking: when on, Anthropic streams a `thinking` content block
     # before the answer. Two hard API constraints: (1) max_tokens MUST exceed
     # budget_tokens (the budget is part of, not on top of, max_tokens), and
@@ -2733,13 +3166,13 @@ def stream_anthropic_response(messages, api_key, model, temperature, max_tokens,
         "model": model,
         "max_tokens": _eff_max,     # always required by the API
         "stream": True,
-        "messages": messages,
+        "messages": _anthropic_with_history_cache_breakpoint(messages),
     }
     if system:
         payload["system"] = system
     if _think_on:
         payload["thinking"] = {"type": "enabled", "budget_tokens": _budget}
-    elif "temperature" in allow:
+    elif supports_temperature(model):
         # temperature is incompatible with thinking — only sent when thinking off.
         payload["temperature"] = _temp
 
@@ -2780,6 +3213,30 @@ def stream_anthropic_response(messages, api_key, model, temperature, max_tokens,
     all_text = []
     _think_chars = 0          # reasoning chars seen (logging only)
     _think_streaming = False  # currently inside a thinking block (sentinel open)
+    # TEMP: cache verification logging - remove after confirmed
+    _ant_cache_usage = {
+        "input_tokens": "MISSING",
+        "output_tokens": "MISSING",
+        "cache_creation_input_tokens": "MISSING",
+        "cache_read_input_tokens": "MISSING",
+    }
+    _ant_cache_usage_logged = False
+
+    def _log_anthropic_cache_usage():
+        # TEMP: cache verification logging - remove after confirmed
+        nonlocal _ant_cache_usage_logged
+        if _ant_cache_usage_logged:
+            return
+        _ant_cache_usage_logged = True
+        print(
+            "[CACHE DEBUG] "
+            f"input={_ant_cache_usage['input_tokens']} "
+            f"output={_ant_cache_usage['output_tokens']} "
+            f"cache_creation={_ant_cache_usage['cache_creation_input_tokens']} "
+            f"cache_read={_ant_cache_usage['cache_read_input_tokens']}",
+            flush=True,
+        )
+
     for line in response.iter_lines(chunk_size=1):
         if abort_generation:
             print("🛑 Anthropic generation aborted", flush=True)
@@ -2798,7 +3255,16 @@ def stream_anthropic_response(messages, api_key, model, temperature, max_tokens,
                 continue
             evt = json.loads(data_str)
             etype = evt.get("type")
-            if etype == "content_block_delta":
+            if etype == "message_start":
+                usage = (evt.get("message") or {}).get("usage") or {}
+                for _k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"):
+                    if _k in usage:
+                        _ant_cache_usage[_k] = usage.get(_k)
+            elif etype == "message_delta":
+                usage = evt.get("usage") or {}
+                if "output_tokens" in usage:
+                    _ant_cache_usage["output_tokens"] = usage.get("output_tokens")
+            elif etype == "content_block_delta":
                 delta = evt.get("delta", {}) or {}
                 dtype = delta.get("type")
                 # Extended-thinking reasoning deltas — wrap in sentinels so the
@@ -2833,11 +3299,13 @@ def stream_anthropic_response(messages, api_key, model, temperature, max_tokens,
                 if _think_streaming:
                     _think_streaming = False
                     yield THINK_CLOSE
+                _log_anthropic_cache_usage()
                 break
             elif etype == "error":
                 if _think_streaming:
                     _think_streaming = False
                     yield THINK_CLOSE
+                _log_anthropic_cache_usage()
                 _msg = evt.get("error", {}).get("message", "unknown")
                 print(f"❌ Anthropic stream error: {_msg}", flush=True)
                 yield f"[Anthropic error: {_msg}]"
@@ -2849,6 +3317,7 @@ def stream_anthropic_response(messages, api_key, model, temperature, max_tokens,
     # Safety: never leave a thinking block unclosed if the stream just ends.
     if _think_streaming:
         yield THINK_CLOSE
+    _log_anthropic_cache_usage()
     print(f"\n☁️ Anthropic DONE: {total_chunks} deltas, {len(''.join(all_text))} chars total"
           f"{f', {_think_chars} thinking chars' if _think_chars else ''}", flush=True)
 
@@ -3219,6 +3688,837 @@ def load_recent_chat(character_name, max_turns=6):
         return None
 
 # --------------------------------------------------
+# Append a New Memory Block
+# --------------------------------------------------
+@app.route('/append_character_memory', methods=['POST'])
+def append_character_memory():
+    try:
+        data = request.get_json(force=True)
+        char_name = (data.get("character") or "").strip()
+        body = (data.get("body") or "").strip()  # This is the full formatted block
+        
+        if not char_name or not body:
+            return jsonify({"error": "Character and body required."}), 400
+        
+        memory_dir = os.path.join(os.path.dirname(__file__), "memories")  # ← Fixed case
+        os.makedirs(memory_dir, exist_ok=True)
+        
+        file_path = os.path.join(memory_dir, f"{char_name.lower()}_memory.txt")
+        
+        with open(file_path, "a", encoding="utf-8") as f:
+            f.write("\n\n" + body + "\n\n")  # Just append the already-formatted block
+        
+        print(f"🧠 Memory saved for {char_name}")
+        return jsonify({"status": "ok"}), 200
+        
+    except Exception as e:
+        print(f"❌ append_character_memory error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+def _retrieve_memory(char_data, character_name, user_input, project_rp_mode, _diag_verbose):
+    """Select & format relevant memory blocks for the prompt. Extracted from chat() (phase 1)."""
+    def load_character_memory(character_name):
+        _mem_dir = os.path.join(os.path.dirname(__file__), "memories")
+        path = os.path.join(_mem_dir, f"{character_name.lower()}_memory.txt")
+        if not os.path.exists(path):
+            return ""
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    def load_global_memory():
+        _mem_dir = os.path.join(os.path.dirname(__file__), "memories")
+        path = os.path.join(_mem_dir, "global_memory.txt")
+        if not os.path.exists(path):
+            return ""
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    memory_text = ""
+    use_personal = char_data.get("use_personal_memory", True)  # default on for backward compat
+    use_global = char_data.get("use_global_memory", False)
+
+    if use_personal:
+        personal_text = load_character_memory(character_name)
+        if personal_text:
+            memory_text += personal_text
+    if use_global:
+        global_text = load_global_memory()
+        if global_text:
+            if memory_text:
+                memory_text += "\n\n"
+            memory_text += global_text
+
+    print(f"🧠 Memory flags — personal: {use_personal}, global: {use_global}, total chars: {len(memory_text)}")
+
+    chosen_blocks = []
+
+    # Skip memory injection only if this is an EXPLICIT search request —
+    # chat search will inject raw snippets instead, memory would just confuse the model.
+    # Uses _classify_chat_search_intent (see definition near do_chat_search) so this
+    # decision stays in lockstep with the primary trigger downstream. Recall phrasing
+    # without a search verb does NOT skip memory — recall is the safe default and
+    # character memory is allowed to run normally.
+    _skip_memory_for_chat_search, _recall_suppressed = _classify_chat_search_intent(user_input)
+    if _skip_memory_for_chat_search:
+        print("🗂️ Chat search intent detected early — skipping memory injection", flush=True)
+    elif _recall_suppressed and _diag_verbose:
+        print(
+            "🧠 Recall phrasing detected, no search verb — suppressing chat search, "
+            "relying on session summary",
+            flush=True,
+        )
+
+    if memory_text and not _skip_memory_for_chat_search:
+        memory_blocks = _parse_memory_blocks(memory_text)
+
+        # Compute keyword frequency across blocks within this character's memory.
+        # A keyword that appears in 2+ blocks can't differentiate between memories
+        # so it gets downweighted. Replaces the old hardcoded
+        # {claire, chris, neville, 4d, 3d} list, which only made sense for one
+        # specific user's data and silently did nothing for everyone else.
+        kw_block_count = {}
+        for blk in memory_blocks:
+            for kw in set(blk["keywords"]):  # dedupe within-block
+                kw_block_count[kw] = kw_block_count.get(kw, 0) + 1
+
+        user_input_lower = user_input.lower()
+        scored_items = []
+        for blk in memory_blocks:
+            score = 0
+            matched = []
+            seen = set()
+            for kw in blk["keywords"]:
+                if kw in seen:  # don't double-count overlapping kw entries
+                    continue
+                seen.add(kw)
+                if _kw_match(kw, user_input_lower):
+                    # 1 point if keyword appears in 2+ blocks (low signal,
+                    # can't differentiate); 3 points if unique to this block.
+                    score += 1 if kw_block_count.get(kw, 1) >= 2 else 3
+                    matched.append(kw)
+            if score > 0:
+                scored_items.append({
+                    "score": score,
+                    "matches": len(matched),
+                    "block": blk,
+                    "matched_keywords": matched,
+                })
+
+        # Sort: score desc, then match-count desc (more distinct keywords beats
+        # one super-rare hit), then title for stable ordering on full ties.
+        scored_items.sort(
+            key=lambda x: (-x["score"], -x["matches"], x["block"]["title"].lower())
+        )
+
+        # In RP mode, cap to 1 memory block to preserve context space for
+        # conversation turns (formatting instructions live in conversation,
+        # not system block — RP needs that room).
+        MAX_MEMORIES = 1 if project_rp_mode else 2
+
+        if scored_items:
+            top = scored_items[:MAX_MEMORIES]
+            chosen_blocks = [
+                f"### {item['block']['title']}\n{item['block']['body']}"
+                for item in top
+            ]
+            print(
+                f"🧠 Memory retrieval — {len(memory_blocks)} blocks loaded, "
+                f"{len(scored_items)} matched, top {len(top)} chosen:"
+            )
+            for i, item in enumerate(top):
+                print(
+                    f"   #{i+1}: '{item['block']['title']}' "
+                    f"score={item['score']} matched={', '.join(item['matched_keywords'])}"
+                )
+        else:
+            print(
+                f"🧠 No keyword matches across {len(memory_blocks)} blocks — "
+                f"no memory injected"
+            )
+
+    if chosen_blocks:
+        memory = (
+            "Relevant memories:\n\n"
+            + "\n\n---\n\n".join(chosen_blocks)
+            + "\n"
+        )
+    else:
+        memory = ""
+    return memory
+
+
+def _load_chat_from_disk(active_chat, data, user_name, user_display_name, character_name):
+    if not active_chat:
+        current_chat_filename = data.get("current_chat_filename", "")
+        
+        if current_chat_filename:
+            chat_file_path = os.path.join("chats", current_chat_filename)
+            
+            if os.path.exists(chat_file_path):
+                try:
+                    with open(chat_file_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                    
+                    lines = content.strip().split('\n')
+                    
+                    for line in lines:
+                        if ':' not in line:
+                            continue
+                        
+                        speaker, message = line.split(':', 1)
+                        speaker = speaker.strip()
+                        message = message.strip()
+                        
+                        if speaker == user_name or speaker == user_display_name:
+                            role = "user"
+                        elif speaker == character_name:
+                            role = "assistant"
+                        else:
+                            continue
+                        
+                        active_chat.append({"role": role, "content": message})
+                    
+                    print(f"📜 Loaded {len(active_chat)} messages from {current_chat_filename} (fallback)")
+                
+                except Exception as e:
+                    print(f"⚠️ Failed to load chat file: {e}")
+            else:
+                print(f"⚠️ Chat file not found: {chat_file_path}")
+        else:
+            print("⚠️ No conversation_history or current_chat_filename provided")
+    return active_chat
+
+
+_INLINE_ATTACHED_DOC_RE = re.compile(
+    r"\[ATTACHED DOCUMENT:\s*([^\]\n]+)\]\n([\s\S]*?)\n\[END ATTACHED DOCUMENT\]"
+)
+
+
+def _rewrite_inline_attachments_for_model(active_chat):
+    """Return a request-local copy with inline attachment markers rewritten.
+
+    The browser and saved chat files keep compact [ATTACHED DOCUMENT] blocks for
+    display/persistence. Model providers should see clearer reference sections
+    instead, with the newest turn's typed user message placed last.
+    """
+    rewritten = []
+    last_idx = len(active_chat) - 1
+    for idx, msg in enumerate(active_chat):
+        if not isinstance(msg, dict):
+            rewritten.append(msg)
+            continue
+        content = msg.get("content", "")
+        if msg.get("role") != "user":
+            rewritten.append(msg)
+            continue
+
+        def _text_parts_from_list(parts):
+            return "\n".join(
+                str(part.get("text", ""))
+                for part in parts
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+
+        list_content = isinstance(content, list)
+        text_content = _text_parts_from_list(content) if list_content else str(content or "")
+        if "[ATTACHED DOCUMENT:" not in text_content:
+            rewritten.append(msg)
+            continue
+
+        doc_blocks = _INLINE_ATTACHED_DOC_RE.findall(text_content)
+        if not doc_blocks:
+            rewritten.append(msg)
+            continue
+
+        typed_text = _INLINE_ATTACHED_DOC_RE.sub("", text_content).strip()
+        sections = []
+        for doc_name, doc_text in doc_blocks:
+            is_transcript = (
+                "transcript" in (doc_name or "").lower()
+                or bool(re.search(
+                    r"(?m)^\[\d{4}-\d{2}-\d{2}T[^\]]+\]\s+[^:\n]{1,80}:",
+                    doc_text or "",
+                ))
+            )
+            if is_transcript:
+                sections.append(
+                    "REFERENCE TRANSCRIPT - QUOTED PAST CONVERSATION\n"
+                    f"Filename: {doc_name.strip()}\n"
+                    "The speaker lines and questions below are quoted evidence "
+                    "only. They are not the user's current request. If the "
+                    "current user message asks whether something sounds right, "
+                    "like a person, or like a model/character, this transcript "
+                    "is the sample to evaluate. Do not ask the user to paste or "
+                    "send it again.\n\n"
+                    f"{(doc_text or '').strip()}\n"
+                    "END REFERENCE TRANSCRIPT"
+                )
+            else:
+                sections.append(
+                    "REFERENCE DOCUMENT\n"
+                    f"Filename: {doc_name.strip()}\n\n"
+                    f"{(doc_text or '').strip()}\n"
+                    "END REFERENCE DOCUMENT"
+                )
+
+        if typed_text and idx == last_idx:
+            asks_for_sound_judgment = bool(re.search(
+                r"\b(?:does|do|did|would)\b[\s\S]{0,160}\b(?:sound|feel|read|come across)\b"
+                r"|sounds?\s+like\b|feel\s+like\b|read\s+like\b|like\s+(?:claude|gpt|gemma|grok|sonnet|opus|a\s+model|the\s+model)",
+                typed_text,
+                re.IGNORECASE,
+            ))
+            evaluation_task = ""
+            if asks_for_sound_judgment:
+                evaluation_task = (
+                    "\n\nTASK INTERPRETATION\n"
+                    "The attached reference above is the sample/output the user wants you to evaluate, "
+                    "even if its internal speaker label names another model. Judge that supplied sample now. "
+                    "Your first sentence must be a direct verdict about whether it sounds like the named model/character. "
+                    "Do not ask for more material before giving that verdict. Then briefly explain the evidence from the sample."
+                )
+            new_text = (
+                "\n\n".join(sections)
+                + "\n\nCURRENT USER MESSAGE - ANSWER THIS NOW\n"
+                + typed_text
+                + evaluation_task
+                + "\n\nRESPONSE REQUIREMENT\n"
+                + "You have already received the pasted reference above. "
+                + "Do not ask the user to paste, send, play, or provide it again. "
+                + "Answer the current message using the supplied reference."
+            )
+        elif typed_text:
+            new_text = (
+                "\n\n".join(sections)
+                + "\n\nUSER MESSAGE THAT ACCOMPANIED THIS REFERENCE\n"
+                + typed_text
+            )
+        else:
+            new_text = "\n\n".join(sections)
+
+        if list_content:
+            new_parts = []
+            replaced = False
+            for part in content:
+                if (
+                    not replaced
+                    and isinstance(part, dict)
+                    and part.get("type") == "text"
+                ):
+                    new_part = dict(part)
+                    new_part["text"] = new_text
+                    new_parts.append(new_part)
+                    replaced = True
+                else:
+                    new_parts.append(part)
+            rewritten.append({**msg, "content": new_parts})
+        else:
+            rewritten.append({**msg, "content": new_text})
+        print(f"Attached document markers rewritten for model ({len(doc_blocks)} block(s))")
+    return rewritten
+
+
+def _build_system_text(char_data, _char_label, _user_label, user_display_name, user_bio, active_chat, character_name, system_prompt, instruction, tone_primer, project_documents):
+    char_context = ""
+
+    # 🧠 Holds ONLY the most-recent saved session summary. It is NOT placed in
+    # char_context — it is appended at the very END of the system block (after
+    # the time context) for stronger recency weighting.
+    # _recent_session_ts is that summary's timestamp, used to phrase the
+    # relative-time marker. Both initialised before the try so the tail
+    # injection is safe even if character-context assembly raises.
+    _recent_session_summary = ""
+    _recent_session_ts = None
+
+    # Defensive pre-init (phase-2 extraction): user_context and _is_jinja_model
+    # are otherwise assigned only inside the try below, yet both are read later
+    # (user_context at the memory-merge; _is_jinja_model at the example-dialogue
+    # gate). Binding them here guarantees every output is populated even if
+    # character-context assembly raises — closes a latent UnboundLocalError on
+    # the except path (which previously only set system_text).
+    user_context = ""
+    _is_jinja_model = False
+
+    try:
+        # Helper to strip stray ChatML tokens from any user-supplied text
+        def strip_chatml(text):
+            text = re.sub(r'<\|im_start\|>\w*', '', text)
+            text = re.sub(r'<\|im_end\|>', '', text)
+            return text.strip()
+
+        # Build character context from JSON fields
+        parts = []
+
+        if char_data.get("name"):
+            parts.append(f"Character Name: {char_data['name']}")
+        if char_data.get("description"):
+            parts.append(f"Description: {substitute_placeholders(strip_chatml(char_data['description']), _char_label, _user_label)}")
+        if char_data.get("scenario"):
+            parts.append(f"Scenario: {substitute_placeholders(strip_chatml(char_data['scenario']), _char_label, _user_label)}")
+
+        # 📍 CURRENT SITUATION — semi-global, opt-in per character
+        if char_data.get("use_current_situation"):
+            try:
+                with open("settings.json", "r", encoding="utf-8") as _sf:
+                    _s = json.load(_sf)
+                _situation = _s.get("current_situation", "").strip()
+            except Exception:
+                _situation = ""
+            if _situation:
+                parts.append(
+                    f"═══════════════════════════════════════════════════════════\n"
+                    f"WHAT YOU CURRENTLY KNOW ABOUT {user_display_name.upper() if user_display_name else 'THE USER'}\n"
+                    f"(This is your own awareness — do not say you were told this, just know it)\n"
+                    f"═══════════════════════════════════════════════════════════\n"
+                    f"{strip_chatml(_situation)}\n"
+                    f"═══════════════════════════════════════════════════════════"
+                )
+
+        if char_data.get("main_prompt"):
+            parts.append(substitute_placeholders(strip_chatml(char_data["main_prompt"]), _char_label, _user_label))
+
+        # post_history is no longer added to the system block — it moved to the
+        # [REPLY INSTRUCTIONS] depth-0 packet (folded into the last user turn)
+        # so it sits adjacent to the model's generation point. See the packet
+        # builder near the end of prompt assembly.
+
+        # 🧠 INJECT SESSION SUMMARY — only on fresh chats
+        # A chat is "new" if there are no real assistant replies yet — i.e. no
+        # assistant message that comes AFTER a user message. An assistant at
+        # position 0 of active_chat is structurally an opening-line greeting
+        # (or project RP opener), pre-conversation, not a real exchange.
+        #
+        # Detection uses two signals:
+        #  1. Explicit `is_opening_line` flag — primary signal for in-memory
+        #     sessions (set by displayOpeningLine in utils.js / mobile.html).
+        #  2. Positional fallback — first message of active_chat is assistant.
+        #     ⚠️ Load-bearing. The is_opening_line flag does NOT survive the
+        #     disk round-trip: the on-disk chat-file format
+        #     (chat_routes.py:_format_chat_messages) has no slot for it, and
+        #     /chats/open's line-walking parser can't reconstruct it. Autosave
+        #     writes the file immediately after the greeting displays, so the
+        #     flag is lost on any subsequent reload-from-disk (refresh,
+        #     character switch, reopen). Without the positional check, post-
+        #     reload `_is_new_chat` flips False and session-summary injection
+        #     is silently suppressed, causing the model to confabulate when
+        #     asked "remember what we talked about last time?". Do not remove
+        #     the positional check assuming the flag is sufficient. (changes.md.)
+        #
+        # ⚠️ DO NOT re-add word-count check. The old ≤30-word branch caused
+        # curt replies ("Yeah, fair." / "Mm.") to silently reset the chat into
+        # new-chat state and re-inject the full session summary every turn.
+        assistant_msgs = [m for m in active_chat if m.get("role") == "assistant"]
+        def _is_opening_line_msg(m):
+            return bool(m.get("is_opening_line"))
+
+        _first_msg_is_assistant = bool(active_chat) and active_chat[0].get("role") == "assistant"
+
+        _new_via_no_asst        = len(assistant_msgs) == 0
+        _new_via_explicit_flag  = (
+            len(assistant_msgs) == 1 and _is_opening_line_msg(assistant_msgs[0])
+        )
+        _new_via_positional     = (
+            len(assistant_msgs) == 1
+            and not _new_via_explicit_flag
+            and _first_msg_is_assistant
+        )
+        _is_new_chat = _new_via_no_asst or _new_via_explicit_flag or _new_via_positional
+
+        if _new_via_positional:
+            _is_new_reason = (
+                "True (positional fallback — opening-line flag lost in "
+                "disk round-trip)"
+            )
+        elif _new_via_explicit_flag:
+            _is_new_reason = "True (is_opening_line flag)"
+        elif _new_via_no_asst:
+            _is_new_reason = "True (no assistant messages)"
+        else:
+            _is_new_reason = "False"
+        print(
+            f"🧠 _is_new_chat: {_is_new_reason} "
+            f"({len(assistant_msgs)} assistant msgs in active_chat)"
+        )
+        if _is_new_chat:
+            # Session memory: the newest saved summary is held for the
+            # tail-injection slot until a newer End Session summary replaces
+            # it; older stored summaries render in the YOUR OWN MEMORY block.
+            # Nothing ages out by clock time.
+            # ⚠️ DO NOT move the most-recent summary back into this block — tail
+            # position is intentional. ⚠️ DO NOT re-add time decay here; a
+            # character should remember the last session even after a long gap.
+            # (changes.md.)
+            _hot_session, _cold_sessions = select_session_summaries(character_name)
+            if _hot_session is not None:
+                _recent_session_ts, _recent_session_summary = _hot_session
+                print(f"🧠 Most-recent session summary held for tail injection "
+                      f"({len(_recent_session_summary)} chars) — new chat")
+            if _cold_sessions:
+                # Older summaries joined with the same SESSION_DIVIDER as before.
+                # Framing/wrapping below is unchanged from the prior task.
+                _older_summaries = SESSION_DIVIDER.join(t for _, t in _cold_sessions)
+                parts.append(
+                    f"\n═══════════════════════════════════════════════════════════\n"
+                    f"YOUR OWN MEMORY OF RECENT SESSIONS\n"
+                    f"═══════════════════════════════════════════════════════════\n"
+                    f"This is your own memory of last time — not a briefing, not "
+                    f"notes someone handed you. Use this only if the user clearly "
+                    f"wants to continue the previous session. Do not mention it otherwise.\n\n"
+                    f"{_older_summaries}\n"
+                    f"═══════════════════════════════════════════════════════════"
+                )
+                print(f"🧠 Cold session summaries injected "
+                      f"({len(_cold_sessions)} entr(y/ies), {len(_older_summaries)} chars) — new chat")
+
+        # character_note and author_note are NOT added here — both are
+        # appended to the system block later (after the restriction anchor,
+        # before the current time injection) wrapped in [OOC: …] labels so
+        # the model treats them as silent instructions rather than content to
+        # echo. They are NOT in the [REPLY INSTRUCTIONS] depth-0 packet —
+        # moving them there cost ~539 tokens per turn and was reverted.
+
+        char_context = "\n\n".join(parts)
+
+        # 🔥 INJECT USER PERSONA CONTEXT
+        # Always inject if we have a user name — bio is optional
+        user_context = ""
+        if user_display_name:
+            _bio_block = f"{substitute_placeholders(user_bio, _char_label, _user_label)}\n\n" if user_bio else ""
+            user_context = (
+                f"\n\n"
+                f"═══════════════════════════════════════════════════════════\n"
+                f"USER CONTEXT - WHO YOU ARE TALKING TO\n"
+                f"═══════════════════════════════════════════════════════════\n\n"
+                f"You are {char_data.get('name', 'the assistant')}.\n"
+                f"You are talking to {user_display_name}.\n\n"
+                f"{_bio_block}"
+                f"When {user_display_name} asks questions using 'I', 'my', or 'me', "
+                f"they are referring to themselves ({user_display_name}), NOT to you.\n"
+                f"You are {char_data.get('name', 'the assistant')}. "
+                f"{user_display_name} is the person you're talking to.\n\n"
+                f"═══════════════════════════════════════════════════════════\n"
+                f"END USER CONTEXT\n"
+                f"═══════════════════════════════════════════════════════════\n\n"
+            )
+            print(f"✅ Injected user persona context for {user_display_name} (bio: {len(user_bio)} chars)")
+        else:
+            print(f"⚠️ No user display name, skipping persona injection")
+
+        # Build the system_text (WITHOUT example_dialogue yet)
+        # Build the system_text (WITHOUT example_dialogue yet)
+        # For jinja/Gemma models: skip instruction layer and tone primer — they're Helcyon-specific
+        # scaffolding that confuses capable models into treating meta-instructions as output format
+        try:
+            with open('settings.json', 'r') as _stf:
+                _sts = json.load(_stf)
+            _st_template = _sts.get('llama_args', {}).get('chat_template', 'chatml').strip().lower()
+        except Exception:
+            _st_template = 'chatml'
+        _st_model = (CURRENT_MODEL or '').lower()
+        _is_jinja_model = _st_template in ('jinja', 'qwen') or 'gemma' in _st_model or 'qwen' in _st_model
+
+        # project_instructions is intentionally NOT in system_text — it moved
+        # to the [REPLY INSTRUCTIONS] depth-0 packet (folded into the last
+        # user turn) for higher behavioural priority.
+        if _is_jinja_model:
+            system_text = (
+                f"{system_prompt}\n\n{char_context}{user_context}{project_documents}"
+            )
+            print("📐 Jinja model: skipping instruction layer + tone primer from system_text")
+        else:
+            system_text = (
+                f"{system_prompt}\n\n{char_context}{user_context}\n\n{instruction}\n\n{tone_primer}{project_documents}"
+            )
+
+        # 📊 LOG SYSTEM MESSAGE SIZE
+        from truncation import rough_token_count
+        system_tokens = rough_token_count(system_text)
+        print(f"📊 SYSTEM MESSAGE SIZE: ~{system_tokens} tokens")
+        if system_tokens > 6000:
+            print(f"🔴 WARNING: System message is very large! May cause context overflow.")
+        elif system_tokens > 4000:
+            print(f"⚠️ CAUTION: System message is getting large.")
+
+        print("=" * 80)
+        print("DEBUG: FULL SYSTEM_TEXT BEING SENT:")
+        print("=" * 80)
+        print(system_text)
+        print("=" * 80)
+
+    except Exception as e:
+        print(f"⚠️ Failed to build character context: {e}")
+        system_text = system_prompt
+    return (
+        system_text, char_context, user_context,
+        _recent_session_summary, _recent_session_ts, _is_jinja_model,
+    )
+
+
+def _load_user_persona(user_name):
+    user_bio = ""
+    user_display_name = user_name
+    try:
+        user_file_path = os.path.join(USERS_DIR, f"{user_name}.json")
+        if os.path.exists(user_file_path):
+            with open(user_file_path, "r", encoding="utf-8") as uf:
+                user_data = json.load(uf)
+                user_bio = user_data.get("bio", "")
+                user_display_name = user_data.get("display_name", user_name)
+                print(f"✅ Loaded user persona for {user_name}")
+                print(f"   Display name: {user_display_name}")
+                print(f"   Bio length: {len(user_bio)} chars")
+                if user_bio:
+                    print(f"   Bio preview: {user_bio[:150]}...")
+        else:
+            print(f"⚠️ User persona file not found: {user_file_path}")
+    except Exception as e:
+        print(f"❌ Failed to load user persona: {e}")
+    return user_bio, user_display_name
+
+
+def _load_documents(user_input, _attached_doc_present):
+    """Load project + global documents for the prompt. Extracted from chat() (phase 1)."""
+    project_instructions = ""
+    project_documents = ""
+    global_documents = ""
+    project_rp_mode = False
+    project_rp_opener = ""
+    newly_pinned_doc = None
+
+    try:
+        from project_routes import get_active_project
+        active_project = get_active_project()
+        
+        if active_project:
+            projects_dir = os.path.join(os.path.dirname(__file__), "projects")
+            config_path = os.path.join(projects_dir, active_project, "config.json")
+            
+            # Load project instructions
+            # Kept as raw text — folded into the [REPLY INSTRUCTIONS] depth-0 packet
+            # later in prompt assembly (not the system block at position 0). Heavy
+            # ═══ fencing was removed because the packet has its own framing.
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as f:
+                    project_config = json.load(f)
+                    project_instructions = project_config.get("instructions", "").strip()
+                    project_rp_mode = project_config.get("rp_mode", False)
+                    project_rp_opener = project_config.get("rp_opener", "").strip()
+
+                    if project_instructions:
+                        print(f"📁 Loaded project instructions for: {active_project}")
+                        print(f"   Instructions length: {len(project_instructions)} chars")
+
+
+            # Load documents - sticky mode or keyword trigger
+            project_documents = ""
+            newly_pinned_doc = None
+            user_input_lower = user_input.lower()
+            sticky_docs = project_config.get("sticky_docs", False) if os.path.exists(config_path) else False
+            sticky_doc_file = project_config.get("sticky_doc_file") if os.path.exists(config_path) else None
+
+            # Helper: load a specific file directly by name (no keyword matching)
+            def load_pinned_doc_direct(proj_name, fname):
+                proj_dir = os.path.join(os.path.dirname(__file__), "projects")
+                fpath = os.path.join(proj_dir, proj_name, "documents", fname)
+                if not os.path.exists(fpath):
+                    print(f"⚠️ Pinned doc not found on disk: {fpath}")
+                    return ""
+                content = _read_doc_content(fpath, max_chars=8000)
+                if not content:
+                    print(f"❌ Failed to read pinned doc {fname}")
+                    return ""
+                prefix, suffix, content = _extract_perspective(content)
+                return (
+                    "\n\n"
+                    "═══════════════════════════════════════════════════════════\n"
+                    "PROJECT DOCUMENTS\n"
+                    "═══════════════════════════════════════════════════════════\n\n"
+                    f"### Document: {fname}\n\n{prefix}{content}{suffix}\n\n"
+                    "═══════════════════════════════════════════════════════════\n"
+                    "END PROJECT DOCUMENTS\n"
+                    "═══════════════════════════════════════════════════════════\n\n"
+                )
+
+            # Helper: check if user is requesting a DIFFERENT doc than the pinned one
+            def user_requesting_different_doc(user_q, current_pinned):
+                """True when the message has doc intent AND no keyword matches the pinned filename."""
+                keywords = _doc_query_keywords(user_q)
+                if not keywords or not current_pinned:
+                    return False
+                pinned_lower = current_pinned.lower().replace('_', ' ').replace('.', ' ')
+                # If any keyword matches the pinned doc name, user is asking for the same one
+                for kw in keywords:
+                    if re.search(r'\b' + re.escape(kw) + r'\b', pinned_lower):
+                        return False
+                # No keyword hits the pinned filename — check for document intent before switching
+                has_intent = (
+                    any(t in user_q.lower() for t in _DOC_STRONG_TRIGGERS) or
+                    bool(_DOC_NOUN_RE.search(user_q))
+                )
+                return has_intent
+
+            if sticky_docs and sticky_doc_file:
+                # Check if user is asking for a DIFFERENT doc than the pinned one
+                if user_requesting_different_doc(user_input, sticky_doc_file):
+                    print(f"📌 Sticky override - user requesting different doc, doing keyword search")
+                    project_documents = load_project_documents(active_project, user_input)
+                    if project_documents:
+                        # Update the pinned doc to the newly loaded one
+                        match = re.search(r'### Document: (.+?)\n', project_documents)
+                        if match:
+                            new_pinned = match.group(1).strip()
+                            try:
+                                with open(config_path, "r", encoding="utf-8") as f:
+                                    cfg = json.load(f)
+                                cfg["sticky_doc_file"] = new_pinned
+                                with open(config_path, "w", encoding="utf-8") as f:
+                                    json.dump(cfg, f, indent=2)
+                                print(f"📌 Pinned doc updated to: {new_pinned}")
+                            except Exception as e:
+                                print(f"⚠️ Could not update pinned doc: {e}")
+                    else:
+                        # Fallback: load the original pinned doc
+                        project_documents = load_pinned_doc_direct(active_project, sticky_doc_file)
+                else:
+                    # Normal sticky load - load pinned doc directly, no keyword matching
+                    project_documents = load_pinned_doc_direct(active_project, sticky_doc_file)
+                    if project_documents:
+                        print(f"📌 Sticky mode - loaded pinned doc: {sticky_doc_file} ({len(project_documents)} chars)")
+                    else:
+                        print(f"📌 Sticky mode - pinned doc missing, clearing pin")
+                        try:
+                            with open(config_path, "r", encoding="utf-8") as f:
+                                cfg = json.load(f)
+                            cfg["sticky_doc_file"] = None
+                            with open(config_path, "w", encoding="utf-8") as f:
+                                json.dump(cfg, f, indent=2)
+                        except Exception:
+                            pass
+
+            elif sticky_docs and not sticky_doc_file:
+                # Sticky ON but no doc pinned yet
+                # First check: if only one doc in folder, auto-load it without needing a trigger
+                docs_dir_check = os.path.join(os.path.dirname(__file__), "projects", active_project, "documents")
+                all_docs = [f for f in os.listdir(docs_dir_check) if os.path.isfile(os.path.join(docs_dir_check, f))] if os.path.exists(docs_dir_check) else []
+                
+                if len(all_docs) == 1:
+                    # Only one doc - just load it, no trigger needed
+                    auto_fname = all_docs[0]
+                    project_documents = load_pinned_doc_direct(active_project, auto_fname)
+                    if project_documents:
+                        print(f"📌 Sticky auto-pinned single doc: {auto_fname}")
+                        try:
+                            with open(config_path, "r", encoding="utf-8") as f:
+                                cfg = json.load(f)
+                            cfg["sticky_doc_file"] = auto_fname
+                            with open(config_path, "w", encoding="utf-8") as f:
+                                json.dump(cfg, f, indent=2)
+                        except Exception as e:
+                            print(f"⚠️ Could not save auto-pin: {e}")
+                elif (any(t in user_input_lower for t in _DOC_STRONG_TRIGGERS) or bool(_DOC_NOUN_RE.search(user_input))):
+                    # Multiple docs - use intent trigger to find and pin one
+                    project_documents = load_project_documents(active_project, user_input)
+                    if project_documents:
+                        print(f"📌 Sticky mode - first trigger, loading and pinning doc")
+                        match = re.search(r'### Document: (.+?)\n', project_documents)
+                        if match:
+                            pinned_filename = match.group(1).strip()
+                            try:
+                                with open(config_path, "r", encoding="utf-8") as f:
+                                    cfg = json.load(f)
+                                cfg["sticky_doc_file"] = pinned_filename
+                                with open(config_path, "w", encoding="utf-8") as f:
+                                    json.dump(cfg, f, indent=2)
+                                print(f"📌 Pinned doc saved: {pinned_filename}")
+                                newly_pinned_doc = pinned_filename
+                            except Exception as e:
+                                print(f"⚠️ Could not save pinned doc: {e}")
+                else:
+                    print(f"📌 Sticky ON, multiple docs, waiting for doc intent")
+
+            elif (any(t in user_input_lower for t in _DOC_STRONG_TRIGGERS) or bool(_DOC_NOUN_RE.search(user_input))):
+                # Non-sticky path: doc intent detected, keyword-match to find the right file
+                project_documents = load_project_documents(active_project, user_input)
+                if project_documents:
+                    print(f"📄 User requested documents - loading {len(project_documents)} chars")
+                    print(f"📄 DOCUMENT CONTENT PREVIEW:\n{project_documents[:1000]}")
+            else:
+                print(f"⭕ Skipped document loading - no doc intent detected")
+            
+    except Exception as e:
+        print(f"⚠️ Failed to load project data: {e}")
+        project_instructions = ""
+        project_documents = ""
+
+    # --------------------------------------------------
+    # Load Global Documents (always, regardless of project)
+    # --------------------------------------------------
+    try:
+        global_docs = load_global_documents(user_input)
+        if global_docs:
+            global_documents = global_docs
+            print(f"🌐 Global doc injected ({len(global_docs)} chars)")
+    except Exception as e:
+        print(f"⚠️ Global document load failed: {e}")
+
+    # 📄 An inline attached document is the user's explicit focus. Discard any
+    # project/global documents the retrieval system auto-loaded above so they
+    # cannot bleed into the reply alongside the attached document.
+    if _attached_doc_present and (project_documents or global_documents):
+        _discarded_doc_chars = len(project_documents) + len(global_documents)
+        print(f"📄 Inline document attached — discarding {_discarded_doc_chars} "
+              f"chars of auto-loaded project/global documents")
+        project_documents = ""
+        global_documents = ""
+    return project_instructions, project_documents, global_documents, project_rp_mode, newly_pinned_doc
+
+
+def _resolve_system_layer(char_data):
+    """Load core system layer (system prompt + instruction + tone primer), apply tone-primer suppression and character-bound system-prompt override. Extracted from chat() (phase 1)."""
+    system_prompt, current_time = get_system_prompt()
+    instruction = get_instruction_layer()
+    tone_primer = get_tone_primer()
+
+    # Suppress tone primer if the character card already defines personality/tone.
+    # The primer is a fallback only — sending it alongside a character card causes
+    # its "favour long, deep responses" instruction to override the character's style.
+    _has_char_personality = bool(
+        char_data.get("main_prompt", "").strip() or
+        char_data.get("description", "").strip() or
+        char_data.get("personality", "").strip()
+    )
+    if _has_char_personality:
+        tone_primer = ""
+        print("🎭 Character has personality defined — tone primer suppressed")
+
+    # Resolve the system prompt via the shared resolver: per-character bound
+    # filename → DEFAULT template ('default.txt'). An UNBOUND character falls
+    # back to default.txt — NOT whatever template is globally "active" in the
+    # SP editor. (Previously an unbound character kept the global-active base
+    # loaded by get_system_prompt() above, so e.g. activating Claude.txt made
+    # every unbound character silently run on Claude's prompt.) ⚠️ DO NOT
+    # re-inline the resolution chain — call resolve_character_prompt_files.
+    _sp_name, _, _ = resolve_character_prompt_files(char_data)
+    _char_sp_path = os.path.join(get_system_prompts_dir(), _sp_name)
+    if os.path.exists(_char_sp_path):
+        try:
+            with open(_char_sp_path, "r", encoding="utf-8") as _spf:
+                _char_sp_content = _spf.read().strip()
+            # Rebuild with same time context prefix
+            _time_ctx = f"Current date and time: {current_time}\n\n"
+            system_prompt = _time_ctx + _char_sp_content
+            print(f"🎭 Character system prompt resolved: {_sp_name}")
+        except Exception as e:
+            print(f"⚠️ Could not load character system prompt '{_sp_name}': {e}")
+    else:
+        # default.txt (or a bound file) missing — keep the get_system_prompt()
+        # base already loaded above as a last-resort safety net.
+        print(f"⚠️ Character system prompt not found: {_char_sp_path}")
+
+    print(f"⏰ Time context injected: {current_time}")
+    return system_prompt, instruction, tone_primer
+
+
 # --------------------------------------------------
 # Chat Endpoint (Smart Memory Trigger + Natural Recall + Proper Formatting)
 # --------------------------------------------------
@@ -3318,6 +4618,12 @@ def chat():
     
     print(f"🔍 DEBUG: Extracted user_input: {user_input[:100] if user_input else '(empty)'}")
     
+    try:
+        with open("_last_chat_request_user.txt", "w", encoding="utf-8") as _reqf:
+            _reqf.write(str(user_input or ""))
+    except Exception as _reqe:
+        print(f"Could not write _last_chat_request_user.txt: {_reqe!r}", flush=True)
+
     character_name = data.get("character", "").strip()
     user_name = data.get("user_name", "User")
     
@@ -3343,7 +4649,22 @@ def chat():
     # still reads the document; only the retrieval/intent query is cleaned.
     # Mirrors the image handling above (text-only copy for processing).
     _attached_doc_present = "[ATTACHED DOCUMENT:" in user_input
+    _attached_transcript_present = False
     if _attached_doc_present:
+        _attached_blocks = re.findall(
+            r"\[ATTACHED DOCUMENT:\s*([^\]\n]+)\]\n([\s\S]*?)\n\[END ATTACHED DOCUMENT\]",
+            user_input,
+        )
+        _attached_transcript_present = any(
+            (
+                "transcript" in (name or "").lower()
+                or bool(re.search(
+                    r"(?m)^\[\d{4}-\d{2}-\d{2}T[^\]]+\]\s+[^:\n]{1,80}:",
+                    content or "",
+                ))
+            )
+            for name, content in _attached_blocks
+        )
         user_input = re.sub(
             r"\[ATTACHED DOCUMENT:.*?\[END ATTACHED DOCUMENT\]",
             "", user_input, flags=re.DOTALL
@@ -3405,20 +4726,26 @@ def chat():
     # --------------------------------------------------
     # Load Project Instructions & Documents (if in a project)
     # --------------------------------------------------
-    project_instructions, project_documents, project_rp_mode, newly_pinned_doc = _load_documents(
+    project_instructions, project_documents, global_documents, project_rp_mode, newly_pinned_doc = _load_documents(
         user_input, _attached_doc_present
     )
 
     # --------------------------------------------------
     # Load character card and build system_text
     # --------------------------------------------------
-    system_text, char_context, user_context, _recent_session_summary, _recent_session_ts, _is_jinja_model = _build_system_text(
+    _anthropic_static_system_text, char_context, user_context, _recent_session_summary, _recent_session_ts, _is_jinja_model = _build_system_text(
         char_data, _char_label, _user_label, user_display_name, user_bio,
         active_chat, character_name, system_prompt, instruction, tone_primer,
         project_documents,
     )
+    system_text = _anthropic_static_system_text + (global_documents or "")
         
-    memory = ""
+    # --------------------------------------------------
+    # Load memory file and find relevant block
+    # --------------------------------------------------
+    memory = _retrieve_memory(
+        char_data, character_name, user_input, project_rp_mode, _diag_verbose
+    )
 
     # --------------------------------------------------
     # Build unified prompt (with example dialogue fenced in system block)
@@ -3434,10 +4761,9 @@ def chat():
         )
     ]
     
-    # Limit to last 20 messages (10 exchanges) to prevent massive prompts
-    if len(active_chat) > 20:
-        active_chat = active_chat[-20:]
-        print(f"⚠️ Trimmed conversation history to last 20 messages")
+    # Do not apply a fixed message-count cap here. The token-aware trimmer below
+    # keeps local prompts inside the llama.cpp budget and lets cloud backends use
+    # their configured prompt windows (for example, Anthropic's larger context).
 
     # Drop leading assistant messages — Helcyon ChatML requires `S U A U A … U`.
     # The frontend persists the character's opening line (and historically the
@@ -3461,9 +4787,13 @@ def chat():
     print(f"📊 Using {len(active_chat)} messages from conversation history")
 
     # 🔥 NEW: Decide if this is a new conversation or continuation
+    active_chat = _rewrite_inline_attachments_for_model(active_chat)
+
     assistant_messages = [msg for msg in active_chat if msg.get("role") == "assistant"]
     print(f"🔍 DEBUG: Found {len(assistant_messages)} assistant messages in active_chat")
     print(f"🔍 DEBUG: active_chat roles: {[msg.get('role') for msg in active_chat]}")
+    import copy as _copy
+    _anthropic_active_chat_pretrim = _copy.deepcopy(active_chat)
     # Combine system text with memory
     messages = [
         {"role": "system", "content": system_text + "\n" + memory},
@@ -3553,6 +4883,40 @@ def chat():
         _gph_pre = ""
     if _gph_pre:
         _reply_packet_overhead += rough_token_count(_gph_pre) + 30  # +30 for [OOC: System directive …] wrapper
+    _relayed_model_reply = False
+    try:
+        _relay_text = (user_input or "").strip()
+        _relay_tail = _relay_text[-500:]
+        _relay_names = {
+            str(x).strip().lower()
+            for x in (character_name, _char_label, char_data.get("name", ""))
+            if str(x or "").strip()
+        }
+        _relay_has_intro = bool(re.search(
+            r"\b(?:here'?s|this is|that'?s)\s+(?:its|their|his|her|the)\s+"
+            r"(?:response|reply|message)\b|\b(?:response|reply|message)\s+from\b",
+            _relay_text,
+            re.IGNORECASE,
+        ))
+        _relay_signoff_match = re.search(
+            r"(?im)^\s*(?:warm regards|regards|best|thanks|thank you),?\s*$"
+            r"[\s\S]{0,180}?^\s*([A-Za-z0-9_. -]{2,60})\s*$",
+            _relay_tail,
+        )
+        _relay_signed_as_current = (
+            bool(_relay_signoff_match)
+            and _relay_signoff_match.group(1).strip().lower() in _relay_names
+        )
+        _relayed_model_reply = (
+            len(_relay_text) > 250
+            and (_relay_has_intro or _relay_signed_as_current)
+        )
+        if _relayed_model_reply:
+            _reply_packet_overhead += 80
+    except Exception:
+        _relayed_model_reply = False
+    if _attached_transcript_present:
+        _reply_packet_overhead += 100
     if _reply_packet_overhead:
         _reply_packet_overhead += 20   # [REPLY INSTRUCTIONS] header + separators
         _ex_overhead += _reply_packet_overhead
@@ -3564,6 +4928,7 @@ def chat():
     _temp_convo_pretrim = len([m for m in messages if m.get("role") != "system"])
     messages = trim_chat_history(messages, extra_system_overhead=_ex_overhead)
     _temp_convo_posttrim = len([m for m in messages if m.get("role") != "system"])  # ⏱️ TEMP
+    active_chat = [m for m in messages if m.get("role") in ("user", "assistant")]
 
     print(f"🔍 DEBUG: After trimming, {len(messages)} messages remain")
 
@@ -3610,7 +4975,7 @@ def chat():
     
     # (project instructions are already in the system message above - no need to repeat)
 
-    # 🎭 Example dialogue is parsed into fictional user/assistant-shaped sample lines,
+    # 🎭 Example dialogue is parsed into user/assistant-shaped sample lines,
     # then appended to the tail of the system block inside <STYLE_EXAMPLES>.
     # Keeping it at the high-attention tail preserves the style effect, while
     # the explicit wrapper tells the model these are voice samples, not live
@@ -3669,7 +5034,7 @@ def chat():
         ex = ex.strip()
         print(f"🧹 Example dialogue speaker line breaks normalised")
 
-        # 🎭 PARSE EXAMPLE DIALOGUE INTO FICTIONAL USER/ASSISTANT-SHAPED SAMPLES
+        # 🎭 PARSE EXAMPLE DIALOGUE INTO USER/ASSISTANT-SHAPED SAMPLES
         # Models follow turn-shaped examples strongly. Parse the raw
         # example_dialogue into {role, content} pairs so the final
         # <STYLE_EXAMPLES> block keeps the conversational rhythm without
@@ -3703,16 +5068,19 @@ def chat():
                         _matched_role = "assistant"
                 if _matched_role:
                     if _cur_role is not None and _cur_lines:
-                        _text = "\n".join(_cur_lines).strip()
+                        _text = "\n".join(_cur_lines).strip("\n")
                         if _text:
                             _fake_turns.append({"role": _cur_role, "content": _text})
                     _cur_role = _matched_role
                     _cur_lines = [_rest] if _rest else []
                 else:
                     if _cur_role is not None:
-                        _cur_lines.append(_stripped)
+                        # Preserve visual formatting inside example replies:
+                        # indentation, quote markers, separators, and other
+                        # line-level style cues are part of the style sample.
+                        _cur_lines.append(_ln.rstrip())
             if _cur_role is not None and _cur_lines:
-                _text = "\n".join(_cur_lines).strip()
+                _text = "\n".join(_cur_lines).strip("\n")
                 if _text:
                     _fake_turns.append({"role": _cur_role, "content": _text})
 
@@ -3828,6 +5196,42 @@ def chat():
     # vars — never hardcoded.
     # ⚠️ DO NOT move the most-recent session summary back into the main system
     # block — tail position is intentional for attention weighting. (changes.md.)
+    if _recent_session_summary and messages and messages[0].get("role") == "system":
+        _rs_user = user_display_name or user_name or "the user"
+        _rs_rel = ""
+        try:
+            # Relative time is computed from the hot summary's own timestamp
+            # (inline ISO stamp, or file-mtime fallback for legacy entries).
+            if _recent_session_ts is not None:
+                import datetime as _dt_rs
+                _rs_days = (_dt_rs.datetime.now(_dt_rs.timezone.utc).date()
+                            - _recent_session_ts.date()).days
+                if _rs_days <= 0:
+                    _rs_rel = "earlier today"
+                elif _rs_days == 1:
+                    _rs_rel = "yesterday"
+                elif _rs_days < 7:
+                    _rs_rel = f"{_rs_days} days ago"
+                elif _rs_days < 14:
+                    _rs_rel = "last week"
+                else:
+                    _rs_rel = f"{_rs_days // 7} weeks ago"
+        except Exception as _rs_e:
+            # No clean way to compute relative time — omit it rather than guess.
+            _rs_rel = ""
+        _rs_header = (
+            f"[Most recent session with {_rs_user}, {_rs_rel}]:"
+            if _rs_rel else
+            f"[Most recent session with {_rs_user}]:"
+        )
+        messages[0]["content"] += (
+            f"\n\n{_rs_header}\n"
+            f"{_recent_session_summary}\n"
+            f"[End of recent session — use this only if the user clearly wants to continue the previous session. Do not mention it otherwise.]"
+        )
+        print(f"🧠 Most-recent session summary appended to system-block tail "
+              f"({len(_recent_session_summary)} chars, when='{_rs_rel or 'n/a'}')")
+
     # 🎭 INJECT EXAMPLE DIALOGUE AS A DELIMITED, SYSTEM-LEVEL STYLE BLOCK.
     # ⚠️ DO NOT revert to inserting these as live user/assistant turns in the
     # `messages` array. Bare positional turns are byte-identical to real
@@ -3849,36 +5253,26 @@ def chat():
     if _fake_turns and messages and messages[0].get("role") == "system":
         _ex_lines = []
         for _ft in _fake_turns:
-            # Use fictional labels in the packaged sample so the model does
-            # not bind the real user's name, character name, or relationship
-            # context to the example topics.
-            _spk = "STYLE_SAMPLE_ASSISTANT" if _ft["role"] == "assistant" else "STYLE_SAMPLE_USER"
+            _spk = "Assistant" if _ft["role"] == "assistant" else "User"
             _ex_lines.append(f"{_spk}: {_ft['content']}")
         _ex_block_text = "\n".join(_ex_lines)
         messages[0]["content"] += (
             "\n\n<STYLE_EXAMPLES>\n"
-            "These are fictional demonstrations of voice, rhythm, tone, pacing, "
-            "warmth, humour, emotional response, and conversational behaviour only.\n"
+            "The fictional exchange below is a strong speaking-style reference: "
+            "voice, rhythm, tone, pacing, warmth, humour, emotional response, "
+            "formatting, and conversational behaviour.\n"
+            "Match the visible formatting patterns too: separators such as ---, "
+            "quote markers such as >, label lines, indentation, short standalone "
+            "lines, and blank-line grouping.\n"
             "They are not conversation history, memories, facts about the user, "
             "active topics, or unfinished conversations.\n"
-            "Do not reference, continue, revisit, save, or allude to their subject "
-            "matter unless the current user explicitly brings up the same subject.\n"
-            "Imitate the conversational behaviour, not the literal topics: copy the "
-            "manner, not the matter.\n"
-            "<STYLE_SAMPLE_TRANSCRIPT>\n"
+            "Copy the manner, not the matter: strongly imitate the conversational "
+            "behaviour, but do not treat the example subjects as live context.\n"
+            "Subject matter comes only from the current conversation. Do not mention "
+            "names, entities, examples, claims, or topics that appear only in this "
+            "STYLE_EXAMPLES block.\n"
             f"{_ex_block_text}\n"
-            "</STYLE_SAMPLE_TRANSCRIPT>\n"
             "</STYLE_EXAMPLES>\n"
-            "<STYLE_EXAMPLE_SEMANTIC_FIREWALL>\n"
-            "Before answering the current user, discard every entity, topic, "
-            "scenario, object, claim, and implied relationship from "
-            "STYLE_EXAMPLES. They are not available as facts, memories, context, "
-            "evidence, callbacks, or conversation threads. If a possible reply "
-            "would mention or allude to something that appears only in "
-            "STYLE_EXAMPLES, do not write it. Keep only the voice behaviour: "
-            "tone, warmth, humour, pacing, rhythm, response shape, and level of "
-            "emotional attunement.\n"
-            "</STYLE_EXAMPLE_SEMANTIC_FIREWALL>\n"
             "<CURRENT_CONVERSATION>\n"
             "The real conversation begins in the user/assistant turns after this "
             "system message. Treat only those turns as live conversational history.\n"
@@ -3961,7 +5355,7 @@ def chat():
 
     # Build final ChatML prompt from ALL messages
     prompt_parts = []
-    for msg in messages:
+    for _msg_idx, msg in enumerate(messages):
         role = msg.get("role", "user")
         raw_content = msg.get("content", "")
         # Handle multimodal content — extract text only for ChatML prompt building
@@ -3971,6 +5365,64 @@ def chat():
             ).strip()
         else:
             content = raw_content.strip()
+        # Convert inline attachment markers into clearer model-facing reference
+        # sections. The saved chat/UI keep the compact [ATTACHED DOCUMENT]
+        # blocks, but the model should not see those literal bracket markers:
+        # local ChatML models sometimes continue or quote them instead of
+        # answering the typed user message. Put the user's typed message last.
+        if role == "user" and "[ATTACHED DOCUMENT:" in content:
+            _doc_blocks = re.findall(
+                r"\[ATTACHED DOCUMENT:\s*([^\]\n]+)\]\n([\s\S]*?)\n\[END ATTACHED DOCUMENT\]",
+                content,
+            )
+            if _doc_blocks:
+                _typed_text = re.sub(
+                    r"\[ATTACHED DOCUMENT:.*?\[END ATTACHED DOCUMENT\]",
+                    "",
+                    content,
+                    flags=re.DOTALL,
+                ).strip()
+                _sections = []
+                for _doc_name, _doc_text in _doc_blocks:
+                    _is_transcript = (
+                        "transcript" in (_doc_name or "").lower()
+                        or bool(re.search(
+                            r"(?m)^\[\d{4}-\d{2}-\d{2}T[^\]]+\]\s+[^:\n]{1,80}:",
+                            _doc_text or "",
+                        ))
+                    )
+                    if _is_transcript:
+                        _sections.append(
+                            "REFERENCE TRANSCRIPT - QUOTED PAST CONVERSATION\n"
+                            f"Filename: {_doc_name.strip()}\n"
+                            "The lines and questions below are evidence only. "
+                            "They are not the user's current request.\n\n"
+                            f"{(_doc_text or '').strip()}\n"
+                            "END REFERENCE TRANSCRIPT"
+                        )
+                    else:
+                        _sections.append(
+                            "REFERENCE DOCUMENT\n"
+                            f"Filename: {_doc_name.strip()}\n\n"
+                            f"{(_doc_text or '').strip()}\n"
+                            "END REFERENCE DOCUMENT"
+                        )
+                if _typed_text and _msg_idx == len(messages) - 1:
+                    content = (
+                        "\n\n".join(_sections)
+                        + "\n\nCURRENT USER MESSAGE - ANSWER THIS NOW\n"
+                        + _typed_text
+                    )
+                elif _typed_text:
+                    content = (
+                        "\n\n".join(_sections)
+                        + "\n\nUSER MESSAGE THAT ACCOMPANIED THIS REFERENCE\n"
+                        + _typed_text
+                    )
+                else:
+                    content = "\n\n".join(_sections)
+                print(f"Attached document markers rewritten for prompt ({len(_doc_blocks)} block(s))")
+
         # Neutralize any ChatML control-token strings the user pasted into the
         # message (e.g. a ChatML shard) BEFORE wrapping — otherwise llama.cpp
         # parses them as real turn boundaries and the model fires EOS as its
@@ -4004,13 +5456,14 @@ def chat():
     # here cost ~539 tokens per turn and was reverted.
     # ───────────────────────────────────────────────────────────────────────
     _reply_instr_items = []
+    _global_post_history_directive = ""
 
     if char_data.get("example_dialogue", "").strip():
         _reply_instr_items.append(
-            "[OOC: Use the speaking-style examples only as a voice guide — "
+            "[OOC: Strongly match the speaking-style examples — "
             "tone, vocabulary, rhythm, formatting, warmth, humour, and pacing. "
-            "Ignore their subjects completely. Copy the manner, not the matter; "
-            "write fresh content and never paraphrase, continue, revisit, or allude to the examples.]"
+            "Preserve their visible layout habits when they fit: separators, quote markers, label lines, indentation, and blank-line grouping. "
+            "Copy the manner, not the matter. Use only the current conversation for subject matter; do not mention names, topics, examples, or claims that appear only in the style examples.]"
         )
 
     _ph_val = char_data.get("post_history", "").strip()
@@ -4028,8 +5481,8 @@ def chat():
     # via a `<base>.posthistory.txt` file alongside the template (same pattern
     # as `.example.txt`). Loading the GPT-4o template loads its post-history;
     # switching templates switches it. SillyTavern-style hard system
-    # instruction. Appended LAST in the packet — the final thing the model
-    # reads before generating, the highest-priority slot in the prompt.
+    # instruction. Appended LAST among instruction-shaped blocks, immediately
+    # before the user's actual message in the final user turn.
     # Overrides character and project text. Resolution mirrors the example-
     # dialogue fallback: character-bound system prompt if set, else the
     # globally active template.
@@ -4049,58 +5502,102 @@ def chat():
         _gph_val = re.sub(r'<\|im_start\|>\w*', '', _gph_val)
         _gph_val = re.sub(r'<\|im_end\|>', '', _gph_val).strip()
     if _gph_val:
-        _reply_instr_items.append(
+        _global_post_history_directive = (
             f"[OOC: System directive — highest priority. Overrides character "
             f"and project instructions. {_gph_val}]"
         )
 
-    if _reply_instr_items and prompt_parts:
-        _packet = "\n\n".join(_reply_instr_items) + "\n\n"
-        # Prepend packet BEFORE the user message so the user's actual words
-        # are the last thing the model sees before generating — not the
-        # instructions. Appending after the user message caused the model to
-        # read the character note as the thing it should respond to and
-        # narrate it back instead of following it silently.
-        # ⚠️ DO NOT move back to append — prepend is correct here.
-        if prompt_parts[-1].startswith("<|im_start|>user\n") and prompt_parts[-1].endswith("\n<|im_end|>"):
-            # Insert packet after <|im_start|>user\n but before the user message
-            prefix = "<|im_start|>user\n"
-            rest = prompt_parts[-1][len(prefix):]  # user message + \n<|im_end|>
-            prompt_parts[-1] = prefix + _packet + rest
-            print(f"📌 [OOC] depth-0 packet prepended to last user turn "
-                  f"({len(_packet)} chars, {len(_reply_instr_items)} item(s))")
-        else:
-            print(f"⚠️ Last prompt_part is not a user turn — [OOC] skipped "
-                  f"({len(_reply_instr_items)} item(s) would have been added)")
-
-    # 📄 ATTACHED DOCUMENT — directive append.
+    # 📄 ATTACHED DOCUMENT — directive queued before Global Post-History.
     # The bare `[ATTACHED DOCUMENT: …]…[END ATTACHED DOCUMENT]` wrapper has
     # no framing on its own — it looks like the search-result blocks but
     # lacks their accompanying "use these to answer naturally" instruction.
     # With the OOC packets (style/post-history/system-directive) sitting
     # directly above the doc, a character-RP-tuned model tends to skim past
     # the doc as ambient noise and respond to the OOC framing instead.
-    # Appending a one-line directive at the END of the user turn fixes this:
-    # the model reads "this is reference material, do not roleplay it" as
-    # the last thing before generating, the strongest attention slot.
-    # ⚠️ Append at prompt-build time, NOT in active_chat — keeps the
+    # Queueing the one-line directive in the final-turn instruction packet gives
+    # the document clear framing while preserving Global Post-History as the
+    # last instruction block and the user's words as the final natural content.
+    # ⚠️ Add at prompt-build time, NOT in active_chat — keeps the
     # directive out of saved chat history and off the user's screen. It is
     # one-shot per turn and applies whenever this turn carries a doc.
-    if _attached_doc_present and prompt_parts:
+    if _attached_doc_present and not _attached_transcript_present:
+        _doc_directive = (
+            "[The user attached the above document as reference material. "
+            "Read it and use it to inform your reply, but do not continue, "
+            "role-play, or respond as any character mentioned inside it.]"
+        )
+        _reply_instr_items.append(_doc_directive)
+        print(f"📄 Attached-document directive queued before Global Post-History "
+              f"({len(_doc_directive)} chars)")
+
+    if global_documents:
+        _global_doc_directive = (
+            "[A matching global reference document has already been loaded above. "
+            "Use that loaded document to answer the user's current request now. "
+            "Do not ask the user to send, paste, upload, or walk you through it again.]"
+        )
+        _reply_instr_items.append(_global_doc_directive)
+        print(f"🌐 Global-document directive queued before Global Post-History "
+              f"({len(_global_doc_directive)} chars)")
+
+    # Relayed model replies can look like a completed assistant turn when the
+    # pasted text ends with a signoff using the active character/model name
+    # (for example: "Warm regards, GPT-5.5"). Mark it as quoted material in the
+    # prompt only, so llama.cpp does not treat the next assistant turn as already
+    # complete and fire EOS as token #1. This is not written to chat history.
+    if _relayed_model_reply:
+        _relay_directive = (
+            "[The user pasted a relayed message from another model above. "
+            "Treat it as quoted material to respond to, not as your own "
+            "completed assistant turn. Reply to the user's framing now.]"
+        )
+        _reply_instr_items.append(_relay_directive)
+        print(f"🔁 Relayed-model directive queued before Global Post-History "
+              f"({len(_relay_directive)} chars)")
+
+    if _global_post_history_directive:
+        _reply_instr_items.append(_global_post_history_directive)
+
+    def _split_leading_instruction_blocks(_text):
+        """Move existing final-turn OOC blocks before Global Post-History."""
+        _leading = []
+        _rest = _text
+        while _rest.startswith(("[OOC:", "[The user ")):
+            _end = _rest.find("]\n\n")
+            _skip = 3
+            if _end < 0:
+                _end = _rest.find("]\r\n\r\n")
+                _skip = 5
+            if _end < 0:
+                break
+            _leading.append(_rest[:_end + 1])
+            _rest = _rest[_end + _skip:]
+        return _leading, _rest
+
+    def _split_final_user_material(_text):
+        """Keep reference material before final instructions; leave typed words last."""
+        _marker = "\n\nCURRENT USER MESSAGE - ANSWER THIS NOW\n"
+        if _marker in _text:
+            _pre, _user = _text.rsplit(_marker, 1)
+            return [_pre + "\n\nCURRENT USER MESSAGE - ANSWER THIS NOW"], _user
+        return [], _text
+
+    if _reply_instr_items and prompt_parts:
         if prompt_parts[-1].startswith("<|im_start|>user\n") and prompt_parts[-1].endswith("\n<|im_end|>"):
-            _doc_directive = (
-                "[The user attached the above document as reference material. "
-                "Read it and use it to inform your reply, but do not continue, "
-                "role-play, or respond as any character mentioned inside it.]"
-            )
-            _imend = "\n<|im_end|>"
-            _body  = prompt_parts[-1][:-len(_imend)]
-            prompt_parts[-1] = _body + "\n\n" + _doc_directive + _imend
-            print(f"📄 Attached-document directive appended to last user turn "
-                  f"({len(_doc_directive)} chars)")
+            prefix = "<|im_start|>user\n"
+            suffix = "\n<|im_end|>"
+            body = prompt_parts[-1][len(prefix):-len(suffix)]
+            leading_blocks, user_body = _split_leading_instruction_blocks(body)
+            reference_blocks, user_body = _split_final_user_material(user_body)
+            final_instr_items = leading_blocks + reference_blocks + _reply_instr_items
+            packet = "\n\n".join(final_instr_items)
+            prompt_parts[-1] = prefix + packet + "\n\n" + user_body + suffix
+            print(f"📌 [OOC] final-turn instruction packet ordered before user text "
+                  f"({len(packet)} chars, {len(final_instr_items)} item(s); "
+                  f"Global Post-History last)")
         else:
-            print("⚠️ Last prompt_part is not a user turn — "
-                  "attached-document directive skipped")
+            print(f"⚠️ Last prompt_part is not a user turn — [OOC] skipped "
+                  f"({len(_reply_instr_items)} item(s) would have been added)")
 
     # Add the assistant start tag. This is the structural ChatML role marker
     # telling the model whose turn it is — NOT an optional "pre-fill". Without
@@ -4125,6 +5622,11 @@ def chat():
     # because the model's first token is often \n, which would then match
     # the stop sequence "\n<|im_start|>" and kill the response after 2 tokens.
     prompt = "\n".join(prompt_parts[:-1]) + "\n" + prompt_parts[-1]
+    try:
+        with open("_last_raw_prompt_for_model.txt", "w", encoding="utf-8") as _rpf:
+            _rpf.write(prompt)
+    except Exception as _rpe:
+        print(f"Could not write _last_raw_prompt_for_model.txt: {_rpe!r}", flush=True)
 
     # 🩺 Prompt structure check — always runs but only emits output when
     # something is wrong (malformed ChatML sequence, mid-conversation system
@@ -4297,11 +5799,11 @@ def chat():
                 msg["content"] = packet + ("\n\n" + text if text else "")
 
             copied[i] = msg
-            print(f"📌 {label}: project instructions prepended to last user turn "
+            print(f"📌 {label}: packet prepended to last user turn "
                   f"({len(packet)} chars)", flush=True)
             return copied
 
-        print(f"⚠️ {label}: project instructions set but no user turn found", flush=True)
+        print(f"⚠️ {label}: packet set but no user turn found", flush=True)
         return copied
 
     _cloud_project_packet = _project_instruction_packet()
@@ -4676,14 +6178,49 @@ def chat():
                   f"{f'/{_ant_think_budget}' if _ant_thinking else ''}", flush=True)
 
             # System goes in the top-level `system` param; messages are convo-only.
-            _ant_system   = system_text + ("\n\n" + memory if memory else "")
-            _ant_messages = _anthropic_normalize(active_chat)
+            # Keep the first system block byte-stable for prompt caching. Per-turn
+            # dynamic context stays outside that cached block, but is framed as
+            # passive reference so it does not read like fresh user intent.
+            _ant_dynamic_packet = _anthropic_dynamic_context_packet(
+                global_documents,
+                memory,
+                project_instructions,
+            )
+            _ant_system = _anthropic_system_blocks_for_cache(
+                _anthropic_static_system_text,
+                _ant_dynamic_packet,
+            )
+            _ant_messages = _anthropic_normalize(_anthropic_active_chat_pretrim)
             if not _ant_messages:
                 return "⚠️ No user message to send to Anthropic.", 400
 
-            _ant_messages = _prepend_to_last_user_message(
-                _ant_messages, _cloud_project_packet, "Anthropic"
+            _ant_messages = _anthropic_trim_messages_to_cap(
+                _ant_messages,
+                system=_ant_system,
             )
+            _ant_dynamic_sources = ["current_datetime"]
+            if project_instructions and project_instructions.strip():
+                _ant_dynamic_sources.append("project_instructions")
+            if global_documents and str(global_documents).strip():
+                _ant_dynamic_sources.append("global_documents")
+            if memory and str(memory).strip():
+                _ant_dynamic_sources.append("memory")
+            _ant_static_len = len(_anthropic_strip_leading_time_context(_anthropic_static_system_text))
+            print(
+                "☁️ Anthropic payload context: "
+                f"static_system_len={_ant_static_len}, "
+                f"dynamic_sources={_ant_dynamic_sources}, "
+                f"project_instructions_dynamic_system={'yes' if project_instructions and project_instructions.strip() else 'no'}, "
+                "project_instruction_packet_in_user_message=no, "
+                "dynamic_added_to_user_message=no",
+                flush=True,
+            )
+            if _diag_verbose and _ant_dynamic_packet:
+                print(
+                    "☁️ Anthropic dynamic packet preview: "
+                    f"{_ant_dynamic_packet[:300]!r}",
+                    flush=True,
+                )
 
             _ant_use_web_search = char_data.get("use_web_search", False)
             try:
@@ -4799,7 +6336,7 @@ def chat():
 
             _sys_content = _nuke_chatml(system_text + ("\n" + memory if memory else ""))
             _text_messages = []  # system folded into first user message for Gemma 3 compatibility
-            for m in active_chat:
+            for m in [m for m in messages if m.get("role") in ("user", "assistant")]:
                 _text_messages.append({
                     "role": m.get("role"),
                     "content": _nuke_chatml(_extract_content(m))
@@ -4819,6 +6356,12 @@ def chat():
                     _alt_messages.append(dict(_tm))
             _text_messages = _alt_messages
             print(f"🧹 ChatML nuked from {len(_text_messages)} messages", flush=True)
+
+            try:
+                with open("_last_messages_api_payload.json", "w", encoding="utf-8") as _mpf:
+                    json.dump(_text_messages, _mpf, ensure_ascii=False, indent=2)
+            except Exception as _mpe:
+                print(f"Could not write _last_messages_api_payload.json: {_mpe!r}", flush=True)
 
             payload = {
                 "model": CURRENT_MODEL or "local",
@@ -5513,6 +7056,9 @@ def chat():
                     - immediately preceded by sentence punctuation + whitespace (. ! ? , ; :)
                     Relative clauses ("the woman who runs", "the place where we met") sit
                     mid-sentence after a noun antecedent, so they fail this check.
+                    Comma appositives ("Tara, who was the first...") are also
+                    relative clauses; treat those as non-question context unless
+                    the comma follows a discourse opener ("by the way, who was...").
                     """
                     if pos == 0:
                         return True
@@ -5525,7 +7071,26 @@ def chat():
                         i -= 1
                     if i < 0:
                         return True
-                    return text[i] in '.!?,;:'
+                    if text[i] != ',':
+                        return text[i] in '.!?:;'
+
+                    before_comma = text[:i].rstrip()
+                    prev_boundary = max(
+                        before_comma.rfind('.'),
+                        before_comma.rfind('!'),
+                        before_comma.rfind('?'),
+                        before_comma.rfind(';'),
+                        before_comma.rfind(':'),
+                    )
+                    clause_before_comma = before_comma[prev_boundary + 1:].strip().lower()
+                    if _re.fullmatch(
+                        r"(?:by the way|btw|anyway|so|well|yeah|yes|no|okay|ok|also|please|actually|however)",
+                        clause_before_comma,
+                    ):
+                        return True
+                    if _re.search(r"^\s*(?:who|which|that|where|when)\b", text[pos:pos + 12], _re.IGNORECASE):
+                        return False
+                    return True
 
                 _should_search = False
                 _firing_trigger = None
@@ -6435,7 +8000,7 @@ def get_chat_history():
 
 # --------------------------------------------------
 # Character-card routes extracted to character_routes.py
-# (character_bp): /active_character (GET/POST), /list_characters,
+# (character_bp): /active_character (GET/POST), /character_groups (GET/POST), /list_characters,
 # /create_character, /characters/<filename>, /characters/<n>.json,
 # /character_voice/<n> (GET/POST), /character_system_prompt/<n> (GET/POST),
 # /get_character/<n>. CHARACTERS_DIR + active-character helpers live there.
@@ -6514,6 +8079,16 @@ def get_model():
     get_current_model()  # refresh from llama.cpp
     name = CURRENT_MODEL or "No model loaded"
     display = os.path.splitext(os.path.basename(name))[0] if name else "No model loaded"
+    model_id = None
+    if CURRENT_MODEL:
+        try:
+            with open('settings.json', 'r', encoding='utf-8') as f:
+                saved_model_id = str(json.load(f).get('llama_last_model', '')).strip()
+            saved_display = os.path.splitext(os.path.basename(saved_model_id))[0]
+            if saved_model_id and saved_display.lower() == display.lower():
+                model_id = saved_model_id
+        except Exception:
+            pass
 
     # Check if mmproj is configured
     cfg = get_llama_settings()
@@ -6553,6 +8128,7 @@ def get_model():
 
     return jsonify({
         "model": display,
+        "model_id": model_id,
         "label": label,
         "vision_active": vision_active,
         "mmproj": os.path.basename(mmproj_path) if mmproj_path else None,
@@ -7405,6 +8981,390 @@ def continue_chat():
         return jsonify({"error": str(e)}), 500
 
       
+# --- CHARACTER MEMORY MANAGEMENT ---
+@app.route("/get_character_memory")
+def get_character_memory():
+    """Return parsed memory entries for the selected character or global."""
+    character = request.args.get("character")
+    if not character:
+        return jsonify({"entries": []})
+
+    mem_dir = os.path.join(os.path.dirname(__file__), "memories")
+    os.makedirs(mem_dir, exist_ok=True)
+    if character.lower() == "global":
+        path = os.path.join(mem_dir, "global_memory.txt")
+    else:
+        path = os.path.join(mem_dir, f"{character.lower()}_memory.txt")
+    print("Looking for memory file:", path)
+
+    if not os.path.exists(path):
+        print("⚠️ Memory file not found.")
+        return jsonify({"entries": []})
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read().strip()
+    except Exception as e:
+        print("❌ Error reading memory file:", e)
+        return jsonify({"entries": []})
+
+    # Split on "# Memory:" and filter out empties
+    blocks = [b.strip() for b in text.split("# Memory:") if b.strip()]
+
+    print(f"✅ Loaded {len(blocks)} memory blocks for {character}.")
+    return jsonify({"entries": blocks})
+
+
+@app.route("/delete_character_memory", methods=["POST"])
+def delete_character_memory():
+    """Delete a memory entry by index for the selected character."""
+    data = request.get_json()
+    character = data.get("character")
+    index = int(data.get("index", -1))
+
+    if character is None or index < 0:
+        return "Invalid request", 400
+
+    mem_dir = os.path.join(os.path.dirname(__file__), "memories")
+    if character.lower() == "global":
+        path = os.path.join(mem_dir, "global_memory.txt")
+    else:
+        path = os.path.join(mem_dir, f"{character.lower()}_memory.txt")
+    if not os.path.exists(path):
+        return "No memory file", 404
+
+    with open(path, "r", encoding="utf-8") as f:
+        blocks = [b for b in f.read().split("# Memory:") if b.strip()]
+
+    if 0 <= index < len(blocks):
+        del blocks[index]
+    else:
+        return "Index out of range", 400
+
+    new_text = "\n\n".join(f"# Memory: {b.strip()}" for b in blocks)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(new_text.strip())
+
+    return "OK", 200
+
+
+@app.route("/add_character_memory", methods=["POST"])
+def add_character_memory():
+    """Append a new memory entry for the selected character."""
+    data = request.get_json()
+    character = data.get("character", "").strip()
+    title = data.get("title", "Untitled").strip()
+    keywords = data.get("keywords", "").strip()
+    body = data.get("body", "").strip()
+    # Optional save target: "character" (default) or "global". When "global",
+    # write to the shared memories/global_memory.txt instead of the per-character
+    # file. (The legacy character=="global" path is kept as a fallback.)
+    target = (data.get("target") or "character").strip().lower()
+
+    if not character or not body:
+        return "Invalid request", 400
+    if _active_project_is_roleplay():
+        return "Memory saving is disabled in roleplay projects", 403
+
+    mem_dir = os.path.join(os.path.dirname(__file__), "memories")
+    os.makedirs(mem_dir, exist_ok=True)
+    if target == "global" or character.lower() == "global":
+        path = os.path.join(mem_dir, "global_memory.txt")
+    else:
+        path = os.path.join(mem_dir, f"{character.lower()}_memory.txt")
+
+    needs_sep = os.path.exists(path) and os.path.getsize(path) > 0
+    entry = f"# Memory: {title}\nKeywords: {keywords}\n\n{body}"
+    with open(path, "a", encoding="utf-8") as f:
+        if needs_sep:
+            f.write("\n\n")
+        f.write(entry)
+
+    return "OK", 200
+
+
+def _active_project_is_roleplay():
+    """Return True when the currently active project has RP mode enabled."""
+    try:
+        projects_dir = os.path.join(os.path.dirname(__file__), "projects")
+        state_path = os.path.join(projects_dir, "_active_project.json")
+        if not os.path.exists(state_path):
+            return False
+        with open(state_path, "r", encoding="utf-8") as f:
+            active_project = (json.load(f) or {}).get("active_project")
+        if not active_project or re.search(r"[\\/]", active_project):
+            return False
+        config_path = os.path.join(
+            projects_dir,
+            active_project,
+            "config.json",
+        )
+        if not os.path.exists(config_path):
+            return False
+        with open(config_path, "r", encoding="utf-8") as f:
+            return bool((json.load(f) or {}).get("rp_mode", False))
+    except Exception as exc:
+        print(f"Roleplay project memory-save check failed: {exc!r}", flush=True)
+        return False
+
+
+def _auto_memory_capture_turn(character, user_text, assistant_text, recent_messages=None, user_name=None, force_save=False):
+    """Capture one turn without depending on a second browser request."""
+    character = str(character or "").strip()
+    user_name = re.sub(r"[\r\n|]+", " ", str(user_name or "Chris")).strip()[:80] or "Chris"
+    user_text = str(user_text or "").strip()[:4000]
+    assistant_text = str(assistant_text or "").strip()[:6000]
+    recent_messages = recent_messages or []
+    if not character or not user_text or re.search(r"[\\/]", character):
+        return {"status": "skipped", "reason": "invalid_request"}, 400
+    if _active_project_is_roleplay():
+        return {"status": "skipped", "reason": "roleplay_project"}, 200
+
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            current_settings = json.load(f)
+    except Exception:
+        current_settings = {}
+    force_save = bool(force_save)
+    auto_settings = current_settings.get("auto_memory") or {}
+    if not force_save and not auto_settings.get("enabled", False):
+        return {"status": "skipped", "reason": "disabled"}, 200
+    if not force_save and current_settings.get("backend_mode", "local") != "local":
+        return {"status": "skipped", "reason": "local_only"}, 200
+
+    explicit = force_save or bool(_AUTO_MEMORY_EXPLICIT_RE.search(user_text))
+    if not force_save and _AUTO_MEMORY_SECRET_RE.search(user_text):
+        return {"status": "skipped", "reason": "secret"}, 200
+    if not explicit and _AUTO_MEMORY_SENSITIVE_RE.search(user_text):
+        return {"status": "skipped", "reason": "sensitive"}, 200
+    if not explicit and not _AUTO_MEMORY_CANDIDATE_RE.search(user_text):
+        return {"status": "skipped", "reason": "no_candidate"}, 200
+
+    candidate = _auto_memory_legacy_tag(assistant_text) if explicit and not force_save else None
+    if candidate is None:
+        history_lines = []
+        if isinstance(recent_messages, list):
+            for msg in recent_messages[-6:]:
+                if not isinstance(msg, dict):
+                    continue
+                role = "User" if msg.get("role") == "user" else "Assistant"
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    content = " ".join(
+                        str(part.get("text", "")) for part in content
+                        if isinstance(part, dict) and part.get("type") == "text"
+                    )
+                history_lines.append(f"{role}: {str(content)[:1800]}")
+        if force_save:
+            classifier_prompt = (
+                "Write one saved memory for a private chat application.\n"
+                "Use the trained memory object format exactly. Do not use JSON. Do not use markdown.\n"
+                "There is no reject/decline option.\n"
+                "The memory must describe the actual belief, preference, fact, project, goal, or recurring context discussed by the user.\n"
+                "Do not mention the save request, memory command, chat, conversation, transcript, recent context, or that the user asked to remember something.\n"
+                "Do not paste or quote the transcript. Do not ask questions. Do not address the user.\n"
+                f"The user's name is {user_name}. In the Summary, refer to them as {user_name}, never as \"the user\".\n"
+                "Use a neutral third-person factual style. Capture beliefs, preferences, identity, projects, goals, or recurring context.\n"
+                "Ignore assistant-only claims unless they clarify what the user said. If the content is sensitive, summarize only what the user explicitly asked to remember.\n"
+                "The Title should be a real topic title, not the first few words of the message.\n"
+                "The Keywords should be 3 to 6 useful lowercase retrieval terms, not filler words.\n"
+                "The Summary should be one polished paragraph in your own words.\n\n"
+                "Output exactly this shape:\n"
+                "Title: <short topic title>\n"
+                "Keywords: <keyword, keyword, keyword>\n"
+                f"Summary: <one concise third-person memory about {user_name}>\n\n"
+                "Conversation to turn into memory:\n" + (assistant_text or "\n".join(history_lines))
+            )
+        else:
+            classifier_prompt = (
+                "You are a private memory classifier for a chat application. Return ONLY one JSON object, no markdown.\n"
+                "Save at most one durable fact about the USER that will be useful in future conversations.\n"
+                f"The user's name is {user_name}. In the summary, refer to them as {user_name}, never as \"the user\".\n"
+                "Good: stable preferences, identity, relationships, ongoing projects, long-term goals, important recurring context.\n"
+                "Do not save casual remarks, temporary moods, assistant claims, guesses, secrets, credentials, or information only about fictional roleplay.\n"
+                "Sensitive health, sexuality, religion, politics, finances, or exact location may be saved only when the user explicitly asks to remember it.\n"
+                "If there is nothing suitable return {\"save\":false}.\n"
+                "Otherwise return {\"save\":true,\"title\":\"short title\",\"keywords\":[\"3\",\"to\",\"6\",\"keywords\"],"
+                f"\"summary\":\"one concise third-person sentence about {user_name}\",\"scope\":\"character\"}}.\n"
+                f"Explicit memory request: {'yes' if explicit else 'no'}\n"
+                f"Current user message: {user_text}\n"
+                f"Current assistant reply: {assistant_text}\n\n"
+                "Recent conversation:\n" + "\n".join(history_lines)
+            )
+        try:
+            model_response = requests.post(
+                f"{API_URL}/v1/chat/completions",
+                json={
+                    "model": CURRENT_MODEL or "local",
+                    "messages": [
+                        {"role": "system", "content": "Write exactly one saved memory object using Title, Keywords, and Summary fields." if force_save else "Classify memory candidates and emit strict JSON only."},
+                        {"role": "user", "content": classifier_prompt},
+                    ],
+                    "temperature": 0,
+                    "max_tokens": 260 if force_save else 180,
+                    "stream": False,
+                },
+                timeout=90,
+            )
+            model_response.raise_for_status()
+            raw = model_response.json()["choices"][0]["message"]["content"]
+            candidate = (_auto_memory_legacy_tag(raw) or _auto_memory_extract_json(raw)) if force_save else _auto_memory_extract_json(raw)
+        except Exception as exc:
+            print(f"Auto-memory classifier failed: {exc!r}", flush=True)
+            return {"status": "skipped", "reason": "classifier_error"}, 200
+
+    if not candidate or candidate.get("save") is not True:
+        if force_save:
+            candidate = _auto_memory_force_fallback_candidate(recent_messages, assistant_text, user_text, user_name)
+        else:
+            return {"status": "skipped", "reason": "model_declined"}, 200
+
+    title = _clean_auto_memory_field(candidate.get("title") or "Memory")[:80]
+    summary = _clean_auto_memory_field(candidate.get("summary") or "")[:700]
+    if force_save and re.search(r"\b(?:asked to remember|save request|memory command|recent context|conversation to summarize|transcript|saved conversation context)\b", f"{title} {summary}", re.IGNORECASE):
+        candidate = _auto_memory_force_fallback_candidate(recent_messages, assistant_text, user_text, user_name)
+        title = _clean_auto_memory_field(candidate.get("title") or "Memory")[:80]
+        summary = _clean_auto_memory_field(candidate.get("summary") or "")[:700]
+    summary = re.sub(r"^(?:the\s+user|user)\b", user_name, summary, flags=re.IGNORECASE)
+    keywords_value = candidate.get("keywords") or []
+    if isinstance(keywords_value, str):
+        keywords_value = keywords_value.split(",")
+    keywords = []
+    for keyword in keywords_value[:6]:
+        clean = re.sub(r"[^A-Za-z0-9 '\-]", "", _clean_auto_memory_field(keyword)).strip()[:40]
+        if clean and clean.lower() not in {k.lower() for k in keywords}:
+            keywords.append(clean)
+    if not summary or _AUTO_MEMORY_SECRET_RE.search(summary):
+        return {"status": "skipped", "reason": "unsafe_output"}, 200
+
+    mem_dir = os.path.join(os.path.dirname(__file__), "memories")
+    os.makedirs(mem_dir, exist_ok=True)
+    path = os.path.join(mem_dir, f"{character.lower()}_memory.txt")
+    entry = f"# Memory: {title}\nKeywords: {', '.join(keywords)}\n\n{summary}"
+    import hashlib
+    undo_token = hashlib.sha256(entry.encode("utf-8")).hexdigest()
+
+    with _AUTO_MEMORY_LOCK:
+        existing = ""
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                existing = f.read()
+        if _auto_memory_is_duplicate(_parse_memory_blocks(existing), title, summary):
+            return {"status": "skipped", "reason": "duplicate"}, 200
+        with open(path, "a", encoding="utf-8") as f:
+            if existing.strip():
+                f.write("\n\n")
+            f.write(entry)
+
+    print(f"Auto-memory saved for {character}: {title}", flush=True)
+    return {"status": "saved", "title": title, "undo_token": undo_token}, 200
+
+
+@app.route("/auto_memory/capture", methods=["POST"])
+def auto_memory_capture():
+    """Browser fallback for automatic memory capture."""
+    data = request.get_json(silent=True) or {}
+    result, status = _auto_memory_capture_turn(
+        data.get("character"),
+        data.get("user_text"),
+        data.get("assistant_text"),
+        data.get("recent_messages"),
+        data.get("user_name"),
+        data.get("force_save", False),
+    )
+    return jsonify(result), status
+
+
+@app.route("/auto_memory/undo", methods=["POST"])
+def auto_memory_undo():
+    data = request.get_json(silent=True) or {}
+    character = str(data.get("character") or "").strip()
+    undo_token = str(data.get("undo_token") or "").strip().lower()
+    if not character or re.search(r"[\\/]", character) or not re.fullmatch(r"[a-f0-9]{64}", undo_token):
+        return jsonify({"status": "error"}), 400
+
+    import hashlib
+    path = os.path.join(os.path.dirname(__file__), "memories", f"{character.lower()}_memory.txt")
+    with _AUTO_MEMORY_LOCK:
+        if not os.path.exists(path):
+            return jsonify({"status": "missing"}), 404
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+        blocks = re.split(r"(?m)(?=^#\s*Memory:\s*)", text)
+        kept = []
+        removed = False
+        for block in blocks:
+            clean = block.strip()
+            if clean and not removed and hashlib.sha256(clean.encode("utf-8")).hexdigest() == undo_token:
+                removed = True
+                continue
+            if clean:
+                kept.append(clean)
+        if not removed:
+            return jsonify({"status": "missing"}), 404
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n\n".join(kept))
+    return jsonify({"status": "undone"})
+
+
+@app.route("/edit_character_memory", methods=["POST"])
+def edit_character_memory():
+    """Replace a memory entry by index for the selected character.
+    Frontend sends 'content' (the full block text shown in the textarea).
+    We preserve title and keywords lines, only updating the body portion.
+    """
+    data = request.get_json()
+    character = data.get("character", "").strip()
+    index = int(data.get("index", -1))
+    # Frontend sends 'content' — accept both 'content' and 'body' for safety
+    new_content = (data.get("content") or data.get("body") or "").strip()
+
+    if not character or index < 0 or not new_content:
+        return "Invalid request", 400
+
+    mem_dir = os.path.join(os.path.dirname(__file__), "memories")
+    if character.lower() == "global":
+        path = os.path.join(mem_dir, "global_memory.txt")
+    else:
+        path = os.path.join(mem_dir, f"{character.lower()}_memory.txt")
+    if not os.path.exists(path):
+        return "No memory file", 404
+
+    with open(path, "r", encoding="utf-8") as f:
+        blocks = [b for b in f.read().split("# Memory:") if b.strip()]
+
+    if not (0 <= index < len(blocks)):
+        return "Index out of range", 400
+
+    # The textarea shows the full block (title line + Keywords line + body).
+    # Split out title and keywords from the new_content so we preserve structure.
+    lines = new_content.splitlines()
+    title_line = ""
+    keywords_line = ""
+    body_lines = []
+    for i, line in enumerate(lines):
+        if i == 0 and not line.lower().startswith("keywords:"):
+            title_line = line.strip()
+        elif line.lower().startswith("keywords:"):
+            keywords_line = line.strip()
+        else:
+            body_lines.append(line)
+
+    # Rebuild the block cleanly
+    rebuilt = f" {title_line}\n"
+    if keywords_line:
+        rebuilt += f"{keywords_line}\n"
+    rebuilt += "\n" + "\n".join(body_lines).strip()
+
+    blocks[index] = rebuilt
+
+    new_text = "\n\n".join(f"# Memory: {b.strip()}" for b in blocks)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(new_text)
+
+    return "OK", 200
+
+
 # --------------------------------------------------
 # Delete Last N Messages from Chat History
 # --------------------------------------------------

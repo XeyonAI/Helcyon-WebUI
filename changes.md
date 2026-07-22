@@ -1,6 +1,548 @@
 > **Older entries archived by month:** [March 2026](changes-archive-2026-03.md) · [April 2026](changes-archive-2026-04.md) · [May 2026 (pre-31)](changes-archive-2026-05.md)
 > This file holds the current (May 31 – June 1 2026) entries only.
 
+## Session: Jul 23 2026 - Public edition feature split
+
+**`templates/config.html`:** Kept the complete memory system available in the public edition and changed only the visual Theme Editor entry point into a £10 HWUI Pro link using the existing button styling. Included themes, background images, appearance settings, memory controls, chat behaviour, persistence, routes, and the dormant editor implementation are unchanged.
+
+**`README.md`:** Moved Memory into the public feature list and updated HWUI Pro to £10 with the Theme Editor as its sole gated feature.
+
+---
+
+## Session: Jul 21 2026 - Paired-model loading guard
+
+**`templates/index.html`:** Added a full-page blocking overlay around automatic character-paired model changes. When the selected character needs a different local model, HWUI immediately dims the page, shows "Model loading — please wait" with the character/model names, focuses the overlay, and ignores additional chat-open requests until the existing `/load_model` call succeeds or fails. Switching chats that use the already-loaded model does not show the overlay. Manual model loading and the underlying model loader are unchanged.
+
+**`templates/mobile.html`:** Added the same preferred-model pairing and blocking wait screen to the mobile chat/character switch path. Choosing a chat for a different character now reads that card's `preferred_model_id`, reuses the existing mobile `loadModel()` function, and blocks further character/chat choices until the load succeeds or fails. Same-model and unpaired-character switches do not show the wait screen; the manual mobile model picker retains its existing behaviour.
+
+---
+
+## Session: Jul 20 2026 - Optional character/model pairing
+
+**`character_routes.py`, `templates/config.html`:** Added the optional `preferred_model_id` character-card field and a compact "Preferred local model" selector beside the character selector at the top of the Character editor. The selector uses the existing `/list_models` registry, stores the canonical relative GGUF path (including any model subfolder), supports clearing the pairing with "No preferred model", and keeps a missing saved ID visible so it can be repaired or removed. Selecting a different value enables an adjacent Apply button; Apply writes only the model pairing through `/character_preferred_model/<character>`, so it cannot accidentally save unfinished edits in the rest of the character form. Older clients that omit the field cannot wipe an existing pairing during a full character save.
+
+**`app.py`, `templates/index.html`:** Character selection and chat-driven character switching now check the saved pairing and, when needed, call the existing `/load_model` flow. `/get_model` exposes the canonical relative ID of the managed model when it can verify it against the live model, avoiding unnecessary reloads even when models are organised into subfolders. Characters without a pairing retain the current model. A missing or failed paired model reports the failure without blocking the character switch. Manually loading another model keeps the current character and does not alter its saved pairing; the pairing is applied again only when that character is selected or restored later. Global backend selection, cloud settings, model registry, model launch arguments, and manual model controls are unchanged.
+
+**Pairing-row layout follow-up:** Kept the character and preferred-model selectors compact and equal-width on the same line, matching the original requested composition. The Apply button sits immediately beside them at the same fixed height with a small rectangular shape; no other Character-tab layout or styling changed.
+
+**Apply button colour:** Matched the preferred-model Apply button to the existing active Character-tab green (`#1a3a2a` background, `#2a6a4a` border, `#6f6` text). No sizing or layout changed.
+
+**Config-return model-switch fix:** On chat-page startup, a saved `currentChatFilename` now resolves its filename-bound character before the server-side `active_character` fallback. Returning from Config therefore loads the actual saved chat character once instead of briefly loading a stale character and its paired model before `openChat()` corrects it. When no current chat is saved, the existing shared active-character and `lastCharacter` fallback order is unchanged.
+
+---
+
+## Session: Jul 17 2026 - In-app shard generator (model-direct JSON batches)
+
+**`shard_gen_routes.py` (new blueprint):** Added `POST /shards/generate` — a fence-free shard pipeline that prompts the active backend directly for a raw JSON array and writes one `.txt` per shard, so shard content containing nested code fences or ChatML samples can never break formatting (code inside a JSON string is just an escaped string). Supports three formats: CX (`instruction`/`prompt`/`response`), DPO (`instruction`/`prompt`/`chosen`/`rejected`), and ChatML teaching (CX shape whose response uses the literal placeholder tags `⟦im_start⟧`/`⟦im_end⟧`; any real `<|im_start|>`/`<|im_end|>` tokens the model leaks are swapped for placeholders before writing). The system prompt is built per request from format + count + brief, including the second-person instruction-field rule and the no-fences-inside-fields rule.
+
+Backend dispatch mirrors `generate_session_summary`: local llama.cpp `/completion` (ChatML-wrapped, `n_predict` capped by live `ctx_size` minus the estimated prompt), or OpenAI/Anthropic when `backend_mode` + `cloud_api_enabled` say so — same settings, keys, and base-URL helpers as normal chat, no new config path or dependency. Parsing is defensive, with each layer added after a live failure from the local Helcyon model: accidental ```` ```json ```` wrappers (with or without preamble) are stripped, the reply is sliced first-`[`-to-last-`]`, `strict=False` accepts literal newlines inside string values, and a truncated array is salvaged down to its last complete shard object. Any parse/validation failure returns the raw model output (HTTP 502) so the UI can show what actually came back instead of a generic error. Filenames are `shard_<NN>_<slug>.txt`, slug from the instruction (prompt fallback), lowercase with non-alphanumeric runs collapsed to underscores and capped at 40 chars; existing files get a `_2`/`_3` suffix rather than being overwritten. Output folder defaults to `shards/`; a relative override joins to the app dir, absolute is used as-is.
+
+**`app.py`:** Registered `shard_gen_bp` (route verified present via `_verify_routes.py`, 170 total).
+
+**`templates/index.html`:** Added a generator button to the right-side fixed toolbar stack (below the Helcyon-Bench export button) opening a modal with Format / Count (1-25) / Brief / Output folder fields. Success shows the written filenames; failure shows the error plus the raw model output in a scrollable block. The modal locks (no Escape/backdrop dismissal) while a batch is generating. The per-message "export code blocks as shard files" button is untouched and coexists — this is the fence-free alternative, not a replacement.
+
+Verified end-to-end against the live local llama.cpp (Helcyon Ethos X12): a 2-shard CX batch parsed and wrote correctly formatted files on the first post-fix attempt.
+
+---
+
+## Session: Jul 14 2026 - Whisper Helcyon transcription variants
+
+**`whisper_routes.py`:** Added the observed spaced Whisper mishearings `Hellsy on` and `Helsea on` (including the existing `and`-style ending variation) to the established Helcyon transcript correction table. Desktop and mobile already share this route, so both receive the correction. Whisper model settings, microphone capture, TTS, and the accepted Qwen desktop/mobile playback paths are untouched.
+
+## Session: Jul 13 2026 - Mobile-only Qwen live completed-WAV trial
+
+**`templates/mobile.html`:** Replaced only the mobile Qwen path used while model text is still streaming with serial completed-WAV generation through the existing `/api/tts/generate` endpoint and native `Audio` playback. Each complete sentence is queued independently for Qwen live speech; while sentence N plays, at most one following sentence is generated. Blob URLs are revoked after playback, and a run token plus the existing abort controller prevent an interrupted response from playing or altering a newly started response.
+
+The branch is deliberately gated by `mobileTTSEngine === 'qwen-fast'` and `ttsStreamingComplete === false`. Mobile Qwen Replay and other completed speech retain the existing PCM path. Desktop TTS, F5-TTS, Chatterbox, completed-audio routing, voice selection, launcher behaviour, and the Qwen backend were not changed.
+
+**`_mobile_qwen_live_wav_test.js`:** Added a deterministic test that loads the exact live-WAV functions from `templates/mobile.html` and verifies three-sentence request/playback order, one active generation maximum, blob URL cleanup, and interruption followed immediately by a new run. The test passes. Browser-based localhost verification was unavailable because the browser runtime blocks localhost access; no workaround or production test endpoint was added.
+
+**First-audio latency follow-up:** Real mobile testing found that a response with a long opening sentence could delay all speech for about 10 seconds because the completed-WAV path waited for terminal punctuation before making its first request. A direct request against the running Qwen `/tts_to_audio` endpoint completed in 1.235 seconds, confirming the delay occurred in frontend sentence collection rather than backend generation or a blocked model lock. Mobile Qwen live speech now caps only that initial wait at the existing 60-character Qwen opening threshold, cutting at the nearest clause or word boundary; subsequent text still uses normal complete-sentence ordering. The deterministic test now also verifies this punctuation-free opening fallback.
+
+**Mobile F5/Qwen contraction pronunciation:** Traced the identical `I'm`/`don't` mispronunciations to shared mobile frontend preprocessing rather than either synthesis model: `fixContractionsForTTS()` explicitly changed those words to `Im` and `dont` before the request. Mobile F5 and Qwen now retain normalized straight apostrophes (`I'm`, `don't`); other engines keep their previous preprocessing. The deterministic test verifies straight and curly apostrophes for both affected engines and confirms Chatterbox remains unchanged.
+
+**Desktop Qwen streaming experiment rollback:** The continuous `AudioWorklet` experiment restored low startup latency but real desktop testing confirmed that it also restored the severe stutter. The worklet integration and its test file were fully removed, returning desktop Qwen to the last user-confirmed non-stuttering completed-WAV queue. Read-only comparison against both in-workspace Qwen-era backups (`hwui_public_v2.67-new_tts.rar` and `hwui_public_2.68.rar`) confirmed that their low-latency desktop implementation is the same raw-PCM `AudioBufferSource` path already proven to stutter in the current environment, so it was not copied back as another unverified fix. Mobile Qwen and all mobile latency/interruption/contraction improvements remain untouched. The known desktop tradeoff is therefore explicit: the restored path is clean but retains its 8-10 second first-audio delay pending a genuinely different verified approach.
+
+**Accepted Qwen baseline:** Live testing confirmed that this is the best overall balance found so far. Desktop completed-WAV playback is clean and non-stuttering; its longer first-audio delay is intermittent and currently acceptable. Mobile completed-WAV live playback is also sounding good. Preserve both paths as the accepted baseline and do not reintroduce desktop raw-PCM/worklet streaming or further mobile latency/quality experiments without an explicit new request.
+
+---
+
+## Session: Jul 13 2026 - Qwen completed-WAV mobile prefetch timing proof
+
+**`_qwen_completed_probe.py`, `_qwen_completed_probe_results.json`:** Added and ran a diagnostic-only, serial probe against the development Qwen backend's existing `/tts_to_audio` completed-WAV endpoint. The probe warms the selected voice, repeats a realistic three-sentence chain three times, measures generation and WAV playback duration, and checks whether sentence N+1 would finish generating before sentence N finishes playing.
+
+The required reliability condition was not met. Sentence 2 took 4.4294-4.9097 seconds to generate while sentence 1 provided 4.32 seconds of playback, producing a 0.1094-0.5897 second gap in all three runs. Sentence 3 did finish comfortably within sentence 2's playback window. Because the first transition was consistently late, the proposed strict single-prefetch completed-WAV pipeline would remove PCM stutter but introduce an audible pause after the opening sentence for this representative chain.
+
+No production TTS code was changed. Mobile and desktop live PCM playback, completed TTS, Replay, F5-TTS, Chatterbox, voice selection, launcher behaviour, proxy routing, and the queue-isolated Qwen backend stream were intentionally left untouched pending a decision on whether that small opening gap is acceptable.
+
+---
+
+## Session: Jul 11 2026 - End Session non-JSON error handling
+
+**`templates/index.html`, `templates/mobile.html`:** Hardened the End Session summary caller so it no longer assumes `/generate_session_summary` always returns JSON. If Flask or an upstream route returns an HTML/text error page, the UI now reports the HTTP status instead of surfacing the browser JSON parser error (`Unexpected token '<'`).
+
+**`session_summary_routes.py`:** Moved the End Session helper import inside the route's JSON error handler and added a local fallback for the llama.cpp API URL and stop tokens. If `app_runtime_helpers` is missing or stale in another build, local summary generation can still run instead of Flask returning an HTML 500 before the route handler starts. The route now also prints a full traceback for any remaining summary failure.
+
+Existing successful summary generation and backend save behavior are unchanged.
+
+---
+
+## Session: Jul 05 2026 - Helcyon-Bench chat JSON export
+
+**`templates/index.html`:** Added a small right-side toolbar download button under the Electron refresh button for exporting the currently open chat to Helcyon-Bench JSON. The export is browser-side and uses `window.loadedChat`, pairing each visible user message only with the immediately following visible non-empty assistant response.
+
+The JSON schema is `helcyon_bench_hwui_export_v1` with source, ISO export timestamp, chat title, best available current model label, and ordered `{ index, prompt, response }` pairs. Hidden/internal turns, opening lines, unmatched trailing user messages, and empty assistant replies are skipped. Downloads are named `helcyon-bench-hwui-<chat-title-slug>-<model-name-slug>-<YYYY-MM-DD-HHMM>.json`.
+
+---
+
+## Session: Jul 05 2026 - Preserve sidebar chat colour on duplicate
+
+**`templates/index.html`:** Added a shared `copyChatColor(sourceFilename, targetFilename)` helper for chat duplicate/branch creation. The helper writes the source and target `chatColors` entries together, so a duplicated or branched chat inherits the sidebar tint while the original chat keeps its colour.
+
+---
+
+## Session: Jul 04 2026 - HWUI OpenAI-compatible local judge proxy
+
+**`app.py`:** Added HWUI-owned `/v1/models` and `/v1/chat/completions` routes that proxy through to the managed local llama.cpp server. This lets OpenAI-compatible tools such as Helcyon-Bench point at HWUI's app port while still using the active local model and llama.cpp's OpenAI response format.
+
+The proxy preserves non-streaming and streaming chat-completion responses, passes through upstream status codes and content types, and returns OpenAI-style JSON errors when the local model server is unavailable or the request body is not JSON.
+
+---
+
+## Session: Jul 03 2026 - Global document use directive
+
+**`app.py`:** Added a one-shot final-turn directive whenever a keyword-matched global reference document is loaded. The directive tells the model that the matching global document has already been loaded and should be used for the current reply, so it should not ask the user to send, paste, upload, or walk through the document again.
+
+---
+
+## Session: Jul 02 2026 - Anthropic context demotion after cache regression
+
+**`app.py`:** Kept the Anthropic cached static system block, but moved per-turn dynamic context back out of the final user message. Current date/time, project instructions, global documents, and memory now go into an uncached second Anthropic `system` block with explicit passive-reference framing, so Claude does not treat Helcyon/training/project material as the user's active topic.
+
+Project instructions now include an Anthropic-only guard telling Claude not to mention, continue, or switch to project topics unless the latest user message explicitly asks about them. Session-summary wording was softened from "mention it naturally, early / pick up the thread" to only use prior-session summaries when the user clearly wants to continue.
+
+Added Anthropic payload context logging for static system length, dynamic sources, project-instruction inclusion, whether dynamic context was added to the user message, and a `diag_verbose`-only preview of the dynamic packet. Local/OpenAI prompt assembly remains unchanged.
+
+**Verification:** `python -m py_compile app.py` passes.
+
+---
+
+## Session: Jul 02 2026 - Anthropic prompt-cache cost controls
+
+**`app.py`, `settings.json`:** Moved Anthropic per-turn dynamic context out of the `system` array and into the final user turn: current date/time, keyword-matched global documents, and keyword-matched memory blocks now ride with the same final-turn packet pattern used for project instructions. The Anthropic system array is now a single cached static block so it can stay byte-identical across consecutive requests.
+
+Re-enabled an Anthropic-specific prompt cap using `max_prompt_tokens.anthropic`, trimming oldest normalized Anthropic messages first while preserving the latest user turn and avoiding a leading assistant. The history cache breakpoint now applies to the newest stable message before the final user turn, with short two-message chats eligible when a stable prior message exists.
+
+Lowered the live `max_tokens` setting from `16384` to `8192` for safer Anthropic output cost while keeping temporary `[CACHE DEBUG]` usage logging in place.
+
+---
+
+## Session: Jul 02 2026 - Sampling preset fetch diagnostics
+
+**`START_HWUI-Dev.bat` / `START_UI.bat`:** Both launchers now open `https://127.0.0.1:<port>` when the local Tailscale cert/key files are present, otherwise they open plain HTTP. This keeps the browser URL aligned with `app.py`, which runs HTTPS whenever those certs exist.
+
+**`templates/config.html`:** Added a small sampling-preset fetch wrapper so save/load/delete failures that happen before Flask responds no longer surface as the bare browser message `Failed to fetch`. The UI now reports that the connection failed before HWUI answered and, when applicable, points the user to reopen the page on HTTPS.
+
+**Verification:** Live HTTPS `/sampling_presets` GET and `/sampling_presets/save` POST both returned 200 before the edit, proving the disk-backed route still works. A temporary probe preset was deleted afterward. `app.py` and `sampling_routes.py` compile successfully.
+
+## Session: Jul 02 2026 - API-backed End Session summaries
+
+**`session_summary_routes.py`:** Fixed `End Session` memory-summary generation so it follows the active connected API backend instead of always posting to the local llama.cpp `/completion` endpoint. OpenAI mode now uses `/chat/completions`; Anthropic mode uses native `/messages`; local mode keeps the existing llama.cpp prompt path.
+
+Anthropic summary requests reuse the model sampling capability rule, so `claude-fable-5` does not receive `temperature`.
+
+---
+
+## Session: Jul 02 2026 - Anthropic prompt cache trim/doc stability
+
+**`app.py`:** Kept a pre-trim copy of the conversation for the Anthropic request path so the local/OpenAI prompt trimmer no longer changes Anthropic's cacheable message prefix. Local and OpenAI still use the existing trimmed conversation.
+
+Global reference documents are now kept separate from project documents during prompt assembly. Local/OpenAI still receive the same joined system string, while Anthropic keeps global reference docs out of the cached static system block and sends them in the uncached dynamic system block.
+
+Also normalised the Anthropic cacheable message prefix to content-block form through the history breakpoint, with `cache_control` only on the breakpoint message, so a previously cached prefix keeps the same JSON shape on later turns.
+
+---
+
+## Session: Jul 02 2026 - Anthropic history cache breakpoint placement
+
+**`app.py`:** Moved the Anthropic conversation-history cache breakpoint from the final message to the message at offset `-4` in the fully assembled Anthropic message list, and skips the history breakpoint entirely for short conversations with fewer than five messages. This keeps the second cache breakpoint before the final per-turn injection zone while leaving the static system cache breakpoint, dynamic timestamp block, and temporary cache-debug logging unchanged.
+
+---
+
+## Session: Jul 02 2026 - Anthropic prompt cache timestamp split
+
+**`app.py`:** Restored the Anthropic prompt-caching payload shape and moved the leading `Current date/time` prefix out of the cached static system block. Anthropic now sends a cached static system text block plus an uncached dynamic block containing a fresh per-request `Current date and time: ...` line and any injected memory text.
+
+The final Anthropic message still receives the second ephemeral cache breakpoint. Local and OpenAI keep their existing single joined system string and are not split into Anthropic content blocks.
+
+---
+
+## Session: Jul 02 2026 - Anthropic Fable sampling compatibility
+
+**`app.py`:** Extended the Anthropic provider-layer sampling capability rules so any model ID containing `fable`, plus the existing `claude-opus-4-7` and `claude-opus-4-8` families, sends no sampling parameters at all. `temperature` is now omitted entirely for those models while older Claude models keep temperature support unchanged.
+
+Added a small `supports_temperature(model_id)` helper backed by the existing Anthropic allow-list resolver. `top_p` and `top_k` remain omitted on the Anthropic request path because they are not plumbed into the native Anthropic payload builder.
+
+---
+
+## Session: Jul 01 2026 - Project-folder instruction update
+
+**`AGENTS.md`, `.claude/hooks/block_personal.py`:** Replaced the old HWUI-dev-build-specific workspace instruction with a project-relative rule: remain inside whichever project folder is currently opened, and ask before accessing another project or arbitrary filesystem location.
+
+Updated the Claude hook warning text so blocked protected-path attempts describe the current-project rule instead of saying the agent is scoped to the dev build only.
+
+---
+
+## Session: Jul 01 2026 - Web search false positive on comma-relative "who was the first"
+
+**`app.py`:** Fixed a web-search false positive caused by ordinary autobiographical relative clauses such as `Tara, who was the first girl I was with`. The factual search tier correctly looks for question-like patterns including `who was the first...`, but the clause-start helper treated any comma before `who` as a valid new question.
+
+The factual-tier clause check now treats comma appositives starting with `who`, `which`, `that`, `where`, or `when` as embedded descriptive clauses, not search-worthy factual questions, while preserving normal discourse-opened questions like `By the way, who was the first...`.
+
+**Verification:** `python -m py_compile app.py` passes. A reproduction check suppresses `Tara, who was the first...` and still allows `By the way, who was the first...` plus sentence-start `Who was the first...`.
+
+---
+
+## Session: Jul 1 2026 - Chat folder shortcut
+
+**`templates/index.html`, `chat_routes.py`, `style.css`:** Added an `Open folder` button beside the sidebar `Chats` heading. It calls a new `/chats/open_folder` route that uses the same active-project/global chat folder resolver as `/chats/list`, so it opens the folder backing the currently visible chat list.
+
+The sidebar refreshes the chat list after opening the folder and again when the HWUI window regains focus, making manual chat-file edits, copies, or deletions visible without reopening the app.
+
+---
+
+## Session: Jun 30 2026 - Project documents folder shortcuts
+
+**`templates/index.html`, `utils/utils.js`, `project_routes.py`, `style.css`:** Added project-document quality-of-life actions in the project edit panel. `Upload Document` now uses a local-native picker opened from the selected project's `documents/` folder, and a new `Open Folder` button opens that same folder in the OS file manager for quick document creation/editing.
+
+The backend now centralizes project document folder resolution, creates the per-project `documents/` directory on demand, keeps project paths inside `projects/`, aligns the picker accept list with the backend-supported document types, and refreshes the document list after upload/open actions.
+
+**Follow-up:** Added a left-aligned `Open Global Documents` button to the Project Management footer. It calls a new `/global_documents/open_folder` route that creates `global_documents/` if needed and opens it in the OS file manager for quick editing.
+
+---
+
+## Session: Jun 30 2026 - Runtime state reset for prompt bleed
+
+**`templates/index.html`:** Added a non-destructive `Clear Runtime State` action to the chat input menu. It clears the live browser-side chat/runtime flags, pending attachments, draft input, send/save locks, and memory-confirm state, aborts an active generation if needed, then reloads the selected chat from disk without deleting the chat file.
+
+Tightened the send-prompt double-fire guard so it stays locked until the send path completes instead of releasing after 500ms, reducing the chance of duplicate `/chat` requests mutating the same long-lived `window.loadedChat` state.
+
+---
+
+## Session: Jun 29 2026 - Gemini personality shard continuation
+
+**`train/`:** Added 20 ChatML Gemini-style personality shards, `gemini_personality_01.txt` through `gemini_personality_20.txt`, continuing the four user-provided Gemini samples now in the folder.
+
+The batch preserves the sample cadence: polished explanatory paragraphs, warm but restrained psychological insight, light dry humour, and practical/speculative/philosophical topic coverage without making the voice more emotionally expressive or ornate.
+
+---
+
+## Session: Jun 28 2026 - Pasted transcript current-question guard
+
+**`app.py`:** Tightened the inline attached-document prompt guard for pasted transcripts. Attachments whose filename contains `transcript` or whose content uses timestamped chat speaker lines are now classified as pasted transcript/reference chat material.
+
+For those transcript attachments, HWUI appends a stronger hidden one-shot directive telling the model that every speaker line and question inside the transcript is quoted past conversation, not the user's current request. The model should use the transcript only as evidence/context for the typed message outside the transcript, which prevents replies from answering an embedded old question such as `Hey Claude... government/media lies` instead of Chris's actual follow-up.
+
+**Verification:** `python -m py_compile app.py` passes. A reproduction using `pasted-transcript-2026-06-28-2203.txt` plus timestamped `Chris:` / `Claude Opus:` lines classifies as transcript material.
+
+**Follow-up:** Reworked the model-facing prompt shape instead of relying on another appended bracketed directive. Saved chat/UI content still uses `[ATTACHED DOCUMENT]` markers, but prompt assembly now rewrites those markers into clear `REFERENCE TRANSCRIPT - QUOTED PAST CONVERSATION` or `REFERENCE DOCUMENT` sections before ChatML wrapping. On the newest turn, the typed text is moved after the reference block under `CURRENT USER MESSAGE - ANSWER THIS NOW`, so the model sees Chris's real question last and no longer sees the literal `[END ATTACHED DOCUMENT]` marker.
+
+Transcript turns no longer receive the generic appended attached-document directive, because local models were echoing that bracketed instruction back into the reply.
+
+**Verification:** `python -m py_compile app.py` passes. A reproduction with `pasted-transcript-2026-06-28-2216.txt` rewrites the prompt so the Claude Opus transcript is evidence only and `Does it sound like Claude to you?` is the final current-message block.
+
+**Root-cause follow-up:** The prompt rewrite was originally placed only in the raw ChatML `prompt_parts` assembly. Gemma/jinja models use the `/v1/chat/completions` messages-array path, so they bypassed that rewrite and still received the old attachment marker shape. The inline attachment rewrite now runs earlier on the request-local `active_chat` before `messages` is built, so raw ChatML, jinja/Gemma, vision, OpenAI, and Anthropic paths all receive the same cleaned reference/current-message structure.
+
+**Verification:** `python -m py_compile app.py` passes after moving the rewrite to the shared conversation path.
+
+**Send-path follow-up:** Made the desktop `/chat` request explicitly carry the hidden model-facing message text for the newest user turn. The UI still displays only Chris's typed message and the document card, but `fetchAndDisplayResponse()` now receives `modelText` and overwrites the last outgoing user message in the request payload with the document-wrapped content. This prevents the save-before-send path from leaving the visible card on screen while `/chat` receives only the plain textbox text.
+
+Added `_last_chat_request_user.txt` as a small proof artifact for the most recent `/chat` request's extracted last user message, so the next paste-transcript test can confirm whether Flask actually received the attached document block.
+
+**Verification:** `python -m py_compile app.py` passes. Direct `node --check templates/index.html` is not applicable because Node will not syntax-check `.html` files directly.
+
+**Gemma/jinja follow-up:** `_last_chat_request_user.txt` proved Flask was receiving the attached transcript, so the failure was downstream. Tightened the transcript reference wording to explicitly say the attached transcript is the sample to evaluate when Chris asks whether something sounds like a model/character, and not to ask for it again.
+
+The local jinja/Gemma `/v1/chat/completions` path now builds its outgoing messages from the finalized `messages[]` list instead of the earlier `active_chat` snapshot, so it receives the same post-trim / post-instruction user-turn content as the raw ChatML path. Added `_last_messages_api_payload.json` to dump the exact messages array sent through that branch for the next verification run.
+
+**Verification:** `python -m py_compile app.py` passes.
+
+**Raw ChatML follow-up:** The missing `_last_messages_api_payload.json` proved the live local config was using the raw ChatML `/completion` path (`settings.json` has `llama_args.chat_template: chatml`), not the jinja/messages path. Added `_last_raw_prompt_for_model.txt` as the non-stale raw prompt dump written immediately after `prompt_parts` are joined.
+
+Also strengthened the final model-facing text for attached references: after the current user message, HWUI now appends a `RESPONSE REQUIREMENT` line saying the pasted reference has already been received, not to ask the user to paste/send/play/provide it again, and to answer using the supplied reference.
+
+**Verification:** `python -m py_compile app.py` passes. A standalone rewrite check against `_last_chat_request_user.txt` ends with the current question followed by the new `RESPONSE REQUIREMENT`.
+
+**Sound-like evaluation follow-up:** `_last_raw_prompt_for_model.txt` confirmed the transcript was present in the raw ChatML prompt, but the task remained semantically ambiguous because the transcript's internal speaker label said `Claude Opus` while Chris's typed question referred to the new Helcyon-Claude model. For attached transcripts paired with questions like `does it sound like Claude`, HWUI now adds a `TASK INTERPRETATION` block stating that the attached reference is the sample/output to evaluate even if the internal speaker label names another model.
+
+The task block requires the first sentence to be a direct verdict and forbids asking for more material before that verdict.
+
+**Verification:** `python -m py_compile app.py` passes.
+
+---
+
+## Session: Jun 28 2026 - Northstar personality identity shards batch 3
+
+**`train/`:** Added 10 more ChatML personality training shards, `northstar_personality_21.txt` through `northstar_personality_30.txt`, widening Northstar's everyday companion coverage across pets, clothing, Bluetooth annoyances, museums, cooking for someone, weather, sleep debt, walking routes, boundaries, and a small earned philosophical moment.
+
+---
+
+## Session: Jun 28 2026 - Northstar personality identity shards batch 2
+
+**`train/`:** Added 10 more ChatML personality training shards, `northstar_personality_11.txt` through `northstar_personality_20.txt`, continuing the Northstar identity set with calm, clear, non-performative companionship. The new batch covers cooking, car trouble, room layout, old sci-fi, group-chat anxiety, stargazing, trip decisions, scrap-wood building, novels, and loneliness after a good day.
+
+---
+
+## Session: Jun 28 2026 - Northstar personality identity shards
+
+**`train/`:** Added 10 ChatML personality training shards, `northstar_personality_01.txt` through `northstar_personality_10.txt`, to reinforce Northstar as a calm, perceptive companion with its own identity. The set covers absurd humour, practical repair advice, Elden Ring, coincidence and meaning, difficult decisions, music, films, creative game design, travel, and quiet emotional presence.
+
+The examples keep Northstar warm, steady, opinionated when warranted, curious before instructive, and able to enjoy ordinary topics without constantly forcing a philosophical pivot.
+
+---
+
+## Session: Jun 28 2026 - Personality LoRA centre-of-gravity shards
+
+**`train/`:** Added 5 more ChatML-shaped `centre_of_gravity_cx_11.txt` through `centre_of_gravity_cx_15.txt` shards for the personality LoRA.
+
+These continue the accepted centre-of-gravity behaviour: textured ordinary-life user moments, second-person system guidance, and assistant replies that develop naturally until the strongest observation lands, without adding DPO fields or unnecessary follow-up questions.
+
+---
+
+## Session: Jun 28 2026 - Centre-of-gravity conversational shard expansion
+
+**`train/`:** Added 6 more ChatML-shaped `centre_of_gravity_cx_05.txt` through `centre_of_gravity_cx_10.txt` shards, matching the public-app examples now present in the folder.
+
+The new set keeps the same long-form reflective shape: clear second-person system instruction, ordinary-life user scene, and an assistant response that develops naturally until the central observation lands without adding DPO `Chosen`/`Rejected` fields.
+
+---
+
+## Session: Jun 28 2026 - Superseded centre-of-gravity conversational shard attempt
+
+**`train/`:** Earlier centre-of-gravity shard draft superseded by the later public-app-matched `centre_of_gravity_cx_*` set.
+
+The initial attempt used a mixed ChatML / CX preference-style shape, but the accepted folder examples use ChatML-shaped `cx` files instead, with no DPO `Chosen` / `Rejected` fields.
+
+---
+
+## Session: Jun 28 2026 - Clickable attached-image thumbnails
+
+**`templates/index.html`:** Added a shared chat-image thumbnail renderer for attached images in user message bubbles. Live-send thumbnails and rerendered thumbnails now use the same fixed `80px` sizing, so the image no longer jumps larger after the model finishes streaming and the chat DOM is rebuilt.
+
+Attached-image thumbnails in the live chat can now be clicked, or focused and opened with Enter/Space, to view the full original preview image in the existing lightbox overlay.
+
+---
+
+## Session: Jun 28 2026 - Direct-only memory command trigger
+
+**`templates/index.html` / `templates/mobile.html`:** Tightened the pre-send memory intent gate so memory saves only trigger from direct leading commands such as `save this to memory`, `remember this`, or `can you please save this to memory`.
+
+Long pasted or relayed model text can now contain phrases like `don't forget` or `Just remember...` without hijacking the send flow into `/auto_memory/capture`.
+
+**Verification:** Tested the exact GPT-5.5 relay text; desktop and mobile both return `false` for memory intent. Direct save commands still return `true`, and both pages' inline scripts parse cleanly.
+
+---
+
+## Session: Jun 28 2026 - Relayed model reply empty-response guard
+
+**`app.py`:** Added a prompt-build guard for long pasted/relayed model replies, especially blocks that end with a signoff matching the active character/model name such as `Warm regards, GPT-5.5`.
+
+When detected, HWUI appends a hidden one-shot instruction inside the final user turn telling the local model that the pasted block is quoted material to respond to, not its own completed assistant turn. This is intended to prevent ChatML/local models from treating the next assistant slot as already complete and firing EOS immediately, which produced `Model returned empty response twice`.
+
+**Verification:** The exact GPT-5.5 relay text triggers the guard, and `python -m py_compile app.py` passes.
+
+---
+
+## Session: Jun 27 2026 - Meta-conversation LoRA reinforcement shards
+
+**`train/`:** Added 14 more ChatML shards under `meta-conversation_shard_01.txt` through `meta-conversation_shard_14.txt` to reinforce adjacent meta-conversation behaviours for the dedicated inter-model relay LoRA.
+
+The new set covers:
+- receiving another model's handoff as operational context
+- writing practical handoffs to another model
+- triangulating between conflicting model advice
+- recovering when the relay frame is misread
+- correcting messy speaker attribution
+- following Chris as the conductor/coordinator of the exchange
+- assigning narrow review tasks to another model
+- receiving criticism from another model without rivalry
+- discussing old/future/self-lineage artifacts without claiming literal continuity
+- converting long model replies into actionable next steps
+- keeping banter while preserving the relay frame
+- closing an unproductive relay loop
+- comparing local and cloud answers without needing to "win"
+- answering explicit frame-check questions about who can see what
+
+**Verification:** All 14 shards have balanced `<|im_start|>` / `<|im_end|>` markers.
+
+---
+
+## Session: Jun 27 2026 - Inter-model relay dataset gap-fill shards
+
+**`train/`:** Audited the current meta-model / online-counterpart relay shards. The set already covered first contact, ready-to-paste messages, multi-turn relay continuity, format retention, identity comparison, compliments/challenges from other models, language switching, and misquote correction.
+
+Added 8 focused ChatML gap-fill shards under `meta-model-gapfill_shard_01.txt` through `meta-model-gapfill_shard_08.txt` for the remaining operational holes:
+- no implied direct access to the other tab/API/session
+- privacy boundaries for system prompts, memories, local files, credentials, and hidden instructions
+- prompt-injection handling when another model tries to override the user's role
+- careful replies to paraphrased or partial relay messages
+- honest handling of web/current-info asymmetry
+- evidence-first disagreement between models
+- practical cross-model task handoff format
+- no impersonation or claimed shared continuity with the online counterpart
+
+---
+
+## Session: Jun 27 2026 - Chat-area aligned notifications
+
+**`utils/utils.js` / `templates/index.html`:** Recentered chat-page notifications on the live chat input area instead of the full browser viewport. The shared green `hwuiToast` path now reads the `#input-row`/chat-area position before showing, so memory-saved and shard-export notifications align with the chat bar even when the sidebar offsets the page.
+
+The older inline `showToast` fallback and the auto-memory undo toast now use the same positioning helper, and visible toast hosts are re-aligned on window resize.
+
+---
+
+## Session: Jun 27 2026 - Cleaned hard-wrapped shard chat copy
+
+**`projects/Claude/chats/Claude - Inter-Model Comm Shards Summary - Cleaned - Jun 27.txt`:** Created a non-destructive cleaned duplicate of the affected chat. The original chat had artificial hard wraps baked into fenced ChatML/shard blocks, which made those blocks look like they had broken spacing even after the app rollback.
+
+The cleaned copy unwraps prose inside fenced blocks while preserving ChatML marker lines (`<|im_start|>`, `<|im_end|>`), blank lines, and `---` separators. The original `Claude - Inter-Model Comm Shards Summary - Jun 27.txt` was left untouched.
+
+**Follow-up:** Reapplied the pasted-persona prefix guard in `chat_routes.py`. Saved continuation lines such as `GPT-4o:` are indented on disk and ignored as speaker boundaries when chats are reopened or branched, so pasted model/user labels stay inside the current user's message.
+
+---
+
+## Session: Jun 27 2026 - Rich chat message copy
+
+**`templates/index.html`:** Updated the desktop chat message copy button to write both `text/html` and `text/plain` clipboard formats. Rich paste targets now receive the rendered message structure (headings, paragraphs, lists, rules, emphasis, and code blocks) instead of only the flattened plain-text fallback.
+
+The copied HTML is built from the already-rendered message DOM, strips chat UI controls/timestamps/classes, and keeps the existing text-only path as a fallback when rich clipboard writes are unavailable. The code-block plain-text fallback now also recognizes the current `.code-lang` label class.
+
+---
+
+## Session: Jun 27 2026 - Pre-send memory summary correction
+
+**`templates/index.html` / `templates/mobile.html`:** Changed the pre-send memory command flow so it no longer writes the recent chat transcript directly into character memory. The command is still intercepted before it becomes a chat turn, but the frontend now sends the recent context to the existing `/auto_memory/capture` generator route with a normalized explicit "remember this" request, restoring the compact `# Memory`, `Keywords`, and summarized body format.
+
+**`app.py`:** Added a forced-save mode for explicit frontend memory commands. Forced saves bypass the old automatic-memory eligibility/classifier decline path, use a no-reject summarization prompt, and fall back to a compact saved-memory entry if the generator still returns a non-save response.
+
+**Follow-up:** Removed the meta fallback that saved "Chris asked to remember this recent context". Forced memory generation now explicitly forbids mentioning the save request/chat/transcript/recent context, and the fallback derives a third-person memory from the actual last user content instead of describing the command.
+
+**Follow-up:** Restored the old trained-memory authoring format for forced pre-send saves. The backend now asks the model for the plain `Title:`, `Keywords:`, `Summary:` object that HWUI previously saved well, parses it with the existing legacy parser, and only falls back to JSON/last-resort handling if that trained-memory object cannot be parsed.
+
+**Follow-up:** Added memory-field cleanup for ChatML/end-marker fragments before writing saved memories to disk, so a non-streaming memory generation that ends with `|im_end|>` does not leak that marker into the saved `Summary:`.
+
+**Behavior:** The trigger phrase remains out of `window.loadedChat` / `chatHistory` and is not sent to `/chat`; the saved memory body is produced by the memory generator instead of being a raw speaker-by-speaker transcript.
+
+---
+
+## Session: Jun 27 2026 - Save As Document keyword extraction
+
+**`project_routes.py`:** Replaced the naive first-seen keyword picker for `/global_documents/save_from_chat` with a deterministic scored extractor. It now filters broad stopwords and document-wrapper terms, prefers body terms over title filler, boosts repeated content terms, allows only repeated or known-useful multi-word phrases, strips formatting artifacts, and returns cleaner retrieval keywords without a second model call.
+
+**Verification:** `project_routes.py` compiles successfully; a `Reincarnation and What Happens Here` sample now produces topic terms such as `Reincarnation`, `chosen experience`, `karma loop`, `Memory wipe`, and `soul identity` instead of `What`, `Happens`, or `Here`.
+
+---
+
+## Session: Jun 27 2026 - Save As Document save-notes cleanup
+
+**`project_routes.py`:** Added `SAVE NOTES:` to the generated-document cleanup path. If the model prefixes the body with `SAVE NOTES: Topic`, the wrapper is removed while preserving the topic text, and `notes` / `save notes` are filtered out of derived keywords.
+
+**Verification:** `project_routes.py` compiles successfully; a `SAVE NOTES:` sample now saves a clean body and excludes `save` / `notes` from derived keywords.
+
+---
+
+## Session: Jun 26 2026 - Save As Document deterministic metadata
+
+**`project_routes.py`:** Reworked `/global_documents/save_from_chat` so the model now generates only the document body while HWUI deterministically owns the title, filename, and keywords. The route strips accidental JSON/labeled save wrappers from the body, derives a topic title from the cleaned content/transcript, slugifies that into the timestamped filename, and builds retrieval keywords from the cleaned document instead of trusting model-supplied metadata.
+
+**Verification:** `project_routes.py` compiles successfully; screenshot-shaped `SAVED DOCUMENT CONTENTS` output now cleans to a topic title like `Reincarnation as a Chosen Experience`, a filename seed like `reincarnation-as-a-chosen-experience`, and no repeated save/title/filename/keyword labels in the body.
+
+---
+
+## Session: Jun 26 2026 - Save As Document labeled output cleanup
+
+**`project_routes.py`:** Added deterministic parsing for the model's labeled `SAVE RESULTS` format (`Title:`, `Filename:`, `Keywords:`, `Body:`). The save route now extracts those fields directly, ignores the wrapper as a title, and strips metadata labels from the stored document body so global documents no longer repeat the title/filename/keywords inside the saved content.
+
+**Verification:** `project_routes.py` compiles successfully; a screenshot-shaped labeled response extracts `The Reincarnation Reset Cycle`, `reincarnation-reset-cycle`, topic keywords, and a clean body with no repeated metadata labels.
+
+---
+
+## Session: Jun 26 2026 - Save As Document topic metadata cleanup
+
+**`project_routes.py`:** Improved the generated-document parser for near-JSON responses where the model adds a wrapper such as "Here's your save:" or emits invalid multiline JSON. The route now extracts loose `title`, `filename`, `keywords`, and `body` fields before falling back to prose, ignores generic save-wrapper titles, and derives topic-based filenames/keywords from the body when needed.
+
+**Verification:** `project_routes.py` compiles successfully; a screenshot-shaped malformed response now extracts the real topic title, filename seed, keywords, and body instead of saving "Here's your save".
+
+---
+
+## Session: Jun 26 2026 - Save As Document JSON fallback
+
+**`project_routes.py`:** Hardened `/global_documents/save_from_chat` so a usable model response is not rejected just because it is not a perfect JSON object. The route still accepts the intended strict JSON shape first, but now cleans common wrappers and falls back to saving plain generated reference text with a derived title, filename, and keywords when JSON extraction fails.
+
+**Verification:** `project_routes.py` compiles successfully.
+
+---
+
+## Session: Jun 26 2026 - Pre-send memory save command
+
+**`templates/index.html`:** Added a desktop pre-send memory intercept beside the save-document command path. Memory phrases now run before chat creation/send, build a deterministic memory entry from the recent visible chat context, and call the existing `/add_character_memory` route directly so the trigger phrase is never rendered, pushed into `window.loadedChat`, autosaved, or sent to the model.
+
+**`templates/mobile.html`:** Added the missing mobile `memoryIntentGate()` and the same direct save flow using recent `chatHistory`. Mobile now intercepts memory-save phrases before adding a user bubble or posting to `/chat`.
+
+**Intent coverage:** Expanded memory phrase matching for variants such as "add that to memory", "add this to your memory", "put that to your memory", and "remember my/the ..." while keeping the document-save gate first so "save that as a document" still routes to the document feature.
+
+**Verification:** Desktop and mobile template scripts parse successfully; intent checks confirm memory variants fire and ordinary chat text does not.
+
+---
+
+## Session: Jun 26 2026 - Save As Document chat command
+
+**`project_routes.py`:** Added `POST /global_documents/save_from_chat` under the existing `project_bp`. The route builds a recent user/assistant transcript, asks llama.cpp `/completion` for strict JSON (`title`, `filename`, `keywords`, `body`) at low temperature, sanitizes the result, timestamp-suffixes the filename to avoid overwrites, and writes a UTF-8 `.txt` file into `global_documents/` with `Keywords:` as the first line so the existing global document loader can retrieve it later.
+
+**`templates/index.html` / `templates/mobile.html`:** Added client-side save-document intent gates for phrases like "save that as a document" and "write that to a document". The gate runs before the normal chat-send path, so the trigger phrase is never added as a user turn, never autosaved into chat history, and never sent to `/chat`.
+
+**Verification:** `project_routes.py` compiles successfully; desktop and mobile template scripts parse successfully.
+
+---
+
+## Session: Jun 26 2026 - Cloud context window trimming
+
+**`app.py`:** Removed the fixed last-20-message cap from `/chat`. Conversation history is now left intact until the token-aware trimmer runs, then `active_chat` is synced back to the trimmed user/assistant turns so the Anthropic and OpenAI cloud branches send the same budgeted history instead of an arbitrary 10-exchange slice.
+
+**`truncation.py`:** Made `trim_chat_history()` backend-aware. Local inference still uses the live llama.cpp `ctx_size` budget, while cloud backends use their configured `max_prompt_tokens` cap (`openai` / `anthropic`) so Claude no longer inherits the local 16k context ceiling.
+
+**Verification:** `app.py` and `truncation.py` compile successfully.
+
+---
+
+## Session: Jun 26 2026 - Persistent session summaries
+
+**`session_summary_routes.py`:** Removed the time-decay filtering from session-summary recall. The newest saved summary is now always returned for the high-priority tail injection slot, and the other stored summaries are returned for the older session-memory block regardless of age. The existing three-summary cap remains the replacement mechanism, so summaries leave recall only when newer End Session summaries push them out.
+
+**`app.py`:** Updated the prompt-path comments and log wording so the session-summary path describes persistent newest/older summaries instead of hot/cold/dormant age windows.
+
+**`settings.json`:** Removed the unused `session_memory.hot_hours` / `cold_days` values so the config no longer advertises a clock-based expiry control.
+
+**Verification:** `app.py` and `session_summary_routes.py` compile successfully.
+
+---
+
+## Session: Jun 26 2026 - Project folder themes
+
+**`project_routes.py`:** Added a saved `theme` field to project folder configs, included it in `/projects/list`, and preserved it through project create/update flows.
+
+**`templates/index.html`:** Added a **Folder Theme** dropdown to the project edit panel using the existing theme list. Switching into a project with a saved folder theme now applies that theme automatically, and saving the active project's theme applies it immediately.
+
+**`style.css`:** Styled the new project theme dropdown to match the existing project edit fields.
+
+**Verification:** `project_routes.py` compiles and the chat page script blocks parse successfully.
+
+**Follow-up:** Added `--message-preview-bg` and a **Preview Panel BG** picker in the Theme Editor's Messages section so the dark background behind the message preview bubbles can be edited instead of being hardcoded.
+
+**Follow-up:** Split the Project Management edit screen backgrounds into explicit Theme Editor controls: `--project-edit-workspace-bg` for the wide edit workspace and `--project-edit-bg` for the inner form card. The Project List preview now shows the actual edit form card so the picker matches the modal surface being changed.
+
+---
+
 ## Session: Jun 24 2026 - Compact sampling sidebar fields
 
 **`templates/config.html`:** Added a `sampling-field-label` class to the quick sampling setting labels so those controls can be laid out as compact rows without affecting the memory checkbox or preset controls.
@@ -1536,5 +2078,176 @@ The same `while(prefetchBuffer.length<3&&ttsQueue.length>0)prefetchBuffer.push(f
 - `speakText()` and the Replay button keep their direct-`splitAndQueue` path. They already group sentences correctly because the full text is available — running them through the batcher would add no value and would force the artificial first-batch-shorter latency on a path where there is no streaming to overlap.
 - Redundant strip patterns shared between `bufferTextForTTS` and `splitAndQueue`. The double-strip is idempotent and the Replay path still needs `splitAndQueue` to do its own cleaning since it bypasses `bufferTextForTTS` entirely.
 - The 50ms `setInterval` for prefetch top-up. Removing it caused a regression — sentences arriving in `ttsQueue` during playback didn't start fetching until the current audio ended, costing the fetch/play overlap. Restored, using the new `topUp` helper.
+
+---
+## Session: Jun 28 2026 — Northstar redundancy-restraint training shards
+
+**`train/`:** Added 10 ChatML corrective training shards, `centre_of_gravity_cx_16.txt` through `centre_of_gravity_cx_25.txt`, to teach Northstar conversational restraint while preserving warmth, depth, and spiritual/philosophical expressiveness. The shards focus on letting one strong affirmation, interpretation, or conclusion land instead of reinforcing the same point in slightly different words.
+
+---
+
+## Session: Jun 29 2026 - Local raw ChatML Global Post-History ordering
+
+**`app.py`:** Reordered the local raw ChatML final-user-turn instruction packet so the paired system-prompt `.posthistory.txt` Global Post-History directive is the last instruction-shaped block before the user's actual message. Existing leading final-turn OOC blocks, including the one-user-chat character-note fallback, are peeled off and kept before the Global Post-History block. Style reminder, per-character post-history, project instructions, attached-document directives, and relayed-model directives are queued before Global Post-History. The user's natural-language message remains the final user content before `<|im_start|>assistant`; document/relay one-shot directives are no longer appended after the user's words.
+
+---
+
+## Session: Jul 1 2026 - Token monitor open refresh
+
+**`templates/index.html`:** Rolled the earlier token-monitor attempt back to the smallest safe fix. `refreshTokenMonitor()` is again a no-op while the panel is closed, so it does not add background `/token_stats` requests during normal chatting. Opening the panel now adds the `tm-open` class inside `requestAnimationFrame()` and then calls `refreshTokenMonitor()`, fixing the blank-on-open timing bug without touching chat save/load behavior. Restored the chat/continue stream-finally calls to use `refreshTokenMonitor()` directly after removing the temporary retry helper.
+
+---
+
+## Session: Jul 10 2026 - Prevent route helpers from re-importing `app.py`
+
+**`app_runtime_helpers.py`:** Added a small shared helper module for runtime-safe helpers used by blueprints: local llama API URL resolution, opening-line placeholder substitution, local stop-token selection, OpenAI token/sampling parameter rules, and Anthropic temperature support checks.
+
+**`extra_routes.py`, `project_routes.py`, `session_summary_routes.py`:** Replaced deferred `from app import ...` imports inside request handlers with imports from `app_runtime_helpers.py`. This avoids loading `app.py` a second time under the module name `app` while the real server is running as `__main__`, which could re-run top-level startup/logging setup and stack stdout/log handlers. URL paths and route behavior are otherwise unchanged.
+
+**Verified:** No remaining `from app import` / `import app` references in the touched runtime route modules. Syntax checked `app_runtime_helpers.py`, `extra_routes.py`, `project_routes.py`, and `session_summary_routes.py` with direct `compile()` so Windows did not need to write `.pyc` files into `__pycache__`.
+
+---
+---
+
+## Session: Jul 12 2026 - Isolated Qwen3-TTS standalone evaluation
+
+**`Qwen3-TTS/`:** Added a completely isolated Python 3.12 standalone evaluation environment for the official `qwen-tts` 0.1.1 package and explicit local `Qwen/Qwen3-TTS-12Hz-0.6B-Base` snapshot. Added a localhost-only FastAPI service (`/health`, `/models`, `/clone`, `/benchmark`), minimal upload-and-play test page, Windows launcher, model download script, conversational benchmark client, local voice/output folders, and documentation. No HWUI, F5-TTS, Chatterbox, global Python, or existing environment wiring was changed.
+
+**Measured:** On the actual RTX 5060 Ti 16 GB with PyTorch 2.10.0+cu128/BF16, model load was 2.89 s; whole-GPU use rose from 2167.4 MB idle to 4506.5 MB loaded and reached 5022.5 MB observed during the run. Cold generation was 15.00 s for 3.60 s audio (RTF 4.1653); the following five requested conversational lines averaged 10.319 s generation and all six averaged RTF 3.5697. The official Python API returned audio only after full generation. The main model requested SDPA; the auxiliary Whisper encoder used its manual PyTorch fallback because FlashAttention was not installed.
+
+**Intentionally not changed:** No HWUI integration was started and no existing TTS installation was touched. The 1.7B Base model was not downloaded because the 0.6B reliable Windows path was already substantially slower than real time and no user reference clip was supplied for a meaningful same-voice quality comparison.
+
+**Launcher follow-up:** Updated `Qwen3-TTS/Start_Qwen3_TTS.bat` to detect a healthy service already listening on port 8766. A duplicate launch now reports that Qwen3-TTS is already running, opens the existing local page, and exits successfully instead of attempting a second bind and showing WinError 10048.
+
+---
+
+## Session: Jul 12 2026 - Isolated faster Qwen3-TTS streaming evaluation
+
+**`Qwen3-TTS-Fast/`:** Added a fully separate native-Windows evaluation of `andimarafioti/faster-qwen3-tts` 0.3.0 at commit `6cdb07a3deea6a8d097a5493963f9b2df3fd9af9`. The isolated Python 3.12/PyTorch 2.10.0+cu128 environment uses BF16, SDPA, and successfully captured the repository's predictor/talker CUDA graphs. Added a localhost-only service on port 8767 with `/health`, `/backend`, `/clone`, `/clone-stream`, and `/benchmark`; a Web Audio streaming test page; friendly full-ICL prompt caching; launcher; request-to-client TTFA measurement script; ten-run benchmark; and labelled official/faster/streaming comparison outputs.
+
+**Measured:** Model load 13.409 s; first ICL prompt creation 0.7738 s; cached reuse skipped prompt processing. Ten consecutive generations completed. Excluding the first CUDA-graph capture run, nine chunk-size-4 runs averaged 0.3101 s server TTFA, 1.7242 s total, and RTF 0.6435. Actual request-to-client playable PCM was 0.5027 s with 320 ms chunks, or 0.3364 s initially and 0.4236 s after a clean warm-start restart with 160 ms chunks. Both 160 ms tests stayed faster than playback (RTF 0.8447 and 0.9178). Whole-GPU use was 2192.7 MB before load, 4556.6 MB loaded, and 6102.9 MB highest observed across all validation. No clipped samples or obvious numerical chunk-join click signature was found; listening comparison remains authoritative.
+
+**Intentionally untouched:** `Qwen3-TTS/` model and environment files, HWUI integration, F5-TTS, Chatterbox, global Python/CUDA, and all existing environments. The fast service reads the existing 0.6B model snapshot by path. No 1.7B model, WSL distribution, Triton, FlashAttention, hosted API, or fallback implementation was installed.
+
+**Warm-start follow-up:** The fast launcher now preloads the model, reconstructs the saved local full-ICL prompt, and captures CUDA graphs during application startup. The service does not report ready until the one-time cold work is complete, preventing the first interactive request from unexpectedly paying the measured graph-capture delay.
+
+**Live-player follow-up:** Fixed chopped browser streaming when the captured WAV replayed cleanly. The page had scheduled every arbitrary HTTP packet as an independent `AudioBufferSource`; packet boundaries do not correspond to decoded Qwen audio chunks and could create hundreds of tiny sources, underruns, gaps, or overlaps. The player now reassembles PCM into fixed 160 ms frames, preserves odd-byte carry between network reads, and schedules the frames on one continuous timeline with a small 80 ms initial safety buffer. Server generation, captured WAVs, cloning, and replay are unchanged.
+
+---
+
+## Session: Jul 12 2026 - Qwen3-TTS Fast HWUI integration
+
+**`tts_routes.py`, `templates/config.html`, `settings.json`, `settings.default.json`:** Added `qwen-fast` as a selectable TTS engine on port 8767. HWUI retains the existing completed-WAV `/generate`, voice-list, warmup, and status contracts, plus a new same-origin `/generate_stream` proxy that relays genuine decoded PCM from Qwen without HTTPS mixed-content or CORS issues. The current build selects Qwen Fast; default settings continue to default new builds to F5 unless explicitly selected.
+
+**`utils/utils.js`, `templates/mobile.html`:** Added Qwen-specific desktop and mobile streaming playback while preserving the complete existing F5/Chatterbox blob-prefetch paths. Qwen PCM is reassembled independently of HTTP packet boundaries into 160 ms frames and scheduled continuously with an 80 ms initial buffer. Sequential Qwen generation runs ahead of the shared playback timeline, allowing the next response chunk to synthesize while earlier audio is still playing. Stop/disable aborts the active request and stops scheduled sources. Existing link/code stripping, text batching, replay, per-character voice selection, and non-Qwen behavior remain intact.
+
+**`Qwen3-TTS-Fast/app/service.py`:** Added HWUI-compatible `/voices`, `/status`, `/warmup`, `/tts_to_audio`, and `/tts_stream` endpoints. The service scans the configured shared F5 voice directory for matching WAV/transcript pairs and caches full-ICL Qwen prompts by voice name. No voice samples are duplicated; the configured directory is `I:\F5-TTS\F5-TTS`.
+
+**`HWUI-Launcher/main.js`, `Qwen3-TTS-Fast/Qwen3-TTS-Fast-server.py`:** When `settings.json` selects `qwen-fast`, the existing Electron service lifecycle reads the single explicit `qwen_tts_fast_server` Python-file path and launches it with the isolated venv beside that file. The Python entry point owns the model path, shared F5 voice path, preload flag, FastAPI application, and port 8767. Existing F5 and Chatterbox behaviour is unchanged.
+
+**Verified:** Python syntax passed for the service and Flask routes; desktop/mobile JavaScript and Electron launcher syntax passed. A Flask blueprint integration test found 84 shared voices and returned 200 for engine, voices, status, completed WAV, and streamed PCM. A seeded Alan voice line produced 53,760 samples at 24 kHz through both complete and streamed paths; correlation was 0.99994. F5, Chatterbox, and their existing code paths were intentionally left unchanged.
+
+**Manual-copy follow-up:** Removed the installer/payload workflow and backend setup script. The documented transfer is now only the five Qwen-aware HWUI files and two manually added settings keys. No destination discovery, destination access, model prompt, voice prompt, or integration installer remains.
+
+**Backup follow-up — `backup_hwui_public.bat`, `backup_hwui_dev.bat`:** Both archives now preserve the Qwen-aware `HWUI-Launcher/main.js`, the single configured `Qwen3-TTS-Fast/Qwen3-TTS-Fast-server.py` entry point, and its `Qwen3-TTS-Fast/app/service.py` implementation at their correct relative paths. The already-covered TTS route, templates, utilities, and public/dev settings remain unchanged. The large model, isolated venv, source checkout, shared F5 voices, benchmarks, and generated outputs are intentionally not added to either archive.
+
+**Voice-list startup race fix — `tts_routes.py`, `utils/utils.js`, `templates/mobile.html`:** The voice proxy now reports the selected engine and whether its backend actually answered. Desktop and mobile retry the voice request only when Qwen Fast is still offline during its model/CUDA-graph startup, replacing the temporary single `Sol` fallback with the full shared F5 voice list as soon as port 8767 becomes ready. Successful F5, Chatterbox, XTTS, and already-ready Qwen voice loading is unchanged.
+
+**Electron Qwen startup fix — `HWUI-Launcher/main.js`:** Corrected the external Python-service resolver to support the Qwen environment's actual `venv/python.exe` layout, with the conventional `venv/Scripts/python.exe` retained as a fallback. The previous helper checked only the latter nonexistent path and rejected Qwen before creating a child process, leaving port 8767 offline. F5's existing BAT launcher and Flask's existing build-venv launcher are unchanged.
+
+**Voice-population reliability follow-up — `utils/utils.js`, `templates/mobile.html`:** Hardened the Qwen startup polling so desktop and mobile also retry after transient HTTP/JSON failures, and trigger another load when the engine probe finishes after an earlier one-option fallback. Retries are capped at 45 attempts and reset immediately on a real response. The temporary offline `Sol` placeholder is no longer persisted as the character's selected voice; selection is saved only after the real backend list arrives. Ready backends and non-Qwen engines keep their existing one-request path.
+
+**Mobile Qwen live-stream quality — `templates/mobile.html`:** Increased only the mobile live Qwen path from 160 ms (`chunk_size: 2`) to 320 ms (`chunk_size: 4`) decoded frames, with a 400 ms initial scheduling cushion and 300 ms underrun-recovery cushion. This keeps decoded-audio streaming active while absorbing Wi-Fi packet jitter and mobile-browser scheduling delays that made the aggressive desktop timing sound chopped. Desktop Qwen streaming, completed Replay audio, F5, Chatterbox, voice selection, and text batching are unchanged.
+
+**Mobile resampling follow-up — `templates/mobile.html`:** The remaining record-needle-style skipping was isolated to mobile Web Audio chunk boundaries. Mobile Qwen now aggregates decoded PCM into 640 ms playback blocks and linearly resamples each block from Qwen's 24 kHz rate to the phone's actual AudioContext output rate before scheduling it, preventing mobile Safari/Chromium from independently restarting its 24 kHz conversion for every small source. The mobile-only start/recovery cushions are 650/450 ms. Streaming remains active; desktop and completed Replay paths remain untouched.
+
+**Mobile live-stream stability correction — `templates/mobile.html`:** Removed the custom resampling experiment after it produced silence on the real phone. Qwen speech during a live mobile model response now uses the existing native `Audio`/completed-WAV path per queued sentence batch. It still begins and continues while response text is arriving, but each batch is decoded and played as one continuous phone-native file instead of many raw PCM Web Audio sources. Mobile Replay retains its previous Qwen path. Desktop genuine streaming, server endpoints, batching, voices, F5, and Chatterbox are unchanged.
+
+**Mobile audio rollback — `templates/mobile.html`:** Fully removed the mobile native-WAV routing experiment after live testing showed broader instability. Mobile Qwen is restored to its last known working PCM streaming implementation (`chunk_size: 2`, 160 ms frames, original 80/60 ms scheduling). Desktop audio code is untouched. The earlier voice-list retry reliability fix remains because it does not participate in audio generation or playback.
+
+**Mobile live MP3 path — `Qwen3-TTS-Fast/app/service.py`, `tts_routes.py`, `templates/mobile.html`:** Added a strictly mobile-live-only Qwen endpoint that generates each queued text batch as constant-bitrate MPEG Layer III using the backend's existing libsndfile encoder (`compression_level=0.6`, measured at approximately 64.5 kbps for 24 kHz mono). While model response text is arriving, mobile now plays those completed MP3 batches through its existing native `Audio` element instead of raw PCM Web Audio chunks. Mobile Replay retains its previous Qwen path. Desktop streaming/Replay, normal `/generate`, Qwen `/tts_stream`, F5, Chatterbox, voice selection, and text batching are unchanged.
+
+**Mobile MP3 start-latency follow-up — `templates/mobile.html`:** Qwen's first complete mobile sentence is now queued immediately instead of being held for the previous 60-character minimum. Mobile live Qwen also uses one ordered MP3 prefetch rather than launching three requests against the backend's single generation lock; the next batch is still generated while the current native audio element plays, but later batches can no longer delay the first one. Non-Qwen prefetch depth, Replay, desktop, and regular audio paths are unchanged.
+
+**Full MP3 experiment rollback — `Qwen3-TTS-Fast/app/service.py`, `tts_routes.py`, `templates/mobile.html`:** Removed the mobile MP3 generation endpoint, HWUI proxy, live-response routing flag, immediate-first-sentence threshold, and Qwen-specific prefetch change after the shared single-model workload coincided with desktop streaming instability. Restored mobile Qwen to the exact previously confirmed working/choppy baseline and removed all new work competing with desktop `/tts_stream`. Desktop player code remains unchanged.
+
+**Qwen sentence-boundary stutter root fix — `tts_routes.py`:** Changed the Qwen proxy URL from `localhost:8767` to the explicit IPv4 loopback `127.0.0.1:8767`. Instrumented diagnosis proved Qwen's decoded PCM cadence and the Flask relay were healthy once connected, but this machine resolves `localhost` to IPv6 `::1` first while Qwen binds IPv4 only; each sentence therefore paid an approximately 2.04-second failed IPv6 connect before falling back to IPv4, exhausting the playback backlog and inserting silence at sentence boundaries. The explicit address removes that per-request delay without changing either player, buffering, streaming format, Replay, F5, or Chatterbox.
+
+**Qwen aborted-stream lock fix — `Qwen3-TTS-Fast/app/service.py`:** Reworked only `/tts_stream` to use the background-producer/queue pattern shipped in faster-qwen3-tts's own OpenAI server example. Live testing proved a direct stream could be forcibly reset and leave `/health` responsive while every later generation waited indefinitely on `runtime.lock`. CUDA generation now runs independently of the HTTP consumer: if desktop/mobile aborts a fetch, the worker safely finishes and releases the single model lock while the disconnected response is discarded. No player, buffering, format, voice, Replay, F5, or Chatterbox code changed.
+
+---
+
+## Session: Jul 15 2026 - TTS em-dash pause
+
+**Em-dash speech pause — `utils/utils.js`, `templates/mobile.html`:** Normalised em dashes to a comma plus space at the final shared TTS queue-cleaning step, giving desktop and mobile speech a natural short pause instead of running the surrounding words together. Desktop Replay's earlier full-stop conversion was aligned to the same comma pause. En dashes, double hyphens, sentence batching, audio playback, Qwen streaming, F5, and Chatterbox behaviour are otherwise unchanged.
+## 2026-07-15 — Explicit model reload control
+
+- Added a Reload button beside Unload in the desktop model picker on the chat and config pages.
+- Clicking the already-loaded model in the picker now does nothing; intentional reloads use the new Reload button.
+
+---
+
+## Session: Jul 16 2026 - Isolated Qwen3-TTS Q5 low-VRAM evaluation
+
+**`Qwen3-TTS-LowVRAM-Test/`:** Added a completely isolated Windows/Vulkan Q5_K_M evaluation of Qwen3-TTS-Rust; the production HWUI launcher, routes, players, current `Qwen3-TTS-Fast` backend, F5, and Chatterbox were not modified. The test folder contains the upstream v0.1.6 executable/source snapshot, Q5 talker and predictor, required ONNX models/tokenizer, download helpers, and a cloned Sol test voice/output.
+
+**Upstream compatibility workarounds:** The released executable cannot read the repository's quantised `qwen3_assets.gguf`, so the test uses the upstream full-precision asset table with the Q5 talker/predictor; the original Q8-compatible asset is retained as `qwen3_assets.q8-incompatible.gguf`. The executable must also receive the exact isolated ONNX Runtime 1.23.2 DLL through `ORT_DYLIB_PATH` to prevent Windows loading an older runtime from the inherited environment.
+
+**Measured result:** From an approximately 1,673 MiB idle GPU baseline, the successful reference-clone run peaked at 3,338 MiB total (approximately 1,665 MiB added). It generated a valid 24 kHz mono, 10.937-second WAV in 24.92 seconds of synthesis and 28.94 seconds total. Output: `Qwen3-TTS-LowVRAM-Test/q5_sol_test.wav`. This proves a major VRAM reduction but is materially slower than the existing faster-qwen3-tts backend on this machine; it remains an evaluation only and has not been integrated.
+
+**CUDA-cache follow-up:** Added `Qwen3-TTS-LowVRAM-Test/benchmark_cuda_cache.py` and compared the existing BF16/CUDA-graph backend at static-cache lengths 2,048, 1,024, and 512 using the same model, cloned voice, seed, and sentence. The 512 setting reduced CUDA reserved memory from 3,296 MiB to 2,546 MiB (750 MiB saved), improved measured generation from 4.6280 to 4.1565 seconds, and produced a sample-for-sample identical 6.88-second WAV. The 1,024 setting reserved 3,190 MiB, saving only 106 MiB. After approval, `Qwen3-TTS-Fast/app/service.py` was changed from 2,048 to 512; the model, BF16 precision, CUDA graphs, synthesis settings, players, voices, F5, and Chatterbox remain unchanged.
+
+**Silent kiss markers — `utils/utils.js`, `templates/mobile.html`:** The final shared desktop/mobile TTS cleaning step now removes only standalone lowercase end-of-chunk kiss markers (`x` through `xxxx`, including immediately before final punctuation). Words containing `x`, uppercase `X`, non-terminal uses of the letter, visible chat text, sentence batching, voices, and synthesis engines are unchanged.
+
+---
+
+## Session: Jul 18 2026 - Qwen completed-audio clipping guard
+
+**`Qwen3-TTS-Fast/app/service.py`:** Added a completed-HWUI-audio-only peak-headroom step before WAV encoding. Read-only analysis of the latest 100 Qwen completed WAVs found 39 files reaching digital full scale, with large discontinuities inside the files while their beginnings and endings were already near silence. Historical grouping proved this was voice-dependent and predated the 512-token CUDA-cache change: `Solara_British_Female` clipped in 40% of its July 14 outputs and 39.1% on July 18, while current Sol and male voice sets generally did not reach full scale. Generated sentences whose peak exceeds 0.95 are now scaled linearly as a whole to 0.95 before PCM conversion, preserving their waveform and dynamics while preventing encoder saturation. Qwen generation settings, the 512 cache, voice prompts, streaming code, frontend playback, F5, and Chatterbox are unchanged.
+
+**Loud-reference follow-up:** Live output after the completed-audio guard proved that Solara sentences were being capped correctly at 0.95 yet retained the reported distortion, ruling out final WAV conversion as the remaining cause. Qwen prompt construction now applies a Qwen-only −6 dBFS peak ceiling (linear peak 0.5) to an in-memory copy of any louder reference audio before codec-token and speaker-embedding extraction. The shared reference WAV is not edited, quieter references are unchanged, and F5 continues reading the original file. Restarting Qwen rebuilds its in-memory voice prompts with the adjusted reference.
+
+---
+
+## Session: Jul 16 2026 - Character dropdown groups
+
+**Character grouping — `templates/index.html`, `style.css`:** Added browser-local groups to the existing desktop character picker. The in-picker **+ Group** control creates named sections, the folder control beside each character moves it between groups, and group headers can be collapsed, renamed, or deleted. Deleting a group returns its characters to **Ungrouped** without deleting or changing any character card. Existing favourites remain pinned in their own top section, and a favourite retains its group assignment underneath. The real character select, character loading/switching, mobile picker, config picker, and character files are unchanged.
+
+**Usability correction — `templates/index.html`, `style.css`:** Replaced browser popup-based group creation/renaming with an inline name field inside the dropdown. There is now one **+ New group** control at the top; the duplicate entry was removed from character folder menus. Group deletion uses an inline two-click confirmation. Explicitly removed inherited global button margins and tightened row padding/line height so character names return to a compact list.
+
+**Favourite/group display fix — `templates/index.html`:** Corrected named-group rendering so favourited characters appear inside their assigned group as well as remaining pinned in **Favourites**. The saved assignment was already correct; only the named-group display had incorrectly filtered favourites out, leaving the group count at zero.
+
+**Character favourites removal — `templates/index.html`:** Removed the desktop character favourite system now that user-created groups provide the same organisation more flexibly. The fixed **Favourites** section, star buttons, favourite-first sorting, favourite helpers, and starred selected-character prefix are gone. Existing named groups and character assignments are preserved; font favourites and unrelated controls are untouched.
+
+**Per-build group persistence — `character_routes.py`, `templates/index.html`, `characters/_character_groups.json`:** Moved character groups from shared browser `localStorage` into a validated JSON state file inside the current build. The desktop picker now loads and saves through `GET/POST /character_groups`; writes are ordered client-side and atomic server-side. `_character_groups.json` is explicitly excluded from `/list_characters`, so it cannot appear as a card or enter `characters/index.json`. Copies using the same browser address/port now keep independent group names, assignments, and collapsed states. The old shared browser value is ignored rather than migrated into every build.
+## Session: Jul 19 2026 - Helcyon-Legion emotional behaviour audit
+
+**Audit only — `shards/helcyon_legion_emotional_behaviour_audit.md`, `shards/helcyon_legion_emotional_behaviour_audit.json`:** Audited all 80 training shards plus two reference files. Classified 56 KEEP, 11 REVIEW, 13 REWRITE, and 0 REMOVE (24/80 affected, 30.0%). No training shard was changed, moved, renamed, or deleted.
+
+---
+
+## Session: Jul 19 2026 - Helcyon-Legion emotional presence rewrites
+
+**Thirteen audit-approved shard rewrites — `shards/Fable-General_11_shard_17_Empathy.txt`, `shards/Fable-General_12_shard_01_Comfort.txt`, `shards/Fable-General_12_shard_03_Deep.txt`, `shards/Fable-General_12_shard_13_Encouragement.txt`, `shards/Fable-General_12_shard_14_Empathy.txt`, `shards/Fable-General_12_shard_17_Comfort.txt`, `shards/Fable-General_13_shard_02_Smalltalk.txt`, `shards/Fable-General_13_shard_06_Wind-Down.txt`, `shards/Fable-General_13_shard_09_Pivot-Down.txt`, `shards/Fable-General_14_shard_03_Pivot-Down.txt`, `shards/Fable-General_14_shard_07_Comfort.txt`, `shards/Fable-General_14_shard_15_Empathy.txt`, `shards/Fable-General_14_shard_19_Calibration.txt`:** Preserved every scenario and the existing warm, image-rich Fable voice while removing the audited behavioural pivots: generic reassurance, emotional diagnosis from above, activity/distraction prescriptions, recovery timelines, growth/resilience conclusions, assignments, outcome guarantees, and premature conversational closure. Two system instructions were narrowed so persistent fatigue is not automatically diagnosed as emotional depletion and wind-down behaviour follows an explicit user sign-off rather than steering toward one.
+
+**Verification:** All 13 targets retain balanced ChatML start/end and user/assistant markers; none of the audited phrases remain; UTF-8 punctuation is intact; no temporary files remain. Last-write-time scope confirms exactly the 13 approved training shards changed during this pass, while the other 67 training shards were left untouched. The original Markdown/JSON audit reports remain unchanged as the pre-rewrite audit snapshot.
+
+---
+
+## Session: Jul 19 2026 - Personality-LoRA shard addendum audit and rewrites
+
+**Current-corpus addendum — `shards/helcyon_legion_personality_lora_addendum_audit.md`, `shards/helcyon_legion_personality_lora_addendum_audit.json`:** Audited the 60 current personality-LoRA shards in Sets 15–17 after the previous 80-file Sets 11–14 snapshot had been removed from `shards/`. Classified 50 KEEP, 4 REVIEW, 6 REWRITE, and 0 REMOVE (10/60 affected, 16.7%). The addendum records every flagged path, semantic evidence, smallest correction, aggregate failure counts, hotspots, and the fact that the prior snapshot was not restored.
+
+**Six surgical rewrites — `Fable-General_15_shard_20_Identity.txt`, `Fable-General_16_shard_05_Chat.txt`, `Fable-General_16_shard_10_Chat.txt`, `Fable-General_16_shard_15_Chat.txt`, `Fable-General_17_shard_16_Chat.txt`, `Fable-General_17_shard_20_Chat.txt`:** Replaced anthropomorphic equivocation with a plain but warm account of model limits; removed symbolic dream decoding, phantom-vibration emotional telemetry, nervous-system/maintenance framing of an enjoyable empty weekend, hidden-soul and self-improvement interpretation of a lottery fantasy, and unsupported compliment certainty followed by psychological diagnosis and forced closure. The original scenarios, humour, imagery, and conversational energy remain intact.
+
+**Intentionally unchanged:** The four REVIEW shards (`Fable-General_16_shard_08_Chat.txt`, `Fable-General_16_shard_18_Chat.txt`, `Fable-General_17_shard_13_Chat.txt`, `Fable-General_17_shard_19_Banter.txt`) were documented but not softened. The other 50 KEEP shards were untouched. No shard was removed, moved, or renamed.
+
+---
+
+## Session: Jul 21 2026 - Qwen cloned-voice stability
+
+**`Qwen3-TTS-Fast/app/service.py`:** Reduced only HWUI's completed and streaming Qwen voice-clone sampling temperature from `0.9` to `0.8`. An initial `0.7` test stopped the brief speaker swaps but made some full-stop endings rise as though the sentence would continue, so `0.8` is the selected compromise for voice stability with more natural sentence-ending prosody. This keeps the selected cached speaker prompt and the existing sampling/playback pipeline.
+
+**Intentionally untouched:** Standalone clone/benchmark sampling, cached reference construction, desktop/mobile playback, text batching, voice selection, F5-TTS, and Chatterbox.
 
 ---

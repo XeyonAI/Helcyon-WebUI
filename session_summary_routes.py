@@ -28,34 +28,19 @@ def _resolve_session_summary_path(character_name):
     return None
 
 
-# ── Time-decay session memory ───────────────────────────────────────────────
+# ── Session memory selection ────────────────────────────────────────────────
 # Each stored summary may carry an inline ISO-8601 timestamp on its
 # ---SESSION--- delimiter line (written by save_session_summary on new
 # appends). Legacy entries with no inline timestamp fall back to the file's
-# mtime as a best-effort age. Decay tiers (settings.json:session_memory):
-#   hot     : age <= hot_hours            → tail-injection slot, most recent only
-#   cold    : hot_hours < age <= cold_days → YOUR OWN MEMORY OF RECENT SESSIONS
-#   dormant : age > cold_days             → still on disk, not injected anywhere
-# ⚠️ DO NOT add an on/off toggle on top of this — time decay replaces it;
-# overlapping controls create state confusion. (changes.md.)
-SESSION_MEMORY_DEFAULTS = {"hot_hours": 48, "cold_days": 7}
+# mtime so legacy summaries can still be sorted.
+#
+# The newest saved summary is always returned for the tail-injection slot,
+# no matter how old it is. Older stored summaries are returned for the
+# secondary "recent sessions" block. The "End Session" save path still keeps
+# only MAX_SUMMARIES entries, so replacement happens when a new summary is
+# created, not because a clock window expired. (changes.md.)
 # One capture group = the optional trailing ISO timestamp on a delimiter line.
 _SESSION_TS_RE = re.compile(r'(?m)^[ \t]*---SESSION---[ \t]*([^\n]*)$')
-
-
-def _read_session_memory_settings():
-    """Return (hot_hours, cold_days) from settings.json:session_memory.
-    Missing section/keys → silent defaults (48, 7). Never raises, never warns."""
-    hot = SESSION_MEMORY_DEFAULTS["hot_hours"]
-    cold = SESSION_MEMORY_DEFAULTS["cold_days"]
-    try:
-        with open("settings.json", "r", encoding="utf-8") as f:
-            sm = json.load(f).get("session_memory", {}) or {}
-        hot = sm.get("hot_hours", hot)
-        cold = sm.get("cold_days", cold)
-    except Exception:
-        pass
-    return hot, cold
 
 
 def _parse_iso_utc(s):
@@ -117,34 +102,21 @@ def parse_session_summaries(character_name):
 
 
 def select_session_summaries(character_name):
-    """Apply time-decay to a character's stored session summaries.
+    """Select a character's stored session summaries without time expiry.
     Returns (hot, cold):
-      hot  : (timestamp, text) of the single most-recent summary IF its age
-             <= hot_hours, else None — in which case the tail slot is skipped.
-      cold : list of (timestamp, text) for every OTHER summary aged
-             <= cold_days, oldest first (the YOUR OWN MEMORY block). A summary
-             younger than hot_hours that is not the single most-recent one
-             still lands here.
-    Summaries aged > cold_days are dormant — excluded from both. Returns
-    (None, []) when the summary file is missing or empty."""
-    import datetime as _dt
+      hot  : (timestamp, text) of the single most-recent summary, always.
+      cold : every other stored summary, oldest first.
+    Returns (None, []) when the summary file is missing or empty."""
     entries = parse_session_summaries(character_name)
     if not entries:
         return None, []
-    hot_hours, cold_days = _read_session_memory_settings()
-    now = _dt.datetime.now(_dt.timezone.utc)
-    hot_cut = _dt.timedelta(hours=hot_hours)
-    cold_cut = _dt.timedelta(days=cold_days)
     newest_idx = max(range(len(entries)), key=lambda i: entries[i][0])
-    hot = None
-    if (now - entries[newest_idx][0]) <= hot_cut:
-        hot = entries[newest_idx]
-    cold = []
-    for i, (ts, text) in enumerate(entries):
-        if hot is not None and i == newest_idx:
-            continue                       # already placed in the tail slot
-        if (now - ts) <= cold_cut:         # cold window; dormant entries dropped
-            cold.append((ts, text))
+    hot = entries[newest_idx]
+    cold = [
+        (ts, text)
+        for i, (ts, text) in enumerate(entries)
+        if i != newest_idx
+    ]
     cold.sort(key=lambda e: e[0])          # oldest first
     return hot, cold
 
@@ -192,12 +164,12 @@ def load_session_summary(character_name):
 def save_session_summary(character_name, new_entry):
     """Append a new summary entry, keeping only the last MAX_SUMMARIES.
 
-    Time-decay (Option C): the NEW entry is written with an inline ISO-8601
-    UTC timestamp on its '---SESSION---' delimiter line. Pre-existing legacy
-    entries are preserved verbatim with NO timestamp backfilled — they keep
-    falling back to file mtime until they age out. The file is rewritten in
-    the header-per-entry format (a '---SESSION--- <iso>' line before each
-    entry); every entry's text content is preserved unchanged."""
+    The NEW entry is written with an inline ISO-8601 UTC timestamp on its
+    '---SESSION---' delimiter line. Pre-existing legacy entries are preserved
+    verbatim with NO timestamp backfilled, using file mtime only for sorting.
+    The file is rewritten in the header-per-entry format (a
+    '---SESSION--- <iso>' line before each entry); every entry's text content
+    is preserved unchanged."""
     import datetime as _dt
     os.makedirs(SESSION_SUMMARY_DIR, exist_ok=True)
     path = os.path.join(SESSION_SUMMARY_DIR, f"{character_name.lower()}_summary.txt")
@@ -241,11 +213,38 @@ def generate_session_summary():
     then append it to session_summaries/<character>_summary.txt.
     Called by the frontend 'End Session' button.
     """
-    # API_URL and get_stop_tokens are module-level state in app.py; import them
-    # here (not at module top) so this blueprint never triggers a circular
-    # import of app at load time. Mirrors extra_routes.py's app-helper usage.
-    from app import API_URL, get_stop_tokens
     try:
+        try:
+            from app_runtime_helpers import get_api_url, get_stop_tokens
+        except Exception as helper_error:
+            print(f"⚠️ summary helper import failed: {helper_error}", flush=True)
+
+            def get_api_url():
+                try:
+                    with open("settings.json", "r", encoding="utf-8") as _sf:
+                        _settings = json.load(_sf) or {}
+                    _port = _settings.get("llama_args", {}).get("port", 8080)
+                except Exception:
+                    _port = 8080
+                return f"http://127.0.0.1:{_port}"
+
+            def get_stop_tokens():
+                try:
+                    with open("settings.json", "r", encoding="utf-8") as _sf:
+                        _settings = json.load(_sf) or {}
+                    _template = (
+                        _settings.get("llama_args", {})
+                        .get("chat_template", "chatml")
+                    )
+                    _model = (_settings.get("llama_last_model", "") or "").lower()
+                except Exception:
+                    _template = "chatml"
+                    _model = ""
+                _template = str(_template or "chatml").strip().lower()
+                if "gemma" in _model or _template == "jinja":
+                    return ["<end_of_turn>", "<start_of_turn>"]
+                return ["<|im_end|>", "<|im_start|>"]
+
         data = request.get_json()
         character_name = data.get("character", "").strip()
         messages = data.get("messages", [])
@@ -361,6 +360,108 @@ def generate_session_summary():
                 f"Last time {user_name} and I talked,"
             )
 
+        def _build_cloud_user_prompt(transcript_text):
+            return (
+                "CONVERSATION TRANSCRIPT:\n"
+                "----------------------------------------\n"
+                f"{transcript_text}\n"
+                "----------------------------------------\n\n"
+                f"You are {char_display_name}. Write your private memory note about this conversation. "
+                f"{user_name} is the person you spoke WITH — refer to them by name. "
+                f"You are NOT {user_name}. Write only from {char_display_name}'s own perspective.\n\n"
+                f"Do not include a timestamp. Do not include the words "
+                f"\"Last time {user_name} and I talked\"; continue naturally after that phrase."
+            )
+
+        def _load_cloud_settings():
+            try:
+                with open("settings.json", "r", encoding="utf-8") as _sf:
+                    return json.load(_sf)
+            except Exception:
+                return {}
+
+        def _generate_openai_summary(prompt_text, max_tokens):
+            from app_runtime_helpers import openai_caps_for
+            from cloud_api_routes import get_openai_base_url
+
+            settings = _load_cloud_settings()
+            api_key = (settings.get("openai_api_key", "") or "").strip()
+            model = (settings.get("openai_model", "") or "").strip() or "gpt-4o"
+            if not api_key:
+                raise RuntimeError("OpenAI backend selected but no API key is configured")
+
+            caps = openai_caps_for(model)
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": summary_system},
+                    {"role": "user", "content": prompt_text},
+                ],
+                "stream": False,
+            }
+            payload[caps["token_param"]] = max_tokens
+            if caps["sampling"]:
+                payload["temperature"] = 0.75
+                payload["top_p"] = 0.9
+
+            base_url = get_openai_base_url()
+            print(f"🧠 summary: OpenAI path model={model}, max_tokens={max_tokens}", flush=True)
+            resp = requests.post(
+                f"{base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=120,
+            )
+            if resp.status_code >= 400:
+                raise RuntimeError(f"OpenAI returned {resp.status_code}: {resp.text[:500]}")
+            data = resp.json()
+            return data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+
+        def _generate_anthropic_summary(prompt_text, max_tokens):
+            from app_runtime_helpers import supports_temperature
+            from cloud_api_routes import get_anthropic_base_url
+
+            settings = _load_cloud_settings()
+            api_key = (settings.get("anthropic_api_key", "") or "").strip()
+            model = (settings.get("anthropic_model", "") or "").strip() or "claude-sonnet-4-5"
+            if not api_key:
+                raise RuntimeError("Anthropic backend selected but no API key is configured")
+
+            payload = {
+                "model": model,
+                "max_tokens": max_tokens,
+                "stream": False,
+                "system": summary_system,
+                "messages": [{"role": "user", "content": prompt_text}],
+            }
+            if supports_temperature(model):
+                payload["temperature"] = 0.75
+
+            base_url = get_anthropic_base_url()
+            print(f"🧠 summary: Anthropic path model={model}, max_tokens={max_tokens}", flush=True)
+            resp = requests.post(
+                f"{base_url}/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json=payload,
+                timeout=120,
+            )
+            if resp.status_code >= 400:
+                raise RuntimeError(f"Anthropic returned {resp.status_code}: {resp.text[:500]}")
+            data = resp.json()
+            parts = data.get("content", [])
+            return "".join(
+                part.get("text", "")
+                for part in parts
+                if isinstance(part, dict) and part.get("type") == "text"
+            ).strip()
+
         # Read live ctx_size from settings.json — same approach as the chat route's
         # dynamic-n_predict fix (May 9). Without this, we hardcoded n_predict=600
         # and trusted the prompt fit; for big character cards (Helcyon's ~2k-token
@@ -420,25 +521,33 @@ def generate_session_summary():
             "stop": get_stop_tokens(),
         }
 
-        resp = requests.post(f"{API_URL}/completion", json=payload, timeout=60)
-        if resp.status_code >= 400:
-            # Surface llama.cpp's actual error message — the bare HTTPError string
-            # (e.g. "400 Client Error: Bad Request for url: …") tells you nothing
-            # about WHAT the server rejected. Read the body and include it.
-            body = ""
-            try:
-                body = resp.text[:500]
-            except Exception:
-                pass
-            print(f"❌ llama.cpp /completion returned {resp.status_code}: {body}", flush=True)
-            print(f"   prompt length: {len(summary_prompt)} chars, ~{_est_real} real tokens", flush=True)
-            print(f"   ctx_size={_ctx_size_live}, n_predict={_n_predict}, msgs={len(conv_messages)}", flush=True)
-            return jsonify({
-                "status": "error",
-                "error": f"llama.cpp returned {resp.status_code}: {body or 'no body'}",
-            }), 500
-        result = resp.json()
-        summary_text = result.get("content", "").strip()
+        cloud_settings = _load_cloud_settings()
+        backend_mode = (cloud_settings.get("backend_mode", "local") or "local").lower()
+        cloud_enabled = bool(cloud_settings.get("cloud_api_enabled", False))
+        if backend_mode == "openai" and cloud_enabled:
+            summary_text = _generate_openai_summary(_build_cloud_user_prompt(transcript), _n_predict)
+        elif backend_mode == "anthropic" and cloud_enabled:
+            summary_text = _generate_anthropic_summary(_build_cloud_user_prompt(transcript), _n_predict)
+        else:
+            resp = requests.post(f"{get_api_url()}/completion", json=payload, timeout=60)
+            if resp.status_code >= 400:
+                # Surface llama.cpp's actual error message — the bare HTTPError string
+                # (e.g. "400 Client Error: Bad Request for url: …") tells you nothing
+                # about WHAT the server rejected. Read the body and include it.
+                body = ""
+                try:
+                    body = resp.text[:500]
+                except Exception:
+                    pass
+                print(f"❌ llama.cpp /completion returned {resp.status_code}: {body}", flush=True)
+                print(f"   prompt length: {len(summary_prompt)} chars, ~{_est_real} real tokens", flush=True)
+                print(f"   ctx_size={_ctx_size_live}, n_predict={_n_predict}, msgs={len(conv_messages)}", flush=True)
+                return jsonify({
+                    "status": "error",
+                    "error": f"llama.cpp returned {resp.status_code}: {body or 'no body'}",
+                }), 500
+            result = resp.json()
+            summary_text = result.get("content", "").strip()
 
         # Strip any leaked ChatML tokens
         summary_text = re.sub(r'<\|im_start\|>\w*', '', summary_text)
@@ -457,5 +566,7 @@ def generate_session_summary():
         return jsonify({"status": "ok", "summary": summary_text})
 
     except Exception as e:
+        import traceback
         print(f"❌ generate_session_summary error: {e}")
+        traceback.print_exc()
         return jsonify({"status": "error", "error": str(e)}), 500

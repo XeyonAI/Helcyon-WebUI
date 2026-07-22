@@ -5,6 +5,37 @@
 // (Defined here in utils.js, which index.html loads, so they're global to the
 // chat page. config.html has its own inline copy — it loads no shared JS.)
 // ============================================================
+function hwuiChatAreaCenterX() {
+  const row = document.getElementById('input-row');
+  if (row) {
+    const rect = row.getBoundingClientRect();
+    if (rect.width > 0) return rect.left + rect.width / 2;
+  }
+  const inputArea = document.getElementById('input-area');
+  if (inputArea) {
+    const rect = inputArea.getBoundingClientRect();
+    if (rect.width > 0) return rect.left + rect.width / 2;
+  }
+  const main = document.getElementById('main');
+  if (main) {
+    const rect = main.getBoundingClientRect();
+    if (rect.width > 0) return rect.left + rect.width / 2;
+  }
+  return window.innerWidth / 2;
+}
+
+function hwuiPositionToastHost(host) {
+  if (!host) return;
+  host.style.left = Math.round(hwuiChatAreaCenterX()) + 'px';
+  host.style.transform = 'translateX(-50%)';
+}
+
+window.addEventListener('resize', () => {
+  hwuiPositionToastHost(document.getElementById('hwui-toast-host'));
+  hwuiPositionToastHost(document.getElementById('hwui-toast'));
+  hwuiPositionToastHost(document.getElementById('auto-memory-toast'));
+});
+
 function hwuiToast(message, kind = 'success', ms = 2200) {
   let host = document.getElementById('hwui-toast-host');
   if (!host) {
@@ -13,6 +44,7 @@ function hwuiToast(message, kind = 'success', ms = 2200) {
     host.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:99999;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;';
     document.body.appendChild(host);
   }
+  hwuiPositionToastHost(host);
   const c = ({
     success: { bg:'#13361f', border:'#2a6a4a', fg:'#aef0c8' },
     error:   { bg:'#3a1414', border:'#8a2424', fg:'#ffb0b0' },
@@ -320,6 +352,72 @@ async function displayOpeningLineInChat() {
 // DOCUMENT MANAGEMENT
 // ==================================================
 
+function getCurrentProjectDocumentName() {
+  const input = document.getElementById('edit-project-name');
+  return input ? input.value : '';
+}
+
+window._projectDocsRefreshOnFocus = null;
+window.addEventListener('focus', () => {
+  const projectName = window._projectDocsRefreshOnFocus;
+  if (!projectName || getCurrentProjectDocumentName() !== projectName) return;
+  loadProjectDocuments(projectName);
+});
+
+async function openProjectDocumentUploadPicker() {
+  const projectName = getCurrentProjectDocumentName();
+  if (!projectName) {
+    hwuiToast('No project selected', 'info');
+    return;
+  }
+
+  try {
+    const res = await fetch(`/projects/${encodeURIComponent(projectName)}/documents/upload_from_dialog`, {
+      method: 'POST'
+    });
+    const result = await res.json();
+
+    if (result.cancelled) return;
+    if (result.error) {
+      hwuiToast('Upload failed: ' + result.error, 'error');
+      return;
+    }
+
+    await loadProjectDocuments(projectName);
+    hwuiToast(`Uploaded "${result.filename}"`, 'success');
+  } catch (err) {
+    console.error('Picker upload error:', err);
+    hwuiToast('Failed to open document picker', 'error');
+  }
+}
+
+async function openProjectDocumentsFolder() {
+  const projectName = getCurrentProjectDocumentName();
+  if (!projectName) {
+    hwuiToast('No project selected', 'info');
+    return;
+  }
+
+  try {
+    const res = await fetch(`/projects/${encodeURIComponent(projectName)}/documents/open_folder`, {
+      method: 'POST'
+    });
+    const result = await res.json();
+
+    if (result.error) {
+      hwuiToast('Failed to open folder: ' + result.error, 'error');
+      return;
+    }
+
+    window._projectDocsRefreshOnFocus = projectName;
+    hwuiToast('Project documents folder opened', 'success');
+    setTimeout(() => loadProjectDocuments(projectName), 500);
+  } catch (err) {
+    console.error('Open folder error:', err);
+    hwuiToast('Failed to open documents folder', 'error');
+  }
+}
+
 // Setup document upload handler
 function initDocumentUpload() {
   const uploadInput = document.getElementById('document-upload');
@@ -328,13 +426,13 @@ function initDocumentUpload() {
       const file = e.target.files[0];
       if (!file) return;
       
-      const projectName = document.getElementById('edit-project-name').value;
+      const projectName = getCurrentProjectDocumentName();
       
       const formData = new FormData();
       formData.append('file', file);
       
       try {
-        const res = await fetch(`/projects/${projectName}/documents/upload`, {
+        const res = await fetch(`/projects/${encodeURIComponent(projectName)}/documents/upload`, {
           method: 'POST',
           body: formData
         });
@@ -364,7 +462,7 @@ function initDocumentUpload() {
 
 async function loadProjectDocuments(projectName) {
   try {
-    const res = await fetch(`/projects/${projectName}/documents/list`);
+    const res = await fetch(`/projects/${encodeURIComponent(projectName)}/documents/list`);
     const data = await res.json();
     
     const listDiv = document.getElementById('documents-list');
@@ -408,7 +506,7 @@ async function deleteProjectDocument(projectName, filename) {
   if (!await hwuiConfirm(`Delete "${filename}"?`)) return;
   
   try {
-    const res = await fetch(`/projects/${projectName}/documents/${filename}`, {
+    const res = await fetch(`/projects/${encodeURIComponent(projectName)}/documents/${encodeURIComponent(filename)}`, {
       method: 'DELETE'
     });
     
@@ -447,6 +545,7 @@ let ttsEnabled = false;
 let isPlayingAudio = false;
 let currentAudio = null;
 let ttsVoice = localStorage.getItem('tts-voice') || 'af_heart';
+let ttsEngine = 'f5';
 
 // Hybrid queue — sentences accumulate here, playback starts after 3 are ready
 let ttsQueue = [];
@@ -732,7 +831,11 @@ async function initTTSEngine() {
     const res = await fetch('/api/tts/engine');
     const data = await res.json();
     const engine = data.engine || 'f5';
-    TTS_MAX_CHUNK_LENGTH = (engine === 'chatterbox') ? 150 : 300;
+    ttsEngine = engine;
+    TTS_MAX_CHUNK_LENGTH = (engine === 'chatterbox') ? 150 : (engine === 'qwen-fast' ? 220 : 300);
+    if (engine === 'qwen-fast' && (document.getElementById('tts-voice-select')?.options.length || 0) <= 1) {
+      loadTTSVoices();
+    }
     console.log(`🔊 TTS engine: ${engine} — chunk length: ${TTS_MAX_CHUNK_LENGTH}`);
   } catch (e) {
     console.warn('Could not fetch TTS engine, using default chunk length');
@@ -748,10 +851,12 @@ function splitAndQueue(text) {
              .replace(/https?:\/\/\S+/g, '')                 // bare URLs
              .replace(/[\u{1F517}]/gu, '');                    // link emoji
   const cleaned = text.trim()
+    .replace(/\s*\u2014\s*/g, ', ')
     .replace(/\u{1F4AF}/gu, 'one hundred percent')
     .replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '$1.')
     .replace(/(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '')
     .replace(/\*\*/g, '').replace(/\*/g, '').replace(/_/g, '')
+    .replace(/(?:^|\s+)x{1,4}(?=\s*[.!?]*\s*$)/g, '').replace(/\s+([.!?])/g, '$1')
     .replace(/^[-*•>]\s+/, '').replace(/^\d+\.\s+/, '').replace(/\s*>\s*/g, '. ')
     .replace(/\s*\(\s*/g, '. ').replace(/\s*\)\s*/g, '. ')
     .trim();
@@ -1026,23 +1131,41 @@ function warmupTTSVoice(voice) {
 async function loadTTSVoices() {
   try {
     const res = await fetch('/api/tts/voices');
+    if (!res.ok) throw new Error(`Voice endpoint returned ${res.status}`);
     const data = await res.json();
+    const voices = data.voices || [];
 
     const select = document.getElementById('tts-voice-select');
     if (!select) return;
 
     select.innerHTML = '';
 
-    data.voices.forEach(voice => {
+    voices.forEach(voice => {
       const option = document.createElement('option');
       option.value = voice.name;
       option.textContent = voice.label;
       if (voice.name === ttsVoice) option.selected = true;
       select.appendChild(option);
     });
+    clearTimeout(loadTTSVoices.retryTimer);
+    if (data.engine === 'qwen-fast' && data.backend_online === false) {
+      loadTTSVoices.retryCount = (loadTTSVoices.retryCount || 0) + 1;
+      if (loadTTSVoices.retryCount <= 45) loadTTSVoices.retryTimer = setTimeout(loadTTSVoices, 2000);
+      return;
+    }
+
+    loadTTSVoices.retryCount = 0;
+    if (voices.length && !voices.some(voice => voice.name === ttsVoice)) {
+      const fallback = voices.find(voice => voice.name === 'Sol_American_Female') || voices[0];
+      setTTSVoice(fallback.name);
+      select.value = ttsVoice;
+    }
 
   } catch (err) {
     console.error('Failed to load TTS voices:', err);
+    clearTimeout(loadTTSVoices.retryTimer);
+    loadTTSVoices.retryCount = (loadTTSVoices.retryCount || 0) + 1;
+    if (loadTTSVoices.retryCount <= 45) loadTTSVoices.retryTimer = setTimeout(loadTTSVoices, 2000);
   }
 }
 
@@ -1296,7 +1419,7 @@ function replayLastAudio() {
       .replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '$1.')
       .replace(/(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '')
       .replace(/\*\*/g, '').replace(/\*/g, '').replace(/_/g, '')
-      .replace(/\s*[\u2013\u2014]\s*/g, '. ').replace(/\s*--\s*/g, '. ')
+      .replace(/\s*\u2014\s*/g, ', ').replace(/\s*\u2013\s*/g, '. ').replace(/\s*--\s*/g, '. ')
       .replace(/\.{3}/g, '. ').replace(/\u2026/g, '. ')
       .replace(/\s*\(\s*/g, '. ').replace(/\s*\)\s*/g, '. ')
       ;

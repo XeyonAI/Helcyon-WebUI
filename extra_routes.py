@@ -110,7 +110,7 @@ def get_opening_lines(character):
         # so there is one Python definition of the placeholders. Reuse the same
         # helper chat() uses (deferred import — app.py imports this module at load,
         # so a top-level import would be circular).
-        from app import substitute_placeholders
+        from app_runtime_helpers import substitute_placeholders
 
         _root = os.path.dirname(__file__)
 

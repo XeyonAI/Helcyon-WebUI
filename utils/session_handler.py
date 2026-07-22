@@ -87,10 +87,10 @@ def get_instruction_layer():
 
         "EXAMPLE DIALOGUE:\n"
         "Example dialogue shows speaking style only — extract tone, rhythm, response shape, warmth, humour, and pacing. "
-        "Copy the conversational manner, not the matter: do not reference example topics, treat them as memories, "
-        "continue them, revisit them, or treat them as real conversation history. Before replying, discard every "
-        "entity, scenario, claim, and implied relationship from example dialogue unless the current user independently "
-        "brings it up.\n\n"
+        "Also copy visible formatting habits such as separators, quote markers, label lines, indentation, short standalone "
+        "lines, and blank-line grouping when they fit the reply. Copy the conversational manner, not the matter: strongly imitate the voice and response shape, but do not "
+        "treat example topics as memories, active conversation threads, or facts about the user. Use only the current "
+        "conversation for subject matter; do not mention names, topics, examples, or claims that appear only in example dialogue.\n\n"
 
         "INJECTED MEMORY:\n"
         "When the system block contains content marked as your own memory of recent sessions, "

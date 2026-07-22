@@ -7,6 +7,10 @@
 
 :root {
   --app-font-family: "Inter", "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  --text-muted: #aaaaaa;
+  --text-dim: #666666;
+  --theme-editor-heading-text: #666666;
+  --theme-preview-muted-text: #555555;
   --topbar-bg: #0c0c0c;
   --container-bg: #000000;
   --chat-bg: #000000;
@@ -24,6 +28,8 @@
   --user-msg-text: #ffffff;
   --model-msg-bg: #000000;
   --model-msg-text: #ffffff;
+  --message-preview-bg: #0a0d10;
+  --msg-timestamp-text: #666666;
   --msg-border: #000000;
   --hr-color: #353535;
   --input-bg: #000000;
@@ -41,6 +47,7 @@
   --memory-entry-bg: #000000;
   --memory-entry-text: #b6b6b6;
   --project-item-bg: #000000;
+  --project-edit-workspace-bg: #000000;
   --project-edit-bg: #0a0d10;
   --project-item-hover: #424242;
   --icon-button-bg: #000000;

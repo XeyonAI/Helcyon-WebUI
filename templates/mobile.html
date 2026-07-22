@@ -183,7 +183,7 @@ const marked={parse:function(txt){
         <span id="tts-label">TTS</span>
       </button>
       <button onclick="openModelPicker()" title="Switch Model" style="flex-shrink:0;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:6px 9px;color:var(--text-dim);font-size:16px;cursor:pointer;line-height:1;">🧠</button>
-      <button onclick="showMobileProNotice()" title="Memory summaries are available in HWUI Pro" style="flex-shrink:0;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:6px 9px;color:var(--text-dim);font-size:16px;cursor:pointer;line-height:1;">⭐</button>
+      <button onclick="endSession()" title="End Session" style="flex-shrink:0;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:6px 9px;color:var(--text-dim);font-size:16px;cursor:pointer;line-height:1;">💾</button>
     </div>
     <!-- Row 2: Character + Project selectors -->
     <div id="header-row2">
@@ -300,11 +300,20 @@ const marked={parse:function(txt){
   </div>
 </div>
 
+<div id="mobile-preferred-model-loading-overlay" role="dialog" aria-modal="true" aria-live="polite" tabindex="-1" style="display:none;position:fixed;inset:0;z-index:200000;align-items:center;justify-content:center;background:rgba(0,0,0,0.76);backdrop-filter:blur(1px);cursor:wait;padding:20px;box-sizing:border-box;">
+  <div style="width:100%;max-width:340px;padding:22px 20px;text-align:center;background:var(--surface);border:1px solid #2a6a4a;border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,0.72);">
+    <div style="font-size:18px;font-weight:700;color:var(--text);margin-bottom:8px;">Model loading &mdash; please wait</div>
+    <div id="mobile-preferred-model-loading-detail" style="font-size:13px;color:#8fd3a8;margin-bottom:7px;"></div>
+    <div style="font-size:12px;color:var(--text-dim);">Please let things settle before choosing another chat.</div>
+  </div>
+</div>
+
 <div id="toast"></div>
 <script>
 let characterName='Assistant',charFilename='Assistant',userName='User',chatHistory=[],ttsEnabled=false,ttsVoice=null,mobileChatFilename=null;
 let mediaRecorder=null,audioChunks=[],isRecording=false;
 let ttsQueue=[],ttsProcessing=false,currentAudio=null,isPlayingAudio=false,ttsOnComplete=null;
+let mobileTTSEngine='f5',mobileQwenCtx=null,mobileQwenNext=0,mobileQwenSources=[],mobileQwenAbort=null,mobileQwenLiveRun=0;
 let replayTimeout=null;
 let ttsSentenceBuffer='',ttsStreamingComplete=false;
 // Code-block stripping state — persists across streaming chunks so a fenced
@@ -388,6 +397,7 @@ async function loadCharacterList(){
 }
 
 async function switchCharacter(name){
+  if(window._mobilePreferredModelLoading)return;
   if(!name)return;
   characterName=name;
   localStorage.setItem('lastCharacter',name);
@@ -412,6 +422,7 @@ async function loadCharacterInfo(charName){
       document.getElementById('header-name').textContent=characterName;
       document.getElementById('header-avatar').src='/static/images/'+(d.image||charName+'.png');
       document.getElementById('header-avatar').onerror=function(){this.src='/static/images/default.png';};
+      await loadMobileCharacterPreferredModel(d);
       // Restore this character's voice — check server first (shared with PC), fallback to localStorage
       try{
         const vr=await fetch('/character_voice/'+encodeURIComponent(charName));
@@ -433,6 +444,56 @@ async function loadCharacterInfo(charName){
       document.getElementById('header-name').textContent=charName;
     }
   }catch(e){console.warn('loadCharacterInfo error',e);}
+}
+
+function mobilePreferredModelName(modelId){
+  return String(modelId||'').split(/[\\/]/).pop().replace(/\.gguf$/i,'');
+}
+
+function showMobilePreferredModelLoadingOverlay(modelName,charName){
+  const overlay=document.getElementById('mobile-preferred-model-loading-overlay');
+  const detail=document.getElementById('mobile-preferred-model-loading-detail');
+  window._mobilePreferredModelLoading=true;
+  if(detail)detail.textContent='Loading '+modelName+' for '+(charName||'character')+'...';
+  if(overlay){overlay.style.display='flex';overlay.focus();}
+}
+
+function hideMobilePreferredModelLoadingOverlay(){
+  const overlay=document.getElementById('mobile-preferred-model-loading-overlay');
+  if(overlay)overlay.style.display='none';
+  window._mobilePreferredModelLoading=false;
+}
+
+async function loadMobileCharacterPreferredModel(characterData){
+  const preferred=String((characterData&&characterData.preferred_model_id)||'').trim();
+  if(!preferred)return true;
+  const displayName=mobilePreferredModelName(preferred);
+  const preferredId=preferred.replace(/\\/g,'/').toLowerCase();
+  const rememberedId=String(localStorage.getItem('llama_last_model')||'').replace(/\\/g,'/').toLowerCase();
+  let overlayShown=false;
+  if(!rememberedId||rememberedId!==preferredId){
+    showMobilePreferredModelLoadingOverlay(displayName,characterData.name);
+    overlayShown=true;
+  }
+  try{
+    const currentRes=await fetch('/get_model');
+    if(currentRes.ok){
+      const current=await currentRes.json();
+      const currentId=String(current.model_id||'').replace(/\\/g,'/').toLowerCase();
+      const sameModel=currentId?currentId===preferredId:mobilePreferredModelName(current.model).toLowerCase()===displayName.toLowerCase();
+      if(sameModel){localStorage.setItem('llama_last_model',preferred);return true;}
+    }
+    if(!overlayShown){showMobilePreferredModelLoadingOverlay(displayName,characterData.name);overlayShown=true;}
+    const loaded=await loadModel(preferred,displayName);
+    showToast(loaded?'Loaded '+displayName:'Could not load preferred model');
+    return loaded;
+  }catch(e){
+    console.warn('Preferred model load failed',e);
+    showToast('Could not load preferred model');
+    return false;
+  }finally{
+    if(overlayShown)hideMobilePreferredModelLoadingOverlay();
+  }
 }
 
 async function loadUserName(){try{const r=await fetch('/get_active_user');if(r.ok){const d=await r.json();userName=d.active_user||d.name||'User';}}catch(e){}}
@@ -538,8 +599,83 @@ function setPTTState(state){
 
 async function sendText(){const ta=document.getElementById('user-text');const text=ta.value.trim();if(!text)return;ta.value='';ta.style.height='';await sendMessage(text);}
 
+function saveDocumentIntentGate(userMsg){
+  if(!userMsg||typeof userMsg!=='string')return false;
+  const SAVE_DOC_RE=/\b(?:save|write|turn|make|convert|store|put)\b.{0,80}\b(?:as|to|into|in)\b.{0,30}\b(?:a\s+)?(?:global\s+)?(?:reference\s+)?doc(?:ument)?\b|\b(?:save|write|store)\s+(?:that|this|it)\s+(?:as|to|into)\s+(?:a\s+)?(?:global\s+)?(?:reference\s+)?doc(?:ument)?\b/i;
+  return SAVE_DOC_RE.test(userMsg);
+}
+
+function memoryIntentGate(userMsg){
+  if(!userMsg||typeof userMsg!=='string')return false;
+  const text=userMsg.replace(/\r\n/g,'\n').trim();
+  const compact=text.replace(/\s+/g,' ');
+  if(!compact)return false;
+  const MEMORY_INTENT_RE=/\b(?:remember (?:this|that|it|to|my|the)|save (?:this|that|it)(?: to (?:your )?memory)?|save .{0,80}for (?:later|future reference)|(?:make|take) a note|don['’]?t forget|for (?:future|later) reference|add (?:(?:this|that|it) )?to (?:your )?memory|note this down|keep (?:this|that|it) in mind|save to (?:your )?memory|put (?:it |this |that )?(?:in(?:to)?|to) (?:your )?memory|(?:can you )?memorize (?:this|that|it)|keep a record|log (?:this|that|it)|store (?:this|that|it)(?: in memory)?|jot (?:this|that|it) down|note (?:this|that|it) down|(?:please )?save (?:this|that|it))\b/i;
+  const LEADING_MEMORY_INTENT_RE=/^(?:please\s+|can you\s+|could you\s+|would you\s+|i want you to\s+)?(?:remember (?:this|that|it|to|my|the)|save (?:this|that|it)(?: to (?:your )?memory)?|save .{0,80}for (?:later|future reference)|(?:make|take) a note|don['â€™]?t forget|for (?:future|later) reference|add (?:(?:this|that|it) )?to (?:your )?memory|note this down|keep (?:this|that|it) in mind|save to (?:your )?memory|put (?:it |this |that )?(?:in(?:to)?|to) (?:your )?memory|memorize (?:this|that|it)|keep a record|log (?:this|that|it)|store (?:this|that|it)(?: in memory)?|jot (?:this|that|it) down|note (?:this|that|it) down|save (?:this|that|it))\b/i;
+  const directCommand = compact.replace(/^(?:(?:please|can you|could you|would you|i want you to)\s+)*/i,'');
+  const DIRECT_MEMORY_COMMAND_RE=/^(?:remember (?:this|that|it|to|my|the)|save (?:this|that|it)(?: to (?:your )?memory)?|save .{0,80}for (?:later|future reference)|(?:make|take) a note|don['â€™]?t forget|for (?:future|later) reference|add (?:(?:this|that|it) )?to (?:your )?memory|note this down|keep (?:this|that|it) in mind|save to (?:your )?memory|put (?:it |this |that )?(?:in(?:to)?|to) (?:your )?memory|memorize (?:this|that|it)|keep a record|log (?:this|that|it)|store (?:this|that|it)(?: in memory)?|jot (?:this|that|it) down|note (?:this|that|it) down|save (?:this|that|it))\b/i;
+  return DIRECT_MEMORY_COMMAND_RE.test(directCommand);
+}
+
+function recentVisibleChatForMemory(){
+  return (chatHistory||[]).slice(-8).map(msg=>{
+    let content=msg.content;
+    if(Array.isArray(content))content=content.filter(p=>p&&p.type==='text').map(p=>p.text||'').join(' ');
+    return{role:msg.role,content:String(content||'').trim()};
+  }).filter(msg=>(msg.role==='user'||msg.role==='assistant')&&msg.content);
+}
+
+function memoryTranscriptFromMessages(messages){
+  const speakerFor=(msg)=>msg.role==='user'?userName:characterName;
+  return messages.map(msg=>speakerFor(msg)+': '+msg.content).join('\n\n');
+}
+
+async function saveMemoryFromChat(commandText){
+  const history=recentVisibleChatForMemory();
+  if(!history.length){showToast('No conversation to save to memory yet');setStatus('Ready');return;}
+  setStatus('Saving memory...');
+  showToast('Saving memory...');
+  try{
+    const res=await fetch('/auto_memory/capture',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({character:charFilename||characterName,user_name:userName,user_text:'remember this',assistant_text:memoryTranscriptFromMessages(history),recent_messages:history,force_save:true})});
+    const result=await res.json().catch(()=>({}));
+    if(res.ok&&result.status==='saved')showToast('Memory saved: '+(result.title||'Saved memory'));
+    else if(result.reason==='duplicate')showToast('That memory is already saved');
+    else if(result.reason==='roleplay_project')showToast('Memory saving is disabled in roleplay projects');
+    else showToast('Failed to save memory: '+(result.error||result.reason||'unknown error'));
+    setStatus('Ready');
+    return;
+  }catch(e){showToast('⚠️ Error: '+e.message);}
+  setStatus('Ready');
+}
+
+function recentVisibleChatForDocument(){
+  return (chatHistory||[]).slice(-40).map(msg=>{
+    let content=msg.content;
+    if(Array.isArray(content))content=content.filter(p=>p&&p.type==='text').map(p=>p.text||'').join(' ');
+    return{role:msg.role,content:content||''};
+  }).filter(msg=>(msg.role==='user'||msg.role==='assistant')&&String(msg.content||'').trim());
+}
+
+async function saveAsDocumentFromChat(commandText){
+  const history=recentVisibleChatForDocument();
+  if(!history.length){showToast('No conversation to save as a document yet');setStatus('Ready');return;}
+  setStatus('Saving document...');
+  showToast('Saving document...');
+  try{
+    const res=await fetch('/global_documents/save_from_chat',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({messages:history,user_name:userName,instruction:commandText})});
+    const data=await res.json().catch(()=>({}));
+    if(res.ok&&data.success)showToast('✅ Document saved: '+data.filename);
+    else showToast('⚠️ '+(data.error||'Failed to save document'));
+  }catch(e){showToast('⚠️ Error: '+e.message);}
+  setStatus('Ready');
+}
+
 async function sendMessage(text){
   if(!text)return;
+  if(saveDocumentIntentGate(text)){await saveAsDocumentFromChat(text);return;}
+  if(memoryIntentGate(text)){await saveMemoryFromChat(text);return;}
   const userTs=new Date().toISOString();
   addBubble('user',userName,text,userTs);chatHistory.push({role:'user',content:text,speaker:userName,timestamp:userTs});
   showTyping(true);setStatus('Thinking...');setPTTState('idle');
@@ -860,6 +996,7 @@ function extractCharFromFilename(filename){
 }
 
 async function loadMobileChat(filename, title){
+  if(window._mobilePreferredModelLoading)return;
   closeChatList();
   // Push state so the phone's back button returns to the chat list
   history.pushState({view:'chat',filename:filename},'');
@@ -932,11 +1069,24 @@ async function newMobileChat(){
 }
 
 async function endSession(){
-  showMobileProNotice();
-}
-
-function showMobileProNotice(){
-  showToast('Memory summaries are available in HWUI Pro.');
+  if(!chatHistory.length){showToast('Nothing to summarise');return;}
+  setStatus('Summarising...');
+  showToast('Ending session...');
+  try{
+    const res=await fetch('/generate_session_summary',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({character:charFilename,messages:chatHistory,user_name:userName})});
+    const raw=await res.text();
+    let d={};
+    try{d=raw?JSON.parse(raw):{};}catch(_){
+      d={error:`Server returned ${res.status} ${res.statusText||''}`.trim()};
+    }
+    if(res.ok){
+      showToast(d.status==='ok'?'✅ Session saved to memory':'⚠️ '+d.error);
+    }else{
+      showToast('⚠️ Summary failed: '+(d.error||res.status));
+    }
+  }catch(e){showToast('⚠️ Error: '+e.message);}
+  setStatus('Ready');
 }
 
 async function displayOpeningLineInChat(){
@@ -986,6 +1136,10 @@ let lastSpokenText='';
 
 function fixContractionsForTTS(text){
   text=text.replace(/\u2019/g,"'").replace(/\u2018/g,"'");
+  // F5 and Qwen both understand normal apostrophes. Removing them turns
+  // "I'm" into "Im" and "don't" into "dont", which causes the shared
+  // mobile mispronunciations heard during live speech.
+  if(mobileTTSEngine==='f5'||mobileTTSEngine==='qwen-fast')return text;
   const contractions=[["aren't","arent"],["can't","cant"],["couldn't","couldnt"],["didn't","didnt"],
     ["doesn't","doesnt"],["don't","dont"],["hadn't","hadnt"],["hasn't","hasnt"],["haven't","havent"],
     ["isn't","isnt"],["it's","its"],["mustn't","mustnt"],["needn't","neednt"],["shan't","shant"],
@@ -1008,10 +1162,12 @@ function splitAndQueue(text){
            .replace(/https?:\/\/\S+/g,'')
            .replace(/[\u{1F517}]/gu,'');
   const cleaned=text.trim()
+    .replace(/\s*\u2014\s*/g,', ')
     .replace(/\u{1F4AF}/gu,'one hundred percent')
     .replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu,'$1.')
     .replace(/(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu,'')
     .replace(/\*\*/g,'').replace(/\*/g,'').replace(/_/g,'')
+    .replace(/(?:^|\s+)x{1,4}(?=\s*[.!?]*\s*$)/g,'').replace(/\s+([.!?])/g,'$1')
     .replace(/^[-*•>]\s+/,'').replace(/^\d+\.\s+/,'').replace(/\s*>\s*/g,'. ')
     .replace(/:/g,'. ')
     .replace(/\s*\(\s*/g,'. ').replace(/\s*\)\s*/g,'. ')
@@ -1053,14 +1209,22 @@ async function initTTSEngine(){
     if(!res.ok)return;
     const data=await res.json();
     const engine=data.engine||'f5';
+    mobileTTSEngine=engine;
     if(engine==='chatterbox'){
       TTS_MAX_CHUNK_LENGTH=150;
       TTS_FIRST_BATCH_MIN=60;
       TTS_BATCH_MIN=120;
+    }else if(engine==='qwen-fast'){
+      TTS_MAX_CHUNK_LENGTH=220;
+      TTS_FIRST_BATCH_MIN=60;
+      TTS_BATCH_MIN=160;
     }else{
       TTS_MAX_CHUNK_LENGTH=300;
       TTS_FIRST_BATCH_MIN=80;
       TTS_BATCH_MIN=180;
+    }
+    if(engine==='qwen-fast'&&(document.getElementById('mobile-voice-select')?.options.length||0)<=1){
+      loadMobileVoices();
     }
     console.log(`\uD83D\uDD0A TTS engine: ${engine} \u2014 max=${TTS_MAX_CHUNK_LENGTH}, batch=${TTS_FIRST_BATCH_MIN}/${TTS_BATCH_MIN}`);
   }catch(e){/* leave defaults */}
@@ -1077,6 +1241,11 @@ function batchAndQueue(sentence){
   if(!sentence)return;
   const trimmed=sentence.trim();
   if(trimmed.length<=2)return;
+  if(mobileTTSEngine==='qwen-fast'){
+    ttsFirstBatchSent=true;
+    splitAndQueue(trimmed);
+    return;
+  }
   ttsPendingBatch=ttsPendingBatch?ttsPendingBatch+' '+trimmed:trimmed;
   const threshold=ttsFirstBatchSent?TTS_BATCH_MIN:TTS_FIRST_BATCH_MIN;
   if(ttsPendingBatch.length>=threshold)flushPendingBatch();
@@ -1169,6 +1338,19 @@ function bufferTextForTTS(chunk){
     lastIndex=match.index+match[0].length;
   }
   if(lastIndex>0)ttsSentenceBuffer=ttsSentenceBuffer.substring(lastIndex);
+  // Qwen mobile live speech normally waits for a complete sentence. If the
+  // model opens with one very long sentence, cap only the first wait at the
+  // existing 60-character Qwen opening threshold and cut on a natural word
+  // boundary. Native completed-WAV decoding still keeps the audio clean.
+  if(mobileTTSEngine==='qwen-fast'&&!ttsFirstBatchSent&&ttsSentenceBuffer.length>=TTS_FIRST_BATCH_MIN){
+    const openingWindow=ttsSentenceBuffer.substring(0,TTS_FIRST_BATCH_MIN);
+    let splitAt=Math.max(openingWindow.lastIndexOf(','),openingWindow.lastIndexOf(';'),openingWindow.lastIndexOf(':'));
+    if(splitAt<TTS_FIRST_BATCH_MIN*0.6)splitAt=openingWindow.lastIndexOf(' ');
+    if(splitAt<1)splitAt=TTS_FIRST_BATCH_MIN;
+    const opening=ttsSentenceBuffer.substring(0,splitAt).replace(/[,:;\s]+$/,'').trim();
+    ttsSentenceBuffer=ttsSentenceBuffer.substring(splitAt).replace(/^\s+/,'');
+    if(opening.length>2)batchAndQueue(opening);
+  }
 }
 
 function flushTTSBuffer(){
@@ -1190,9 +1372,106 @@ function flushTTSBuffer(){
   },150);
 }
 
+function stopMobileQwen(){
+  mobileQwenLiveRun++;
+  if(mobileQwenAbort){mobileQwenAbort.abort();mobileQwenAbort=null;}
+  mobileQwenSources.forEach(s=>{try{s.stop();}catch(e){}});mobileQwenSources=[];mobileQwenNext=0;
+  if(mobileQwenCtx){mobileQwenCtx.close().catch(()=>{});mobileQwenCtx=null;}
+}
+
+async function streamMobileQwen(sentence){
+  if(!mobileQwenCtx||mobileQwenCtx.state==='closed'){mobileQwenCtx=new AudioContext();mobileQwenNext=0;}
+  await mobileQwenCtx.resume();mobileQwenAbort=new AbortController();
+  const r=await fetch('/api/tts/generate_stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:sentence,voice:ttsVoice||'Sol',language:'English',chunk_size:2}),signal:mobileQwenAbort.signal});
+  if(!r.ok)throw new Error((await r.json().catch(()=>({}))).error||`Qwen Fast returned ${r.status}`);
+  const reader=r.body.getReader(),FRAME=3840;let header=44,carry=new Uint8Array(0),samples=[];
+  const schedule=a=>{if(!a.length||!mobileQwenCtx)return;const b=mobileQwenCtx.createBuffer(1,a.length,24000),c=b.getChannelData(0);for(let i=0;i<a.length;i++)c[i]=a[i]/32768;const s=mobileQwenCtx.createBufferSource();s.buffer=b;s.connect(mobileQwenCtx.destination);if(!mobileQwenNext)mobileQwenNext=mobileQwenCtx.currentTime+.08;else if(mobileQwenNext<mobileQwenCtx.currentTime+.015)mobileQwenNext=mobileQwenCtx.currentTime+.06;s.start(mobileQwenNext);mobileQwenNext+=a.length/24000;mobileQwenSources.push(s);s.onended=()=>{const i=mobileQwenSources.indexOf(s);if(i>=0)mobileQwenSources.splice(i,1);};};
+  while(ttsEnabled){const {done,value}=await reader.read();if(done)break;let bytes=value;if(header){const n=Math.min(header,bytes.length);bytes=bytes.slice(n);header-=n;}if(!bytes.length)continue;if(carry.length){const j=new Uint8Array(carry.length+bytes.length);j.set(carry);j.set(bytes,carry.length);bytes=j;}const even=bytes.length-bytes.length%2,v=new DataView(bytes.buffer,bytes.byteOffset,even);for(let i=0;i<even;i+=2)samples.push(v.getInt16(i,true));carry=even<bytes.length?bytes.slice(even):new Uint8Array(0);while(samples.length>=FRAME)schedule(samples.splice(0,FRAME));}schedule(samples);mobileQwenAbort=null;
+}
+
+async function processMobileQwen(){
+  while(ttsEnabled){if(ttsQueue.length){try{await streamMobileQwen(ttsQueue.shift());}catch(e){if(e.name!=='AbortError')console.error('Qwen Fast stream failed:',e);}continue;}if(ttsStreamingComplete)break;await new Promise(r=>setTimeout(r,25));}
+  if(mobileQwenCtx&&ttsEnabled){const ms=Math.max(0,(mobileQwenNext-mobileQwenCtx.currentTime)*1000);if(ms)await new Promise(r=>setTimeout(r,ms));}
+  ttsProcessing=false;isPlayingAudio=false;const cb=ttsOnComplete;ttsOnComplete=null;if(cb)cb();const replayBtn=document.querySelector('.mobile-replay-btn.active');if(replayBtn)setReplayBtnIdle(replayBtn);
+}
+
+async function fetchMobileQwenWav(sentence,run){
+  for(let attempt=0;attempt<2;attempt++){
+    const controller=new AbortController();
+    mobileQwenAbort=controller;
+    try{
+      const response=await fetch('/api/tts/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:sentence,voice:ttsVoice||'Sol'}),signal:controller.signal});
+      if(response.ok){
+        const blob=await response.blob();
+        if(run!==mobileQwenLiveRun)return null;
+        return URL.createObjectURL(blob);
+      }
+      console.warn(`Qwen Fast WAV fetch ${response.status} (attempt ${attempt+1})`);
+    }catch(e){
+      if(e.name==='AbortError')throw e;
+      console.warn(`Qwen Fast WAV fetch error (attempt ${attempt+1}):`,e);
+    }finally{
+      if(mobileQwenAbort===controller)mobileQwenAbort=null;
+    }
+    if(attempt===0)await new Promise(r=>setTimeout(r,200));
+  }
+  return null;
+}
+
+async function processMobileQwenLiveWav(){
+  const run=++mobileQwenLiveRun;
+  let nextAudio=null;
+  while(ttsEnabled&&run===mobileQwenLiveRun){
+    if(!nextAudio){
+      if(ttsQueue.length)nextAudio=fetchMobileQwenWav(ttsQueue.shift(),run);
+      else if(ttsStreamingComplete)break;
+      else{await new Promise(r=>setTimeout(r,25));continue;}
+    }
+
+    let audioUrl;
+    try{audioUrl=await nextAudio;}catch(e){if(e.name!=='AbortError')console.error('Qwen Fast WAV failed:',e);break;}
+    nextAudio=null;
+    if(!audioUrl)continue;
+    if(!ttsEnabled||run!==mobileQwenLiveRun){URL.revokeObjectURL(audioUrl);continue;}
+
+    await new Promise(resolve=>{
+      const audio=new Audio(audioUrl);
+      currentAudio=audio;isPlayingAudio=true;
+      const prefetchInterval=setInterval(()=>{
+        if(!nextAudio&&ttsQueue.length&&ttsEnabled&&run===mobileQwenLiveRun){
+          nextAudio=fetchMobileQwenWav(ttsQueue.shift(),run);
+        }
+      },25);
+      let cleaned=false;
+      const cleanup=()=>{
+        if(cleaned)return;
+        cleaned=true;
+        clearInterval(prefetchInterval);
+        URL.revokeObjectURL(audioUrl);
+        if(currentAudio===audio)currentAudio=null;
+        isPlayingAudio=false;
+        resolve();
+      };
+      audio.onended=cleanup;
+      audio.onerror=cleanup;
+      audio.onpause=cleanup;
+      audio.play().catch(cleanup);
+    });
+  }
+
+  if(run!==mobileQwenLiveRun)return;
+  ttsProcessing=false;isPlayingAudio=false;const cb=ttsOnComplete;ttsOnComplete=null;if(cb)cb();const replayBtn=document.querySelector('.mobile-replay-btn.active');if(replayBtn)setReplayBtnIdle(replayBtn);
+}
+
 async function processQueue(){
   if(ttsProcessing)return;
   ttsProcessing=true;
+
+  if(mobileTTSEngine==='qwen-fast'){
+    if(!ttsStreamingComplete)await processMobileQwenLiveWav();
+    else await processMobileQwen();
+    return;
+  }
 
   async function fetchAudio(sentence){
     for(let attempt=0;attempt<2;attempt++){
@@ -1268,6 +1547,7 @@ function setReplayBtnIdle(btn){
 function stopAllAudio(){
   if(replayTimeout){clearTimeout(replayTimeout);replayTimeout=null;}
   if(currentAudio){try{currentAudio.pause();currentAudio=null;}catch(e){}}
+  stopMobileQwen();
   ttsQueue=[];
   ttsProcessing=false;
   isPlayingAudio=false;
@@ -1379,7 +1659,7 @@ function attachLongPress(wrap, text, role){
 async function loadMobileVoices(){
   try{
     const res=await fetch('/api/tts/voices');
-    if(!res.ok)return;
+    if(!res.ok)throw new Error('Voice endpoint returned '+res.status);
     const data=await res.json();
     const voices=data.voices||[];
     const sel=document.getElementById('mobile-voice-select');
@@ -1390,7 +1670,24 @@ async function loadMobileVoices(){
       if(v.name===ttsVoice)o.selected=true;
       sel.appendChild(o);
     });
-  }catch(e){console.warn('Voice load failed:',e);}
+    clearTimeout(loadMobileVoices.retryTimer);
+    if(data.engine==='qwen-fast'&&data.backend_online===false){
+      loadMobileVoices.retryCount=(loadMobileVoices.retryCount||0)+1;
+      if(loadMobileVoices.retryCount<=45)loadMobileVoices.retryTimer=setTimeout(loadMobileVoices,2000);
+      return;
+    }
+    loadMobileVoices.retryCount=0;
+    if(voices.length&&!voices.some(v=>v.name===ttsVoice)){
+      const fallback=voices.find(v=>v.name==='Sol_American_Female')||voices[0];
+      setMobileVoice(fallback.name);
+      sel.value=ttsVoice;
+    }
+  }catch(e){
+    console.warn('Voice load failed:',e);
+    clearTimeout(loadMobileVoices.retryTimer);
+    loadMobileVoices.retryCount=(loadMobileVoices.retryCount||0)+1;
+    if(loadMobileVoices.retryCount<=45)loadMobileVoices.retryTimer=setTimeout(loadMobileVoices,2000);
+  }
 }
 
 function setMobileVoice(name){
@@ -1474,20 +1771,24 @@ async function loadModel(filename,label){
     const r=await fetch('/load_model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:filename})});
     const d=await r.json();
     if(d.status==='ok'){
+      localStorage.setItem('llama_last_model',filename);
       cur.textContent=d.label||displayName;
       status.style.color='#6dbf8a';
       status.textContent='✅ Loaded: '+(d.label||displayName);
       el.style.opacity='1';el.style.pointerEvents='all';
       setTimeout(()=>closeModelPicker(),1500);
+      return true;
     }else{
       status.style.color='#e88';
       status.textContent='❌ '+(d.error||'Load failed');
       el.style.opacity='1';el.style.pointerEvents='all';
+      return false;
     }
   }catch(e){
     status.style.color='#e88';
     status.textContent='❌ '+e.message;
     el.style.opacity='1';el.style.pointerEvents='all';
+    return false;
   }
 }
 

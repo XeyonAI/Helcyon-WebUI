@@ -1,5 +1,7 @@
 {
   "port": 8081,
+  "tts_engine": "f5",
+  "qwen_tts_fast_server": "",
   "temperature": 0.8,
   "max_tokens": 4096,
   "top_p": 0.95,
@@ -14,7 +16,7 @@
   "frequency_penalty": 0,
   "presence_penalty": 0,
   "auto_memory": {
-    "enabled": false,
+    "enabled": true,
     "local_only": true
   },
   "ignore_eos": false,

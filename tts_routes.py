@@ -1,8 +1,6 @@
-"""
-TTS Routes - Text-to-Speech functionality supporting F5-TTS, XTTS, and Chatterbox engines
-"""
+"""TTS routes for F5-TTS, XTTS, Chatterbox, and Qwen3-TTS Fast."""
 
-from flask import Blueprint, request, jsonify, send_file
+from flask import Blueprint, request, jsonify, send_file, Response, stream_with_context
 import requests
 from io import BytesIO
 import logging
@@ -16,6 +14,7 @@ tts_bp = Blueprint('tts', __name__)
 F5_SERVER_URL          = 'http://localhost:8003'
 XTTS_SERVER_URL        = 'http://localhost:8002'
 CHATTERBOX_SERVER_URL  = 'http://localhost:8004'
+QWEN_FAST_SERVER_URL   = 'http://127.0.0.1:8767'
 DEFAULT_VOICE = 'Sol'
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.json')
 
@@ -92,6 +91,8 @@ def get_server_url():
         return XTTS_SERVER_URL
     elif engine == 'chatterbox':
         return CHATTERBOX_SERVER_URL
+    elif engine == 'qwen-fast':
+        return QWEN_FAST_SERVER_URL
     else:
         return F5_SERVER_URL
 
@@ -107,7 +108,7 @@ def get_tts_engine():
 def set_tts_engine():
     data = request.json
     engine = data.get('engine', 'f5')
-    if engine not in ('f5', 'xtts', 'chatterbox', 'none'):
+    if engine not in ('f5', 'xtts', 'chatterbox', 'qwen-fast', 'none'):
         return jsonify({'error': 'Invalid engine'}), 400
     save_settings({'tts_engine': engine})
     logging.info(f"TTS engine set to: {engine}")
@@ -174,24 +175,71 @@ def generate_tts():
         return jsonify({'error': str(e)}), 500
 
 
+@tts_bp.route('/generate_stream', methods=['POST'])
+def generate_tts_stream():
+    """Proxy genuine decoded Qwen PCM streaming through HWUI's own origin."""
+    if get_engine() != 'qwen-fast':
+        return jsonify({'error': 'Streaming is only available for Qwen3-TTS Fast'}), 400
+    data = request.json or {}
+    text = str(data.get('text') or '').strip()
+    voice = data.get('voice') or DEFAULT_VOICE
+    if not text:
+        return jsonify({'error': 'No text provided'}), 400
+    try:
+        upstream = requests.post(
+            f'{QWEN_FAST_SERVER_URL}/tts_stream',
+            json={
+                'text': text,
+                'voice': voice,
+                'language': data.get('language', 'English'),
+                'seed': data.get('seed', 42),
+                'chunk_size': data.get('chunk_size', 2),
+            },
+            stream=True,
+            timeout=(10, 120),
+        )
+        if upstream.status_code != 200:
+            message = upstream.text[:500]
+            upstream.close()
+            return jsonify({'error': message or f'Qwen Fast returned {upstream.status_code}'}), upstream.status_code
+
+        @stream_with_context
+        def relay():
+            try:
+                for chunk in upstream.iter_content(chunk_size=4096):
+                    if chunk:
+                        yield chunk
+            finally:
+                upstream.close()
+
+        return Response(relay(), mimetype='audio/wav', headers={'X-Audio-Streaming': 'decoded-pcm'})
+    except requests.exceptions.Timeout:
+        return jsonify({'error': 'Qwen Fast streaming timed out'}), 504
+    except requests.exceptions.ConnectionError:
+        return jsonify({'error': 'Cannot connect to Qwen Fast on port 8767'}), 503
+
+
 # --------------------------------------------------
 # LIST AVAILABLE VOICES
 # --------------------------------------------------
 @tts_bp.route('/voices', methods=['GET'])
 def get_voices():
     """Get available voices from active TTS server"""
+    engine = get_engine()
     try:
         server_url = get_server_url()
         response = requests.get(f'{server_url}/voices', timeout=5)
         if response.status_code == 200:
             data = response.json()
             voices = [{"name": v, "label": v} for v in data.get("voices", [])]
-            return jsonify({"voices": voices})
+            return jsonify({"voices": voices, "engine": engine, "backend_online": True})
         else:
-            return jsonify({"voices": [{"name": DEFAULT_VOICE, "label": DEFAULT_VOICE}]})
+            return jsonify({"voices": [{"name": DEFAULT_VOICE, "label": DEFAULT_VOICE}],
+                            "engine": engine, "backend_online": False})
     except Exception as e:
         logging.error(f"Error fetching voices: {str(e)}")
-        return jsonify({"voices": [{"name": DEFAULT_VOICE, "label": DEFAULT_VOICE}]})
+        return jsonify({"voices": [{"name": DEFAULT_VOICE, "label": DEFAULT_VOICE}],
+                        "engine": engine, "backend_online": False})
 
 
 # --------------------------------------------------

@@ -17,7 +17,9 @@ for /f "tokens=5" %%a in ('netstat -ano ^| findstr :%HWUI_PORT% ^| findstr LISTE
 echo Clean start.
 
 echo Starting HWUI on port %HWUI_PORT%...
-start "" http://127.0.0.1:%HWUI_PORT%
+set HWUI_SCHEME=http
+if exist "music.tail39b776.ts.net.crt" if exist "music.tail39b776.ts.net.key" set HWUI_SCHEME=https
+start "" %HWUI_SCHEME%://127.0.0.1:%HWUI_PORT%
 call venv\Scripts\activate
 python app.py
 pause
