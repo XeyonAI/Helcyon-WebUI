@@ -1,6 +1,6 @@
 @echo off
 echo ============================================
-echo   HWUI-Pro Setup
+echo   Helcyon-WebUI Setup
 echo ============================================
 echo.
 
@@ -24,7 +24,7 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 echo [4/5] Installing remaining dependencies...
 pip install flask flask-cors requests psutil faster-whisper openai-whisper python-docx odfpy PyPDF2 --quiet
 
-echo [5/5] Setting up models folder and config...
+echo [5/5] Setting up model, TTS and config folders...
 
 :: Create default models folder at C:\HWUI-Models
 if not exist "C:\HWUI-Models" (
@@ -40,6 +40,20 @@ if not exist "C:\HWUI-Models\model_names.txt" (
     echo Created blank model_names.txt in C:\HWUI-Models
 )
 
+:: Create predictable optional TTS folders. Engines remain optional and
+:: install into their own environments; these are only their shared defaults.
+for %%D in (
+    "C:\HWUI-TTS\Cache\HuggingFace"
+    "C:\HWUI-TTS\F5\voices"
+    "C:\HWUI-TTS\F5\models"
+    "C:\HWUI-TTS\Chatterbox\voices"
+    "C:\HWUI-TTS\Qwen3-TTS\models\Qwen"
+    "C:\HWUI-TTS\XTTS\voices"
+) do (
+    if not exist "%%~D" mkdir "%%~D"
+)
+echo TTS folders ready under C:\HWUI-TTS
+
 :: Create settings.json from default if it doesn't exist
 if not exist settings.json (
     if exist settings.default.json (
@@ -54,7 +68,7 @@ echo   Setup complete!
 echo.
 echo   Your models folder is: C:\HWUI-Models
 echo   Drop your .gguf files there, then run
-echo   Start_AI.bat to launch.
+echo   START_UI.bat to launch.
 echo.
 echo   To change the models folder later, open
 echo   the Config page inside HWUI.

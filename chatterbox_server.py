@@ -188,9 +188,11 @@ def clean_text(text):
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-# Keep model weights off C: drive — same as f5_server.py
-os.environ.setdefault('HF_HOME', r'I:\HuggingFace')
-os.environ.setdefault('TRANSFORMERS_CACHE', r'I:\HuggingFace')
+# Keep model weights in the shared HWUI TTS cache unless overridden.
+TTS_ROOT = os.environ.get('HWUI_TTS_ROOT', r'C:\HWUI-TTS')
+HF_CACHE_DIR = os.environ.get('HWUI_HF_CACHE', os.path.join(TTS_ROOT, 'Cache', 'HuggingFace'))
+os.environ.setdefault('HF_HOME', HF_CACHE_DIR)
+os.environ.setdefault('TRANSFORMERS_CACHE', HF_CACHE_DIR)
 # Default to offline so a cached model loads with no network check/re-download.
 # ⚠️ Chatterbox's model is fetched via from_pretrained and may NOT be cached yet
 # (only the F5 vocoder is currently cached). The FIRST chatterbox run therefore
@@ -201,8 +203,10 @@ os.environ.setdefault('HF_HUB_OFFLINE', '1')
 
 # --- CONFIG -------------------------------------------------------------------
 PORT          = 8004
-VOICES_DIR    = r"I:\Chattervoice"
+VOICES_DIR    = os.environ.get('HWUI_CHATTERBOX_VOICES_DIR', os.path.join(TTS_ROOT, 'Chatterbox', 'voices'))
 DEFAULT_VOICE = "Sol"
+os.makedirs(VOICES_DIR, exist_ok=True)
+os.makedirs(HF_CACHE_DIR, exist_ok=True)
 
 # For standard model fallback only
 EXAGGERATION = 0.5

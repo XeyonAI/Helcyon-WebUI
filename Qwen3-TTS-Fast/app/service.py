@@ -27,10 +27,10 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "source"
 MODEL_DIR = Path(os.getenv(
     "QWEN_FAST_MODEL_PATH",
-    r"I:\HWUI-Pro-Dev-build\Qwen3-TTS\models\Qwen\Qwen3-TTS-12Hz-0.6B-Base",
+    r"C:\HWUI-TTS\Qwen3-TTS\models\Qwen\Qwen3-TTS-12Hz-0.6B-Base",
 ))
 VOICES = ROOT / "voices"
-SHARED_VOICES = Path(os.getenv("QWEN_FAST_VOICES_DIR", r"I:\F5-TTS\F5-TTS"))
+SHARED_VOICES = Path(os.getenv("QWEN_FAST_VOICES_DIR", r"C:\HWUI-TTS\F5\voices"))
 OUTPUTS = ROOT / "outputs"
 BENCHMARKS = ROOT / "benchmarks"
 OFFICIAL_OUTPUTS = OUTPUTS / "official"

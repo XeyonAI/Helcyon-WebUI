@@ -19,7 +19,7 @@ CORS(app)
 MUSIC_PC_IP = "192.168.0.15"
 DOCKER_XTTS_URL = f"http://{MUSIC_PC_IP}:8020/tts_to_audio"
 DOCKER_BASE_URL = f"http://{MUSIC_PC_IP}:8020"
-VOICE_FOLDER = "voices"
+VOICE_FOLDER = os.environ.get('HWUI_XTTS_VOICES_DIR', r"C:\HWUI-TTS\XTTS\voices")
 DEFAULT_VOICE = "Sol.wav"
 
 # Prevents multiple simultaneous requests overwhelming Docker XTTS

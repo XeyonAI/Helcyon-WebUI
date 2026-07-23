@@ -14,11 +14,19 @@ import torch
 # PATH SETUP
 # ----------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-VOICES_DIR = r"I:\F5-TTS\F5-TTS"
+TTS_ROOT = os.environ.get('HWUI_TTS_ROOT', r"C:\HWUI-TTS")
+VOICES_DIR = os.environ.get('HWUI_F5_VOICES_DIR', os.path.join(TTS_ROOT, 'F5', 'voices'))
+F5_CHECKPOINT = os.environ.get(
+    'HWUI_F5_CHECKPOINT',
+    os.path.join(TTS_ROOT, 'F5', 'models', 'model_1250000.safetensors')
+)
+HF_CACHE_DIR = os.environ.get('HWUI_HF_CACHE', os.path.join(TTS_ROOT, 'Cache', 'HuggingFace'))
 
-# Force HuggingFace cache off C: drive entirely
-os.environ['HF_HOME'] = r"I:\HuggingFace"
-os.environ['TRANSFORMERS_CACHE'] = r"I:\HuggingFace"
+# Keep model downloads in the shared HWUI TTS cache unless overridden.
+os.environ.setdefault('HF_HOME', HF_CACHE_DIR)
+os.environ.setdefault('TRANSFORMERS_CACHE', HF_CACHE_DIR)
+os.makedirs(VOICES_DIR, exist_ok=True)
+os.makedirs(HF_CACHE_DIR, exist_ok=True)
 
 # ----------------------------------------------------------------
 # STARTUP CHECK
@@ -32,10 +40,10 @@ if device == "cuda":
 print("-----------------------------------------------")
 
 # ----------------------------------------------------------------
-# LOAD F5-TTS — model loaded from I: drive, no HF download
+# LOAD F5-TTS — model loaded from the configured local checkpoint
 # ----------------------------------------------------------------
 from f5_tts.api import F5TTS
-tts = F5TTS(ckpt_file=r"I:\F5-TTS\F5-TTS\model\model_1250000.safetensors", device=device)
+tts = F5TTS(ckpt_file=F5_CHECKPOINT, device=device)
 tts_lock = Lock()
 print("✅ F5-TTS model loaded and ready.")
 # ----------------------------------------------------------------

@@ -7,8 +7,12 @@ import uvicorn
 
 
 ROOT = Path(__file__).resolve().parent
-MODEL_PATH = ROOT.parent / "Qwen3-TTS" / "models" / "Qwen" / "Qwen3-TTS-12Hz-0.6B-Base"
-VOICE_PATH = Path(r"I:\F5-TTS\F5-TTS")
+TTS_ROOT = Path(os.getenv("HWUI_TTS_ROOT", r"C:\HWUI-TTS"))
+MODEL_PATH = Path(os.getenv(
+    "HWUI_QWEN_MODEL_PATH",
+    str(TTS_ROOT / "Qwen3-TTS" / "models" / "Qwen" / "Qwen3-TTS-12Hz-0.6B-Base"),
+))
+VOICE_PATH = Path(os.getenv("HWUI_QWEN_VOICES_DIR", str(TTS_ROOT / "F5" / "voices")))
 
 # This entry point owns the backend configuration. HWUI supplies only this file.
 os.environ["QWEN_FAST_MODEL_PATH"] = str(MODEL_PATH)

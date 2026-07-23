@@ -7,6 +7,8 @@
 
 **`README.md`:** Moved Memory into the public feature list and updated HWUI Pro to £10 with the Theme Editor as its sole gated feature.
 
+**`HWUI_Setup_Guide.docx`, TTS servers and setup scripts:** Rebuilt the public setup guide for the current browser app, covering managed llama.cpp, first-run configuration, memory, cloud backends, F5, Chatterbox, Qwen3-TTS Fast, XTTS, Kokoro's current router limitation, and desktop/mobile Whisper. Removed the obsolete Electron-launcher workflow from the guide. TTS assets now default to a shared `C:\HWUI-TTS` layout (with environment-variable overrides), `setup.bat` creates those folders, and `Start_F5_XTTS.bat` no longer points at a developer checkout on `I:`. Existing ports, routes, TTS request formats and the XTTS relay host setting are unchanged.
+
 ---
 
 ## Session: Jul 21 2026 - Paired-model loading guard
