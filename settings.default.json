@@ -35,6 +35,7 @@
     "parallel": 1
   },
   "llama_last_model": "",
+  "character_model_pairing_enabled": true,
   "active_theme": "ChatGPT",
   "active_system_prompt": "",
   "diag_verbose": false,

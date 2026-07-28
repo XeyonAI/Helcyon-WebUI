@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <title>Helcyon-WebUI</title>
-  <link rel="stylesheet" href="/style.css?v=21">
+  <link rel="stylesheet" href="/style.css?v=22">
   <link rel="stylesheet" href="/theme-files/midnight.css" id="active-theme-link">
   <style>
     /* Cog dropdown menu — converted from the old #settings-link <a>.
@@ -541,6 +541,10 @@
             </div>
           </div>
         </div>
+        <section id="opening-question-starters" hidden aria-label="Opening questions">
+          <h3 id="opening-question-heading"></h3>
+          <div id="opening-question-cards"></div>
+        </section>
         <!-- Chat -->
         <div id="chat"></div>
         <!-- Input -->
@@ -704,22 +708,47 @@ Examples:
   <div id="opening-line-modal" class="modal">
     <div class="modal-content">
       <div class="modal-header">
-        <h3>Opening Line</h3>
+        <div class="opening-modal-tabs" role="tablist" aria-label="Opening content">
+          <button id="opening-lines-tab" class="opening-modal-tab active" type="button"
+            role="tab" aria-selected="true" aria-controls="opening-lines-panel"
+            onclick="switchOpeningModalTab('lines')">Opening Lines</button>
+          <button id="opening-questions-tab" class="opening-modal-tab" type="button"
+            role="tab" aria-selected="false" aria-controls="opening-questions-panel"
+            onclick="switchOpeningModalTab('questions')">Opening Questions</button>
+        </div>
         <span class="close" onclick="closeOpeningLineModal()">&times;</span>
       </div>
       
       <div class="modal-body">
-        <label>
-          <input type="checkbox" id="opening-line-enabled"> Enable opening line for new chats
-        </label>
-        
-        <div id="opening-lines-container">
-          <!-- Opening lines will be dynamically added here -->
+        <div id="opening-lines-panel" class="opening-modal-panel" role="tabpanel"
+          aria-labelledby="opening-lines-tab">
+          <label>
+            <input type="checkbox" id="opening-line-enabled"> Enable opening line for new chats
+          </label>
+
+          <div id="opening-lines-container">
+            <!-- Opening lines will be dynamically added here -->
+          </div>
+
+          <button onclick="addOpeningLineField()" class="add-line-btn">
+            &#10133; Add New Line
+          </button>
         </div>
-        
-        <button onclick="addOpeningLineField()" class="add-line-btn">
-          ➕ Add New Line
-        </button>
+
+        <div id="opening-questions-panel" class="opening-modal-panel" role="tabpanel"
+          aria-labelledby="opening-questions-tab" hidden>
+          <label>
+            <input type="checkbox" id="opening-questions-enabled"> Enable opening questions for new chats
+          </label>
+
+          <div id="opening-questions-container">
+            <!-- Opening questions will be dynamically added here -->
+          </div>
+
+          <button onclick="addOpeningQuestionField()" class="add-line-btn">
+            &#10133; Add New Question
+          </button>
+        </div>
       </div>
       
       <div class="modal-footer">
@@ -857,7 +886,7 @@ Examples:
 <style>
   #paste-transcript-filename, #paste-transcript-content { border: 1px solid #2a2a2a; }
 </style>
-<div id="paste-transcript-modal" class="modal" onclick="if(event.target===this)closePasteTranscriptModal()">
+<div id="paste-transcript-modal" class="modal">
   <div class="modal-content" style="max-width:760px;">
     <div class="modal-header">
       <h3>📋 Paste Transcript</h3>
@@ -1958,6 +1987,16 @@ if (typeof marked === "undefined") {
     const preferred = String(characterData?.preferred_model_id || '').trim();
     if (!preferred) return true;
 
+    try {
+      const settingRes = await fetch('/character_model_pairing_enabled', { cache: 'no-store' });
+      if (settingRes.ok) {
+        const setting = await settingRes.json();
+        if (setting.enabled === false) return true;
+      }
+    } catch (e) {
+      console.warn('Could not read automatic character model loading setting:', e);
+    }
+
     const displayName = preferredModelName(preferred);
     const preferredId = preferred.replace(/\\/g, '/').toLowerCase();
     const rememberedId = String(localStorage.getItem('llama_last_model') || '').replace(/\\/g, '/').toLowerCase();
@@ -2325,7 +2364,7 @@ if (typeof marked === "undefined") {
     buildCustomSelect();
   }
 
-  function showCharacterGroupEditor(container, initialValue, onSave) {
+  function showCharacterGroupEditor(container, initialValue, onSave, refresh = buildCustomSelect) {
     container.innerHTML = '';
     container.classList.add('character-group-editor');
 
@@ -2346,16 +2385,16 @@ if (typeof marked === "undefined") {
     const submit = () => {
       const name = input.value.trim();
       if (!name) return;
-      if (onSave(name) !== false) buildCustomSelect();
+      if (onSave(name) !== false) refresh();
     };
 
     input.addEventListener('click', e => e.stopPropagation());
     input.addEventListener('keydown', e => {
       if (e.key === 'Enter') { e.preventDefault(); submit(); }
-      if (e.key === 'Escape') { e.preventDefault(); buildCustomSelect(); }
+      if (e.key === 'Escape') { e.preventDefault(); refresh(); }
     });
     save.addEventListener('click', e => { e.stopPropagation(); submit(); });
-    cancel.addEventListener('click', e => { e.stopPropagation(); buildCustomSelect(); });
+    cancel.addEventListener('click', e => { e.stopPropagation(); refresh(); });
 
     container.append(input, save, cancel);
     input.focus();
@@ -2539,7 +2578,7 @@ if (typeof marked === "undefined") {
         const cur = sel.options[sel.selectedIndex];
         if (cur) {
           selected.textContent = cur.textContent;
-          document.querySelectorAll('.custom-select-item').forEach(i => {
+          document.querySelectorAll('#char-custom-options .custom-select-item').forEach(i => {
             i.classList.toggle('active', i.dataset.value === sel.value);
           });
         }
@@ -2548,29 +2587,233 @@ if (typeof marked === "undefined") {
   }, 150);
 
   // ── Custom Voice Select ──────────────────────────────
+  let voiceGroupsState = { groups: [], assignments: {}, collapsed: {} };
+  let voiceGroupsSaveQueue = Promise.resolve();
+
+  function getVoiceGroups() {
+    return voiceGroupsState;
+  }
+
+  async function loadVoiceGroups() {
+    try {
+      const response = await fetch('/api/tts/voice_groups', { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const saved = await response.json();
+      voiceGroupsState = {
+        groups: Array.isArray(saved.groups) ? saved.groups.filter(g => g && g.id && g.name) : [],
+        assignments: saved.assignments && typeof saved.assignments === 'object' ? saved.assignments : {},
+        collapsed: saved.collapsed && typeof saved.collapsed === 'object' ? saved.collapsed : {}
+      };
+    } catch (error) {
+      voiceGroupsState = { groups: [], assignments: {}, collapsed: {} };
+      console.error('Failed to load voice groups:', error);
+      hwuiToast('Could not load this build\'s voice groups.', 'error');
+    }
+  }
+
+  function setVoiceGroups(state) {
+    const snapshot = JSON.parse(JSON.stringify(state));
+    voiceGroupsState = snapshot;
+    voiceGroupsSaveQueue = voiceGroupsSaveQueue.then(async () => {
+      const response = await fetch('/api/tts/voice_groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(snapshot)
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.success) throw new Error(result.error || `HTTP ${response.status}`);
+    }).catch(error => {
+      console.error('Failed to save voice groups:', error);
+      hwuiToast('Could not save this build\'s voice groups.', 'error');
+    });
+  }
+
+  function createVoiceGroup(name) {
+    if (!name || !name.trim()) return null;
+    const state = getVoiceGroups();
+    const cleanName = name.trim();
+    if (state.groups.some(g => g.name.toLowerCase() === cleanName.toLowerCase())) {
+      hwuiToast('A voice group with that name already exists.', 'info');
+      return null;
+    }
+    const group = { id: 'voice-group-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7), name: cleanName };
+    state.groups.push(group);
+    setVoiceGroups(state);
+    return group;
+  }
+
+  function assignVoiceGroup(voiceName, groupId) {
+    const state = getVoiceGroups();
+    if (groupId) state.assignments[voiceName] = groupId;
+    else delete state.assignments[voiceName];
+    setVoiceGroups(state);
+    buildVoiceCustomSelect();
+  }
+
+  function renameVoiceGroup(groupId, name) {
+    const state = getVoiceGroups();
+    const group = state.groups.find(g => g.id === groupId);
+    if (!group || !name || !name.trim()) return false;
+    if (name.trim() === group.name) return true;
+    const cleanName = name.trim();
+    if (state.groups.some(g => g.id !== groupId && g.name.toLowerCase() === cleanName.toLowerCase())) {
+      hwuiToast('A voice group with that name already exists.', 'info');
+      return false;
+    }
+    group.name = cleanName;
+    setVoiceGroups(state);
+    return true;
+  }
+
+  function deleteVoiceGroup(groupId) {
+    const state = getVoiceGroups();
+    if (!state.groups.some(g => g.id === groupId)) return;
+    state.groups = state.groups.filter(g => g.id !== groupId);
+    Object.keys(state.assignments).forEach(name => {
+      if (state.assignments[name] === groupId) delete state.assignments[name];
+    });
+    delete state.collapsed[groupId];
+    setVoiceGroups(state);
+    buildVoiceCustomSelect();
+  }
+
   function buildVoiceCustomSelect() {
     const select = document.getElementById('tts-voice-select');
     const selected = document.getElementById('voice-custom-selected');
     const optList = document.getElementById('voice-custom-options');
+    const groupState = getVoiceGroups();
+    const allOpts = Array.from(select.options);
+
     optList.innerHTML = '';
-    Array.from(select.options).forEach(opt => {
+    const toolbar = document.createElement('div');
+    toolbar.className = 'character-group-toolbar';
+    const toolbarLabel = document.createElement('span');
+    toolbarLabel.textContent = 'Groups';
+    const addGroup = document.createElement('button');
+    addGroup.type = 'button';
+    addGroup.textContent = '+ New group';
+    addGroup.title = 'Create a voice group';
+    addGroup.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showCharacterGroupEditor(toolbar, '', name => !!createVoiceGroup(name), buildVoiceCustomSelect);
+    });
+    toolbar.append(toolbarLabel, addGroup);
+    optList.appendChild(toolbar);
+
+    function renderVoiceItem(opt) {
       const item = document.createElement('div');
-      item.className = 'custom-select-item' + (opt.value === select.value ? ' active' : '');
-      item.textContent = opt.textContent;
+      item.className = 'custom-select-item character-select-item voice-select-item' + (opt.value === select.value ? ' active' : '');
       item.dataset.value = opt.value;
+
+      const label = document.createElement('span');
+      label.textContent = opt.textContent;
+      label.className = 'character-option-label';
+
+      const folder = document.createElement('button');
+      folder.type = 'button';
+      folder.className = 'character-folder-button';
+      folder.textContent = '\uD83D\uDCC1';
+      folder.hidden = groupState.groups.length === 0;
+      const assignedGroup = groupState.groups.find(g => g.id === groupState.assignments[opt.value]);
+      folder.title = assignedGroup ? `Move from ${assignedGroup.name}` : 'Move to a group';
+      folder.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const existingMenu = item.querySelector('.character-group-menu');
+        optList.querySelectorAll('.character-group-menu').forEach(menu => menu.remove());
+        if (existingMenu) return;
+
+        const menu = document.createElement('div');
+        menu.className = 'character-group-menu';
+        [{ id: '', name: 'Ungrouped' }, ...groupState.groups].forEach(group => {
+          const choice = document.createElement('button');
+          choice.type = 'button';
+          choice.textContent = (groupState.assignments[opt.value] || '') === group.id ? `\u2713 ${group.name}` : group.name;
+          choice.addEventListener('click', (event) => {
+            event.stopPropagation();
+            assignVoiceGroup(opt.value, group.id);
+          });
+          menu.appendChild(choice);
+        });
+        item.appendChild(menu);
+      });
+
+      item.append(label, folder);
       item.addEventListener('click', () => {
         select.value = opt.value;
         select.dispatchEvent(new Event('change'));
         selected.textContent = opt.textContent;
-        optList.querySelectorAll('.custom-select-item').forEach(i => i.classList.remove('active'));
+        optList.querySelectorAll('.voice-select-item').forEach(i => i.classList.remove('active'));
         item.classList.add('active');
         document.getElementById('voice-custom-select').classList.remove('open');
       });
-      optList.appendChild(item);
+      return item;
+    }
+
+    function renderVoiceSection(title, options, sectionId, groupId = null) {
+      if (!options.length && !groupId) return;
+      const header = document.createElement('div');
+      header.className = 'character-group-header';
+      const isCollapsed = !!groupState.collapsed[sectionId];
+
+      const heading = document.createElement('button');
+      heading.type = 'button';
+      heading.className = 'character-group-heading';
+      heading.textContent = `${isCollapsed ? '\u25B8' : '\u25BE'} ${title} (${options.length})`;
+      heading.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const state = getVoiceGroups();
+        state.collapsed[sectionId] = !state.collapsed[sectionId];
+        setVoiceGroups(state);
+        buildVoiceCustomSelect();
+      });
+      header.appendChild(heading);
+
+      if (groupId) {
+        const controls = document.createElement('span');
+        controls.className = 'character-group-controls';
+        const rename = document.createElement('button');
+        rename.type = 'button';
+        rename.textContent = '\u270E';
+        rename.title = 'Rename group';
+        rename.addEventListener('click', (e) => {
+          e.stopPropagation();
+          showCharacterGroupEditor(header, title, name => renameVoiceGroup(groupId, name), buildVoiceCustomSelect);
+        });
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.textContent = '\u00D7';
+        remove.title = 'Delete group';
+        let deleteArmed = false;
+        remove.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (!deleteArmed) {
+            deleteArmed = true;
+            remove.textContent = 'Delete?';
+            remove.classList.add('delete-confirm');
+            return;
+          }
+          deleteVoiceGroup(groupId);
+        });
+        controls.append(rename, remove);
+        header.appendChild(controls);
+      }
+
+      optList.appendChild(header);
+      if (!isCollapsed) options.forEach(opt => optList.appendChild(renderVoiceItem(opt)));
+    }
+
+    groupState.groups.forEach(group => {
+      renderVoiceSection(group.name, allOpts.filter(opt => groupState.assignments[opt.value] === group.id), group.id, group.id);
     });
+    const knownGroupIds = new Set(groupState.groups.map(group => group.id));
+    const ungrouped = allOpts.filter(opt => !knownGroupIds.has(groupState.assignments[opt.value]));
+    renderVoiceSection(groupState.groups.length ? 'Ungrouped' : 'Voices', ungrouped, 'ungrouped');
+
     const cur = select.options[select.selectedIndex];
-    selected.textContent = cur ? cur.textContent : '—';
+    selected.textContent = cur ? cur.textContent : '\u2014';
   }
+
+  loadVoiceGroups().then(buildVoiceCustomSelect);
 
   document.getElementById('voice-custom-selected').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -2822,6 +3065,7 @@ function persistChatState() {
     sortChatList(chats);
     
     const list = document.getElementById('chat-list');
+    closeChatActionsMenu();
     list.innerHTML = '';
     
     chats.forEach(chat => {
@@ -2859,87 +3103,45 @@ function persistChatState() {
       const title = document.createElement('span');
       title.textContent = displayTitle;
       title.classList.add('chat-title');
-      
-      const metaDiv = document.createElement('div');
-      metaDiv.classList.add('chat-meta');
-      
+
+      const tooltip = document.createElement('span');
+      tooltip.classList.add('chat-title-tooltip');
+      tooltip.textContent = displayTitle;
+
+      const actions = document.createElement('div');
+      actions.classList.add('chat-row-actions');
+
       if (dateText) {
-        const date = document.createElement('span');
-        date.textContent = dateText;
-        date.classList.add('chat-date');
-        metaDiv.appendChild(date);
+        const inlineDate = document.createElement('span');
+        inlineDate.classList.add('chat-inline-date');
+        inlineDate.textContent = dateText;
+        actions.appendChild(inlineDate);
       }
-      
-      // Button container
-      const buttonContainer = document.createElement('div');
-      buttonContainer.classList.add('chat-buttons');
-      
-      // Duplicate button
-      const dup = document.createElement('span');
-      dup.textContent = '⧉';
-      dup.classList.add('duplicate-chat');
-      dup.title = 'Duplicate this chat';
-      
-      dup.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        
-        try {
-          const res = await fetch('/chats/copy', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              source_filename: chat.filename,
-              new_title: '-Branch'
-            })
-          });
-          
-          const result = await res.json();
-          
-          if (result.error) {
-            throw new Error(result.error);
-          }
-          
-          console.log('✅ Chat duplicated:', result.new_filename);
 
-          // Inherit the source chat's colour on the new (duplicated) chat.
-          // This copies the key and explicitly preserves the source tint.
-          copyChatColor(chat.filename, result.new_filename);
+      if (chat.pinned) {
+        const pin = document.createElement('span');
+        pin.classList.add('chat-pin-indicator');
+        pin.textContent = '📌';
+        pin.title = 'Pinned chat';
+        actions.appendChild(pin);
+      }
 
-          await loadChats();
-          await openChat(result.new_filename);
-          
-        } catch (err) {
-          console.error('❌ Duplicate failed:', err);
-          hwuiToast('Failed to duplicate chat: ' + err.message, 'error');
-        }
-      });
-      
-      // Delete button
-      const del = document.createElement('span');
-      del.textContent = '✕';
-      del.classList.add('delete-chat');
-      
-      del.addEventListener('click', async (e) => {
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.classList.add('chat-actions-trigger');
+      more.textContent = '⋯';
+      more.title = 'Chat options';
+      more.setAttribute('aria-label', 'Chat options for ' + displayTitle);
+      more.setAttribute('aria-expanded', 'false');
+      more.addEventListener('click', (e) => {
         e.stopPropagation();
-        
-        if (!await hwuiConfirm('Delete "' + displayTitle + '"?')) return;
-        
-        try {
-          await fetch('/chats/delete/' + chat.filename, { method: 'DELETE' });
-          loadChats();
-        } catch (err) {
-          console.error('Delete failed:', err);
-          hwuiToast('Failed to delete chat.', 'error');
-        }
+        showChatActionsMenu(e, chat, displayTitle, dateText, more);
       });
-      
-      buttonContainer.appendChild(dup);
-      buttonContainer.appendChild(del);
-      metaDiv.appendChild(buttonContainer);
+      actions.appendChild(more);
       
       // Assemble
       contentDiv.appendChild(title);
-      contentDiv.appendChild(metaDiv);
+      contentDiv.appendChild(actions);
       
       // Open chat on click - USE extractCharacterFromFilename()
       li.addEventListener('click', () => {
@@ -2978,12 +3180,230 @@ function persistChatState() {
       });
       
       li.appendChild(contentDiv);
+      li.appendChild(tooltip);
       list.appendChild(li);
     });
 
     // Apply saved colours after list is rendered
     applyChatColors();
   }
+
+  function closeChatActionsMenu() {
+    const menu = document.getElementById('chat-actions-menu');
+    if (menu) menu.remove();
+    document.querySelectorAll('.chat-actions-trigger[aria-expanded="true"]').forEach(button => {
+      button.setAttribute('aria-expanded', 'false');
+      const row = button.closest('.chat-item');
+      if (row) row.classList.remove('menu-open');
+    });
+  }
+
+  function addChatMenuButton(menu, label, handler, className = '') {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'chat-menu-item' + (className ? ' ' + className : '');
+    button.textContent = label;
+    button.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      closeChatActionsMenu();
+      await handler(e);
+    });
+    menu.appendChild(button);
+  }
+
+  async function copySidebarChat(chat, copyKind) {
+    try {
+      const res = await fetch('/chats/copy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_filename: chat.filename,
+          copy_kind: copyKind
+        })
+      });
+      const result = await res.json();
+      if (!res.ok || result.error) throw new Error(result.error || 'Copy failed');
+
+      copyChatColor(chat.filename, result.new_filename);
+      await loadChats();
+      await openChat(result.new_filename);
+    } catch (err) {
+      console.error('Chat copy failed:', err);
+      hwuiToast('Failed to ' + copyKind + ' chat: ' + err.message, 'error');
+    }
+  }
+
+  async function toggleSidebarChatPin(chat) {
+    try {
+      const res = await fetch('/chats/pin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: chat.filename, pinned: !chat.pinned })
+      });
+      const result = await res.json();
+      if (!res.ok || result.error) throw new Error(result.error || 'Pin failed');
+      await loadChats();
+    } catch (err) {
+      console.error('Pin chat failed:', err);
+      hwuiToast('Failed to update pin: ' + err.message, 'error');
+    }
+  }
+
+  async function moveSidebarChat(chat, targetProject, targetLabel) {
+    try {
+      const res = await fetch('/chats/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: chat.filename, target_project: targetProject })
+      });
+      const result = await res.json();
+      if (!res.ok || result.error) throw new Error(result.error || 'Move failed');
+
+      // The server renames on collision — carry the colour key across if it did.
+      if (result.new_filename && result.new_filename !== chat.filename) {
+        copyChatColor(chat.filename, result.new_filename);
+        setChatColor(chat.filename, null);
+      }
+
+      // The chat now lives in another folder, so an open copy of it would keep
+      // autosaving back into THIS folder and recreate the file. Clear the pane.
+      if (currentChatFilename === chat.filename) {
+        currentChatFilename = null;
+        document.getElementById('chat').innerHTML = '';
+        window.loadedChat = [];
+        localStorage.removeItem('lastOpenChat');
+        localStorage.removeItem('currentChatFilename');
+      }
+
+      await loadChats();
+      hwuiToast('Moved to ' + targetLabel, 'success');
+    } catch (err) {
+      console.error('Move chat failed:', err);
+      hwuiToast('Failed to move chat: ' + err.message, 'error');
+    }
+  }
+
+  async function showMoveToFolderMenu(chat, trigger) {
+    closeChatActionsMenu();
+
+    const menu = document.createElement('div');
+    menu.id = 'chat-actions-menu';
+    menu.dataset.filename = chat.filename;
+    menu.setAttribute('role', 'menu');
+
+    const header = document.createElement('div');
+    header.className = 'chat-menu-date';
+    header.textContent = 'Move to folder';
+    menu.appendChild(header);
+
+    const listWrap = document.createElement('div');
+    listWrap.className = 'chat-menu-scroll';
+    menu.appendChild(listWrap);
+
+    document.body.appendChild(menu);
+    trigger.setAttribute('aria-expanded', 'true');
+    trigger.closest('.chat-item').classList.add('menu-open');
+
+    const position = () => {
+      const triggerRect = trigger.getBoundingClientRect();
+      const menuRect = menu.getBoundingClientRect();
+      const left = Math.max(8, Math.min(triggerRect.right - menuRect.width, window.innerWidth - menuRect.width - 8));
+      const top = Math.max(8, Math.min(triggerRect.bottom + 4, window.innerHeight - menuRect.height - 8));
+      menu.style.left = left + 'px';
+      menu.style.top = top + 'px';
+    };
+    position();
+
+    let projects = [];
+    try {
+      const res = await fetch('/projects/list');
+      const data = await res.json();
+      projects = data.projects || [];
+    } catch (err) {
+      console.error('Failed to load projects for move menu:', err);
+    }
+
+    // The menu can be dismissed while the fetch is in flight.
+    if (!document.body.contains(menu)) return;
+
+    const destinations = projects
+      .filter(p => p.name !== activeProjectName)
+      .map(p => ({ value: p.name, label: '📁 ' + (p.display_name || p.name) }));
+
+    // Global chats is only a destination when we're currently inside a project.
+    if (activeProjectName) {
+      destinations.unshift({ value: null, label: '🏠 Global chats' });
+    }
+
+    if (!destinations.length) {
+      const empty = document.createElement('div');
+      empty.className = 'chat-menu-empty';
+      empty.textContent = 'No other folders';
+      listWrap.appendChild(empty);
+    } else {
+      destinations.forEach(dest => {
+        addChatMenuButton(listWrap, dest.label, () => moveSidebarChat(chat, dest.value, dest.label.replace(/^\S+\s/, '')));
+      });
+    }
+
+    position();
+  }
+
+  async function deleteSidebarChat(chat, displayTitle) {
+    if (!await hwuiConfirm('Delete "' + displayTitle + '"?')) return;
+    try {
+      const res = await fetch('/chats/delete/' + encodeURIComponent(chat.filename), { method: 'DELETE' });
+      const result = await res.json();
+      if (!res.ok || result.error) throw new Error(result.error || 'Delete failed');
+      await loadChats();
+    } catch (err) {
+      console.error('Delete failed:', err);
+      hwuiToast('Failed to delete chat: ' + err.message, 'error');
+    }
+  }
+
+  function showChatActionsMenu(e, chat, displayTitle, dateText, trigger) {
+    const existing = document.getElementById('chat-actions-menu');
+    if (existing && existing.dataset.filename === chat.filename) {
+      closeChatActionsMenu();
+      return;
+    }
+    closeChatActionsMenu();
+
+    const menu = document.createElement('div');
+    menu.id = 'chat-actions-menu';
+    menu.dataset.filename = chat.filename;
+    menu.setAttribute('role', 'menu');
+
+    const date = document.createElement('div');
+    date.className = 'chat-menu-date';
+    date.textContent = dateText ? 'Date · ' + dateText : 'Date unavailable';
+    menu.appendChild(date);
+
+    addChatMenuButton(menu, '📋 Duplicate', () => copySidebarChat(chat, 'duplicate'));
+    addChatMenuButton(menu, '🌿 Branch', () => copySidebarChat(chat, 'branch'));
+    addChatMenuButton(menu, chat.pinned ? '📌 Unpin chat' : '📌 Pin chat', () => toggleSidebarChatPin(chat));
+    addChatMenuButton(menu, '📁 Move to folder…', () => showMoveToFolderMenu(chat, trigger));
+    addChatMenuButton(menu, '🎨 Colour', (clickEvent) => showColorMenu(clickEvent, chat.filename));
+    addChatMenuButton(menu, '🗑 Delete', () => deleteSidebarChat(chat, displayTitle), 'danger');
+
+    document.body.appendChild(menu);
+    const triggerRect = trigger.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    const left = Math.max(8, Math.min(triggerRect.right - menuRect.width, window.innerWidth - menuRect.width - 8));
+    const top = Math.max(8, Math.min(triggerRect.bottom + 4, window.innerHeight - menuRect.height - 8));
+    menu.style.left = left + 'px';
+    menu.style.top = top + 'px';
+    trigger.setAttribute('aria-expanded', 'true');
+    trigger.closest('.chat-item').classList.add('menu-open');
+  }
+
+  document.addEventListener('click', (e) => {
+    const menu = document.getElementById('chat-actions-menu');
+    if (menu && !menu.contains(e.target) && !e.target.closest('.chat-actions-trigger')) {
+      closeChatActionsMenu();
+    }
+  });
   
   // ==================================================
   // EDIT SPECIFIC MESSAGE (inline)
@@ -3113,26 +3533,30 @@ function persistChatState() {
     const sel = document.getElementById('chat-sort-select');
     if (sel && sel.value !== sortMode) sel.value = sortMode;
 
-    if (sortMode === 'newest') {
-      chats.sort((a, b) => {
+    const sortWithinPins = (a, b) => {
+      if (sortMode === 'newest') {
         const da = parseDateFromFilename(a.filename) ?? (a.modified * 1000);
         const db = parseDateFromFilename(b.filename) ?? (b.modified * 1000);
         if (db !== da) return db - da;
         // Same date: fall back to mtime for within-day ordering
         return b.modified - a.modified;
-      });
-    } else if (sortMode === 'oldest') {
-      chats.sort((a, b) => {
+      } else if (sortMode === 'oldest') {
         const da = parseDateFromFilename(a.filename) ?? (a.created * 1000);
         const db = parseDateFromFilename(b.filename) ?? (b.created * 1000);
         if (da !== db) return da - db;
         return a.created - b.created;
-      });
-    } else if (sortMode === 'most_recent') {
-      chats.sort((a, b) => b.modified - a.modified);
-    } else if (sortMode === 'alphabetical') {
-      chats.sort((a, b) => a.title.localeCompare(b.title));
-    }
+      } else if (sortMode === 'most_recent') {
+        return b.modified - a.modified;
+      } else if (sortMode === 'alphabetical') {
+        return a.title.localeCompare(b.title);
+      }
+      return 0;
+    };
+
+    chats.sort((a, b) => {
+      if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
+      return sortWithinPins(a, b);
+    });
   }
   
   // ==================================================
@@ -3517,10 +3941,15 @@ async function openChat(filename) {
     
     console.log('✅ Chat opened successfully:', filename);
     
+    hideOpeningQuestions();
+
     // ✅ FIXED: Only display opening line if chat is actually empty
     if (data.messages.length === 0) {
       displayOpeningLineInChat();
       displayRpOpenerInChat();
+    }
+    if (data.messages.every(message => message.is_opening_line)) {
+      displayOpeningQuestions();
     }
     
   } catch (err) {
@@ -3989,6 +4418,7 @@ async function openChat(filename) {
     const hasDocs = window.attachedDocuments && window.attachedDocuments.length > 0;
 
     if (!input && !hasImages && !hasDocs) return;
+    hideOpeningQuestions();
 
     // Document text the model will read — folded into this turn's content,
     // wrapped in [ATTACHED DOCUMENT: …] markers. One-shot: it lives in this
@@ -5317,6 +5747,21 @@ async function stopGeneration() {
   // OPENING LINE MODAL - DISK-BASED STORAGE
   // ==================================================
 
+  function switchOpeningModalTab(tabName) {
+    const showQuestions = tabName === 'questions';
+    const linesTab = document.getElementById('opening-lines-tab');
+    const questionsTab = document.getElementById('opening-questions-tab');
+    const linesPanel = document.getElementById('opening-lines-panel');
+    const questionsPanel = document.getElementById('opening-questions-panel');
+
+    linesTab.classList.toggle('active', !showQuestions);
+    questionsTab.classList.toggle('active', showQuestions);
+    linesTab.setAttribute('aria-selected', showQuestions ? 'false' : 'true');
+    questionsTab.setAttribute('aria-selected', showQuestions ? 'true' : 'false');
+    linesPanel.hidden = showQuestions;
+    questionsPanel.hidden = !showQuestions;
+  }
+
   async function openOpeningLineModal() {
     const modal = document.getElementById('opening-line-modal');
     const dropdown = document.getElementById('character-select');
@@ -5333,16 +5778,23 @@ async function stopGeneration() {
       const data = await res.json();
       
       document.getElementById('opening-line-enabled').checked = data.enabled;
+      document.getElementById('opening-questions-enabled').checked = data.questions_enabled === true;
       
       let lines = data.lines || [];
+      let questions = data.questions || [];
       
       // If no lines exist, add one empty field
       if (lines.length === 0) {
         lines = [''];
       }
+      if (questions.length === 0) {
+        questions = [''];
+      }
       
-      // Render the lines
+      // Render both tabs and open on the existing opening-lines view
       renderOpeningLines(lines);
+      renderOpeningQuestions(questions);
+      switchOpeningModalTab('lines');
       
       modal.style.display = 'block';
       
@@ -5399,7 +5851,7 @@ async function stopGeneration() {
     deleteBtn.textContent = '🗑️';
     deleteBtn.title = 'Delete this line';
     deleteBtn.onclick = function() {
-      const items = document.querySelectorAll('.opening-line-item');
+      const items = document.querySelectorAll('#opening-lines-container .opening-line-item');
       if (items.length === 1) {
         hwuiToast('You must have at least one opening line field.', 'info');
         return;
@@ -5414,6 +5866,66 @@ async function stopGeneration() {
     textarea.focus();
   }
 
+  function renderOpeningQuestions(questions) {
+    const container = document.getElementById('opening-questions-container');
+    container.innerHTML = '';
+
+    questions.forEach((question, index) => {
+      const questionDiv = document.createElement('div');
+      questionDiv.className = 'opening-line-item opening-question-item';
+
+      const textarea = document.createElement('textarea');
+      textarea.value = question;
+      textarea.placeholder = `Opening question ${index + 1}...`;
+      textarea.dataset.index = index;
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.textContent = '\u{1F5D1}\uFE0F';
+      deleteBtn.title = 'Delete this question';
+      deleteBtn.onclick = function() {
+        if (container.querySelectorAll('.opening-question-item').length === 1) {
+          hwuiToast('You must have at least one opening question field.', 'info');
+          return;
+        }
+        questionDiv.remove();
+      };
+
+      questionDiv.appendChild(textarea);
+      questionDiv.appendChild(deleteBtn);
+      container.appendChild(questionDiv);
+    });
+  }
+
+  function addOpeningQuestionField() {
+    const container = document.getElementById('opening-questions-container');
+    if (container.querySelectorAll('.opening-question-item').length >= 8) {
+      hwuiToast('You can add up to eight opening questions.', 'info');
+      return;
+    }
+
+    const questionDiv = document.createElement('div');
+    questionDiv.className = 'opening-line-item opening-question-item';
+
+    const textarea = document.createElement('textarea');
+    textarea.placeholder = 'New opening question...';
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.textContent = '\u{1F5D1}\uFE0F';
+    deleteBtn.title = 'Delete this question';
+    deleteBtn.onclick = function() {
+      if (container.querySelectorAll('.opening-question-item').length === 1) {
+        hwuiToast('You must have at least one opening question field.', 'info');
+        return;
+      }
+      questionDiv.remove();
+    };
+
+    questionDiv.appendChild(textarea);
+    questionDiv.appendChild(deleteBtn);
+    container.appendChild(questionDiv);
+    textarea.focus();
+  }
+
   async function saveOpeningLines() {
     const dropdown = document.getElementById('character-select');
     const charName = dropdown.value;
@@ -5424,15 +5936,26 @@ async function stopGeneration() {
     }
     
     const enabled = document.getElementById('opening-line-enabled').checked;
+    const questionsEnabled = document.getElementById('opening-questions-enabled').checked;
     
     // Collect all opening lines from textareas
     const textareas = document.querySelectorAll('#opening-lines-container textarea');
     const lines = Array.from(textareas)
       .map(ta => ta.value.trim())
       .filter(line => line.length > 0);
+    const questionTextareas = document.querySelectorAll('#opening-questions-container textarea');
+    const questions = Array.from(questionTextareas)
+      .map(ta => ta.value.trim())
+      .filter(question => question.length > 0)
+      .slice(0, 8);
     
     if (enabled && lines.length === 0) {
       hwuiToast('Please add at least one opening line or disable the feature.', 'info');
+      return;
+    }
+    if (questionsEnabled && questions.length === 0) {
+      switchOpeningModalTab('questions');
+      hwuiToast('Please add at least one opening question or disable the feature.', 'info');
       return;
     }
     
@@ -5444,7 +5967,9 @@ async function stopGeneration() {
         body: JSON.stringify({
           character: charName,
           enabled: enabled,
-          lines: lines
+          lines: lines,
+          questions_enabled: questionsEnabled,
+          questions: questions
         })
       });
       
@@ -5454,7 +5979,7 @@ async function stopGeneration() {
         throw new Error(result.error);
       }
       
-      console.log(`✅ Saved ${lines.length} opening line(s) for ${charName}`);
+      console.log(`✅ Saved ${lines.length} opening line(s) and ${questions.length} opening question(s) for ${charName}`);
       
       closeOpeningLineModal();
       
@@ -5464,6 +5989,10 @@ async function stopGeneration() {
         displayOpeningLineInChat();
         displayRpOpenerInChat();
       }
+      if (Array.isArray(window.loadedChat) &&
+          window.loadedChat.every(message => message.is_opening_line)) {
+        displayOpeningQuestions();
+      }
       
     } catch (err) {
       console.error('Failed to save opening lines:', err);
@@ -5471,13 +6000,6 @@ async function stopGeneration() {
     }
   }
 
-  // Close modal when clicking outside
-  window.onclick = function(event) {
-    const modal = document.getElementById('opening-line-modal');
-    if (event.target === modal) {
-      closeOpeningLineModal();
-    }
-  };
 // ==================================================
 // CLEAR CHAT (clear the actual file contents)
 // ==================================================
@@ -5512,6 +6034,7 @@ async function stopGeneration() {
         const chat = document.getElementById('chat');
         if (chat) chat.innerHTML = '';
         displayOpeningLineInChat();
+        displayOpeningQuestions();
         displayRpOpenerInChat();
       }
 
@@ -5572,6 +6095,7 @@ async function stopGeneration() {
       
       // ✅ RE-DISPLAY OPENING LINE AFTER CLEAR
       displayOpeningLineInChat();
+      displayOpeningQuestions();
       displayRpOpenerInChat();
       
     } catch (err) {
@@ -6125,12 +6649,15 @@ async function stopGeneration() {
               cleanup(value);
           }
           function onKey(e) {
-              if (e.key === 'Escape') { e.preventDefault(); cleanup(null); }
+              if (e.key === 'Escape') {
+                  e.preventDefault();
+                  e.stopImmediatePropagation();
+                  cleanup(null);
+              }
               else if (e.key === 'Enter') { e.preventDefault(); submit(); }
           }
 
           document.addEventListener('keydown', onKey, true);
-          backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) cleanup(null); });
           cancelBtn.addEventListener('click', () => cleanup(null));
           saveBtn.addEventListener('click', submit);
           setTimeout(() => input.focus(), 0);
@@ -6273,7 +6800,11 @@ async function stopGeneration() {
           try { if (prevFocus && prevFocus.focus) prevFocus.focus(); } catch (_) {}
       }
       function onKey(e) {
-          if (e.key === 'Escape') { e.preventDefault(); cleanup(); }
+          if (e.key === 'Escape') {
+              e.preventDefault();
+              e.stopImmediatePropagation();
+              cleanup();
+          }
       }
       function showStatus(html, color) {
           statusBox.style.display = 'block';
@@ -6350,7 +6881,6 @@ async function stopGeneration() {
       }
 
       document.addEventListener('keydown', onKey, true);
-      backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) cleanup(); });
       cancelBtn.addEventListener('click', cleanup);
       genBtn.addEventListener('click', generate);
       setTimeout(() => briefInput.focus(), 0);
@@ -7254,6 +7784,7 @@ function showAutoMemoryToast(character, title, undoToken) {
       
       // ✅ NOW display opening line with correct character loaded
       displayOpeningLineInChat();
+      displayOpeningQuestions();
       displayRpOpenerInChat();
       
       console.log('✅ Ready for new chat with', selectedChar);
@@ -8298,13 +8829,35 @@ document.addEventListener('click', (e) => {
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    const modalClosers = [
+      ['paste-transcript-modal', 'closePasteTranscriptModal'],
+      ['document-viewer-modal', 'closeDocumentViewer'],
+      ['brave-key-modal', 'closeBraveKeyModal'],
+      ['opening-line-modal', 'closeOpeningLineModal'],
+      ['global-docs-modal', 'closeGlobalDocsModal'],
+      ['memory-modal', 'closeMemoryModal'],
+      ['project-modal', 'closeProjectModal'],
+      ['author-note-modal', 'closeAuthorNote']
+    ];
+    for (const [modalId, closeFunction] of modalClosers) {
+      const modal = document.getElementById(modalId);
+      if (!modal || getComputedStyle(modal).display === 'none') continue;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (typeof window[closeFunction] === 'function') {
+        window[closeFunction]();
+      } else {
+        modal.style.display = 'none';
+      }
+      return;
+    }
+
+    closeChatActionsMenu();
     hideColorMenu();
     hideProjectColorMenu();
     const _ccm = document.getElementById('chat-char-menu');
     if (_ccm) _ccm.style.display = 'none';
     closeAvatarLightbox();
-    var pasteModal = document.getElementById('paste-transcript-modal');
-    if (pasteModal && pasteModal.style.display === 'flex') closePasteTranscriptModal();
   }
 });
 

@@ -10,6 +10,78 @@ from PIL.PngImagePlugin import PngInfo
 # Blueprint setup
 # --------------------------------------------------
 extra = Blueprint("extra", __name__)
+APP_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def _chat_filename_belongs_to_character(filename, character_name):
+    """Match current and legacy chat filenames without catching longer names."""
+    if not filename.lower().endswith(".txt"):
+        return False
+    stem = filename[:-4].casefold()
+    name = character_name.strip().casefold()
+    return bool(name) and (
+        stem == name
+        or stem.startswith(name + " - ")
+        or stem.startswith(name + "_chat_")
+    )
+
+
+def _all_chat_directories(app_root=APP_ROOT):
+    """Yield the legacy global chat folder and every project chat folder."""
+    root = os.path.realpath(app_root)
+    candidates = [os.path.join(root, "chats")]
+    projects_dir = os.path.join(root, "projects")
+    if os.path.isdir(projects_dir):
+        for entry in os.scandir(projects_dir):
+            if entry.is_dir():
+                candidates.append(os.path.join(entry.path, "chats"))
+
+    for candidate in candidates:
+        if not os.path.isdir(candidate):
+            continue
+        resolved = os.path.realpath(candidate)
+        try:
+            if os.path.commonpath([root, resolved]) != root:
+                continue
+        except ValueError:
+            continue
+        yield resolved
+
+
+def _delete_character_chats(character_name, app_root=APP_ROOT):
+    """Delete filename-bound chats across global and project chat folders."""
+    deleted = []
+    for chat_dir in _all_chat_directories(app_root):
+        deleted_in_dir = []
+        for filename in os.listdir(chat_dir):
+            if not _chat_filename_belongs_to_character(filename, character_name):
+                continue
+            chat_path = os.path.join(chat_dir, filename)
+            if not os.path.isfile(chat_path):
+                continue
+            os.remove(chat_path)
+            deleted.append(chat_path)
+            deleted_in_dir.append(filename)
+
+        if deleted_in_dir:
+            pins_path = os.path.join(chat_dir, ".pinned_chats.json")
+            try:
+                with open(pins_path, "r", encoding="utf-8") as f:
+                    pins = json.load(f)
+                if isinstance(pins, list):
+                    deleted_names = set(deleted_in_dir)
+                    remaining = [name for name in pins if name not in deleted_names]
+                    if remaining != pins:
+                        temp_path = pins_path + ".tmp"
+                        with open(temp_path, "w", encoding="utf-8") as f:
+                            json.dump(sorted(set(remaining)), f, indent=2, ensure_ascii=False)
+                            f.write("\n")
+                        os.replace(temp_path, pins_path)
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                print(f"Could not prune chat pins in {chat_dir}: {e}")
+    return deleted
 
 # --------------------------------------------------
 # Restore previously saved chat
@@ -101,7 +173,12 @@ def get_opening_lines(character):
         filepath = os.path.join(opening_lines_dir, f"{character}.json")
 
         if not os.path.exists(filepath):
-            return jsonify({"enabled": False, "lines": []})
+            return jsonify({
+                "enabled": False,
+                "lines": [],
+                "questions_enabled": False,
+                "questions": []
+            })
 
         with open(filepath, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -165,11 +242,26 @@ def get_opening_lines(character):
                 substitute_placeholders(_ln, _char_label, _user_label) for _ln in _lines
             ]
 
+        _questions = data.get("questions", [])
+        if isinstance(_questions, list):
+            data["questions"] = [
+                substitute_placeholders(_question, _char_label, _user_label)
+                for _question in _questions
+            ]
+
+        data.setdefault("questions_enabled", False)
+        data.setdefault("questions", [])
+
         return jsonify(data)
         
     except Exception as e:
         print(f"âŒ Error loading opening lines for {character}: {e}")
-        return jsonify({"enabled": False, "lines": []})
+        return jsonify({
+            "enabled": False,
+            "lines": [],
+            "questions_enabled": False,
+            "questions": []
+        })
 
 
 @extra.route('/save_opening_lines', methods=['POST'])
@@ -180,6 +272,8 @@ def save_opening_lines():
         character = data.get("character")
         enabled = data.get("enabled", False)
         lines = data.get("lines", [])
+        questions_enabled = data.get("questions_enabled", False)
+        questions = data.get("questions", [])
         
         if not character:
             return jsonify({"error": "No character specified"}), 400
@@ -192,7 +286,9 @@ def save_opening_lines():
         with open(filepath, "w", encoding="utf-8") as f:
             json.dump({
                 "enabled": enabled,
-                "lines": lines
+                "lines": lines,
+                "questions_enabled": questions_enabled,
+                "questions": questions
             }, f, indent=2, ensure_ascii=False)
         
         print(f"âœ… Saved opening lines for {character}")
@@ -416,6 +512,9 @@ def import_character():
 def delete_character(n):
     """Delete a character and its associated files."""
     try:
+        deleted_chats = _delete_character_chats(n)
+        print(f"Deleted {len(deleted_chats)} chat(s) for character: {n}")
+
         # Delete character JSON
         char_path = os.path.join("characters", f"{n}.json")
         if os.path.exists(char_path):
@@ -444,7 +543,11 @@ def delete_character(n):
             
             print(f"âœ… Removed {n} from character index")
         
-        return jsonify({"status": "ok", "deleted": n})
+        return jsonify({
+            "status": "ok",
+            "deleted": n,
+            "deleted_chats": len(deleted_chats)
+        })
         
     except Exception as e:
         print(f"âŒ Delete failed: {e}")

@@ -24,6 +24,10 @@ import torch
 
 from flask import Flask, request, jsonify, send_file
 
+from tts_path_config import apply_tts_path_overrides
+
+apply_tts_path_overrides()
+
 # ─── TEXT CLEANING ─────────────────────────────────────────────────────────────
 
 ACRONYMS = {

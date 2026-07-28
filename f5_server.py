@@ -10,6 +10,10 @@ from threading import Lock
 from flask import Flask, request, send_file, jsonify
 import torch
 
+from tts_path_config import apply_tts_path_overrides
+
+apply_tts_path_overrides()
+
 # ----------------------------------------------------------------
 # PATH SETUP
 # ----------------------------------------------------------------

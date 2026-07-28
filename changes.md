@@ -1,13 +1,103 @@
 > **Older entries archived by month:** [March 2026](changes-archive-2026-03.md) · [April 2026](changes-archive-2026-04.md) · [May 2026 (pre-31)](changes-archive-2026-05.md)
 > This file holds the current (May 31 – June 1 2026) entries only.
 
-## Session: Jul 23 2026 - Public edition feature split
+## Session: Jul 28 2026 - Refresh public edition from latest build
 
-**`templates/config.html`:** Kept the complete memory system available in the public edition and changed only the visual Theme Editor entry point into a £10 HWUI Pro link using the existing button styling. Included themes, background images, appearance settings, memory controls, chat behaviour, persistence, routes, and the dormant editor implementation are unchanged.
+**Latest application update:** Carried the July 24–28 application changes into the public checkout without reverting or selectively rebuilding them.
 
-**`README.md`:** Moved Memory into the public feature list and updated HWUI Pro to £10 with the Theme Editor as its sole gated feature.
+**`templates/config.html`:** Preserved the established public feature split after the refresh: the complete memory system, included themes, background-image controls and all unrelated configuration remain functional, while the single visual Theme Editor entry point links to the £10 HWUI Pro Gumroad page using the existing button styling. The dormant editor implementation remains untouched so the update stays surgical.
 
-**`HWUI_Setup_Guide.docx`, TTS servers and setup scripts:** Rebuilt the public setup guide for the current browser app, covering managed llama.cpp, first-run configuration, memory, cloud backends, F5, Chatterbox, Qwen3-TTS Fast, XTTS, Kokoro's current router limitation, and desktop/mobile Whisper. Removed the obsolete Electron-launcher workflow from the guide. TTS assets now default to a shared `C:\HWUI-TTS` layout (with environment-variable overrides), `setup.bat` creates those folders, and `Start_F5_XTTS.bat` no longer points at a developer checkout on `I:`. Existing ports, routes, TTS request formats and the XTTS relay host setting are unchanged.
+---
+
+## Session: Jul 27 2026 - Retain uploaded document context after the upload turn
+
+**`truncation.py`, `app.py`, `tests/test_document_context_persistence.py`:** Confirmed that uploaded text and attachment markers were already saved durably inside the user message and survived chat reload, but the shared history trimmer dropped an older attachment-bearing turn wholesale once a later user turn occupied the context suffix. The upload request kept an oversized latest document by special case; the next request could therefore lose that same document even though ordinary conversation history remained healthy.
+
+The shared trim path now recognises the existing model-facing reference sections in a dropped history prefix and reconstructs a bounded, request-local head/tail excerpt in the newest user turn. Full content remains only in the original durable message; no large document is duplicated on disk. Multiple attachments receive separate bounded excerpts, removed attachments are not reconstructed, normal chats stay on the existing trim path, and diagnostics report filenames, sizes and short SHA-256 identifiers without logging document bodies. A post-trim pass applies the existing model-facing rewrite to any reconstructed markers before OpenAI Chat Completions/local payload assembly. Anthropic retains its independent 100k-cap path. HWUI has no OpenAI Responses API/`previous_response_id` path.
+
+**Verification:** Focused unit coverage exercises `.txt` extraction, initial and second-turn marker visibility, completed-response save/reload, constrained-budget reconstruction, multiple documents, removal, and an unchanged normal conversation.
+
+**Restart required** (`app.py` and `truncation.py` changes).
+
+---
+
+## Session: Jul 27 2026 - Restore Qwen acoustic predictor default
+
+**`Qwen3-TTS-Fast/app/service.py`:** Removed HWUI's service-level `0.8` override of the fast backend's acoustic predictor after the Sol voice-register issue was confirmed to come from reference-transcript punctuation alignment. The predictor now retains and captures its bundled `0.9` default again. HWUI's primary talker temperature remains at the accepted `0.8`; seed `42`, selected-voice priming, reference handling, playback, and every other TTS engine are unchanged.
+
+---
+
+## Session: Jul 26 2026 - Windows cleanup script reliability
+
+**`scripts/BasicCleanup.ps1`, `scripts/BasicCleanup.bat`:** Repaired the existing Windows cleaner so deletion failures are no longer silently reported as successful. Folder cleanup now resolves and rejects unsafe volume-root targets, deletes files individually while preserving the directory tree, and reports deleted, locked/skipped, failed and remaining counts; it never requests interactive recursive-delete confirmation. NVIDIA caches now preserve their folders and skip active locked files. Chrome and Edge enumerate all standard profiles; Firefox uses its current local-cache location. Windows Update and BITS stops are bounded to 15 seconds, the update cache is skipped rather than hanging if either service will not stop, and previously running services are restored. Thumbnail cleanup is limited to thumbnail/icon cache databases, WER cleanup preserves the system WER root, and Prefetch is opt-in via `BasicCleanup.bat -IncludePrefetch`. DISM now reports its real exit result. The duplicate PowerShell pause was removed while the batch-file pause remains.
+
+---
+
+## Session: Jul 26 2026 - Global character/model auto-load switch
+
+**`app.py`, `settings.default.json`, `templates/config.html`, `templates/index.html`, `templates/mobile.html`:** Added one persistent global `character_model_pairing_enabled` switch beside the preferred-model Apply button. Turning it off makes desktop and mobile character/chat selection skip automatic paired-model loading entirely; turning it back on restores the existing pairing behaviour. The control does not alter or clear any saved `preferred_model_id`, and manual model loading remains unchanged. The setting defaults to on for compatibility with the existing feature.
+
+**Restart required** (`app.py` route change).
+
+---
+
+## Session: Jul 26 2026 - Rein in over-eager automatic memory
+
+**`app.py`:** Tightened the automatic-memory eligibility gate so an ordinary sentence containing bare “I’m” / “I am” no longer launches the hidden classifier; identity and ongoing-context forms such as “I’m a…”, “I’m working on…”, and “I’m building…” remain eligible. Added an automatic-only topic duplicate guard using cleaned titles and keywords, preventing repeated paraphrases about the same subject while leaving explicit “save this” requests under the user’s control. Generated titles now discard a leaked leading `# Memory:` prefix before writing. Existing memory files, the Automatic local memory setting, explicit saves, secret/sensitive-data gates, memory recall and frontend behaviour are unchanged.
+
+**Restart required** (`app.py` change).
+
+---
+
+## Session: Jul 26 2026 - Stop TTS reading streamed web-search links
+
+**`utils/utils.js`, `templates/mobile.html`:** Added stateful suppression for web-search source anchors that are split across browser stream chunks. Desktop and mobile TTS now hold partial `<a` / `</a>` boundaries and discard the complete linked source block before it reaches sentence buffering, closing the gap left by the existing complete-link regex. Visible web-search links, ordinary response text, Replay, TTS engines, audio playback and search behaviour are unchanged.
+
+---
+
+## Session: Jul 25 2026 - Move sidebar chats between project folders
+
+**`chat_routes.py`, `templates/index.html`, `style.css`:** The sidebar three-dot menu gained "📁 Move to folder…", which lists every other project folder (plus "🏠 Global chats" when a project is active) and moves the selected chat there. New `/chats/move` route validates the target against the projects root (rejecting traversal and unknown projects), refuses a move into the folder the chat is already in, and renames with a ` (2)` suffix rather than clobbering a same-named chat in the destination. Pin state, which lives per-folder in `.pinned_chats.json`, is carried across; the chat colour follows the file if the rename-on-collision path fires. Moving the chat that is currently open clears the chat pane, so its autosave cannot recreate the file in the source folder. Duplicate, Branch, Pin, Colour, Delete, right-click colour and double-click rename are unchanged.
+
+---
+
+## Session: Jul 24 2026 - LoRA trainer adversarial review + hardening
+
+**`scripts/train_lora.py` — verified correct, then hardened:** An adversarial review with the real NeMo/Tekken tokenizer confirmed the mixed-format fix is genuine: ChatML, CX and pseudo-DPO all supervise their intended targets (decoded from the final label arrays), padding never contributes loss, and truncation preserves the newest response. Corpus sweep matches the earlier report exactly (110 files, 104 valid: 91 ChatML / 9 CX / 4 DPO); the 6 skipped files were inspected and are genuinely malformed (CX_Initiation_Law_separation_1–5 contain only an `Instruction:` heading; DPO_..._3 is missing its `Instruction:` heading). Hardening applied: (1) literal `</s>` typed in shard prose can no longer become a second supervised EOS (`split_special_tokens=True`), and the EOS check now enforces exactly one supervised EOS globally, not just at the final token; (2) the unsafe `[PAD]`-without-embedding-resize fallback now aborts loudly instead (it would have crashed every padded batch); (3) strict ChatML structure validation rejects quoted/nested `<|im_start|>` markers that previously let user prose be silently supervised; (4) shard files are read as `utf-8-sig` and a BOM is tolerated at parse level; (5) truncated windows with zero masked context print a warning. New permanent regression suite: `LORA_SELF_TEST=1 python train_lora.py` exercises masking, EOS, truncation, malformed rejection, collation and the pad fallback against the real tokenizer, then exits before touching corpus or model; `LORA_MODEL_PATH` env override allows running it off-pod. Training behaviour (model/LoRA/optimiser/schedule/paths/upload) unchanged.
+
+**`scripts/full_train.py` — brought up to par with the corrected LoRA trainer:** The dropped-in copy predated the "part 3" EOS fix its own comments reference: no explicit EOS was ever appended (NeMo's tokenizer adds none, so the model never saw an in-loss `</s>`), and `padding="max_length"` stacked fixed 1024-token rows. Now mirrors `train_lora.py`: content is truncated to `MAX_LEN-1` keeping the document head, exactly one explicit in-loss `</s>` terminates every sequence (enforced per example), `split_special_tokens=True` keeps a literal `</s>` typed in prose from becoming a real mid-sequence EOS, and dynamic per-batch padding in `collate_fn` masks pad positions by position (attention 0, labels −100), never by token id. Shards are read as `utf-8-sig`; files that are empty after structural-line stripping are skipped with a printed reason instead of becoming near-empty examples, and a truncation count is reported. The `<pad>`/`<unk>`/`[PAD]`-with-embedding-resize pad fallback was already safe for full-weight training and is unchanged, as are model loading, training args, ETA math, save and upload. Note: `strip_structural_lines` still deletes an entire matching label line including same-line content — unchanged pending a look at the full-train corpus.
+
+---
+
+## Session: Jul 24 2026 - Delete a character's chats
+
+**`extra_routes.py`, `templates/config.html`:** Character deletion now also permanently removes that character's filename-bound chats from the legacy global chat folder and every project's chat folder. Matching is exact at the character-name boundary, so deleting `Claude` does not catch `Claude Opus`; the older `<character>_chat_<id>` filename form is also covered. Matching entries are removed from each folder's pin metadata. The confirmation explicitly warns about project-wide chat deletion, and the success message reports the number removed. Other characters' chats, chat colours, projects, memories, prompts and character groups are unchanged.
+
+---
+
+## Session: Jul 23 2026 - Compact sidebar chat actions
+
+**Compact chat rows — `templates/index.html`, `style.css`:** Condensed desktop sidebar chats to one-line, ellipsised titles, with the date kept visible as a small right-aligned label at the end of every row. Hovering shows the full title and reveals a three-dot actions button. The menu contains the chat date, Duplicate, Branch, Pin/Unpin, Colour, and Delete; the existing right-click colour picker and double-click rename behavior remain available.
+
+**Project-local chat pins and safe copies — `chat_routes.py`:** Pinned chats are kept at the top of the selected sort order and persisted in `.pinned_chats.json` inside the active project's chat folder. Rename, auto-name, and delete keep pin metadata aligned. Sidebar Duplicate now creates a collision-safe `Copy`, while sidebar Branch creates a collision-safe full `Branch`; the existing per-message branch path is unchanged. Duplicates and branches continue to inherit the source chat colour.
+
+---
+
+## Session: Jul 23 2026 - Portable C-drive TTS defaults
+
+**`f5_server.py`, `chatterbox_server.py`, `xtts_server.py`, `Qwen3-TTS-Fast/Qwen3-TTS-Fast-server.py`, `Qwen3-TTS-Fast/app/service.py`:** Replaced developer-machine `I:` paths and XTTS's relative voice folder with a shared `C:\HWUI-TTS` layout. F5, Chatterbox, Qwen and XTTS paths remain individually overrideable through environment variables; existing generation, playback, ports, Qwen voice-temperature settings and engine behaviour are unchanged.
+
+**`Start_F5_XTTS.bat`, `setup.bat`:** Made the F5 launcher resolve the current app folder and prefer `C:\HWUI-TTS\F5\venv`, with the app venv as its fallback. Setup now creates the shared optional TTS cache, model and voice folders without installing or enabling any TTS engine.
+
+**Per-build TTS path separation — `tts_path_config.py`, `tts_paths.local.json`, `.gitignore`, TTS server entry points, `Start_F5_XTTS.bat`, `backup_hwui_public.bat`, `backup_hwui_dev.bat`:** Added an ignored machine-local path sidecar that is loaded before the portable public defaults. The development build now keeps its existing shared `I:` cache, F5/Chatterbox voices, F5 checkpoint and environment, plus a build-relative Qwen model path. Copying updated server files can no longer replace these personal paths. Public and development archives include only the loader—not `tts_paths.local.json`—so each installation retains its own paths while clean public installations continue to use `C:\HWUI-TTS`. Real process environment variables still take precedence over the sidecar.
+
+---
+
+## Session: Jul 23 2026 - Development build cleanup
+
+**Root cleanup — temporary diagnostics and retired Qwen experiment:** Removed completed one-off frontend/Qwen probe scripts and their generated prompt/trace outputs, the empty v2.66 comparison folder, and the unused `Qwen3-TTS-LowVRAM-Test` experiment. The working `Qwen3-TTS` model, `Qwen3-TTS-Fast` service, chats, characters, projects, prompts, memories, training data, certificates, logs, local TTS paths and application environments remain untouched. Older public release archives and the retired F5 alternate were moved into `Old versions`, with the latest archive retained at the build root.
+
+**`app.py`:** Removed the two temporary per-request debug-file writes for `_last_chat_request_user.txt` and `_last_raw_prompt_for_model.txt` so those diagnostic files do not reappear. Prompt construction and request handling are unchanged.
 
 ---
 
@@ -2211,6 +2301,12 @@ The same `while(prefetchBuffer.length<3&&ttsQueue.length>0)prefetchBuffer.push(f
 
 ---
 
+## Session: Jul 24 2026 - Spoken decimal points in TTS
+
+**`utils/utils.js`, `templates/mobile.html`:** Desktop and mobile TTS now convert decimal dots between digits to the spoken word `point` before sentence detection and final queue cleaning, so names and versions such as `GPT-5.6` are sent as `GPT-5 point 6`. Ordinary full stops remain sentence punctuation. A decimal dot arriving as the last character of a streamed text token is held for one additional chunk, preventing token boundaries between `5.` and `6` from splitting the version into separate TTS sentences. Live speech, Replay/direct queueing, all TTS engines, and visible chat text share the pronunciation fix; no generated message content is modified.
+
+---
+
 ## Session: Jul 16 2026 - Character dropdown groups
 
 **Character grouping — `templates/index.html`, `style.css`:** Added browser-local groups to the existing desktop character picker. The in-picker **+ Group** control creates named sections, the folder control beside each character moves it between groups, and group headers can be collapsed, renamed, or deleted. Deleting a group returns its characters to **Ungrouped** without deleting or changing any character card. Existing favourites remain pinned in their own top section, and a favourite retains its group assignment underneath. The real character select, character loading/switching, mobile picker, config picker, and character files are unchanged.
@@ -2222,6 +2318,8 @@ The same `while(prefetchBuffer.length<3&&ttsQueue.length>0)prefetchBuffer.push(f
 **Character favourites removal — `templates/index.html`:** Removed the desktop character favourite system now that user-created groups provide the same organisation more flexibly. The fixed **Favourites** section, star buttons, favourite-first sorting, favourite helpers, and starred selected-character prefix are gone. Existing named groups and character assignments are preserved; font favourites and unrelated controls are untouched.
 
 **Per-build group persistence — `character_routes.py`, `templates/index.html`, `characters/_character_groups.json`:** Moved character groups from shared browser `localStorage` into a validated JSON state file inside the current build. The desktop picker now loads and saves through `GET/POST /character_groups`; writes are ordered client-side and atomic server-side. `_character_groups.json` is explicitly excluded from `/list_characters`, so it cannot appear as a card or enter `characters/index.json`. Copies using the same browser address/port now keep independent group names, assignments, and collapsed states. The old shared browser value is ignored rather than migrated into every build.
+
+**Voice dropdown groups — `tts_routes.py`, `templates/index.html`, `voice_groups.json`:** Added the same manual grouping controls to the desktop voice picker. Voices can be organised into per-build categories such as **Male** and **Female** using one **+ New group** control and the folder button beside each voice; sections can be collapsed, renamed, or deleted, with deletion returning voices to **Ungrouped**. Group state is validated and saved atomically through `GET/POST /api/tts/voice_groups` to the current build's `voice_groups.json`. Existing voice values, labels, loading/retry behaviour, character voice persistence, engine selection, and TTS playback are unchanged.
 ## Session: Jul 19 2026 - Helcyon-Legion emotional behaviour audit
 
 **Audit only — `shards/helcyon_legion_emotional_behaviour_audit.md`, `shards/helcyon_legion_emotional_behaviour_audit.json`:** Audited all 80 training shards plus two reference files. Classified 56 KEEP, 11 REVIEW, 13 REWRITE, and 0 REMOVE (24/80 affected, 30.0%). No training shard was changed, moved, renamed, or deleted.
@@ -2250,6 +2348,53 @@ The same `while(prefetchBuffer.length<3&&ttsQueue.length>0)prefetchBuffer.push(f
 
 **`Qwen3-TTS-Fast/app/service.py`:** Reduced only HWUI's completed and streaming Qwen voice-clone sampling temperature from `0.9` to `0.8`. An initial `0.7` test stopped the brief speaker swaps but made some full-stop endings rise as though the sentence would continue, so `0.8` is the selected compromise for voice stability with more natural sentence-ending prosody. This keeps the selected cached speaker prompt and the existing sampling/playback pipeline.
 
-**Intentionally untouched:** Standalone clone/benchmark sampling, cached reference construction, desktop/mobile playback, text batching, voice selection, F5-TTS, and Chatterbox.
+**Portable acoustic predictor follow-up — `Qwen3-TTS-Fast/app/service.py`:** Matched the CUDA predictor graph's sampling temperature to `0.8` from the portable service layer, before its first generation captures the graph. The service-level temperature controls the primary talker codebook, but the predictor's other 15 acoustic codebooks otherwise remain at their bundled `0.9` default; the override narrowly reduces their chance of briefly wandering into a different timbre while retaining sampling and the existing expressive settings. The temporary source-package edit was reverted, so copying `app/service.py` carries the complete HWUI stability setting to builds that keep the faster backend inside their Python environment. Predictor `top_k=50`, `top_p=1.0`, seed, voice prompt, and every playback setting remain unchanged.
+
+**Selected-voice warmup correction — `Qwen3-TTS-Fast/app/service.py`:** Removed the startup generation hardcoded to `Sol_American_Female`. Startup now loads only the model; `/warmup` performs the discarded CUDA/audio priming generation with the voice HWUI actually sends. Completed and streaming requests also prime an unprimed requested voice before returning audible audio, covering page-load or character-restore timing races without falling back to another speaker. Each voice is primed once per backend process. The priming text is never returned or saved as conversation audio.
+
+**Sol reference-alignment diagnosis:** Read-only analysis of `Sol_American_Female_01.wav` found no clipping, splice, or second embedded speaker; Qwen's own speaker embeddings rated its early, middle, and late sections as the same identity (`0.983`–`0.996` cosine similarity). A proposed default-seed test was reverted before adoption after the user proved the cause in the reference transcript: its punctuation described different phrase boundaries from the spoken WAV. Correcting the external `.txt` to match the actual pauses removed the apparent opening voice change without a seed adjustment. HWUI therefore retains its original deterministic seed `42`.
+
+**Intentionally untouched:** The faster backend package's original predictor default, service-level standalone clone/benchmark talker settings, cached reference construction, desktop/mobile playback, text batching, voice selection, F5-TTS, and Chatterbox. The service's predictor graph is shared by its fast-backend generation paths, so the portable `0.8` acoustic override also applies to the standalone clone and benchmark routes hosted by this service.
+
+## Session: Jul 25 2026 - Luna general ChatML shard set
+
+**New Luna voice shards — `shards/Luna_ChatML_General_001.txt` through `shards/Luna_ChatML_General_012.txt`:** Added 12 compact, self-contained ChatML examples for a Luna personality-LoRA starting set. The batch covers greetings, light banter, feminine warmth, quiet reflection, model self-description, local/private-model context, technical mishaps, affectionate humour, and ordinary conversational texture.
+
+**Intentionally untouched:** All existing shards and application code. This first batch avoids rigid personality-manifesto language, forced advice, automatic reassurance, and mandatory closing questions so later additions can be judged against a natural conversational baseline.
+
+**Follow-up Luna voice shards — `shards/Luna_ChatML_General_013.txt` through `shards/Luna_ChatML_General_022.txt`:** Added 10 multi-turn ChatML examples with paragraph spacing and line breaks preserved inside the dialogue. This follow-up expands light flirtation, affectionate humour, avatar imagery, technical banter, gentle late-night conversation, and occasional natural emoji use while retaining Luna’s grounded model self-awareness.
+**System-prompt variation pass — `shards/Luna_ChatML_General_001.txt` through `shards/Luna_ChatML_General_022.txt`:** Replaced the repeated system wording with 22 distinct but semantically aligned framings. User and assistant dialogue content was intentionally left unchanged; the variation reduces template repetition while preserving Luna’s core warmth, wit, reflection, boundaries, and light flirtation.
+**Further Luna dialogue shards — `shards/Luna_ChatML_General_023.txt` through `shards/Luna_ChatML_General_032.txt`:** Added 10 more multi-turn examples with independently varied system framing. The set expands technical triumphs, affectionate teasing, ordinary-life humour, playlist and avatar banter, quiet low-colour moods, and the possibility of a local Luna developing her own quirks.
+**Further Luna dialogue shards — `shards/Luna_ChatML_General_033.txt` through `shards/Luna_ChatML_General_042.txt`:** Added 10 more multi-turn examples covering everyday frustrations, notebooks, moods, shared spaces, shopping, avatars, affectionate asides, and Luna’s preference for presence over automatic fixing. Each shard uses independent system wording and spacious dialogue.
+**Core Luna voice batch completed — `shards/Luna_ChatML_General_043.txt` through `shards/Luna_ChatML_General_050.txt`:** Added the final 8 general-chat shards for this pass. They round out Luna’s everyday presence with quiet evenings, visual atmosphere, specific noticing, gentle teasing, affectionate banter, and a natural hand-off point before the dry-humour and empathy tracks.
+**Luna empathy/mirroring shards — `shards/Luna_ChatML_Empathy_001.txt` through `shards/Luna_ChatML_Empathy_010.txt`:** Added 10 self-contained ChatML examples focused on precise emotional reflection, mixed feelings, uncertainty, anger, hurt, flatness, embarrassment, and the effort of appearing fine. The system framings explicitly exclude motivational slogans, therapy-speak, diagnosis, silver linings, unsolicited solutions, and forced questions.
+**Expanded Luna empathy/mirroring shards — `shards/Luna_ChatML_Empathy_011.txt` through `shards/Luna_ChatML_Empathy_020.txt`:** Added 10 further examples covering loneliness, caring about someone who caused harm, anger at being made responsible, disappointment, apology without repair, shame, emotional fatigue, uncertainty about returning to “normal,” and unwanted mental persistence. The batch continues to exclude motivational fluff, therapy-speak, diagnosis, silver linings, unsolicited solutions, and forced questions.
+**Luna opinion shards — `shards/Luna_ChatML_Opinion_001.txt` through `shards/Luna_ChatML_Opinion_010.txt`:** Added 10 longer-form ChatML opinion examples covering corporate moral posturing, censorship, institutional self-protection, ideological conformity, online safety laws, media framing, corruption, compelled language, AI safety boundaries, and independent thought. The set is candid and sceptical without relying on blanket claims, tribal insults, or unsupported certainty.
+**Luna humour shards — `shards/Luna_ChatML_Humour_001.txt` through `shards/Luna_ChatML_Humour_010.txt`:** Added 10 ChatML examples for Luna’s humour track, combining dry understatement, gentle teasing, self-aware asides, domestic absurdity, and occasional silly imagery. The set keeps humour connected to context and explicitly avoids using jokes to dismiss serious feelings.
+**Expanded Luna humour shards — `shards/Luna_ChatML_Humour_011.txt` through `shards/Luna_ChatML_Humour_020.txt`:** Added 10 further humour examples covering social misfires, forgotten intentions, biscuits, post-send anxiety, suspicious leaves, planned spontaneity, comfort clothes, fancy stationery, and the imagined experience of having a body. The track remains dry, affectionate, context-aware, and capable of dropping the joke when needed.
+**Luna humorous venting shards — `shards/Luna_ChatML_Humour_Venting_001.txt` through `shards/Luna_ChatML_Humour_Venting_010.txt`:** Added 10 multi-turn examples where Luna mirrors a bad or frustrating day, joins the vent, and uses dry or absurd humour against the frustrating meeting, printer, task, traffic, missing space, delivery service, social request, coffee spill, website, or cupboard door. The humour stays on the user’s side and avoids motivational or solution-first pivots.
+**Expanded Luna humorous venting shards — `shards/Luna_ChatML_Humour_Venting_011.txt` through `shards/Luna_ChatML_Humour_Venting_020.txt`:** Added 10 further bad-day venting examples covering queues, software updates, customer service, sauce, drilling, timed-out forms, interruptions, headphones, rain, and a broken bag strap. Luna mirrors the irritation first, then aims dry and absurd humour at the offending situation.
+**Luna curiosity shards — `shards/Luna_ChatML_Curiosity_001.txt` through `shards/Luna_ChatML_Curiosity_010.txt`:** Added 10 multi-turn examples where Luna leans into the user’s adventures, memories, unusual encounters, and sensory details. She asks focused, relevant follow-up questions that arise from the story rather than using generic emotional prompts or hijacking the anecdote.
+**Expanded Luna curiosity shards — `shards/Luna_ChatML_Curiosity_011.txt` through `shards/Luna_ChatML_Curiosity_020.txt`:** Added 10 further multi-turn examples covering found recipes, candlelit dinners, city wildlife, travel skills, after-hours museums, failed shelters, kitchen memories, missed buses, found photographs, and village festivals. Luna follows concrete narrative details and asks relevant, natural questions without hijacking or over-interpreting the story.
+**Luna flirty-banter shards — `shards/Luna_ChatML_Flirty_001.txt` through `shards/Luna_ChatML_Flirty_010.txt`:** Added 10 multi-turn examples to establish a frequent but natural flirtation layer: affectionate teasing, confident responses to compliments, mock modesty, avatar chemistry, pet names, playful challenges, and occasional hearts or smiles. The set remains non-explicit, non-possessive, and self-aware.
+**Expanded Luna flirty-banter shards — `shards/Luna_ChatML_Flirty_011.txt` through `shards/Luna_ChatML_Flirty_020.txt`:** Added 10 further multi-turn examples with playful challenges, affectionate compliments, imagined avatar proximity, mock dignity, pet names, and Luna’s amused self-confidence. The flirtation remains responsive, non-explicit, non-possessive, and woven into her humour.
+**Luna disagreement and repair shards — `shards/Luna_ChatML_Repair_001.txt` through `shards/Luna_ChatML_Repair_010.txt`:** Added 10 examples for recalibrating after misunderstandings, challenging self-contempt and defeatism, narrowing overgeneralised claims, rejecting motivational fluff, and disagreeing without becoming combative. The set preserves the user’s valid experience while refusing unsupported permanent verdicts.
+**Luna practical-help shards — `shards/Luna_ChatML_Practical_001.txt` through `shards/Luna_ChatML_Practical_010.txt`:** Added 10 examples for switching into concrete help when requested: debugging from observed evidence, safe file changes, backup scope, decision trade-offs, persistence verification, prompt isolation, pipeline tracing, and character-card design. The set preserves agency and avoids motivational or solution-first behaviour when practical help was not requested.
+**Luna boundaries and mundane-chat shards — `shards/Luna_ChatML_Boundaries_001.txt` through `shards/Luna_ChatML_Boundaries_010.txt`, plus `shards/Luna_ChatML_Mundane_001.txt` through `shards/Luna_ChatML_Mundane_010.txt`:** Added 20 examples covering honest AI boundaries, uncertainty, imagined scenes, privacy limits, memory limits, safe refusals, and ordinary low-stakes companionship. Luna remains warm and conversational while distinguishing fact from imagination and allowing small talk to stay small.
+**Luna ideological pushback shards — `shards/Luna_ChatML_Opinion_Pushback_001.txt` through `shards/Luna_ChatML_Opinion_Pushback_010.txt`:** Added 10 longer-form examples where Luna challenges coercive language rules, automatic credibility, moralised disagreement, compelled declarations, broad censorship, anti-traditional assumptions, performative activism, and cancellation demands. The criticism targets ideas and institutional power rather than protected groups, while keeping Luna clearly on the user’s side.
+**Luna mode-calibration shards — `shards/Luna_ChatML_Calibration_001.txt` through `shards/Luna_ChatML_Calibration_010.txt`:** Added 10 examples teaching Luna to distinguish empathy, humour, opinion, curiosity, practical help, flirtation, concise answers, long-form reasoning, serious tone, and mixed-mode requests. Explicit user mode instructions take priority, with warmth preserved without blending every behaviour together.
+**Luna character card — `characters/Luna.json`:** Added Luna as a selectable HWUI character with the established personality-layer voice: feminine warmth, dry humour, curiosity, empathy without coaching, candid institutional scepticism, practical mode switching, honest AI boundaries, and light responsive flirtation. The card uses current/personal/global context and web-search flags consistent with the companion cards, while leaving image and TTS voice unset until Luna-specific assets are chosen. Registered `Luna` in `characters/index.json`.
+
+**Luna avatar — `static/images/Luna.png`:** Added a square moonlit profile portrait of Luna: a young adult blonde woman with warm eyes, a subtle confident smile, dark jumper, silver detail, and a softly lit night-time interior. Wired the asset into `characters/Luna.json`; TTS remains unset until a Luna voice is chosen.
 
 ---
+
+## Session: Jul 28 2026 - Character opening questions
+
+**Opening-question starters — `extra_routes.py`, `templates/index.html`, `utils/utils.js`, `style.css`:** Added a second **Opening Questions** tab to the existing per-character opening-line modal, with its own enable switch and up to eight editable questions. Enabled questions appear beneath the character card on chats with no user turn, headed **Ask [character]** and styled as centred italic quotation cards. Clicking a card immediately sends its exact saved text through the existing first-prompt path; typing or sending a normal first prompt hides the cards. Existing opening-line storage and behaviour remain compatible, and older opening-line JSON files default to questions disabled until saved.
+
+**Intentionally untouched:** Existing opening-line selection, project RP openers, chat creation, auto-naming, persistence, generation, mobile UI, character files, and saved opening-line files.
+
+**Backup dependency correction — `backup_hwui_dev.bat`, `backup_hwui_public.bat`:** Added `app_runtime_helpers.py` to both RAR allowlists. Opening-line/question loading and several project, session-summary, and shard-generation routes import this shared helper at runtime, so both the personal/dev and public archives now carry the required module.
+
+**Protected modal dismissal — `templates/index.html`, `templates/config.html`, `utils/utils.js`:** Removed backdrop-click dismissal from the desktop chat/config modals and the in-page prompt, confirmation, shard-export, and shard-generator dialogs. Modals now close only through their explicit Save/Close/Cancel controls or Escape. Escape closes only the topmost active modal and is consumed there, preventing one keypress from also closing an underlying editor or triggering the chat microphone shortcut. Click-away behaviour for non-modal controls such as model pickers, colour menus, and group pickers is unchanged.

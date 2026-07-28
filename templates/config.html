@@ -378,7 +378,7 @@
       <button id="advanced-settings-btn" type="button" onclick="openAdvancedSettings()">Advanced Settings</button>
     </div>
 
-    <div id="advanced-settings-overlay" aria-hidden="true" onclick="onAdvancedSettingsOverlayClick(event)">
+    <div id="advanced-settings-overlay" aria-hidden="true">
       <div id="advanced-settings-modal" role="dialog" aria-modal="true" aria-labelledby="advanced-settings-title">
         <div class="advanced-settings-header">
           <div>
@@ -670,6 +670,7 @@
             <option value="">— No preferred model —</option>
           </select>
           <button id="apply-preferred-model-btn" type="button" onclick="saveCharacterPreferredModel()" disabled style="width:68px; height:36px; flex:0 0 68px; margin:0; padding:0 10px; border-radius:3px; background:#1a3a2a; border-color:#2a6a4a; color:#6f6;">Apply</button>
+          <button id="character-model-pairing-toggle" type="button" role="switch" aria-checked="true" onclick="toggleCharacterModelPairing()" title="Turn automatic character model loading on or off. Saved pairings are kept." style="width:88px; height:36px; flex:0 0 88px; margin:0; padding:0 8px; border-radius:3px;">Auto: On</button>
         </div>
 	  </div>
 
@@ -974,16 +975,26 @@
     if (trigger) trigger.focus({ preventScroll: true });
   }
 
-  function onAdvancedSettingsOverlayClick(event) {
-    if (event.target && event.target.id === 'advanced-settings-overlay') {
-      closeAdvancedSettings();
-    }
-  }
-
   document.addEventListener('keydown', function(event) {
     if (event.key === 'Escape') {
+      const cloudConfirm = document.getElementById('cloud-confirm-modal');
+      if (cloudConfirm && cloudConfirm.style.display !== 'none') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        cancelCloudConnect();
+        return;
+      }
+      const themeOverlay = document.getElementById('theme-modal-overlay');
+      if (themeOverlay && themeOverlay.style.display !== 'none') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        closeThemeModal();
+        return;
+      }
       const overlay = document.getElementById('advanced-settings-overlay');
       if (overlay && overlay.classList.contains('open')) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
         closeAdvancedSettings();
       }
     }
@@ -1404,6 +1415,60 @@
     if (button) {
       button.disabled = false;
       button.textContent = "Apply";
+    }
+  }
+
+  function renderCharacterModelPairingToggle(enabled) {
+    const button = document.getElementById("character-model-pairing-toggle");
+    if (!button) return;
+    button.dataset.enabled = enabled ? "true" : "false";
+    button.setAttribute("aria-checked", enabled ? "true" : "false");
+    button.textContent = enabled ? "Auto: On" : "Auto: Off";
+    button.style.background = enabled ? "#1a3a2a" : "#252525";
+    button.style.borderColor = enabled ? "#2a6a4a" : "#444";
+    button.style.color = enabled ? "#6f6" : "#aaa";
+  }
+
+  async function loadCharacterModelPairingToggle() {
+    const button = document.getElementById("character-model-pairing-toggle");
+    if (!button) return;
+    button.disabled = true;
+    try {
+      const response = await fetch("/character_model_pairing_enabled", { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok || data.status !== "ok") throw new Error(data.error || "Load failed");
+      renderCharacterModelPairingToggle(data.enabled !== false);
+    } catch (err) {
+      console.warn("Failed to load character model pairing setting:", err);
+      renderCharacterModelPairingToggle(true);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function toggleCharacterModelPairing() {
+    const button = document.getElementById("character-model-pairing-toggle");
+    if (!button || button.disabled) return;
+    const previous = button.dataset.enabled !== "false";
+    const enabled = !previous;
+    button.disabled = true;
+    renderCharacterModelPairingToggle(enabled);
+    try {
+      const response = await fetch("/character_model_pairing_enabled", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled })
+      });
+      const data = await response.json();
+      if (!response.ok || data.status !== "ok") throw new Error(data.error || "Save failed");
+      renderCharacterModelPairingToggle(data.enabled !== false);
+      hwuiToast(data.enabled ? "Automatic character model loading enabled." : "Automatic character model loading disabled.", "success");
+    } catch (err) {
+      console.error("Failed to save character model pairing setting:", err);
+      renderCharacterModelPairingToggle(previous);
+      hwuiToast("Failed to update automatic model loading.", "error");
+    } finally {
+      button.disabled = false;
     }
   }
 
@@ -1836,7 +1901,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
   }
   
   // Confirm deletion
-  if (!await hwuiConfirm(`Are you sure you want to permanently delete "${charName}"?\n\nThis will delete:\n- Character data\n- Character image\n- All associated files\n\nThis cannot be undone.`)) {
+  if (!await hwuiConfirm(`Are you sure you want to permanently delete "${charName}"?\n\nThis will delete:\n- Character data\n- Character image\n- All chats for this character across every project\n- All associated files\n\nThis cannot be undone.`)) {
     return;
   }
   
@@ -1853,7 +1918,8 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     }
     
     console.log(`✅ Deleted character: ${charName}`);
-    hwuiToast(`Character "${charName}" deleted successfully.`, 'success');
+    const deletedChats = Number(result.deleted_chats || 0);
+    hwuiToast(`Character "${charName}" and ${deletedChats} related chat${deletedChats === 1 ? '' : 's'} deleted successfully.`, 'success');
     
     // Reload character list and clear the form
     await loadCharacterList();
@@ -2094,6 +2160,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
                                       // independent of loadLlamaConfig (which early-returns
                                       // on a llama-config error and would otherwise skip this)
     loadBindCharacterList();
+    loadCharacterModelPairingToggle();
 
     // ⚠️ The three SP fields (#global-system-prompt / -example-dialog /
     // -post-history) are written by BOTH loadGlobalSystemPrompt (the globally
@@ -3052,7 +3119,7 @@ function hwuiToast(message, kind = 'success', ms = 2200) {
 }
 
 // hwuiConfirm(message[, opts]) → Promise<boolean>. In-page replacement for native
-// confirm(). Resolves true on confirm, false on cancel / backdrop / Escape.
+// confirm(). Resolves true on confirm, false on cancel / Escape.
 function hwuiConfirm(message, opts = {}) {
   return new Promise((resolve) => {
     const prevFocus = document.activeElement;
@@ -3082,11 +3149,14 @@ function hwuiConfirm(message, opts = {}) {
       resolve(result);
     }
     function onKey(e) {
-      if (e.key === 'Escape') { e.preventDefault(); cleanup(false); }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        cleanup(false);
+      }
       else if (e.key === 'Enter') { e.preventDefault(); cleanup(true); }
     }
     document.addEventListener('keydown', onKey, true);
-    backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) cleanup(false); });
     cancelBtn.addEventListener('click', () => cleanup(false));
     okBtn.addEventListener('click', () => cleanup(true));
     okBtn.focus();
@@ -3094,7 +3164,7 @@ function hwuiConfirm(message, opts = {}) {
 }
 
 // hwuiPrompt(message[, defaultValue]) → Promise<string|null>. In-page replacement
-// for native prompt(). Resolves entered text, or null on cancel / backdrop / Escape.
+// for native prompt(). Resolves entered text, or null on cancel / Escape.
 function hwuiPrompt(message, defaultValue = '', opts = {}) {
   return new Promise((resolve) => {
     const prevFocus = document.activeElement;
@@ -3128,11 +3198,14 @@ function hwuiPrompt(message, defaultValue = '', opts = {}) {
       resolve(result);
     }
     function onKey(e) {
-      if (e.key === 'Escape') { e.preventDefault(); cleanup(null); }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        cleanup(null);
+      }
       else if (e.key === 'Enter') { e.preventDefault(); cleanup(field.value); }
     }
     document.addEventListener('keydown', onKey, true);
-    backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) cleanup(null); });
     cancelBtn.addEventListener('click', () => cleanup(null));
     okBtn.addEventListener('click', () => cleanup(field.value));
     field.focus(); field.select();
@@ -4175,11 +4248,6 @@ function openThemeModal() {
 function closeThemeModal() {
   document.getElementById('theme-modal-overlay').style.display = 'none';
 }
-// Close on overlay click
-document.getElementById('theme-modal-overlay').addEventListener('mousedown', function(e) {
-  if (e.target === this) closeThemeModal();
-});
-
 // ---- Section definitions: each has a label, vars, and a preview renderer ----
 const THEME_SECTIONS = [
 

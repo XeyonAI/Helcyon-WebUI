@@ -8,15 +8,15 @@
 :root {
   --app-font-family: "Inter", "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
   --text-muted: #aaaaaa;
-  --text-dim: #666666;
-  --theme-editor-heading-text: #666666;
-  --theme-preview-muted-text: #555555;
+  --text-dim: #8c8c8c;
+  --theme-editor-heading-text: #7c7c7c;
+  --theme-preview-muted-text: #898989;
   --topbar-bg: #1a1a1b;
   --container-bg: #181818;
   --chat-bg: #0f0f0f;
   --project-header-bg: #0f0f0f;
   --sidebar-bg: #1e1f20;
-  --chat-item-bg: #2e2e2e;
+  --chat-item-bg: #1e1e1e;
   --sidebar-button-hover: #143257;
   --new-chat-btn-bg: #00335a;
   --new-chat-btn-text: #c8c8c8;

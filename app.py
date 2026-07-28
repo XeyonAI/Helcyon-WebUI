@@ -1978,7 +1978,9 @@ _AUTO_MEMORY_EXPLICIT_RE = re.compile(
     re.IGNORECASE,
 )
 _AUTO_MEMORY_CANDIDATE_RE = re.compile(
-    r"\b(?:i am|i'm|i prefer|i like|i love|i hate|i dislike|i live|i work|i study|"
+    r"\b(?:i(?: am|['’]m)\s+(?:an?\s+\w+|from|based in|living in|working (?:as|at|on)|"
+    r"studying|building|developing|creating)|"
+    r"i prefer|i like|i love|i hate|i dislike|i live|i work|i study|"
     r"my (?:name|birthday|job|work|partner|family|project|goal|preference|favourite|favorite|"
     r"hobby|interests|pronouns|timezone|city|country|pet)|"
     r"remember|memorize|save|store|log|note|jot|don't forget)\b",
@@ -2000,14 +2002,42 @@ def _auto_memory_normalize_words(text):
     return set(re.findall(r"[a-z0-9']+", (text or "").lower()))
 
 
-def _auto_memory_is_duplicate(blocks, title, body):
+_AUTO_MEMORY_TOPIC_STOPWORDS = {
+    "a", "an", "and", "about", "current", "interest", "latest", "memory",
+    "milestone", "new", "of", "s", "the", "update",
+}
+
+
+def _auto_memory_topic_words(title, keywords, ignored_words=None):
+    words = _auto_memory_normalize_words(
+        f"{title or ''} {' '.join(str(keyword) for keyword in (keywords or []))}"
+    )
+    words -= _AUTO_MEMORY_TOPIC_STOPWORDS
+    for ignored in ignored_words or ():
+        words -= _auto_memory_normalize_words(ignored)
+    return words
+
+
+def _auto_memory_is_duplicate(
+    blocks, title, body, keywords=None, suppress_same_topic=False, ignored_topic_words=None
+):
     new_words = _auto_memory_normalize_words(body)
+    new_topic_words = (
+        _auto_memory_topic_words(title, keywords, ignored_topic_words)
+        if suppress_same_topic else set()
+    )
     for block in blocks:
         if block.get("title", "").strip().lower() == title.strip().lower():
             return True
         old_words = _auto_memory_normalize_words(block.get("body", ""))
         union = new_words | old_words
         if union and len(new_words & old_words) / len(union) >= 0.72:
+            return True
+        if suppress_same_topic and len(
+            new_topic_words & _auto_memory_topic_words(
+                block.get("title", ""), block.get("keywords", []), ignored_topic_words
+            )
+        ) >= 2:
             return True
     return False
 
@@ -2139,6 +2169,13 @@ def _clean_auto_memory_field(text):
     text = re.sub(r"(?:<\|?|\|)?im_(?:start|end)\|?>?", "", text, flags=re.IGNORECASE)
     text = re.sub(r"(?:<\||\|>|<|>)\s*$", "", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _clean_auto_memory_title(text):
+    text = _clean_auto_memory_field(text)
+    return re.sub(
+        r"^(?:\s*#*\s*memory\s*:\s*)+", "", text, flags=re.IGNORECASE
+    ).strip()
 
 
 def _kw_match(kw, text_lower):
@@ -4618,12 +4655,6 @@ def chat():
     
     print(f"🔍 DEBUG: Extracted user_input: {user_input[:100] if user_input else '(empty)'}")
     
-    try:
-        with open("_last_chat_request_user.txt", "w", encoding="utf-8") as _reqf:
-            _reqf.write(str(user_input or ""))
-    except Exception as _reqe:
-        print(f"Could not write _last_chat_request_user.txt: {_reqe!r}", flush=True)
-
     character_name = data.get("character", "").strip()
     user_name = data.get("user_name", "User")
     
@@ -4928,7 +4959,13 @@ def chat():
     _temp_convo_pretrim = len([m for m in messages if m.get("role") != "system"])
     messages = trim_chat_history(messages, extra_system_overhead=_ex_overhead)
     _temp_convo_posttrim = len([m for m in messages if m.get("role") != "system"])  # ⏱️ TEMP
-    active_chat = [m for m in messages if m.get("role") in ("user", "assistant")]
+    active_chat = _rewrite_inline_attachments_for_model(
+        [m for m in messages if m.get("role") in ("user", "assistant")]
+    )
+    messages = [
+        *[m for m in messages if m.get("role") == "system"],
+        *active_chat,
+    ]
 
     print(f"🔍 DEBUG: After trimming, {len(messages)} messages remain")
 
@@ -5622,12 +5659,6 @@ def chat():
     # because the model's first token is often \n, which would then match
     # the stop sequence "\n<|im_start|>" and kill the response after 2 tokens.
     prompt = "\n".join(prompt_parts[:-1]) + "\n" + prompt_parts[-1]
-    try:
-        with open("_last_raw_prompt_for_model.txt", "w", encoding="utf-8") as _rpf:
-            _rpf.write(prompt)
-    except Exception as _rpe:
-        print(f"Could not write _last_raw_prompt_for_model.txt: {_rpe!r}", flush=True)
-
     # 🩺 Prompt structure check — always runs but only emits output when
     # something is wrong (malformed ChatML sequence, mid-conversation system
     # message, embedded ChatML fragment in user/assistant content). Cheap.
@@ -8414,6 +8445,32 @@ def unload_model():
     CURRENT_MODEL = None
     return jsonify({"status": "ok"})
 
+@app.route("/character_model_pairing_enabled", methods=["GET", "POST"])
+def character_model_pairing_enabled():
+    """Read or update the global auto-load gate without changing saved pairings."""
+    try:
+        settings_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "settings.json")
+        with open(settings_path, "r", encoding="utf-8") as f:
+            current_settings = json.load(f)
+
+        if request.method == "POST":
+            data = request.get_json(silent=True) or {}
+            enabled = data.get("enabled")
+            if not isinstance(enabled, bool):
+                return jsonify({"status": "error", "error": "enabled must be true or false"}), 400
+            current_settings["character_model_pairing_enabled"] = enabled
+            temp_path = settings_path + ".tmp"
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(current_settings, f, indent=2)
+            os.replace(temp_path, settings_path)
+        else:
+            enabled = current_settings.get("character_model_pairing_enabled", True)
+
+        return jsonify({"status": "ok", "enabled": bool(enabled)})
+    except Exception as e:
+        return jsonify({"status": "error", "error": str(e)}), 500
+
+
 @app.route("/get_llama_config", methods=["GET"])
 def get_llama_config():
     """Return current llama settings for the config page."""
@@ -9219,11 +9276,11 @@ def _auto_memory_capture_turn(character, user_text, assistant_text, recent_messa
         else:
             return {"status": "skipped", "reason": "model_declined"}, 200
 
-    title = _clean_auto_memory_field(candidate.get("title") or "Memory")[:80]
+    title = (_clean_auto_memory_title(candidate.get("title") or "Memory") or "Memory")[:80]
     summary = _clean_auto_memory_field(candidate.get("summary") or "")[:700]
     if force_save and re.search(r"\b(?:asked to remember|save request|memory command|recent context|conversation to summarize|transcript|saved conversation context)\b", f"{title} {summary}", re.IGNORECASE):
         candidate = _auto_memory_force_fallback_candidate(recent_messages, assistant_text, user_text, user_name)
-        title = _clean_auto_memory_field(candidate.get("title") or "Memory")[:80]
+        title = (_clean_auto_memory_title(candidate.get("title") or "Memory") or "Memory")[:80]
         summary = _clean_auto_memory_field(candidate.get("summary") or "")[:700]
     summary = re.sub(r"^(?:the\s+user|user)\b", user_name, summary, flags=re.IGNORECASE)
     keywords_value = candidate.get("keywords") or []
@@ -9249,7 +9306,14 @@ def _auto_memory_capture_turn(character, user_text, assistant_text, recent_messa
         if os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
                 existing = f.read()
-        if _auto_memory_is_duplicate(_parse_memory_blocks(existing), title, summary):
+        if _auto_memory_is_duplicate(
+            _parse_memory_blocks(existing),
+            title,
+            summary,
+            keywords,
+            suppress_same_topic=not explicit,
+            ignored_topic_words={user_name, f"{user_name}'s", f"{user_name}’s"},
+        ):
             return {"status": "skipped", "reason": "duplicate"}, 200
         with open(path, "a", encoding="utf-8") as f:
             if existing.strip():

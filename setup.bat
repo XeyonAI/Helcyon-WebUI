@@ -1,6 +1,6 @@
 @echo off
 echo ============================================
-echo   Helcyon-WebUI Setup
+echo   HWUI-Pro Setup
 echo ============================================
 echo.
 
@@ -68,7 +68,7 @@ echo   Setup complete!
 echo.
 echo   Your models folder is: C:\HWUI-Models
 echo   Drop your .gguf files there, then run
-echo   START_UI.bat to launch.
+echo   Start_AI.bat to launch.
 echo.
 echo   To change the models folder later, open
 echo   the Config page inside HWUI.
