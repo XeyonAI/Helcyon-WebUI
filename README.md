@@ -10,10 +10,10 @@
 <p align="center">
   <img src="static/images/Project_manager.jpg" alt="Project Manager" width="48%" />
   &nbsp;&nbsp;
-  <img src="static/images/benchmark_1.png" alt="Integrated Benchmark — Dashboard" width="48%" />
+  <img src="static/images/benchmark_1.png" alt="Integrated Benchmark — Overall Leaderboard" width="48%" />
 </p>
 <p align="center">
-  <img src="static/images/benchmark_2.png" alt="Integrated Benchmark — Prompt Pack Editor" width="48%" />
+  <img src="static/images/benchmark_2.png" alt="Integrated Benchmark — Results Dashboard" width="48%" />
   &nbsp;&nbsp;
   <img src="static/images/Theme_designer.jpg" alt="Theme Designer — Pro Edition" width="48%" />
 </p>
