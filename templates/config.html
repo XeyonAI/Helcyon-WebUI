@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <title>Helcyon Config</title>
-  <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/style.css?v=41" />
   <style>
     /* ---- Config Tab System (self-contained — do not rely on style.css for this) ---- */
     #config-tab-bar {
@@ -246,11 +246,11 @@
         </div>
       </div>
       <button id="model-display" onclick="toggleModelPicker()" title="Switch model" style="
-        background: transparent; border: 1px solid var(--modal-border, #2d394b);
+        background: var(--modal-bg, #1a1f2a); border: 1px solid var(--modal-border, #2d394b);
         border-radius: 20px; padding: 7px 16px 7px 14px; font-size: 14px; color: #ccc;
         cursor: pointer; display: flex; align-items: center; gap: 7px; white-space: nowrap;
         max-width: 280px; transition: border-color 0.15s, background 0.15s;
-      " onmouseover="this.style.borderColor='#4a6a8a'; this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.borderColor='var(--modal-border, #2d394b)'; this.style.background='transparent'">
+      " onmouseover="this.style.borderColor='#4a6a8a'; this.style.background='#202733'" onmouseout="this.style.borderColor='var(--modal-border, #2d394b)'; this.style.background='var(--modal-bg, #1a1f2a)'">
         <span id="model-display-name" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Loading...</span>
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="flex-shrink:0; opacity:0.45;"><polyline points="6 9 12 15 18 9"></polyline></svg>
       </button>
@@ -378,7 +378,7 @@
       <button id="advanced-settings-btn" type="button" onclick="openAdvancedSettings()">Advanced Settings</button>
     </div>
 
-    <div id="advanced-settings-overlay" aria-hidden="true" onclick="onAdvancedSettingsOverlayClick(event)">
+    <div id="advanced-settings-overlay" aria-hidden="true">
       <div id="advanced-settings-modal" role="dialog" aria-modal="true" aria-labelledby="advanced-settings-title">
         <div class="advanced-settings-header">
           <div>
@@ -596,6 +596,7 @@
         <button class="config-tab" onclick="switchConfigTab('create-char', this)">✨ New Character</button>
         <button class="config-tab" onclick="switchConfigTab('user-persona', this)">👤 User Persona</button>
         <button class="config-tab" onclick="switchConfigTab('appearance', this)">🎨 Appearance</button>
+        <button class="config-tab" onclick="switchConfigTab('helcyon-bench', this)">Helcyon-Bench</button>
       </div>
 
       <!-- ===== TAB: SYSTEM PROMPT ===== -->
@@ -670,6 +671,7 @@
             <option value="">— No preferred model —</option>
           </select>
           <button id="apply-preferred-model-btn" type="button" onclick="saveCharacterPreferredModel()" disabled style="width:68px; height:36px; flex:0 0 68px; margin:0; padding:0 10px; border-radius:3px; background:#1a3a2a; border-color:#2a6a4a; color:#6f6;">Apply</button>
+          <button id="character-model-pairing-toggle" type="button" role="switch" aria-checked="true" onclick="toggleCharacterModelPairing()" title="Turn automatic character model loading on or off. Saved pairings are kept." style="width:88px; height:36px; flex:0 0 88px; margin:0; padding:0 8px; border-radius:3px;">Auto: On</button>
         </div>
 	  </div>
 
@@ -920,8 +922,8 @@
 
         <!-- Colour mode info -->
         <div id="bg-colour-section">
-          <p style="font-size:12px; color:#888; margin:0 0 10px;">Create and customise themes with the visual Theme Editor in HWUI Pro.</p>
-          <button onclick="window.open('https://xeyonai.gumroad.com/l/bsmupk','_blank')" style="background:#1e3a4a; border:1px solid #2a5068; color:#a0c8d8; width:100%; font-size:13px; padding:10px 0; border-radius:6px; cursor:pointer;">🎨 Get Theme Editor — Pro £10</button>
+          <p style="font-size:12px; color:#888; margin:0 0 10px;">Background colour is controlled by <strong style="color:#aaa;">Chat Panel BG</strong> in the Theme Editor.</p>
+          <button onclick="openThemeModal()" style="background:#1e3a4a; border:1px solid #2a5068; color:#a0c8d8; width:100%; font-size:13px; padding:10px 0; border-radius:6px; cursor:pointer;">🎨 Open Theme Editor</button>
         </div>
 
         <!-- Image mode -->
@@ -933,13 +935,314 @@
 
       </div><!-- end tab-appearance -->
 
+      <!-- ===== TAB: HELCYON-BENCH ===== -->
+      <div id="tab-helcyon-bench" class="config-tab-panel">
+        <div class="bench-app-shell">
+          <aside class="bench-nav-rail">
+            <div class="bench-brand">
+              <span class="bench-brand-mark">HB</span>
+              <div><strong>Helcyon-Bench</strong><small>Free tools, Pro automation</small></div>
+            </div>
+
+            <section class="bench-rail-section">
+              <h4>View</h4>
+              <button type="button" class="bench-view-tab active" onclick="switchBenchView('test', this)">
+                <span>Benchmark Test</span><small>Prompts and candidates</small>
+              </button>
+              <button type="button" class="bench-view-tab" onclick="switchBenchView('results', this)">
+                <span>Results Dashboard</span><small>Benchmark strength map</small>
+              </button>
+              <button type="button" class="bench-view-tab" onclick="switchBenchView('leaderboard', this)">
+                <span>Overall Leaderboard</span><small>Cross-category ranking</small>
+              </button>
+            </section>
+
+            <section class="bench-rail-section">
+              <h4>Judge</h4>
+              <span class="bench-kicker">Active Judge Profile</span>
+              <strong id="bench-sidebar-profile">Loading...</strong>
+              <small id="bench-sidebar-category">Category: -</small>
+              <label for="bench-judge-endpoint">Judge endpoint</label>
+              <select id="bench-judge-endpoint" onchange="changeBenchJudgeEndpoint()"><option>Loading...</option></select>
+              <small id="bench-judge-endpoint-detail">Loading judge configuration...</small>
+              <label for="bench-judge-api-key">API key</label>
+              <div class="bench-api-key-row">
+                <input id="bench-judge-api-key" type="password" autocomplete="new-password" placeholder="Enter a replacement key">
+                <button type="button" onclick="toggleBenchJudgeApiKey(this)" title="Show API key" aria-label="Show API key">
+                  <svg class="bench-eye-show" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                  <svg class="bench-eye-hide" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" hidden><path d="M3 3l18 18"></path><path d="M10.6 10.6a2 2 0 0 0 2.8 2.8"></path><path d="M9.9 4.2A10.8 10.8 0 0 1 12 4c6.5 0 10 8 10 8a17 17 0 0 1-2.1 3.2"></path><path d="M6.6 6.6C3.7 8.5 2 12 2 12s3.5 8 10 8a9.8 9.8 0 0 0 4.1-.9"></path></svg>
+                </button>
+              </div>
+              <button type="button" class="bench-judge-save-key" onclick="saveBenchJudgeApiKey()">Save API Key</button>
+              <label for="bench-judge-model">Judge</label>
+              <select id="bench-judge-model" onchange="saveBenchJudgeSelection()"><option>Loading...</option></select>
+              <button type="button" onclick="refreshBenchJudgeModels()">Refresh Judge Models</button>
+              <button type="button" onclick="testBenchJudgeConnection()">Test Judge Connection</button>
+              <small id="bench-judge-message" aria-live="polite"></small>
+              <button id="bench-judge-run-sidebar" data-bench-judge-run type="button" class="bench-primary-btn" onclick="startBenchJudgeRun()" disabled>Judge benchmark</button>
+            </section>
+
+            <section class="bench-rail-section bench-history-section">
+              <h4>History</h4>
+              <div id="bench-history-list" class="bench-history-list">
+                <small>Saved comparisons will appear here.</small>
+              </div>
+              <button type="button" onclick="clearBenchHistory()">Clear History</button>
+            </section>
+          </aside>
+
+          <main class="bench-workspace">
+            <div id="bench-view-test" class="bench-view active">
+              <header class="bench-page-header">
+                <div>
+                  <span class="bench-eyebrow">Native HWUI integration</span>
+                  <h2>Helcyon-Bench</h2>
+                  <p>Compare two candidate models across a visible prompt pack, using HWUI's normal chat and generation flow.</p>
+                </div>
+                <button type="button" class="bench-secondary-btn" onclick="refreshHelcyonBenchTarget()">Refresh HWUI target</button>
+              </header>
+
+              <section class="bench-target-strip">
+                <div><span>Active HWUI chat</span><strong id="bench-active-chat">Checking...</strong></div>
+                <div><span>Generating model</span><strong id="bench-active-model">Checking...</strong></div>
+                <p id="bench-target-help">Select the chat and model you want from the normal Chat page before sending a prompt.</p>
+              </section>
+
+              <section class="bench-candidate-grid">
+                <article class="bench-candidate-card candidate-a">
+                  <span class="bench-candidate-label">Candidate A</span>
+                  <label for="bench-existing-model-a">Previously Tested Model</label>
+                  <select id="bench-existing-model-a" class="bench-existing-model-select" onchange="selectBenchExistingModel('A', this)">
+                    <option value="">Select an existing model...</option>
+                  </select>
+                  <label for="bench-model-a">New Model Name A <small>(or edit selection)</small></label>
+                  <input id="bench-model-a" type="text" placeholder="Enter a model not listed above" oninput="handleBenchModelNameInput('A')">
+                  <button type="button" class="bench-secondary-btn" onclick="clearBenchCandidate('A')">Clear Model A Responses</button>
+                </article>
+                <article class="bench-candidate-card candidate-b">
+                  <span class="bench-candidate-label">Candidate B</span>
+                  <label for="bench-existing-model-b">Previously Tested Model</label>
+                  <select id="bench-existing-model-b" class="bench-existing-model-select" onchange="selectBenchExistingModel('B', this)">
+                    <option value="">Select an existing model...</option>
+                  </select>
+                  <label for="bench-model-b">New Model Name B <small>(or edit selection)</small></label>
+                  <input id="bench-model-b" type="text" placeholder="Enter a model not listed above" oninput="handleBenchModelNameInput('B')">
+                  <button type="button" class="bench-secondary-btn" onclick="clearBenchCandidate('B')">Clear Model B Responses</button>
+                </article>
+              </section>
+
+              <section class="bench-section-card bench-pack-section">
+                <div class="bench-section-heading">
+                  <div><span class="bench-eyebrow">Prompt Pack</span><h3>Select benchmark material</h3></div>
+                  <button type="button" class="bench-secondary-btn" onclick="toggleBenchPackEditor()">Prompt Pack Editor</button>
+                </div>
+                <div class="bench-pack-controls">
+                  <label>Category<select id="bench-pack-category" onchange="filterBenchPackOptions(); saveBenchFormState()"><option>Loading...</option></select></label>
+                  <label>Prompt Pack<select id="bench-pack-select" onchange="saveBenchFormState()"><option value="">Loading prompt packs...</option></select></label>
+                  <button type="button" class="bench-primary-btn" onclick="loadSelectedBenchPack()">Load Selected Pack</button>
+                  <button type="button" onclick="requestBenchPackDelete()">Delete Pack</button>
+                </div>
+                <div id="bench-pack-delete-confirm" class="bench-pack-editor-confirm" hidden>
+                  <span id="bench-pack-delete-confirm-label"></span>
+                  <button type="button" onclick="confirmBenchPackDelete()">Confirm Delete Pack</button>
+                  <button type="button" class="bench-secondary-btn" onclick="cancelBenchPackDelete()">Cancel</button>
+                </div>
+                <div id="bench-pack-editor" class="bench-pack-editor" hidden>
+                  <strong>Prompt Pack Editor</strong>
+                  <p id="bench-pack-editor-loaded" class="bench-pack-editor-meta">No pack is loaded into this editor.</p>
+                  <div class="bench-pack-editor-actions">
+                    <button type="button" class="bench-secondary-btn" onclick="loadBenchPackIntoEditor()">Load Selected Pack Into Editor</button>
+                  </div>
+                  <div class="bench-pack-editor-subheading">Pack details</div>
+                  <div class="bench-pack-editor-fields">
+                    <label>Pack Name<input id="bench-pack-editor-name" type="text" placeholder="Pack name"></label>
+                    <label>Category<input id="bench-pack-editor-category" type="text" placeholder="e.g. Companion"></label>
+                    <label>Judge Profile<input id="bench-pack-editor-judge-profile" type="text" placeholder="e.g. Companion"></label>
+                    <label class="bench-pack-editor-description">Description<textarea id="bench-pack-editor-description" rows="2" placeholder="Optional description"></textarea></label>
+                  </div>
+                  <div class="bench-pack-editor-prompt">
+                    <div class="bench-pack-editor-subheading">Prompt 1</div>
+                    <label>Title<input id="bench-pack-editor-title-1" type="text" placeholder="Prompt title"></label>
+                    <label>Prompt<textarea id="bench-pack-editor-prompt-1" placeholder="Write the benchmark prompt..."></textarea></label>
+                  </div>
+                  <div class="bench-pack-editor-prompt">
+                    <div class="bench-pack-editor-subheading">Prompt 2</div>
+                    <label>Title<input id="bench-pack-editor-title-2" type="text" placeholder="Prompt title"></label>
+                    <label>Prompt<textarea id="bench-pack-editor-prompt-2" placeholder="Write the benchmark prompt..."></textarea></label>
+                  </div>
+                  <div class="bench-pack-editor-prompt">
+                    <div class="bench-pack-editor-subheading">Prompt 3</div>
+                    <label>Title<input id="bench-pack-editor-title-3" type="text" placeholder="Prompt title"></label>
+                    <label>Prompt<textarea id="bench-pack-editor-prompt-3" placeholder="Write the benchmark prompt..."></textarea></label>
+                  </div>
+                  <div class="bench-pack-editor-prompt">
+                    <div class="bench-pack-editor-subheading">Prompt 4</div>
+                    <label>Title<input id="bench-pack-editor-title-4" type="text" placeholder="Prompt title"></label>
+                    <label>Prompt<textarea id="bench-pack-editor-prompt-4" placeholder="Write the benchmark prompt..."></textarea></label>
+                  </div>
+                  <div class="bench-pack-editor-prompt">
+                    <div class="bench-pack-editor-subheading">Prompt 5</div>
+                    <label>Title<input id="bench-pack-editor-title-5" type="text" placeholder="Prompt title"></label>
+                    <label>Prompt<textarea id="bench-pack-editor-prompt-5" placeholder="Write the benchmark prompt..."></textarea></label>
+                  </div>
+                  <div class="bench-pack-editor-actions">
+                    <button id="bench-pack-editor-save" type="button" class="bench-primary-btn" onclick="saveBenchPackEditor()" disabled>Save / Rename Loaded Pack</button>
+                    <button type="button" class="bench-secondary-btn" onclick="toggleBenchSaveAsNewPack()">Save As New Pack</button>
+                  </div>
+                  <div id="bench-pack-editor-save-as" class="bench-pack-editor-confirm" hidden>
+                    <label>New Pack Name<input id="bench-pack-editor-new-name" type="text" placeholder="Type a new pack name..."></label>
+                    <button type="button" class="bench-primary-btn" onclick="saveBenchPackEditorAsNew()">Create New Pack</button>
+                    <button type="button" class="bench-secondary-btn" onclick="toggleBenchSaveAsNewPack(false)">Cancel</button>
+                  </div>
+                  <p id="bench-pack-editor-message" class="bench-pack-editor-message" aria-live="polite"></p>
+                </div>
+              </section>
+
+              <section class="bench-prompts-section">
+                <div class="bench-section-heading">
+                  <div><span class="bench-eyebrow">Benchmark Prompts</span><h3 id="bench-active-pack-title">Loading...</h3></div>
+                  <div class="bench-prompt-heading-actions">
+                    <button type="button" class="bench-secondary-btn" onclick="jumpToLastBenchResponse()">Jump to last response</button>
+                    <div class="bench-active-meta">
+                      <span>Test Category <b id="bench-active-category">-</b></span>
+                      <span>Active Pack <b id="bench-active-pack">-</b></span>
+                      <span>Judge Profile <b id="bench-active-profile">-</b></span>
+                    </div>
+                  </div>
+                </div>
+                <p id="bench-pack-description" class="bench-muted"></p>
+                <div id="bench-prompt-list"></div>
+              </section>
+
+              <section class="bench-run-actions">
+                <button id="bench-judge-run" data-bench-judge-run type="button" class="bench-primary-btn" onclick="startBenchJudgeRun()" disabled>Judge benchmark</button>
+                <button id="bench-judge-cancel" type="button" class="bench-secondary-btn" onclick="cancelBenchJudgeRun()" hidden>Cancel judging</button>
+                <button type="button" class="bench-secondary-btn" onclick="resetCurrentBenchRun()">Reset current benchmark run</button>
+                <button type="button" class="bench-secondary-btn" onclick="clearAllBenchResponses()">Clear All Benchmark Responses</button>
+                <div class="bench-progress-copy"><span id="bench-run-progress-label">Response readiness</span><strong id="bench-run-progress">0 / 10 responses</strong></div>
+              </section>
+
+              <section class="bench-section-card bench-sessions-section">
+                <div class="bench-section-heading">
+                  <div><span class="bench-eyebrow">Full Benchmark Sessions</span><h3>Save and reload complete response sets</h3></div>
+                </div>
+                <p class="bench-muted">Save All writes every prompt and response for the active pack to a permanent file on disk, so a browser reset or Clear All Benchmark Responses can never lose captured test answers. Saved sessions are separate from judged results and are never judged, deleted, or overwritten automatically.</p>
+                <div class="bench-pack-controls bench-sessions-controls">
+                  <button type="button" class="bench-primary-btn" onclick="saveBenchSession()">Save All</button>
+                  <label>Saved Sessions<select id="bench-session-select"><option value="">No saved sessions yet</option></select></label>
+                  <button type="button" class="bench-secondary-btn" onclick="loadSelectedBenchSession()">Load Session</button>
+                  <button type="button" onclick="requestBenchSessionDelete()">Delete Session</button>
+                </div>
+                <div id="bench-session-delete-confirm" class="bench-pack-editor-confirm" hidden>
+                  <span id="bench-session-delete-confirm-label"></span>
+                  <button type="button" onclick="confirmBenchSessionDelete()">Confirm Delete Session</button>
+                  <button type="button" class="bench-secondary-btn" onclick="cancelBenchSessionDelete()">Cancel</button>
+                </div>
+                <p id="bench-session-message" class="bench-pack-editor-message" aria-live="polite"></p>
+              </section>
+
+              <section id="bench-completed-results" class="bench-completed-results" aria-live="polite" hidden>
+                <h2>Benchmark Results</h2>
+                <div id="bench-completed-results-content"></div>
+              </section>
+            </div>
+
+            <div id="bench-view-results" class="bench-view">
+              <header class="bench-page-header">
+                <div>
+                  <span class="bench-eyebrow">Development / progress view</span>
+                  <h2>Benchmark Strength Map</h2>
+                  <p>Not an overall ranking. Cards reflect currently available saved results; use Overall Leaderboard for authoritative cross-category ranking.</p>
+                </div>
+              </header>
+              <section class="bench-filter-bar">
+                <label>Benchmark Category<select id="bench-results-category" onchange="renderBenchDashboard(); saveBenchFormState()"></select></label>
+                <label>Models<select id="bench-results-model" onchange="renderBenchDashboard(); saveBenchFormState()"></select></label>
+                <label>Score Category<select id="bench-results-score" onchange="renderBenchDashboard(); saveBenchFormState()"></select></label>
+                <label>Sort<select id="bench-results-sort" onchange="renderBenchDashboard(); saveBenchFormState()"><option>Highest to lowest</option><option>Lowest to highest</option><option>Model A-Z</option></select></label>
+                <label>Date<select id="bench-results-date" onchange="renderBenchDashboard(); saveBenchFormState()"><option>Ignore dates</option><option>Newest to oldest</option><option>Oldest to newest</option></select></label>
+              </section>
+              <details class="bench-alias-panel">
+                <summary>Consolidated models <span id="bench-alias-count"></span></summary>
+                <div id="bench-alias-list"></div>
+                <div class="bench-readonly-actions">
+                  <input id="bench-consolidated-model-name" type="text" placeholder="Final model name">
+                  <button id="bench-confirm-consolidation" type="button" onclick="confirmBenchConsolidation()">Confirm Consolidate</button>
+                </div>
+                <small>Select at least two model cards, enter their final shared name, then confirm. Saved benchmark JSON files remain unchanged.</small>
+              </details>
+              <p id="bench-dashboard-count" class="bench-muted"></p>
+              <div id="bench-results-list" class="bench-dashboard-grid">Loading saved results...</div>
+            </div>
+
+            <div id="bench-view-leaderboard" class="bench-view">
+              <header class="bench-page-header">
+                <div>
+                  <span class="bench-eyebrow">Authoritative cross-category view</span>
+                  <h2>Overall Leaderboard</h2>
+                  <p id="bench-leaderboard-context">Loading leaderboard scoring rules...</p>
+                </div>
+              </header>
+              <div class="bench-leaderboard-toolbar">
+                <div class="bench-metric-tabs">
+                  <button type="button" class="active" data-metric="current" onclick="setBenchLeaderboardMetric('current', this)">Current</button>
+                  <button type="button" data-metric="best" onclick="setBenchLeaderboardMetric('best', this)">Best</button>
+                  <button type="button" data-metric="historical_average" onclick="setBenchLeaderboardMetric('historical_average', this)">Historical</button>
+                </div>
+                <label>Test category<select id="bench-leaderboard-test-category" onchange="renderBenchLeaderboard(); saveBenchFormState()"><option value="">All test categories</option></select></label>
+                <label>Score category<select id="bench-leaderboard-category" onchange="renderBenchLeaderboard(); saveBenchFormState()"><option value="">Overall</option></select></label>
+                <label>Find model<input id="bench-leaderboard-search" type="search" placeholder="Filter models..." oninput="renderBenchLeaderboard(); saveBenchFormState()"></label>
+              </div>
+              <p id="bench-leaderboard-description" class="bench-muted"></p>
+              <div id="bench-leaderboard-list" class="bench-leaderboard-list">Loading leaderboard...</div>
+            </div>
+
+            <div id="bench-action-status" class="bench-status" aria-live="polite"></div>
+            <details id="bench-raw-response" class="bench-alias-panel bench-raw-response" hidden>
+              <summary>Raw judge response</summary>
+              <pre id="bench-raw-response-body" class="bench-raw-response-body"></pre>
+            </details>
+          </main>
+        </div>
+
+        <div id="bench-detail-overlay" class="bench-detail-overlay" hidden onclick="closeBenchDetail(event)">
+          <section class="bench-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="bench-detail-title">
+            <button type="button" class="bench-detail-close" onclick="closeBenchDetail()">Close</button>
+            <h3 id="bench-detail-title">Model details</h3>
+            <div id="bench-detail-content"></div>
+          </section>
+        </div>
+
+        <div id="bench-judging-overlay" class="bench-judging-overlay" role="dialog" aria-modal="true" aria-labelledby="bench-judging-title" aria-hidden="true" hidden>
+          <div class="bench-judging-frame">
+            <section class="bench-judging-card">
+              <div class="bench-judging-head">
+                <span class="bench-judging-spinner" aria-hidden="true"></span>
+                <h3 id="bench-judging-title">Judging in progress</h3>
+              </div>
+              <p class="bench-judging-hint">Please wait while both response orders are judged.</p>
+              <div class="bench-judging-label-row">
+                <span id="bench-judging-label">Warming up the judge...</span>
+                <strong id="bench-judging-percent">0%</strong>
+              </div>
+              <div class="bench-judging-track" role="progressbar" aria-label="Judging progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div id="bench-judging-fill" class="bench-judging-fill"><span class="bench-judging-shimmer"></span></div>
+              </div>
+              <div id="bench-judging-dots" class="bench-judging-dots" aria-hidden="true"></div>
+              <button type="button" class="bench-secondary-btn bench-judging-cancel" onclick="cancelBenchJudgeRun()">Cancel judging</button>
+            </section>
+          </div>
+        </div>
+      </div><!-- end tab-helcyon-bench -->
+
     </div><!-- end #container -->
 
   </div><!-- end #main -->
 
-  <!-- JavaScript will go here (next step) -->
+  <script src="/static/helcyon_bench_integration.js?v=9"></script>
 <script>
   function switchConfigTab(tabId, btn) {
+    document.body.classList.toggle('bench-config-active', tabId === 'helcyon-bench');
     // Hide all panels
     document.querySelectorAll('.config-tab-panel').forEach(p => p.classList.remove('active'));
     // Deactivate all tab buttons
@@ -952,7 +1255,2584 @@
     // Scroll centre column to top
     const container = document.getElementById('container');
     if (container) container.scrollTop = 0;
+    if (tabId === 'helcyon-bench') initialiseHelcyonBench();
   }
+
+  const BENCH_FORM_STATE_KEY = HelcyonBenchPromptTransfer.FORM_STATE_KEY;
+  let helcyonBenchPacks = [];
+  let helcyonBenchResults = [];
+  let helcyonBenchStrength = { models: [], leaderboard: [], score_entries: [], benchmark_categories: [], score_categories: [], aliases: {} };
+  let helcyonBenchActivePack = null;
+  let helcyonBenchInitialised = false;
+  let helcyonBenchTarget = { chat: '', model: '' };
+  let helcyonBenchLeaderboardMetric = 'current';
+  let helcyonBenchSaveTimer = null;
+  let helcyonBenchSaveVersion = 0;
+  let helcyonBenchJudgeSettings = { configured: false, endpoints: [] };
+  let helcyonBenchJudgeJob = null;
+  let helcyonBenchJudgePollTimer = null;
+  const helcyonBenchConsolidationSelection = new Set();
+  const BENCH_PACK_EDITOR_SLOTS = 5;
+  let helcyonBenchPackEditorBoundId = null;
+  let helcyonBenchPackEditorBoundName = '';
+  let helcyonBenchPackDeleteTargetId = null;
+
+  function setBenchStatus(message, kind) {
+    const status = document.getElementById('bench-action-status');
+    if (status) {
+      status.textContent = message || '';
+      status.className = 'bench-status' + (kind ? ' ' + kind : '');
+    }
+    // #bench-action-status sits at the very bottom of a long page (after the
+    // leaderboard section) — a user with an earlier prompt card open never
+    // scrolls far enough to see it. An error there previously read as "the
+    // button did nothing." hwuiToast is fixed-position, so it's visible
+    // regardless of scroll position.
+    if (kind === 'error' && message) {
+      hwuiToast(message, 'error', 6000);
+    }
+  }
+
+  function setBenchRawResponse(rawResponse) {
+    const details = document.getElementById('bench-raw-response');
+    const body = document.getElementById('bench-raw-response-body');
+    if (!details || !body) return;
+    const text = rawResponse == null ? '' : String(rawResponse).trim();
+    if (!text) {
+      details.hidden = true;
+      body.textContent = '';
+      return;
+    }
+    body.textContent = text;
+    details.hidden = false;
+  }
+
+  function switchBenchView(viewId, button) {
+    document.querySelectorAll('.bench-view').forEach(panel => panel.classList.remove('active'));
+    document.querySelectorAll('.bench-view-tab').forEach(tab => tab.classList.remove('active'));
+    const panel = document.getElementById('bench-view-' + viewId);
+    if (panel) panel.classList.add('active');
+    if (button) button.classList.add('active');
+    document.querySelectorAll('.bench-view-tab').forEach(tab => {
+      const target = (tab.getAttribute('onclick') || '').match(/'([^']+)'/);
+      if (target && target[1] === viewId) tab.classList.add('active');
+    });
+    if (helcyonBenchInitialised) saveBenchFormState();
+  }
+
+  function readBenchFormState() {
+    try {
+      const state = JSON.parse(localStorage.getItem(BENCH_FORM_STATE_KEY) || '{}');
+      return state && typeof state === 'object' ? state : {};
+    } catch (error) {
+      return {};
+    }
+  }
+
+  async function persistBenchSessionState(state = readBenchFormState()) {
+    const saveVersion = ++helcyonBenchSaveVersion;
+    if (helcyonBenchSaveTimer) {
+      clearTimeout(helcyonBenchSaveTimer);
+      helcyonBenchSaveTimer = null;
+    }
+    try {
+      const response = await fetch('/api/helcyon-bench/session', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(state)
+      });
+      if (!response.ok) throw new Error('Integrated Bench session save failed.');
+      const result = await response.json();
+      if (result.session && saveVersion === helcyonBenchSaveVersion) {
+        localStorage.setItem(BENCH_FORM_STATE_KEY, JSON.stringify(result.session));
+      }
+      return result.session || state;
+    } catch (error) {
+      console.warn('Integrated Bench session save failed:', error);
+      return state;
+    }
+  }
+
+  async function hydrateBenchSessionState() {
+    // Live localStorage associations are the freshest local copy — the chat
+    // page updates them without re-pushing the whole session snapshot.
+    const local = {
+      ...readBenchFormState(),
+      associations: HelcyonBenchPromptTransfer.getAssociations(localStorage)
+    };
+    try {
+      const response = await fetch('/api/helcyon-bench/session', { cache: 'no-store' });
+      const result = await response.json();
+      const server = response.ok && result.session && typeof result.session === 'object'
+        ? result.session
+        : {};
+      const hydrated = HelcyonBenchPromptTransfer.mergeSessionState(
+        local,
+        server,
+        helcyonBenchTarget
+      );
+      localStorage.setItem(BENCH_FORM_STATE_KEY, JSON.stringify(hydrated));
+      localStorage.setItem(
+        HelcyonBenchPromptTransfer.ASSOCIATIONS_KEY,
+        JSON.stringify(hydrated.associations || {})
+      );
+      return hydrated;
+    } catch (error) {
+      // Server session unavailable (e.g. still booting): still normalize the
+      // local copy so terminal leftovers cannot render as startup badges.
+      // No target is passed — live work must survive an offline hydration.
+      const fallback = HelcyonBenchPromptTransfer.mergeSessionState(local, {}, null);
+      localStorage.setItem(BENCH_FORM_STATE_KEY, JSON.stringify(fallback));
+      localStorage.setItem(
+        HelcyonBenchPromptTransfer.ASSOCIATIONS_KEY,
+        JSON.stringify(fallback.associations || {})
+      );
+      return fallback;
+    }
+  }
+
+  function queueBenchSessionPersist() {
+    if (helcyonBenchSaveTimer) clearTimeout(helcyonBenchSaveTimer);
+    helcyonBenchSaveTimer = setTimeout(() => persistBenchSessionState(), 180);
+  }
+
+  // Debounced persists die with the page; flush any pending save on teardown
+  // so the server session cannot fall behind the browser state it hydrates
+  // from next time. keepalive lets the PUT outlive the navigation.
+  window.addEventListener('pagehide', () => {
+    if (!helcyonBenchSaveTimer) return;
+    clearTimeout(helcyonBenchSaveTimer);
+    helcyonBenchSaveTimer = null;
+    try {
+      fetch('/api/helcyon-bench/session', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: localStorage.getItem(BENCH_FORM_STATE_KEY) || '{}',
+        keepalive: true
+      });
+    } catch (error) {}
+  });
+
+  function saveBenchFormState() {
+    const state = readBenchFormState();
+    state.model_a = document.getElementById('bench-model-a')?.value || '';
+    state.model_b = document.getElementById('bench-model-b')?.value || '';
+    state.selected_view = document.querySelector('.bench-view.active')?.id.replace('bench-view-', '') || state.selected_view || 'test';
+    state.selected_category = document.getElementById('bench-pack-category')?.value || state.selected_category || '';
+    state.selected_pack = helcyonBenchActivePack?.id || document.getElementById('bench-pack-select')?.value || state.selected_pack || '';
+    state.active_prompt_test_id = document.querySelector('.bench-prompt-card[open]')?.dataset.testId || state.active_prompt_test_id || '';
+    state.judge_endpoint = document.getElementById('bench-judge-endpoint')?.value || state.judge_endpoint || '';
+    state.judge_model = document.getElementById('bench-judge-model')?.value || state.judge_model || '';
+    state.filters = {
+      results_category: document.getElementById('bench-results-category')?.value || '',
+      results_model: document.getElementById('bench-results-model')?.value || '',
+      results_score: document.getElementById('bench-results-score')?.value || '',
+      results_sort: document.getElementById('bench-results-sort')?.value || '',
+      results_date: document.getElementById('bench-results-date')?.value || '',
+      leaderboard_search: document.getElementById('bench-leaderboard-search')?.value || '',
+      leaderboard_test_category: document.getElementById('bench-leaderboard-test-category')?.value || '',
+      leaderboard_score_category: document.getElementById('bench-leaderboard-category')?.value || '',
+      leaderboard_metric: helcyonBenchLeaderboardMetric
+    };
+    state.responses = state.responses || {};
+    state.response_meta = state.response_meta || {};
+    state.associations = HelcyonBenchPromptTransfer.getAssociations(localStorage);
+    document.querySelectorAll('.bench-response-area').forEach(area => {
+      state.responses[area.dataset.responseKey] = area.value;
+    });
+    const fields = [...document.querySelectorAll('.bench-response-area')];
+    state.prompt_progress = {
+      completed_responses: fields.filter(field => field.value.trim()).length,
+      total_responses: fields.length
+    };
+    localStorage.setItem(BENCH_FORM_STATE_KEY, JSON.stringify(state));
+    queueBenchSessionPersist();
+    updateBenchRunProgress();
+    return state;
+  }
+
+  function restoreBenchFormState(state = readBenchFormState()) {
+    document.getElementById('bench-model-a').value = state.model_a || '';
+    document.getElementById('bench-model-b').value = state.model_b || '';
+    syncBenchExistingModelSelector('A');
+    syncBenchExistingModelSelector('B');
+  }
+
+  function restoreBenchWorkspaceState(state) {
+    const filters = state.filters || {};
+    const values = {
+      'bench-results-category': filters.results_category,
+      'bench-results-model': filters.results_model,
+      'bench-results-score': filters.results_score,
+      'bench-results-sort': filters.results_sort,
+      'bench-results-date': filters.results_date,
+      'bench-leaderboard-search': filters.leaderboard_search,
+      'bench-leaderboard-test-category': filters.leaderboard_test_category,
+      'bench-leaderboard-category': filters.leaderboard_score_category
+    };
+    Object.entries(values).forEach(([id, value]) => {
+      const element = document.getElementById(id);
+      if (!element || value === undefined || value === null) return;
+      if (element.tagName !== 'SELECT' || [...element.options].some(option => option.value === value)) {
+        element.value = value;
+      }
+    });
+    const metric = filters.leaderboard_metric || 'current';
+    const metricButton = document.querySelector(`.bench-metric-tabs button[data-metric="${metric}"]`);
+    helcyonBenchLeaderboardMetric = metricButton ? metric : 'current';
+    document.querySelectorAll('.bench-metric-tabs button').forEach(button => {
+      button.classList.toggle('active', button.dataset.metric === helcyonBenchLeaderboardMetric);
+    });
+    const view = ['test', 'results', 'leaderboard'].includes(state.selected_view)
+      ? state.selected_view
+      : 'test';
+    switchBenchView(view, document.querySelector(`.bench-view-tab[onclick*="'${view}'"]`));
+  }
+
+  function scrollToBenchResponse(area, focus = true) {
+    if (!area) return false;
+    const card = area.closest('.bench-prompt-card');
+    if (card) {
+      document.querySelectorAll('.bench-prompt-card[open]').forEach(other => {
+        if (other !== card) other.open = false;
+      });
+      card.open = true;
+    }
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        area.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (focus) area.focus({ preventScroll: true });
+      });
+    });
+    return true;
+  }
+
+  function jumpToLastBenchResponse(responseKey = '') {
+    const state = readBenchFormState();
+    const areas = [...document.querySelectorAll('.bench-response-area')];
+    const preferredKey = responseKey || state.last_focused_response_key || '';
+    let area = areas.find(item =>
+      item.dataset.responseKey === preferredKey && item.value.trim()
+    );
+    if (!area) area = [...areas].reverse().find(item => item.value.trim());
+    if (!area && preferredKey) {
+      area = areas.find(item => item.dataset.responseKey === preferredKey);
+    }
+    if (!area) {
+      setBenchStatus('No benchmark response is available to jump to yet.', '');
+      return false;
+    }
+    state.last_focused_response_key = area.dataset.responseKey;
+    state.active_prompt_test_id = area.closest('.bench-prompt-card')?.dataset.testId || state.active_prompt_test_id || '';
+    localStorage.setItem(BENCH_FORM_STATE_KEY, JSON.stringify(state));
+    queueBenchSessionPersist();
+    scrollToBenchResponse(area);
+    return true;
+  }
+
+  function focusRestoredBenchResponse(state) {
+    if (!state.focus_response_on_return || !state.last_focused_response_key) return;
+    if (!jumpToLastBenchResponse(state.last_focused_response_key)) return;
+    state.focus_response_on_return = false;
+    localStorage.setItem(BENCH_FORM_STATE_KEY, JSON.stringify(state));
+    queueBenchSessionPersist();
+  }
+
+  function benchResponseKey(packId, testId, slot) {
+    return `${packId}:${testId}:${slot}`;
+  }
+
+  function currentBenchRunId(packId) {
+    const state = readBenchFormState();
+    state.run_ids = state.run_ids || {};
+    if (!state.run_ids[packId]) {
+      state.run_ids[packId] = (crypto.randomUUID ? crypto.randomUUID() : `bench-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+      localStorage.setItem(BENCH_FORM_STATE_KEY, JSON.stringify(state));
+    }
+    return state.run_ids[packId];
+  }
+
+  function clearBenchResponseMetadata(keys) {
+    const state = readBenchFormState();
+    state.response_meta = state.response_meta || {};
+    keys.forEach(key => { delete state.response_meta[key]; });
+    localStorage.setItem(BENCH_FORM_STATE_KEY, JSON.stringify(state));
+    // Clearing a response also retires its prompt associations so the chat
+    // page cannot resurrect a stale run into the next benchmark.
+    HelcyonBenchPromptTransfer.invalidateAssociationsForResponseKeys(localStorage, keys);
+    const context = HelcyonBenchPromptTransfer.getContext(localStorage);
+    if (context && keys.includes(HelcyonBenchPromptTransfer.responseKey(context))) {
+      HelcyonBenchPromptTransfer.dismissContext(localStorage, context.association_id);
+    }
+  }
+
+  function clearBenchResponse(area, key, slot) {
+    area.value = '';
+    clearBenchResponseMetadata([key]);
+    saveBenchFormState();
+    persistBenchSessionState();
+    setBenchStatus(`This Model ${slot} response was cleared.`, 'success');
+  }
+
+  function clearBenchCandidate(slot) {
+    const areas = [...document.querySelectorAll(`.bench-response-${slot.toLowerCase()}`)];
+    areas.forEach(area => { area.value = ''; });
+    clearBenchResponseMetadata(areas.map(area => area.dataset.responseKey));
+    saveBenchFormState();
+    persistBenchSessionState();
+    setBenchStatus(`Model ${slot} responses cleared.`, 'success');
+  }
+
+  function clearAllBenchResponses() {
+    const areas = [...document.querySelectorAll('.bench-response-area')];
+    areas.forEach(area => { area.value = ''; });
+    clearBenchResponseMetadata(areas.map(area => area.dataset.responseKey));
+    const state = readBenchFormState();
+    delete state.last_result_file;
+    // A full clear starts the next run fresh: rotating the cleared packs' run
+    // ids stops new transfers colliding with (or inheriting) the old run's
+    // association keys.
+    state.run_ids = state.run_ids || {};
+    [...new Set(
+      areas.map(area => String(area.dataset.responseKey || '').split(':')[0]).filter(Boolean)
+    )].forEach(packId => { delete state.run_ids[packId]; });
+    localStorage.setItem(BENCH_FORM_STATE_KEY, JSON.stringify(state));
+    renderBenchCompletedResult(null);
+    saveBenchFormState();
+    persistBenchSessionState();
+    setBenchStatus('All benchmark responses and the completed result display were cleared.', 'success');
+  }
+
+  function resetCurrentBenchRun() {
+    const pack = helcyonBenchActivePack;
+    if (!pack) {
+      setBenchStatus('Load a prompt pack before resetting its current run.', 'error');
+      return;
+    }
+    if (!window.confirm(
+      `Reset the current ${pack.name} run? Unsaved responses and in-progress capture links for this pack will be cleared.`
+    )) return;
+    HelcyonBenchPromptTransfer.resetCurrentRun(
+      localStorage,
+      readBenchFormState(),
+      pack.id
+    );
+    renderSelectedBenchPack();
+    const state = readBenchFormState();
+    persistBenchSessionState(state);
+    setBenchStatus(`Reset the current ${pack.name} benchmark run.`, 'success');
+  }
+
+  let helcyonBenchSavedSessions = [];
+
+  function setBenchSessionMessage(message, kind) {
+    const element = document.getElementById('bench-session-message');
+    if (!element) return;
+    element.textContent = message || '';
+    element.className = 'bench-pack-editor-message' + (kind ? ' ' + kind : '');
+  }
+
+  async function refreshBenchSavedSessionsList(preferFilename) {
+    try {
+      const response = await fetch('/api/helcyon-bench/saved-sessions', { cache: 'no-store' });
+      const data = await response.json();
+      helcyonBenchSavedSessions = data.sessions || [];
+    } catch (error) {
+      helcyonBenchSavedSessions = [];
+    }
+    const select = document.getElementById('bench-session-select');
+    if (!select) return;
+    select.innerHTML = '';
+    if (!helcyonBenchSavedSessions.length) {
+      const empty = document.createElement('option');
+      empty.value = '';
+      empty.textContent = 'No saved sessions yet';
+      select.appendChild(empty);
+      return;
+    }
+    helcyonBenchSavedSessions.forEach(session => {
+      const option = document.createElement('option');
+      option.value = session.filename;
+      const models = `${session.model_a || 'Model A'} vs ${session.model_b || 'Model B'}`;
+      const tag = session.auto_saved ? ' (auto)' : '';
+      option.textContent =
+        `${models} | ${session.prompt_pack_name} | ${session.response_count}/${session.item_count} responses | ${session.saved_at}${tag}`;
+      select.appendChild(option);
+    });
+    if (preferFilename && helcyonBenchSavedSessions.some(session => session.filename === preferFilename)) {
+      select.value = preferFilename;
+    }
+  }
+
+  function collectBenchSessionItems() {
+    const pack = helcyonBenchActivePack;
+    if (!pack) throw new Error('Select and load a prompt pack before saving a session.');
+    const state = readBenchFormState();
+    const responses = state.responses || {};
+    const items = pack.prompts.map(item => ({
+      test_id: item.test_id,
+      title: item.title,
+      prompt: item.prompt,
+      response_a: responses[benchResponseKey(pack.id, item.test_id, 'A')] || '',
+      response_b: responses[benchResponseKey(pack.id, item.test_id, 'B')] || ''
+    }));
+    return { pack, items };
+  }
+
+  async function postBenchSession(pack, items, autoSaved) {
+    const modelA = document.getElementById('bench-model-a')?.value || '';
+    const modelB = document.getElementById('bench-model-b')?.value || '';
+    const response = await fetch('/api/helcyon-bench/saved-sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model_a: modelA,
+        model_b: modelB,
+        prompt_pack: {
+          id: pack.id,
+          name: pack.name,
+          category: pack.category,
+          description: pack.description,
+          judge_profile: pack.judge_profile
+        },
+        items,
+        auto_saved: Boolean(autoSaved)
+      })
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not save the benchmark session.');
+    await refreshBenchSavedSessionsList(data.session.filename);
+    return data.session;
+  }
+
+  async function saveBenchSession() {
+    showHwuiProModal('Benchmark Session Automation', 'Saving and resuming full benchmark sessions is a Pro feature.');
+  }
+
+  // Runs automatically once a judge run completes, so a set of captured test
+  // answers is never lost to a forgotten manual save, a browser reset, or the
+  // next autosave cycle overwriting the in-progress draft. Deliberately quiet
+  // on failure — judging has already succeeded and saved its own result file,
+  // so this reports into the Sessions panel rather than the main status banner
+  // and never interrupts or overwrites the "Benchmark complete" message.
+  async function autoSaveBenchSessionAfterJudging() {
+    saveBenchFormState();
+    let pack;
+    let items;
+    try {
+      ({ pack, items } = collectBenchSessionItems());
+    } catch (error) {
+      return;
+    }
+    try {
+      const session = await postBenchSession(pack, items, true);
+      setBenchSessionMessage(`Auto-saved session ${session.filename} after judging completed.`, 'success');
+    } catch (error) {
+      setBenchSessionMessage(`Automatic session save after judging failed: ${error.message}`, 'error');
+    }
+  }
+
+  function applyLoadedBenchSession(session) {
+    const packId = session.prompt_pack?.id || '';
+    const packExists = helcyonBenchPacks.some(pack => pack.id === packId);
+    if (packId && packExists) {
+      const targetPack = helcyonBenchPacks.find(pack => pack.id === packId);
+      const categorySelect = document.getElementById('bench-pack-category');
+      if (
+        targetPack
+        && [...categorySelect.options].some(option => option.value === (targetPack.category || 'Uncategorised'))
+      ) {
+        categorySelect.value = targetPack.category || 'Uncategorised';
+      }
+      filterBenchPackOptions();
+      const packSelect = document.getElementById('bench-pack-select');
+      if ([...packSelect.options].some(option => option.value === packId)) {
+        packSelect.value = packId;
+      }
+      loadSelectedBenchPack();
+    } else if (packId) {
+      setBenchSessionMessage(
+        `The original pack (${session.prompt_pack?.name || packId}) no longer exists. Responses were restored ` +
+        'against the currently loaded pack using matching prompt ids, where any match.',
+        ''
+      );
+    }
+    const activePackId = helcyonBenchActivePack ? helcyonBenchActivePack.id : packId;
+    const state = readBenchFormState();
+    state.responses = state.responses || {};
+    (session.items || []).forEach(item => {
+      if (item.response_a) state.responses[benchResponseKey(activePackId, item.test_id, 'A')] = item.response_a;
+      if (item.response_b) state.responses[benchResponseKey(activePackId, item.test_id, 'B')] = item.response_b;
+    });
+    localStorage.setItem(BENCH_FORM_STATE_KEY, JSON.stringify(state));
+    document.getElementById('bench-model-a').value = session.model_a || '';
+    document.getElementById('bench-model-b').value = session.model_b || '';
+    syncBenchExistingModelSelector('A');
+    syncBenchExistingModelSelector('B');
+    renderSelectedBenchPack();
+    saveBenchFormState();
+    persistBenchSessionState();
+  }
+
+  async function loadSelectedBenchSession() {
+    showHwuiProModal('Benchmark Session Automation', 'Saving and resuming full benchmark sessions is a Pro feature.');
+  }
+
+  let helcyonBenchSessionDeleteTarget = '';
+
+  function requestBenchSessionDelete() {
+    showHwuiProModal('Benchmark Session Automation', 'Saving and resuming full benchmark sessions is a Pro feature.');
+  }
+
+  function cancelBenchSessionDelete() {
+    helcyonBenchSessionDeleteTarget = '';
+    document.getElementById('bench-session-delete-confirm').hidden = true;
+  }
+
+  async function confirmBenchSessionDelete() {
+    const filename = helcyonBenchSessionDeleteTarget;
+    if (!filename) return;
+    try {
+      const response = await fetch(`/api/helcyon-bench/saved-sessions/${encodeURIComponent(filename)}`, {
+        method: 'DELETE'
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Could not delete the saved session.');
+      cancelBenchSessionDelete();
+      await refreshBenchSavedSessionsList();
+      setBenchSessionMessage(`Deleted ${filename}.`, 'success');
+      setBenchStatus(`Deleted saved benchmark session ${filename}.`, 'success');
+    } catch (error) {
+      setBenchSessionMessage(error.message, 'error');
+      cancelBenchSessionDelete();
+    }
+  }
+
+  function updateBenchRunProgress() {
+    const fields = [...document.querySelectorAll('.bench-response-area')];
+    const completed = fields.filter(field => field.value.trim()).length;
+    const progress = document.getElementById('bench-run-progress');
+    if (progress) progress.textContent = `${completed} / ${fields.length} responses`;
+    const label = document.getElementById('bench-run-progress-label');
+    if (label && !helcyonBenchJudgeJob) label.textContent = 'Response readiness';
+    updateBenchJudgeAvailability();
+  }
+
+  function applyBenchCaptureState(button, statusElement, association, nextButton) {
+    const status = association?.status || association?.generation_status || 'not_sent';
+    const labels = {
+      not_sent: 'Not sent',
+      queued: 'Queued for chat',
+      loaded_into_chat: 'Loaded into chat',
+      checking: 'Checking exact response',
+      submitted: 'Submitted',
+      generating: 'Generating',
+      ready_to_capture: 'Ready to capture',
+      captured: 'Captured',
+      invalidated: 'Invalidated',
+      cancelled: 'Cancelled',
+      error: 'Error'
+    };
+    const resolvedChat = association?.resolved_chat_filename || association?.target_chat_filename || '';
+    const inactiveOriginalChat = Boolean(
+      resolvedChat && resolvedChat !== helcyonBenchTarget.chat
+    );
+    statusElement.textContent =
+      (labels[status] || status.replaceAll('_', ' ')) +
+      (inactiveOriginalChat ? ' · original chat inactive' : '');
+    statusElement.dataset.captureStatus = status;
+    button.disabled = status !== 'ready_to_capture';
+    button.textContent = status === 'captured'
+      ? 'Captured'
+      : 'Capture response';
+    button.title = association?.error || (
+      status === 'ready_to_capture'
+        ? 'Capture the exact completed assistant reply linked to this submitted turn'
+        : 'Capture becomes available after the exact linked assistant reply is saved as completed'
+    );
+    if (nextButton && status === 'captured') nextButton.hidden = false;
+  }
+
+  async function refreshBenchCaptureStates() {
+    const buttons = [...document.querySelectorAll('[data-capture-button="true"][data-association-id]')];
+    await Promise.all(buttons.map(async button => {
+      const panel = button.closest('.bench-response-panel');
+      const statusElement = panel?.querySelector('.bench-capture-state');
+      const nextButton = panel?.querySelector('[data-next-button="true"]');
+      if (!statusElement) return;
+      const durable = HelcyonBenchPromptTransfer.getAssociationById(
+        localStorage,
+        button.dataset.associationId
+      );
+      let association;
+      try {
+        const response = await fetch(
+          `/api/helcyon-bench/capture-associations/${encodeURIComponent(button.dataset.associationId)}/status`,
+          { cache: 'no-store' }
+        );
+        const result = await response.json();
+        if (result.association) {
+          const updates = {
+            ...result.association,
+            status: result.status || result.association.generation_status || 'error',
+            error: result.error || ''
+          };
+          association = HelcyonBenchPromptTransfer.updateAssociation(
+            localStorage,
+            button.dataset.associationId,
+            updates
+          ) || updates;
+        } else if (result.code === 'association_missing') {
+          // Not registered on the server yet (queued / pre-Generate) — show
+          // and keep the durable local state instead of clobbering it.
+          association = durable;
+        } else {
+          // Display-only: transient resolve failures must not overwrite the
+          // durable association record.
+          association = durable
+            ? { ...durable, status: result.status || 'error', error: result.error || '' }
+            : null;
+        }
+      } catch (error) {
+        // The status check itself failed (server booting, non-JSON reply).
+        // Show the durable state rather than fabricating an Error the
+        // storage never contained; a live record keeps its real badge.
+        association = durable;
+      }
+      // Invariant: a blank slot with no recoverable in-flight work renders
+      // "Not sent" — never Error/Invalidated/Captured. Terminal-on-either-field
+      // uses the same rule hydration uses, so cleanup and display agree.
+      const area = panel?.querySelector('.bench-response-area');
+      if (
+        !String(area?.value || '').trim()
+        && (!association || HelcyonBenchPromptTransfer.isTerminalAssociation(association))
+      ) {
+        HelcyonBenchPromptTransfer.retireAssociation(
+          localStorage,
+          button.dataset.associationId
+        );
+        delete button.dataset.associationId;
+        applyBenchCaptureState(button, statusElement, null, nextButton);
+        saveBenchFormState();
+        return;
+      }
+      applyBenchCaptureState(button, statusElement, association, nextButton);
+    }));
+  }
+
+  async function captureBenchResponse(pack, item, slot, area, button, statusElement) {
+    showHwuiProModal('Capture Response', 'Capturing the exact assistant reply into a candidate slot is a Pro feature.');
+  }
+
+  function advanceBenchPrompt(currentCard) {
+    const cards = [...document.querySelectorAll('.bench-prompt-card')];
+    const index = cards.indexOf(currentCard);
+    const next = index >= 0 ? cards[index + 1] : null;
+    if (!next) {
+      setBenchStatus('This is the final prompt in the selected pack.', 'success');
+      return;
+    }
+    currentCard.open = false;
+    next.open = true;
+    next.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function configureBenchContinuation(button, pack, item, card) {
+    if (!button) return;
+    const meta = readBenchFormState().response_meta || {};
+    const captured = slot => String(meta[benchResponseKey(pack.id, item.test_id, slot)]?.origin || '').includes('capture');
+    const missingSlot = !captured('A') ? 'A' : !captured('B') ? 'B' : '';
+    button.hidden = false;
+    if (missingSlot) {
+      button.textContent = `Send to Model ${missingSlot}`;
+      button.onclick = () => sendBenchPrompt(pack, item, missingSlot);
+    } else {
+      button.textContent = 'Next prompt';
+      button.onclick = () => advanceBenchPrompt(card);
+    }
+  }
+
+  async function resolveHelcyonBenchModel() {
+    try {
+      const state = await fetch('/cloud_api_enabled', { cache: 'no-store' }).then(response => response.json());
+      if (state.cloud_api_enabled && state.backend_mode === 'openai') {
+        const settings = await fetch('/get_openai_settings', { cache: 'no-store' }).then(response => response.json());
+        return settings.openai_model || '';
+      }
+      if (state.cloud_api_enabled && state.backend_mode === 'anthropic') {
+        const settings = await fetch('/get_anthropic_settings', { cache: 'no-store' }).then(response => response.json());
+        return settings.anthropic_model || '';
+      }
+      const local = await fetch('/get_model', { cache: 'no-store' }).then(response => response.json());
+      return local.model && local.model !== 'No model loaded' ? local.model : '';
+    } catch (error) {
+      return '';
+    }
+  }
+
+  async function refreshHelcyonBenchTarget() {
+    let chat = localStorage.getItem('currentChatFilename') || '';
+    if (chat) {
+      try {
+        const response = await fetch('/chats/load', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ filename: chat })
+        });
+        if (!response.ok) chat = '';
+      } catch (error) {
+        chat = '';
+      }
+    }
+    const model = await resolveHelcyonBenchModel();
+    helcyonBenchTarget = { chat, model };
+    document.getElementById('bench-active-chat').textContent = chat || 'No active chat';
+    document.getElementById('bench-active-model').textContent = model || 'No active model';
+    document.getElementById('bench-target-help').textContent =
+      chat && model
+        ? 'Prompts will be placed into this exact chat input for editing and will never generate automatically.'
+        : 'Open Chat and select both a chat and model before sending a benchmark prompt.';
+    return helcyonBenchTarget;
+  }
+
+  function populateSelect(select, options, firstLabel) {
+    select.innerHTML = '';
+    if (firstLabel) {
+      const first = document.createElement('option');
+      first.value = '';
+      first.textContent = firstLabel;
+      select.appendChild(first);
+    }
+    options.forEach(value => {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = value;
+      select.appendChild(option);
+    });
+  }
+
+  function setBenchJudgeMessage(message, kind) {
+    const element = document.getElementById('bench-judge-message');
+    if (!element) return;
+    element.textContent = message || '';
+    element.className = kind || '';
+  }
+
+  function selectedBenchJudgeEndpoint() {
+    return document.getElementById('bench-judge-endpoint')?.value || '';
+  }
+
+  function selectedBenchJudgeModel() {
+    return document.getElementById('bench-judge-model')?.value || '';
+  }
+
+  function renderBenchJudgeSettings(settings, preferredModel = '') {
+    helcyonBenchJudgeSettings = settings || { configured: false, endpoints: [] };
+    const endpointSelect = document.getElementById('bench-judge-endpoint');
+    const modelSelect = document.getElementById('bench-judge-model');
+    const detail = document.getElementById('bench-judge-endpoint-detail');
+    const keyInput = document.getElementById('bench-judge-api-key');
+    const endpoints = helcyonBenchJudgeSettings.endpoints || [];
+    populateSelect(endpointSelect, endpoints.map(endpoint => endpoint.name));
+    endpointSelect.disabled = !helcyonBenchJudgeSettings.configured || !endpoints.length;
+    if (endpoints.some(endpoint => endpoint.name === helcyonBenchJudgeSettings.selected_endpoint)) {
+      endpointSelect.value = helcyonBenchJudgeSettings.selected_endpoint;
+    }
+    const endpoint = endpoints.find(item => item.name === endpointSelect.value);
+    const models = endpoint?.models || [];
+    populateSelect(modelSelect, models, models.length ? '' : 'No models returned');
+    const selectedModel = preferredModel || helcyonBenchJudgeSettings.selected_model;
+    if (models.includes(selectedModel)) modelSelect.value = selectedModel;
+    modelSelect.disabled = !endpoint || !models.length;
+    keyInput.disabled = !endpoint;
+    keyInput.value = '';
+    keyInput.placeholder = endpoint?.requires_api_key
+      ? 'API key required'
+      : endpoint?.has_api_key
+        ? 'Saved key (enter to replace)'
+        : 'Enter API key if required';
+    detail.textContent = endpoint
+      ? `${endpoint.base_url} · ${endpoint.local_endpoint_mode || 'API endpoint'}`
+      : helcyonBenchJudgeSettings.error || 'No configured judge endpoint.';
+    if (helcyonBenchJudgeSettings.error) {
+      setBenchJudgeMessage(helcyonBenchJudgeSettings.error, 'error');
+    } else if (helcyonBenchJudgeSettings.notice) {
+      setBenchJudgeMessage(helcyonBenchJudgeSettings.notice, 'success');
+    }
+    updateBenchJudgeAvailability();
+  }
+
+  async function loadBenchJudgeSettings(state = readBenchFormState()) {
+    const query = new URLSearchParams();
+    if (state.judge_endpoint) query.set('endpoint', state.judge_endpoint);
+    if (state.judge_model) query.set('model', state.judge_model);
+    const response = await fetch(
+      '/api/helcyon-bench/judge/settings' + (query.toString() ? `?${query}` : ''),
+      { cache: 'no-store' }
+    );
+    const settings = await response.json();
+    renderBenchJudgeSettings(settings, state.judge_model || '');
+    return settings;
+  }
+
+  async function changeBenchJudgeEndpoint() {
+    const state = readBenchFormState();
+    state.judge_endpoint = selectedBenchJudgeEndpoint();
+    state.judge_model = '';
+    localStorage.setItem(BENCH_FORM_STATE_KEY, JSON.stringify(state));
+    await loadBenchJudgeSettings(state);
+    saveBenchFormState();
+  }
+
+  function saveBenchJudgeSelection() {
+    saveBenchFormState();
+    setBenchJudgeMessage('', '');
+  }
+
+  function toggleBenchJudgeApiKey(button) {
+    const input = document.getElementById('bench-judge-api-key');
+    input.type = input.type === 'password' ? 'text' : 'password';
+    const visible = input.type === 'text';
+    button.querySelector('.bench-eye-show').hidden = visible;
+    button.querySelector('.bench-eye-hide').hidden = !visible;
+    button.title = visible ? 'Hide API key' : 'Show API key';
+    button.setAttribute('aria-label', button.title);
+  }
+
+  async function saveBenchJudgeApiKey() {
+    const endpoint = selectedBenchJudgeEndpoint();
+    const input = document.getElementById('bench-judge-api-key');
+    const apiKey = input.value.trim();
+    if (!endpoint || !apiKey) {
+      setBenchJudgeMessage('Choose an endpoint and enter an API key.', 'error');
+      return;
+    }
+    try {
+      const response = await fetch('/api/helcyon-bench/judge/api-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint, api_key: apiKey })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'The judge API key could not be saved.');
+      input.value = '';
+      renderBenchJudgeSettings(result.settings, selectedBenchJudgeModel());
+      setBenchJudgeMessage(result.message || 'Judge API key saved.', 'success');
+    } catch (error) {
+      setBenchJudgeMessage(error.message, 'error');
+    }
+  }
+
+  async function refreshBenchJudgeModels() {
+    const endpoint = selectedBenchJudgeEndpoint();
+    if (!endpoint) {
+      setBenchJudgeMessage('No judge endpoint is configured.', 'error');
+      return;
+    }
+    setBenchJudgeMessage('Refreshing judge models...', '');
+    try {
+      const response = await fetch('/api/helcyon-bench/judge/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Judge models could not be loaded.');
+      const configured = helcyonBenchJudgeSettings.endpoints.find(item => item.name === endpoint);
+      if (configured) configured.models = result.models || [];
+      populateSelect(document.getElementById('bench-judge-model'), result.models || []);
+      document.getElementById('bench-judge-model').disabled = !(result.models || []).length;
+      saveBenchFormState();
+      setBenchJudgeMessage(`Loaded ${(result.models || []).length} model(s) from ${endpoint}.`, 'success');
+    } catch (error) {
+      setBenchJudgeMessage(error.message, 'error');
+      updateBenchJudgeAvailability();
+    }
+  }
+
+  async function testBenchJudgeConnection() {
+    const endpoint = selectedBenchJudgeEndpoint();
+    const model = selectedBenchJudgeModel();
+    if (!endpoint || !model) {
+      setBenchJudgeMessage('Select a judge endpoint and model first.', 'error');
+      return;
+    }
+    setBenchJudgeMessage('Testing judge connection...', '');
+    try {
+      const response = await fetch('/api/helcyon-bench/judge/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint, model })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Judge connection failed.');
+      setBenchJudgeMessage(result.message, 'success');
+    } catch (error) {
+      setBenchJudgeMessage(error.message, 'error');
+    }
+  }
+
+  function updateBenchJudgeAvailability() {
+    const buttons = [...document.querySelectorAll('[data-bench-judge-run]')];
+    if (!buttons.length) return;
+    const fields = [...document.querySelectorAll('.bench-response-area')];
+    const complete = fields.length > 0 && fields.every(field => field.value.trim());
+    const namesReady =
+      Boolean(document.getElementById('bench-model-a')?.value.trim()) &&
+      Boolean(document.getElementById('bench-model-b')?.value.trim());
+    const judgeReady = Boolean(selectedBenchJudgeEndpoint() && selectedBenchJudgeModel());
+    const running = Boolean(
+      helcyonBenchJudgeJob &&
+      ['queued', 'running'].includes(helcyonBenchJudgeJob.status)
+    );
+    const disabled = !complete || !namesReady || !judgeReady || running;
+    const title = !namesReady
+      ? 'Enter both candidate model names'
+      : !complete
+        ? 'Complete every Model A and Model B response before judging'
+        : !judgeReady
+          ? 'Configure a judge endpoint and model'
+          : '';
+    buttons.forEach(button => {
+      button.disabled = disabled;
+      button.title = title;
+    });
+  }
+
+  async function refreshBenchResultData() {
+    const [resultsPayload, strengthPayload] = await Promise.all([
+      fetch('/api/helcyon-bench/results', { cache: 'no-store' }).then(response => response.json()),
+      fetch('/api/helcyon-bench/strength-map', { cache: 'no-store' }).then(response => response.json())
+    ]);
+    helcyonBenchResults = resultsPayload.results || [];
+    helcyonBenchStrength = strengthPayload || helcyonBenchStrength;
+    renderBenchHistory();
+    initialiseBenchFilters();
+    renderBenchAliases();
+    renderBenchDashboard();
+    renderBenchLeaderboard();
+  }
+
+  const BENCH_CLASSIFICATION_LABELS = {
+    clear_winner: 'Clear Winner',
+    narrow_preference: 'Narrow Preference',
+    effective_tie: 'Effective Tie'
+  };
+
+  function formatBenchResultScore(value, digits = 2) {
+    if (value === null || value === undefined || value === '') return 'N/A';
+    const number = Number(value);
+    return Number.isFinite(number) ? number.toFixed(digits) : 'N/A';
+  }
+
+  function formatBenchResultDifference(scoreA, scoreB) {
+    if (
+      scoreA === null || scoreA === undefined || scoreA === '' ||
+      scoreB === null || scoreB === undefined || scoreB === ''
+    ) return 'N/A';
+    const difference = Number(scoreB) - Number(scoreA);
+    if (!Number.isFinite(difference)) return 'N/A';
+    if (Math.abs(difference) < 0.005) return '0.00';
+    return `${difference > 0 ? '+' : ''}${difference.toFixed(2)}`;
+  }
+
+  function appendBenchResultsTable(host, headers, rows) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'bench-results-table-wrap';
+    const table = document.createElement('table');
+    table.className = 'bench-results-table';
+    const head = document.createElement('thead');
+    const headRow = document.createElement('tr');
+    headers.forEach(header => {
+      const cell = document.createElement('th');
+      cell.textContent = header;
+      headRow.appendChild(cell);
+    });
+    head.appendChild(headRow);
+    const body = document.createElement('tbody');
+    rows.forEach(row => {
+      const tableRow = document.createElement('tr');
+      if (String(row[0] || '') === 'Overall') {
+        tableRow.className = 'bench-results-overall';
+      }
+      row.forEach(value => {
+        const cell = document.createElement('td');
+        cell.textContent = value ?? '';
+        tableRow.appendChild(cell);
+      });
+      body.appendChild(tableRow);
+    });
+    table.append(head, body);
+    wrapper.appendChild(table);
+    host.appendChild(wrapper);
+  }
+
+  function appendBenchResultNotice(host, message, kind = 'warning') {
+    if (!message) return;
+    const notice = document.createElement('p');
+    notice.className = `bench-result-notice ${kind}`;
+    notice.textContent = message;
+    host.appendChild(notice);
+  }
+
+  function benchPromptWinner(result, item) {
+    const winner = result.winner || {};
+    const response = String(winner.response || '').toUpperCase();
+    const name = winner.model_name ||
+      (response === 'A' ? item.model_name_a : response === 'B' ? item.model_name_b : 'Tie');
+    const classification = winner.classification_label ||
+      BENCH_CLASSIFICATION_LABELS[winner.classification] || '';
+    if (classification === 'Effective Tie') {
+      return response === 'A' || response === 'B'
+        ? `Effective Tie (leaning ${name})`
+        : 'Effective Tie';
+    }
+    if (classification === 'Narrow Preference') return `${name} (Narrow Preference)`;
+    return name;
+  }
+
+  function benchStabilityLabel(result) {
+    const stability = result.protocol?.stability || {};
+    if (stability.stability_grade_label) return stability.stability_grade_label;
+    if (result.protocol?.mode !== 'bidirectional') return 'Legacy single pass';
+    return stability.position_sensitive ? 'Position-sensitive' : 'Stable';
+  }
+
+  function appendBenchPromptDetails(host, entry, index, modelA, modelB) {
+    const item = entry.item || {};
+    const result = entry.result || {};
+    const details = document.createElement('details');
+    details.className = 'bench-prompt-result-detail';
+    const summary = document.createElement('summary');
+    summary.textContent = `Prompt ${index}: ${item.title || `Prompt ${index}`}`;
+    details.appendChild(summary);
+    const body = document.createElement('div');
+    body.className = 'bench-prompt-result-body';
+
+    const stability = result.protocol?.stability || {};
+    if (stability.warning) {
+      appendBenchResultNotice(body, stability.warning);
+    } else if (result.protocol?.mode !== 'bidirectional') {
+      appendBenchResultNotice(
+        body,
+        'Legacy single-pass record: judged in one response order only.',
+        'info'
+      );
+    }
+
+    const classification = result.winner?.classification_label ||
+      BENCH_CLASSIFICATION_LABELS[result.winner?.classification] || 'Unknown';
+    const caption = document.createElement('p');
+    caption.className = 'bench-result-caption';
+    caption.textContent =
+      `Classification: ${classification} | Directional lean and raw scores are preserved below even for an Effective Tie.`;
+    body.appendChild(caption);
+
+    const scoreHeading = document.createElement('h4');
+    scoreHeading.textContent = 'Score Summary';
+    body.appendChild(scoreHeading);
+    const responseA = result.responses?.A || {};
+    const responseB = result.responses?.B || {};
+    const scoresA = responseA.scores || {};
+    const scoresB = responseB.scores || {};
+    const categories = [...new Set([...Object.keys(scoresA), ...Object.keys(scoresB)])];
+    const scoreRows = categories.map(category => {
+      const notApplicable = result.criteria_applicability?.[category] === 'not_applicable';
+      const scoreA = notApplicable ? null : scoresA[category];
+      const scoreB = notApplicable ? null : scoresB[category];
+      return [
+        notApplicable ? `${category} (N/A)` : category,
+        formatBenchResultScore(scoreA, 1),
+        formatBenchResultScore(scoreB, 1),
+        formatBenchResultDifference(scoreA, scoreB)
+      ];
+    });
+    scoreRows.push([
+      'Overall',
+      formatBenchResultScore(responseA.overall),
+      formatBenchResultScore(responseB.overall),
+      formatBenchResultDifference(responseA.overall, responseB.overall)
+    ]);
+    appendBenchResultsTable(
+      body,
+      ['Category', modelA, modelB, 'Difference'],
+      scoreRows
+    );
+
+    const passes = result.protocol?.passes || [];
+    if (passes.length) {
+      const passHeading = document.createElement('h4');
+      passHeading.textContent = 'Directional Passes';
+      body.appendChild(passHeading);
+      appendBenchResultsTable(
+        body,
+        ['Order', 'Slot A', 'Slot B', 'Slot A score', 'Slot B score', 'Pass winner'],
+        passes.map(pass => {
+          const passResult = pass.result || {};
+          const slotModels = pass.slot_models || {};
+          const winnerSlot = String(passResult.winner?.response || '').toUpperCase();
+          return [
+            pass.pass === 'forward' ? 'First (A/B)' : 'Reversed (B/A)',
+            slotModels.A || '',
+            slotModels.B || '',
+            formatBenchResultScore(passResult.responses?.A?.overall),
+            formatBenchResultScore(passResult.responses?.B?.overall),
+            slotModels[winnerSlot] || (winnerSlot === 'TIE' ? 'Tie' : 'Unknown')
+          ];
+        })
+      );
+    }
+
+    const agreement = result.category_agreement;
+    if (agreement && typeof agreement === 'object') {
+      const agreementCaption = document.createElement('p');
+      agreementCaption.className = 'bench-result-caption';
+      agreementCaption.textContent =
+        `Category agreement: ${(Number(agreement.agreement_fraction || 0) * 100).toFixed(0)}% ` +
+        `(${agreement.agreeing || 0} agreeing, ${agreement.disagreeing || 0} disagreeing, ${agreement.tied || 0} tied)`;
+      body.appendChild(agreementCaption);
+    }
+
+    const consistency = result.verdict_consistency;
+    if (consistency && (consistency.conflict || ['repaired', 'conflict'].includes(consistency.status))) {
+      const consistencyWarning =
+        consistency.forward?.warning ||
+        consistency.reverse?.warning ||
+        consistency.warning ||
+        'The written verdict disagreed with the calculated numeric winner.';
+      appendBenchResultNotice(
+        body,
+        `Verdict/score conflict. ${consistencyWarning}`
+      );
+    }
+
+    const verdictHeading = document.createElement('h4');
+    verdictHeading.textContent = 'Final Verdict';
+    const verdict = document.createElement('p');
+    verdict.className = 'bench-final-verdict';
+    verdict.textContent = result.final_verdict || '';
+    body.append(verdictHeading, verdict);
+    details.appendChild(body);
+    host.appendChild(details);
+  }
+
+  function renderBenchCompletedResult(payload) {
+    const section = document.getElementById('bench-completed-results');
+    const host = document.getElementById('bench-completed-results-content');
+    if (!section || !host) return;
+    host.replaceChildren();
+    section.hidden = !payload;
+    if (!payload) return;
+
+    const comparisons = Array.isArray(payload.comparisons) ? payload.comparisons : [];
+    const models = payload.evaluation_protocol?.models || {};
+    const firstItem = comparisons[0]?.item || {};
+    const modelA = models.A || firstItem.model_name_a || 'Model A';
+    const modelB = models.B || firstItem.model_name_b || 'Model B';
+    const averages = Array.isArray(payload.averages) ? payload.averages : [];
+    const overall = averages.find(row => row.Category === 'Overall') || {};
+
+    const winnerCard = document.createElement('div');
+    winnerCard.className = 'bench-winner-card';
+    const winnerLabel = document.createElement('span');
+    winnerLabel.textContent = 'Canonical Winner';
+    const winner = document.createElement('strong');
+    winner.textContent = payload.canonical_winner || 'Unknown';
+    const scores = document.createElement('p');
+    scores.append(
+      document.createTextNode(`${modelA} canonical overall: `)
+    );
+    const scoreA = document.createElement('b');
+    scoreA.textContent = `${overall['Response A Avg'] ?? 'N/A'} / 10`;
+    scores.append(scoreA, document.createTextNode('  |  '));
+    scores.append(document.createTextNode(`${modelB} canonical overall: `));
+    const scoreB = document.createElement('b');
+    scoreB.textContent = `${overall['Response B Avg'] ?? 'N/A'} / 10`;
+    scores.appendChild(scoreB);
+    const winnerDetail = document.createElement('small');
+    const slotEffect = payload.evaluation_protocol?.mean_slot_effect;
+    winnerDetail.textContent =
+      `Identity-mapped average of both response orders.` +
+      (slotEffect === null || slotEffect === undefined
+        ? ''
+        : ` Mean slot effect ${Number(slotEffect) >= 0 ? '+' : ''}${Number(slotEffect).toFixed(2)}.`);
+    winnerCard.append(winnerLabel, winner, scores, winnerDetail);
+    host.appendChild(winnerCard);
+
+    const counts = payload.evaluation_protocol?.classification_counts || {};
+    const classification = document.createElement('p');
+    classification.className = 'bench-result-caption';
+    classification.textContent =
+      'Classification breakdown: ' +
+      Object.entries(BENCH_CLASSIFICATION_LABELS)
+        .map(([key, label]) => `${label} ${Number(counts[key]) || 0}`)
+        .join(', ');
+    host.appendChild(classification);
+
+    if (payload.self_judging?.judge_is_candidate) {
+      appendBenchResultNotice(
+        host,
+        `Self-judging comparison. ${payload.self_judging.warning || 'The selected judge is also one of the candidates.'}`
+      );
+    }
+    const unstable = payload.evaluation_protocol?.position_sensitive_comparisons || [];
+    if (unstable.length) {
+      appendBenchResultNotice(
+        host,
+        `${unstable.length} of ${comparisons.length} comparisons were position-sensitive ` +
+        `(prompts ${unstable.join(', ')}). Their winner changed when the response order was reversed, so those results are not clean wins.`
+      );
+    }
+    const legacyCount = Number(payload.evaluation_protocol?.legacy_single_pass_comparisons) || 0;
+    if (legacyCount) {
+      appendBenchResultNotice(
+        host,
+        `${legacyCount} of ${comparisons.length} comparisons are legacy single-pass records, judged in one response order only.`,
+        'info'
+      );
+    }
+
+    const averageHeading = document.createElement('h3');
+    averageHeading.textContent = 'Averaged Category Summary';
+    host.appendChild(averageHeading);
+    appendBenchResultsTable(
+      host,
+      ['Category', `${modelA} Avg`, `${modelB} Avg`, 'Difference'],
+      averages.map(row => [
+        row.Category || '',
+        row['Response A Avg'] ?? '',
+        row['Response B Avg'] ?? '',
+        row.Difference ?? ''
+      ])
+    );
+
+    const promptHeading = document.createElement('h3');
+    promptHeading.textContent = 'Per-prompt Results';
+    host.appendChild(promptHeading);
+    appendBenchResultsTable(
+      host,
+      ['#', 'Title', 'Winner', 'Classification', 'Stability', 'Confidence', modelA, modelB, 'Difference'],
+      comparisons.map((entry, index) => {
+        const item = entry.item || {};
+        const result = entry.result || {};
+        const responseA = result.responses?.A?.overall;
+        const responseB = result.responses?.B?.overall;
+        return [
+          String(index + 1),
+          item.title || `Prompt ${index + 1}`,
+          benchPromptWinner(result, item),
+          result.winner?.classification_label ||
+            BENCH_CLASSIFICATION_LABELS[result.winner?.classification] || 'Unknown',
+          benchStabilityLabel(result),
+          `${Number(result.winner?.confidence) || 0}%`,
+          formatBenchResultScore(responseA),
+          formatBenchResultScore(responseB),
+          formatBenchResultDifference(responseA, responseB)
+        ];
+      })
+    );
+
+    const detailHeading = document.createElement('h3');
+    detailHeading.textContent = 'Detailed Prompt Results';
+    host.appendChild(detailHeading);
+    comparisons.forEach((entry, index) => {
+      appendBenchPromptDetails(host, entry, index + 1, modelA, modelB);
+    });
+
+    const saved = document.createElement('p');
+    saved.className = 'bench-result-caption';
+    saved.textContent =
+      `Saved result: ${payload._source || 'completed benchmark'} · Judge: ${payload.judge_model || 'Unknown'}`;
+    host.appendChild(saved);
+  }
+
+  async function loadBenchCompletedResult(source, quiet = false) {
+    if (!source) {
+      renderBenchCompletedResult(null);
+      return null;
+    }
+    try {
+      const response = await fetch(
+        `/api/helcyon-bench/results/${encodeURIComponent(source)}`,
+        { cache: 'no-store' }
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Completed benchmark result could not be loaded.');
+      const payload = data.result || null;
+      if (payload) payload._source = source;
+      renderBenchCompletedResult(payload);
+      return payload;
+    } catch (error) {
+      renderBenchCompletedResult(null);
+      if (!quiet) setBenchStatus(error.message, 'error');
+      return null;
+    }
+  }
+
+  async function revealCompletedBenchResult(job) {
+    const state = readBenchFormState();
+    state.last_result_file = job.result_file || '';
+    state.selected_view = 'test';
+    localStorage.setItem(BENCH_FORM_STATE_KEY, JSON.stringify(state));
+    await persistBenchSessionState(state);
+    const payload = await loadBenchCompletedResult(job.result_file);
+    switchBenchView('test', document.querySelector('.bench-view-tab[onclick*="test"]'));
+
+    const section = document.getElementById('bench-completed-results');
+    if (!payload || !section) return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+  }
+
+  async function startBenchJudgeRun() {
+    showHwuiProModal('Automated Judge Benchmark', 'Running the automated benchmark judge is a Pro feature.');
+  }
+
+  function renderBenchJudgingOverlay(job) {
+    const overlay = document.getElementById('bench-judging-overlay');
+    if (!overlay) return;
+    const running = Boolean(job && ['queued', 'running'].includes(job.status));
+    overlay.hidden = !running;
+    overlay.setAttribute('aria-hidden', running ? 'false' : 'true');
+    if (!running) return;
+
+    const total = Math.max(1, Number(job.passes_total) || 10);
+    const completed = Math.max(0, Math.min(total, Number(job.passes_completed) || 0));
+    const percent = Math.round((completed / total) * 100);
+    document.getElementById('bench-judging-label').textContent =
+      job.message || 'Warming up the judge...';
+    document.getElementById('bench-judging-percent').textContent = `${percent}%`;
+    document.getElementById('bench-judging-fill').style.width = `${Math.max(percent, 3)}%`;
+    const track = overlay.querySelector('.bench-judging-track');
+    track.setAttribute('aria-valuenow', String(percent));
+
+    const dots = document.getElementById('bench-judging-dots');
+    if (dots.childElementCount !== total) {
+      dots.replaceChildren(...Array.from({ length: total }, () => {
+        const dot = document.createElement('span');
+        dot.className = 'bench-judging-dot';
+        return dot;
+      }));
+    }
+    [...dots.children].forEach((dot, index) => {
+      dot.className = 'bench-judging-dot' +
+        (index < completed
+          ? ' bench-judging-dot-done'
+          : index === completed && completed < total
+            ? ' bench-judging-dot-active'
+            : '');
+    });
+  }
+
+  function renderBenchJudgeJob(job) {
+    helcyonBenchJudgeJob = job;
+    const running = ['queued', 'running'].includes(job.status);
+    renderBenchJudgingOverlay(job);
+    document.getElementById('bench-judge-cancel').hidden = !running;
+    document.getElementById('bench-run-progress-label').textContent =
+      running ? 'Judge progress' : 'Response readiness';
+    if (running) {
+      document.getElementById('bench-run-progress').textContent =
+        `${job.passes_completed || 0} / ${job.passes_total || 10} judge passes`;
+      setBenchStatus(job.message || 'Judging benchmark...', '');
+      setBenchRawResponse(null);
+    } else if (job.status === 'completed') {
+      setBenchStatus(
+        `Benchmark complete: ${job.canonical_winner}. Saved ${job.result_file}.`,
+        'success'
+      );
+      setBenchRawResponse(null);
+    } else if (job.status === 'cancelled') {
+      setBenchStatus(job.message || 'Judge run cancelled.', '');
+      setBenchRawResponse(null);
+    } else {
+      setBenchStatus(job.error || job.message || 'Judge run failed.', 'error');
+      setBenchRawResponse(job.raw_response);
+    }
+    updateBenchJudgeAvailability();
+  }
+
+  async function pollBenchJudgeRun() {
+    if (!helcyonBenchJudgeJob?.job_id) return;
+    if (helcyonBenchJudgePollTimer) clearTimeout(helcyonBenchJudgePollTimer);
+    try {
+      const response = await fetch(
+        `/api/helcyon-bench/judge/runs/${encodeURIComponent(helcyonBenchJudgeJob.job_id)}`,
+        { cache: 'no-store' }
+      );
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Judge progress could not be loaded.');
+      renderBenchJudgeJob(result.job);
+      if (['queued', 'running'].includes(result.job.status)) {
+        helcyonBenchJudgePollTimer = setTimeout(pollBenchJudgeRun, 700);
+      } else {
+        helcyonBenchJudgeJob = null;
+        document.getElementById('bench-judge-cancel').hidden = true;
+        updateBenchRunProgress();
+        if (result.job.status === 'completed') {
+          await refreshBenchResultData();
+          await revealCompletedBenchResult(result.job);
+          await autoSaveBenchSessionAfterJudging();
+        }
+      }
+    } catch (error) {
+      helcyonBenchJudgeJob = null;
+      renderBenchJudgingOverlay(null);
+      setBenchStatus(error.message, 'error');
+      setBenchRawResponse(null);
+      updateBenchRunProgress();
+    }
+  }
+
+  async function cancelBenchJudgeRun() {
+    if (!helcyonBenchJudgeJob?.job_id) return;
+    try {
+      const response = await fetch(
+        `/api/helcyon-bench/judge/runs/${encodeURIComponent(helcyonBenchJudgeJob.job_id)}`,
+        { method: 'DELETE' }
+      );
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Judge run could not be cancelled.');
+      renderBenchJudgeJob(result.job);
+    } catch (error) {
+      setBenchStatus(error.message, 'error');
+    }
+  }
+
+  function filterBenchPackOptions() {
+    const category = document.getElementById('bench-pack-category').value;
+    const select = document.getElementById('bench-pack-select');
+    const state = readBenchFormState();
+    const previous = select.value || state.selected_pack || '';
+    const packs = helcyonBenchPacks.filter(pack => !category || pack.category === category);
+    select.innerHTML = '';
+    packs.forEach(pack => {
+      const option = document.createElement('option');
+      option.value = pack.id;
+      option.textContent = pack.name;
+      select.appendChild(option);
+    });
+    if (packs.some(pack => pack.id === previous)) select.value = previous;
+    if (helcyonBenchInitialised) saveBenchFormState();
+  }
+
+  function loadSelectedBenchPack() {
+    const selectedId = document.getElementById('bench-pack-select').value;
+    helcyonBenchActivePack = helcyonBenchPacks.find(pack => pack.id === selectedId) || null;
+    renderSelectedBenchPack();
+    saveBenchFormState();
+    if (helcyonBenchActivePack) setBenchStatus(`Loaded ${helcyonBenchActivePack.name}.`, 'success');
+  }
+
+  function toggleBenchPackEditor() {
+    const editor = document.getElementById('bench-pack-editor');
+    editor.hidden = !editor.hidden;
+  }
+
+  function setBenchPackEditorMessage(message, kind) {
+    const element = document.getElementById('bench-pack-editor-message');
+    if (!element) return;
+    element.textContent = message || '';
+    element.className = 'bench-pack-editor-message' + (kind ? ' ' + kind : '');
+  }
+
+  function benchPackEditorHasContent() {
+    if ((document.getElementById('bench-pack-editor-name')?.value || '').trim()) return true;
+    for (let slot = 1; slot <= BENCH_PACK_EDITOR_SLOTS; slot++) {
+      const title = document.getElementById(`bench-pack-editor-title-${slot}`)?.value || '';
+      const prompt = document.getElementById(`bench-pack-editor-prompt-${slot}`)?.value || '';
+      if (title.trim() || prompt.trim()) return true;
+    }
+    return false;
+  }
+
+  function fillBenchPackEditorFields(pack) {
+    document.getElementById('bench-pack-editor-name').value = pack.name || '';
+    document.getElementById('bench-pack-editor-category').value = pack.category || '';
+    document.getElementById('bench-pack-editor-description').value = pack.description || '';
+    document.getElementById('bench-pack-editor-judge-profile').value = pack.judge_profile || '';
+    const prompts = pack.prompts || [];
+    for (let slot = 1; slot <= BENCH_PACK_EDITOR_SLOTS; slot++) {
+      const item = prompts[slot - 1];
+      document.getElementById(`bench-pack-editor-title-${slot}`).value = item ? (item.title || '') : '';
+      document.getElementById(`bench-pack-editor-prompt-${slot}`).value = item ? (item.prompt || '') : '';
+    }
+  }
+
+  function updateBenchPackEditorBoundLabel() {
+    const label = document.getElementById('bench-pack-editor-loaded');
+    const saveButton = document.getElementById('bench-pack-editor-save');
+    if (!label || !saveButton) return;
+    if (helcyonBenchPackEditorBoundId) {
+      label.textContent = `Editing file: ${helcyonBenchPackEditorBoundId}.json`;
+      saveButton.disabled = false;
+    } else {
+      label.textContent = 'No pack is loaded into this editor. Click "Load Selected Pack Into Editor", or fill in prompts below and use "Save As New Pack".';
+      saveButton.disabled = true;
+    }
+  }
+
+  function loadBenchPackIntoEditor() {
+    const packId = document.getElementById('bench-pack-select').value;
+    const pack = helcyonBenchPacks.find(item => item.id === packId);
+    if (!pack) {
+      setBenchPackEditorMessage('Select a prompt pack to load first.', 'error');
+      return;
+    }
+    if (
+      benchPackEditorHasContent() &&
+      !window.confirm(`Replace the editor's current content with ${pack.name}?`)
+    ) {
+      return;
+    }
+    fillBenchPackEditorFields(pack);
+    helcyonBenchPackEditorBoundId = pack.id;
+    helcyonBenchPackEditorBoundName = pack.name;
+    updateBenchPackEditorBoundLabel();
+    setBenchPackEditorMessage(`Loaded ${pack.name} (${pack.id}.json) into the editor.`, '');
+  }
+
+  function collectBenchPackEditorPrompts() {
+    const prompts = [];
+    for (let slot = 1; slot <= BENCH_PACK_EDITOR_SLOTS; slot++) {
+      const title = (document.getElementById(`bench-pack-editor-title-${slot}`)?.value || '').trim();
+      const prompt = (document.getElementById(`bench-pack-editor-prompt-${slot}`)?.value || '').trim();
+      if (!title && !prompt) continue;
+      if (!title || !prompt) throw new Error(`Editor prompt ${slot} needs both a title and prompt.`);
+      prompts.push({ title, prompt });
+    }
+    if (!prompts.length) throw new Error('Add at least one complete prompt before saving.');
+    return prompts;
+  }
+
+  function collectBenchPackEditorMetadata() {
+    const name = (document.getElementById('bench-pack-editor-name')?.value || '').trim();
+    if (!name) throw new Error('Pack name is required.');
+    return {
+      name,
+      category: (document.getElementById('bench-pack-editor-category')?.value || '').trim() || 'General',
+      description: (document.getElementById('bench-pack-editor-description')?.value || '').trim(),
+      judge_profile: (document.getElementById('bench-pack-editor-judge-profile')?.value || '').trim() || 'General'
+    };
+  }
+
+  function refreshBenchPackList(payload, selectId) {
+    helcyonBenchPacks = payload.prompt_packs || helcyonBenchPacks;
+    const categories = [...new Set(helcyonBenchPacks.map(pack => pack.category || 'Uncategorised'))].sort();
+    populateSelect(document.getElementById('bench-pack-category'), categories);
+    const target = helcyonBenchPacks.find(pack => pack.id === selectId) || helcyonBenchPacks[0] || null;
+    const categorySelect = document.getElementById('bench-pack-category');
+    if (target && [...categorySelect.options].some(option => option.value === (target.category || 'Uncategorised'))) {
+      categorySelect.value = target.category || 'Uncategorised';
+    }
+    filterBenchPackOptions();
+    const packSelect = document.getElementById('bench-pack-select');
+    if (target && [...packSelect.options].some(option => option.value === target.id)) {
+      packSelect.value = target.id;
+    }
+    loadSelectedBenchPack();
+  }
+
+  async function saveBenchPackEditor() {
+    if (!helcyonBenchPackEditorBoundId) {
+      setBenchPackEditorMessage(
+        'No pack is loaded into this editor, so there is nothing to save over. ' +
+        'Click "Load Selected Pack Into Editor" first, or use "Save As New Pack".',
+        'error'
+      );
+      return;
+    }
+    let metadata;
+    let prompts;
+    try {
+      metadata = collectBenchPackEditorMetadata();
+      prompts = collectBenchPackEditorPrompts();
+    } catch (error) {
+      setBenchPackEditorMessage(error.message, 'error');
+      return;
+    }
+    const button = document.getElementById('bench-pack-editor-save');
+    button.disabled = true;
+    try {
+      const response = await fetch(
+        `/api/helcyon-bench/prompt-packs/${encodeURIComponent(helcyonBenchPackEditorBoundId)}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...metadata, prompts, bound_name: helcyonBenchPackEditorBoundName })
+        }
+      );
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Could not save prompt pack.');
+      const renamed = helcyonBenchPackEditorBoundId !== data.pack.id;
+      helcyonBenchPackEditorBoundId = data.pack.id;
+      helcyonBenchPackEditorBoundName = data.pack.name;
+      refreshBenchPackList(data, data.pack.id);
+      updateBenchPackEditorBoundLabel();
+      setBenchPackEditorMessage(
+        renamed ? `Renamed and saved changes to ${data.pack.id}.json.` : `Saved changes to ${data.pack.id}.json.`,
+        'success'
+      );
+      setBenchStatus(`Saved prompt pack ${data.pack.name}.`, 'success');
+    } catch (error) {
+      setBenchPackEditorMessage(error.message, 'error');
+    } finally {
+      button.disabled = !helcyonBenchPackEditorBoundId;
+    }
+  }
+
+  function toggleBenchSaveAsNewPack(show) {
+    const panel = document.getElementById('bench-pack-editor-save-as');
+    const shouldShow = typeof show === 'boolean' ? show : panel.hidden;
+    panel.hidden = !shouldShow;
+    if (shouldShow) {
+      document.getElementById('bench-pack-editor-new-name').focus();
+    } else {
+      document.getElementById('bench-pack-editor-new-name').value = '';
+    }
+  }
+
+  async function saveBenchPackEditorAsNew() {
+    const name = (document.getElementById('bench-pack-editor-new-name')?.value || '').trim();
+    if (!name) {
+      setBenchPackEditorMessage('Type a new pack name before creating a new pack.', 'error');
+      return;
+    }
+    let metadata;
+    let prompts;
+    try {
+      metadata = collectBenchPackEditorMetadata();
+      prompts = collectBenchPackEditorPrompts();
+    } catch (error) {
+      setBenchPackEditorMessage(error.message, 'error');
+      return;
+    }
+    try {
+      const response = await fetch('/api/helcyon-bench/prompt-packs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...metadata, name, prompts })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Could not save new prompt pack.');
+      helcyonBenchPackEditorBoundId = data.pack.id;
+      helcyonBenchPackEditorBoundName = data.pack.name;
+      document.getElementById('bench-pack-editor-name').value = data.pack.name;
+      toggleBenchSaveAsNewPack(false);
+      refreshBenchPackList(data, data.pack.id);
+      updateBenchPackEditorBoundLabel();
+      setBenchPackEditorMessage(`Saved ${prompts.length} prompt(s) as new pack ${data.pack.id}.json.`, 'success');
+      setBenchStatus(`Created prompt pack ${data.pack.name}.`, 'success');
+    } catch (error) {
+      setBenchPackEditorMessage(error.message, 'error');
+    }
+  }
+
+  function requestBenchPackDelete() {
+    const packId = document.getElementById('bench-pack-select').value;
+    if (!packId) {
+      setBenchStatus('Select a prompt pack to delete first.', 'error');
+      return;
+    }
+    const pack = helcyonBenchPacks.find(item => item.id === packId);
+    helcyonBenchPackDeleteTargetId = packId;
+    const label = document.getElementById('bench-pack-delete-confirm-label');
+    if (label) {
+      label.textContent = `Permanently delete ${pack ? pack.name : packId} (${packId}.json)? This cannot be undone.`;
+    }
+    document.getElementById('bench-pack-delete-confirm').hidden = false;
+  }
+
+  function cancelBenchPackDelete() {
+    helcyonBenchPackDeleteTargetId = null;
+    document.getElementById('bench-pack-delete-confirm').hidden = true;
+  }
+
+  async function confirmBenchPackDelete() {
+    const packId = helcyonBenchPackDeleteTargetId;
+    if (!packId) return;
+    try {
+      const response = await fetch(`/api/helcyon-bench/prompt-packs/${encodeURIComponent(packId)}`, {
+        method: 'DELETE'
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Could not delete prompt pack.');
+      if (helcyonBenchPackEditorBoundId === packId) {
+        helcyonBenchPackEditorBoundId = null;
+        helcyonBenchPackEditorBoundName = '';
+        updateBenchPackEditorBoundLabel();
+      }
+      cancelBenchPackDelete();
+      refreshBenchPackList(data, null);
+      setBenchStatus(`Deleted prompt pack ${packId}.json.`, 'success');
+    } catch (error) {
+      setBenchStatus(error.message, 'error');
+      cancelBenchPackDelete();
+    }
+  }
+
+  function renderSelectedBenchPack() {
+    const pack = helcyonBenchActivePack;
+    const list = document.getElementById('bench-prompt-list');
+    const description = document.getElementById('bench-pack-description');
+    if (!pack) {
+      description.textContent = '';
+      list.innerHTML = '<p class="bench-muted">No prompt pack selected.</p>';
+      return;
+    }
+    description.textContent = pack.description || '';
+    document.getElementById('bench-active-pack-title').textContent = `${pack.name} prompts`;
+    document.getElementById('bench-active-category').textContent = pack.category || 'Uncategorised';
+    document.getElementById('bench-active-pack').textContent = pack.name;
+    document.getElementById('bench-active-profile').textContent = pack.judge_profile || 'Default';
+    document.getElementById('bench-sidebar-profile').textContent = pack.judge_profile || 'Default';
+    document.getElementById('bench-sidebar-category').textContent = `Category: ${pack.category || 'Uncategorised'}`;
+    list.innerHTML = '';
+    const state = readBenchFormState();
+    const responses = state.responses || {};
+    const responseMeta = state.response_meta || {};
+    const activePromptTestId = state.selected_pack === pack.id
+      ? state.active_prompt_test_id
+      : '';
+    const runId = currentBenchRunId(pack.id);
+    pack.prompts.forEach((item, index) => {
+      const card = document.createElement('details');
+      card.className = 'bench-prompt-card';
+      card.dataset.testId = item.test_id;
+      card.open = activePromptTestId ? item.test_id === activePromptTestId : index === 0;
+      card.addEventListener('toggle', () => {
+        if (!card.open) return;
+        document.querySelectorAll('.bench-prompt-card[open]').forEach(other => {
+          if (other !== card) other.open = false;
+        });
+        const current = readBenchFormState();
+        current.active_prompt_test_id = item.test_id;
+        localStorage.setItem(BENCH_FORM_STATE_KEY, JSON.stringify(current));
+        saveBenchFormState();
+      });
+      const summary = document.createElement('summary');
+      const summaryCopy = document.createElement('span');
+      summaryCopy.innerHTML = `<b>Prompt ${index + 1}</b><strong></strong>`;
+      summaryCopy.querySelector('strong').textContent = item.title;
+      const status = document.createElement('small');
+      status.textContent = 'Two candidate responses';
+      summary.append(summaryCopy, status);
+
+      const body = document.createElement('div');
+      body.className = 'bench-prompt-body';
+      const promptLabel = document.createElement('span');
+      promptLabel.className = 'bench-kicker';
+      promptLabel.textContent = 'Test prompt';
+      const prompt = document.createElement('div');
+      prompt.className = 'bench-prompt-text';
+      prompt.textContent = item.prompt;
+      const responseGrid = document.createElement('div');
+      responseGrid.className = 'bench-response-grid';
+      ['A', 'B'].forEach(slot => {
+        const panel = document.createElement('section');
+        panel.className = `bench-response-panel candidate-${slot.toLowerCase()}`;
+        const heading = document.createElement('div');
+        heading.className = 'bench-response-heading';
+        const title = document.createElement('strong');
+        title.textContent = `Response ${slot}`;
+        const slotStatus = document.createElement('small');
+        slotStatus.className = 'bench-capture-state';
+        slotStatus.textContent = 'Not sent';
+        heading.append(title, slotStatus);
+        const area = document.createElement('textarea');
+        const key = benchResponseKey(pack.id, item.test_id, slot);
+        area.className = `bench-response-area bench-response-${slot.toLowerCase()}`;
+        area.dataset.responseKey = key;
+        area.placeholder = `Paste Response ${slot} for this prompt...`;
+        area.value = responses[key] || '';
+        area.addEventListener('focus', () => {
+          const current = readBenchFormState();
+          current.last_focused_response_key = key;
+          current.current_candidate_slot = slot;
+          localStorage.setItem(BENCH_FORM_STATE_KEY, JSON.stringify(current));
+          queueBenchSessionPersist();
+        });
+        area.addEventListener('input', () => {
+          const current = readBenchFormState();
+          current.response_meta = current.response_meta || {};
+          const previous = current.response_meta[key];
+          current.response_meta[key] = {
+            ...(previous || {}),
+            origin: previous && previous.origin === 'captured' ? 'edited_capture' : 'manual',
+            edited_at: new Date().toISOString()
+          };
+          localStorage.setItem(BENCH_FORM_STATE_KEY, JSON.stringify(current));
+          saveBenchFormState();
+        });
+        const actions = document.createElement('div');
+        actions.className = 'bench-response-actions';
+        const send = document.createElement('button');
+        send.type = 'button';
+        send.className = 'bench-primary-btn';
+        send.textContent = `Send to Model ${slot}`;
+        send.title = `Send this prompt to the Model ${slot} chat`;
+        send.onclick = () => sendBenchPrompt(pack, item, slot);
+        const capture = document.createElement('button');
+        capture.type = 'button';
+        // Free build: capture always shows the Pro-upgrade modal regardless of
+        // association state, so the button stays clickable rather than waiting
+        // on a "ready to capture" association that Send Prompt never creates.
+        capture.disabled = false;
+        capture.textContent = `Capture Model ${slot} response`;
+        capture.dataset.captureButton = 'true';
+        const association = HelcyonBenchPromptTransfer.getAssociation(
+          localStorage,
+          runId,
+          pack.id,
+          item.test_id,
+          slot
+        );
+        if (association) capture.dataset.associationId = association.association_id;
+        capture.onclick = () => captureBenchResponse(pack, item, slot, area, capture, slotStatus);
+        const clear = document.createElement('button');
+        clear.type = 'button';
+        clear.className = 'bench-secondary-btn';
+        clear.textContent = 'Clear';
+        clear.title = `Clear only this Model ${slot} response`;
+        clear.onclick = () => clearBenchResponse(area, key, slot);
+        const next = document.createElement('button');
+        next.type = 'button';
+        next.className = 'bench-secondary-btn';
+        next.dataset.nextButton = 'true';
+        next.textContent = 'Next prompt';
+        next.hidden = !(responseMeta[key] && responseMeta[key].origin && responseMeta[key].origin.includes('capture'));
+        next.onclick = () => advanceBenchPrompt(card);
+        actions.append(send, capture, clear, next);
+        panel.append(heading, area, actions);
+        responseGrid.appendChild(panel);
+        applyBenchCaptureState(
+          capture,
+          slotStatus,
+          association
+            ? { ...association, status: association.status === 'captured' ? 'captured' : 'checking' }
+            : null,
+          next
+        );
+        if (!next.hidden) configureBenchContinuation(next, pack, item, card);
+      });
+      body.append(promptLabel, prompt, responseGrid);
+      card.append(summary, body);
+      list.appendChild(card);
+    });
+    updateBenchRunProgress();
+    refreshBenchCaptureStates();
+  }
+
+  async function prepareBenchCandidateChat(target, pack, runId, slot) {
+    if (!HelcyonBenchPromptTransfer.candidateChatNeedsRotation(
+      localStorage,
+      runId,
+      pack.id,
+      slot,
+      target.chat
+    )) {
+      return { target, created: false };
+    }
+    const character = localStorage.getItem('lastCharacter') || '';
+    if (!character) {
+      throw new Error(
+        `Model ${slot} needs a fresh chat, but the active character could not be determined. Open Chat, create one, then try again.`
+      );
+    }
+    const response = await fetch('/chats/new', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ character })
+    });
+    const result = await response.json();
+    if (!response.ok || !result.filename) {
+      throw new Error(result.error || `A fresh chat for Model ${slot} could not be created.`);
+    }
+    localStorage.setItem('currentChatFilename', result.filename);
+    localStorage.setItem('lastOpenChat', result.filename);
+    const preparedTarget = { ...target, chat: result.filename };
+    helcyonBenchTarget = preparedTarget;
+    document.getElementById('bench-active-chat').textContent = result.filename;
+    return { target: preparedTarget, created: true };
+  }
+
+  async function sendBenchPrompt(pack, item, slot) {
+    showHwuiProModal('Send Prompt to Active Chat', 'Sending benchmark prompts directly into your active chat is a Pro feature.');
+  }
+
+  function renderBenchHistory() {
+    const host = document.getElementById('bench-history-list');
+    host.innerHTML = '';
+    const hidden = new Set(readBenchFormState().hidden_history_sources || []);
+    helcyonBenchResults.filter(result => !hidden.has(result.source)).slice(0, 10).forEach(result => {
+      const item = document.createElement('div');
+      const date = document.createElement('small');
+      date.textContent = result.generated_at ? result.generated_at.replace('T', ' ') : 'Saved run';
+      const winner = document.createElement('span');
+      winner.textContent = result.winner || `${result.model_a} vs ${result.model_b}`;
+      item.append(date, winner);
+      host.appendChild(item);
+    });
+    if (!host.children.length) host.innerHTML = '<small>Saved comparisons will appear here.</small>';
+  }
+
+  function clearBenchHistory() {
+    const state = readBenchFormState();
+    state.hidden_history_sources = [
+      ...new Set([
+        ...(state.hidden_history_sources || []),
+        ...helcyonBenchResults.map(result => result.source).filter(Boolean)
+      ])
+    ];
+    localStorage.setItem(BENCH_FORM_STATE_KEY, JSON.stringify(state));
+    persistBenchSessionState(state);
+    renderBenchHistory();
+    setBenchStatus('Sidebar comparison history cleared. Saved benchmark reports were preserved.', 'success');
+  }
+
+  function dashboardModelsFromEntries(entries) {
+    const grouped = new Map();
+    entries.forEach(entry => {
+      if (!grouped.has(entry.model)) grouped.set(entry.model, []);
+      grouped.get(entry.model).push(entry);
+    });
+    return [...grouped].map(([modelName, rows]) => {
+      const metrics = new Map();
+      rows.forEach(row => {
+        if (!metrics.has(row.category)) metrics.set(row.category, []);
+        metrics.get(row.category).push(Number(row.score));
+      });
+      const categories = [...metrics]
+        .filter(([name]) => name !== 'Overall')
+        .map(([category, scores]) => ({ category, score: scores.reduce((a, b) => a + b, 0) / scores.length, count: scores.length }))
+        .sort((a, b) => a.category.localeCompare(b.category));
+      const overalls = metrics.get('Overall') || [];
+      const overall = overalls.length
+        ? overalls.reduce((a, b) => a + b, 0) / overalls.length
+        : categories.reduce((total, row) => total + row.score, 0) / Math.max(categories.length, 1);
+      const source = helcyonBenchStrength.models.find(model => model.model === modelName) || {};
+      return {
+        ...source,
+        model: modelName,
+        categories,
+        overall,
+        latest_run: rows.reduce(
+          (latest, row) => String(row.generated_at || '') > latest ? String(row.generated_at || '') : latest,
+          ''
+        ),
+        comparisons: overalls.length,
+        strongest: categories.length ? categories.reduce((a, b) => a.score > b.score ? a : b) : null,
+        weakest: categories.length ? categories.reduce((a, b) => a.score < b.score ? a : b) : null
+      };
+    });
+  }
+
+  function renderMetricBars(categories, modelIndex = 0) {
+    const palette = [
+      ['#ff5a36', '#ffd84d'],
+      ['#c4f72c', '#69ef87'],
+      ['#20df73', '#61ebd0'],
+      ['#20c9d8', '#65a8f2'],
+      ['#3459f5', '#a65cf0'],
+      ['#df31d2', '#f45e9d'],
+      ['#ff304c', '#ffad5c']
+    ];
+    const fragment = document.createDocumentFragment();
+    categories.forEach((row, index) => {
+      const metric = document.createElement('div');
+      metric.className = `bench-score-row metric-${index % 3}`;
+      const label = document.createElement('div');
+      label.innerHTML = `<span></span><strong>${row.score.toFixed(2)}</strong>`;
+      label.querySelector('span').textContent = row.category;
+      const track = document.createElement('div');
+      track.className = 'bench-score-track';
+      track.style.setProperty('height', '10px', 'important');
+      track.style.setProperty('border', '0', 'important');
+      track.style.setProperty('background', 'rgba(255, 255, 255, 0.08)', 'important');
+      const fill = document.createElement('div');
+      fill.className = 'bench-score-fill';
+      const colours = palette[(modelIndex * 2 + index) % palette.length];
+      const width = Math.max(2, Math.min(row.score * 10, 100));
+      fill.setAttribute(
+        'style',
+        `width:${width}% !important; height:100% !important; border-radius:999px !important; ` +
+        `background-color:${colours[0]} !important; ` +
+        `background-image:linear-gradient(90deg, ${colours[0]}, ${colours[1]}) !important;`
+      );
+      track.appendChild(fill);
+      metric.append(label, track);
+      fragment.appendChild(metric);
+    });
+    return fragment;
+  }
+
+  function renderBenchDashboard() {
+    const host = document.getElementById('bench-results-list');
+    const category = document.getElementById('bench-results-category').value;
+    const modelFilter = document.getElementById('bench-results-model').value;
+    const scoreCategory = document.getElementById('bench-results-score').value;
+    const sort = document.getElementById('bench-results-sort').value;
+    const date = document.getElementById('bench-results-date').value;
+    let entries = (helcyonBenchStrength.score_entries || []).filter(entry =>
+      (!category || entry.benchmark_category === category) &&
+      (!modelFilter || entry.model === modelFilter) &&
+      (!scoreCategory || entry.category === scoreCategory || entry.category === 'Overall')
+    );
+    let models = dashboardModelsFromEntries(entries);
+    models.forEach(model => {
+      const selectedMetric = scoreCategory && scoreCategory !== 'Overall'
+        ? model.categories.find(row => row.category === scoreCategory)
+        : null;
+      model.sortScore = selectedMetric ? selectedMetric.score : model.overall;
+    });
+    if (sort === 'Lowest to highest') models.sort((a, b) => a.sortScore - b.sortScore || a.model.localeCompare(b.model));
+    else if (sort === 'Model A-Z') models.sort((a, b) => a.model.localeCompare(b.model));
+    else models.sort((a, b) => b.sortScore - a.sortScore || a.model.localeCompare(b.model));
+    if (date !== 'Ignore dates') {
+      models.sort((a, b) => {
+        const comparison = String(a.latest_run || '').localeCompare(String(b.latest_run || ''));
+        return date === 'Newest to oldest' ? -comparison : comparison;
+      });
+    }
+    host.innerHTML = '';
+    document.getElementById('bench-dashboard-count').textContent =
+      `Showing ${models.length} model(s) from ${helcyonBenchStrength.files_read || 0} saved JSON benchmark file(s).`;
+    if (!models.length) {
+      host.innerHTML = '<p class="bench-muted">No saved benchmark results match those filters.</p>';
+      return;
+    }
+    models.forEach((model, modelIndex) => {
+      const card = document.createElement('article');
+      card.className = 'bench-model-card';
+      const head = document.createElement('header');
+      const title = document.createElement('div');
+      const incomplete = (model.tested_categories || []).length < (model.categories_total || 0);
+      title.innerHTML = `<h3></h3><p>${model.comparisons || 0} scored prompt result(s)</p><small>${(model.tested_categories || []).length}/${model.categories_total || 0} benchmark categories tested ${incomplete ? '<b>Incomplete</b>' : ''}</small>`;
+      const heading = title.querySelector('h3');
+      heading.textContent = model.model;
+      const renameButton = document.createElement('button');
+      renameButton.type = 'button';
+      renameButton.className = 'bench-model-rename';
+      renameButton.textContent = '✎';
+      renameButton.title = `Rename ${model.model}`;
+      renameButton.setAttribute('aria-label', `Rename ${model.model}`);
+      renameButton.onclick = () => showBenchRenameDialog(model.model);
+      heading.appendChild(renameButton);
+      const score = document.createElement('div');
+      score.className = 'bench-overall-score';
+      score.innerHTML = `<strong>${Number(model.overall).toFixed(2)}</strong><span>/ 10</span>`;
+      score.style.setProperty('color', '#f2bd6b', 'important');
+      score.querySelector('strong').style.setProperty('color', '#f2bd6b', 'important');
+      head.append(title, score);
+      const actions = document.createElement('div');
+      actions.className = 'bench-card-actions';
+      const trend = document.createElement('button');
+      trend.type = 'button'; trend.textContent = 'Trend'; trend.onclick = () => showBenchModelDetail(model.model, 'trend');
+      const info = document.createElement('button');
+      info.type = 'button'; info.textContent = 'Info'; info.onclick = () => showBenchModelDetail(model.model, 'info');
+      actions.append(trend, info);
+      const chips = document.createElement('div');
+      chips.className = 'bench-strength-chips';
+      const strongest = model.strongest;
+      const weakest = model.weakest;
+      chips.innerHTML = `<span>Strongest: <b>${strongest ? `${strongest.category} ${strongest.score.toFixed(2)}` : 'n/a'}</b></span><span>Weakest: <b>${weakest ? `${weakest.category} ${weakest.score.toFixed(2)}` : 'n/a'}</b></span>`;
+      const metrics = document.createElement('div');
+      metrics.className = 'bench-score-bars';
+      metrics.appendChild(renderMetricBars(model.categories || [], modelIndex));
+      metrics.querySelectorAll('.bench-score-row strong').forEach(value => {
+        value.style.setProperty('color', '#f2bd6b', 'important');
+      });
+      const footer = document.createElement('footer');
+      const consolidationLabel = document.createElement('label');
+      const consolidationCheckbox = document.createElement('input');
+      consolidationCheckbox.type = 'checkbox';
+      consolidationCheckbox.checked = helcyonBenchConsolidationSelection.has(model.model);
+      consolidationCheckbox.onchange = () => {
+        if (consolidationCheckbox.checked) helcyonBenchConsolidationSelection.add(model.model);
+        else helcyonBenchConsolidationSelection.delete(model.model);
+      };
+      consolidationLabel.append(consolidationCheckbox, ' Include in consolidation');
+      const deleteButton = document.createElement('button');
+      deleteButton.type = 'button';
+      deleteButton.textContent = 'Delete';
+      deleteButton.onclick = () => deleteBenchModelRuns(model);
+      footer.append(consolidationLabel, deleteButton);
+      card.append(head, actions, chips, metrics, footer);
+      host.appendChild(card);
+    });
+  }
+
+  async function confirmBenchConsolidation() {
+    const input = document.getElementById('bench-consolidated-model-name');
+    const button = document.getElementById('bench-confirm-consolidation');
+    const canonicalModel = (input?.value || '').trim();
+    const models = [...helcyonBenchConsolidationSelection];
+    if (!canonicalModel) {
+      setBenchStatus('Enter a final model name first.', 'error');
+      input?.focus();
+      return;
+    }
+    if (models.length < 2) {
+      setBenchStatus('Select at least two model cards to consolidate.', 'error');
+      return;
+    }
+    button.disabled = true;
+    try {
+      const response = await fetch('/api/helcyon-bench/model-aliases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ canonical_model: canonicalModel, models })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Could not save model consolidation.');
+      helcyonBenchConsolidationSelection.clear();
+      input.value = '';
+      await refreshBenchResultData();
+      setBenchStatus(`Consolidated ${models.length} model identities into ${canonicalModel}.`, 'success');
+    } catch (error) {
+      setBenchStatus(error.message || String(error), 'error');
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  function renderBenchAliases() {
+    const aliases = helcyonBenchStrength.aliases || {};
+    const host = document.getElementById('bench-alias-list');
+    const rows = Object.entries(aliases);
+    document.getElementById('bench-alias-count').textContent = `(${rows.length})`;
+    host.innerHTML = '';
+    rows.forEach(([alias, sources]) => {
+      const row = document.createElement('p');
+      row.innerHTML = '<strong></strong><span></span>';
+      row.querySelector('strong').textContent = alias;
+      row.querySelector('span').textContent = sources.join(', ');
+      host.appendChild(row);
+    });
+  }
+
+  function showBenchRenameDialog(modelName) {
+    const overlay = document.getElementById('bench-detail-overlay');
+    const content = document.getElementById('bench-detail-content');
+    document.getElementById('bench-detail-title').textContent = `Rename ${modelName}`;
+    content.innerHTML = '';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = modelName;
+    input.setAttribute('aria-label', 'New model name');
+    const actions = document.createElement('div');
+    actions.className = 'bench-card-actions';
+    const apply = document.createElement('button');
+    apply.type = 'button';
+    apply.textContent = 'Apply';
+    apply.onclick = () => renameBenchModel(modelName, input.value, apply);
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = 'Cancel';
+    cancel.onclick = () => closeBenchDetail();
+    actions.append(apply, cancel);
+    content.append(input, actions);
+    overlay.hidden = false;
+    requestAnimationFrame(() => {
+      input.focus();
+      input.select();
+    });
+  }
+
+  async function renameBenchModel(modelName, newName, button) {
+    const replacement = String(newName || '').trim();
+    if (!replacement || replacement === modelName) {
+      setBenchStatus('Enter a different model name.', 'error');
+      return;
+    }
+    button.disabled = true;
+    try {
+      const response = await fetch('/api/helcyon-bench/model-aliases', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: modelName, new_name: replacement })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Could not rename model.');
+      closeBenchDetail();
+      await refreshBenchResultData();
+      setBenchStatus(`Renamed ${modelName} to ${replacement}.`, 'success');
+    } catch (error) {
+      setBenchStatus(error.message || String(error), 'error');
+      button.disabled = false;
+    }
+  }
+
+  async function deleteBenchModelRuns(model) {
+    const sourceCount = new Set((model.runs || []).map(run => run.source).filter(Boolean)).size;
+    const confirmed = window.confirm(
+      `Permanently delete ${sourceCount} saved benchmark run${sourceCount === 1 ? '' : 's'} for ${model.model}?\n\n` +
+      'Each run is a comparison file, so the paired model result stored in the same file will also be deleted.\n\n' +
+      'This cannot be undone.'
+    );
+    if (!confirmed) return;
+    try {
+      const response = await fetch('/api/helcyon-bench/model-runs', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: model.model })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Could not delete model runs.');
+      helcyonBenchConsolidationSelection.delete(model.model);
+      await refreshBenchResultData();
+      setBenchStatus(`Deleted ${(data.deleted || []).length} saved file(s) for ${model.model}.`, 'success');
+    } catch (error) {
+      setBenchStatus(error.message || String(error), 'error');
+    }
+  }
+
+  function showBenchModelDetail(modelName, mode) {
+    const model = helcyonBenchStrength.models.find(row => row.model === modelName);
+    if (!model) return;
+    const overlay = document.getElementById('bench-detail-overlay');
+    const content = document.getElementById('bench-detail-content');
+    document.getElementById('bench-detail-title').textContent = `${modelName} ${mode === 'trend' ? 'trend' : 'information'}`;
+    content.innerHTML = '';
+    if (mode === 'trend') {
+      const list = document.createElement('div');
+      list.className = 'bench-detail-runs';
+      (model.runs || []).forEach(run => {
+        const row = document.createElement('div');
+        row.innerHTML = `<strong>${Number(run.score).toFixed(2)}</strong><span></span><small></small>`;
+        row.querySelector('span').textContent = run.benchmark_category;
+        row.querySelector('small').textContent = run.generated_at ? run.generated_at.replace('T', ' ') : run.source;
+        list.appendChild(row);
+      });
+      content.appendChild(list);
+    } else {
+      const info = document.createElement('dl');
+      const values = [
+        ['Saved runs', model.run_count || 0],
+        ['Raw model identities', (model.raw_models || []).join(', ') || modelName],
+        ['Tested categories', (model.tested_categories || []).join(', ') || 'None'],
+        ['Missing categories', (model.missing_categories || []).join(', ') || 'None']
+      ];
+      values.forEach(([label, value]) => {
+        const dt = document.createElement('dt'); dt.textContent = label;
+        const dd = document.createElement('dd'); dd.textContent = value;
+        info.append(dt, dd);
+      });
+      content.appendChild(info);
+    }
+    overlay.hidden = false;
+  }
+
+  function closeBenchDetail(event) {
+    if (event && event.target !== document.getElementById('bench-detail-overlay')) return;
+    document.getElementById('bench-detail-overlay').hidden = true;
+  }
+
+  function setBenchLeaderboardMetric(metric, button) {
+    helcyonBenchLeaderboardMetric = metric;
+    document.querySelectorAll('.bench-metric-tabs button').forEach(item => item.classList.remove('active'));
+    button.classList.add('active');
+    renderBenchLeaderboard();
+    saveBenchFormState();
+  }
+
+  // Sample-size thresholds below which a (model, category) score is flagged
+  // low_sample. Mirrors LOW_SAMPLE_MIN_PROMPTS / LOW_SAMPLE_MIN_OPPONENTS in
+  // helcyon_bench_adapter.py so the warning is consistent whether or not a
+  // Score category filter is active.
+  const BENCH_LOW_SAMPLE_MIN_PROMPTS = 10;
+  const BENCH_LOW_SAMPLE_MIN_OPPONENTS = 2;
+
+  function buildBenchScoreCategoryLeaderboard(scoreCategory) {
+    const benchmarkCategories = helcyonBenchStrength.benchmark_categories || [];
+    const entries = (helcyonBenchStrength.score_entries || []).filter(
+      entry => entry.category === scoreCategory
+    );
+    const entriesByModel = new Map(
+      (helcyonBenchStrength.leaderboard || []).map(row => [row.model, []])
+    );
+    entries.forEach(entry => {
+      if (!entriesByModel.has(entry.model)) entriesByModel.set(entry.model, []);
+      entriesByModel.get(entry.model).push(entry);
+    });
+    // A run is one saved (source, generated_at) file; each run pairs the model
+    // against whichever other models also have entries under that same key.
+    const runOpponents = new Map();
+    (helcyonBenchStrength.score_entries || []).forEach(entry => {
+      if (entry.category !== 'Overall') return;
+      const runKey = `${entry.source}\u0000${entry.generated_at}`;
+      if (!runOpponents.has(runKey)) runOpponents.set(runKey, new Set());
+      runOpponents.get(runKey).add(entry.model);
+    });
+    return [...entriesByModel.entries()].map(([model, modelEntries]) => {
+      const categoryScores = {};
+      benchmarkCategories.forEach(benchmarkCategory => {
+        const categoryEntries = modelEntries.filter(
+          entry => entry.benchmark_category === benchmarkCategory
+        );
+        if (!categoryEntries.length) return;
+        const runs = new Map();
+        categoryEntries.forEach(entry => {
+          const runKey = `${entry.source}\u0000${entry.generated_at}`;
+          if (!runs.has(runKey)) {
+            runs.set(runKey, {
+              source: entry.source || '',
+              generated_at: entry.generated_at || '',
+              scores: []
+            });
+          }
+          runs.get(runKey).scores.push(Number(entry.score) || 0);
+        });
+        const runRows = [...runs.values()].map(run => ({
+          ...run,
+          score: run.scores.reduce((total, value) => total + value, 0) / run.scores.length,
+          timestamp: Number.isFinite(Date.parse(run.generated_at)) ? Date.parse(run.generated_at) : 0
+        }));
+        const current = [...runRows].sort(
+          (a, b) => b.timestamp - a.timestamp || b.source.localeCompare(a.source)
+        )[0];
+        const best = [...runRows].sort(
+          (a, b) => b.score - a.score || b.timestamp - a.timestamp || b.source.localeCompare(a.source)
+        )[0];
+        const opponents = new Set();
+        [...runs.keys()].forEach(runKey => {
+          (runOpponents.get(runKey) || new Set()).forEach(other => {
+            if (other !== model) opponents.add(other);
+          });
+        });
+        categoryScores[benchmarkCategory] = {
+          current: current.score,
+          best: best.score,
+          historical_average: categoryEntries.reduce(
+            (total, entry) => total + (Number(entry.score) || 0), 0
+          ) / categoryEntries.length,
+          prompt_count: categoryEntries.length,
+          opponent_count: opponents.size,
+          low_sample: categoryEntries.length < BENCH_LOW_SAMPLE_MIN_PROMPTS
+            || opponents.size < BENCH_LOW_SAMPLE_MIN_OPPONENTS
+        };
+      });
+      const testedCategories = benchmarkCategories.filter(category => categoryScores[category]);
+      // Divide by categories this model was actually tested in, not every category
+      // that exists anywhere — matches the fix in helcyon_bench_adapter.py.
+      const totalTested = testedCategories.length || 1;
+      const totalFor = metric => (
+        testedCategories.reduce((total, category) => total + categoryScores[category][metric], 0)
+        / totalTested
+      );
+      const lowSampleCategories = testedCategories.filter(category => categoryScores[category].low_sample);
+      return {
+        model,
+        current: totalFor('current'),
+        best: totalFor('best'),
+        historical_average: totalFor('historical_average'),
+        category_scores: categoryScores,
+        low_sample: lowSampleCategories.length > 0,
+        low_sample_categories: lowSampleCategories,
+        tested_categories: testedCategories,
+        missing_categories: benchmarkCategories.filter(category => !categoryScores[category]),
+        categories_total: benchmarkCategories.length,
+        run_count: new Set(modelEntries.map(entry => `${entry.source}\u0000${entry.generated_at}`)).size
+      };
+    });
+  }
+
+  function renderBenchLeaderboard() {
+    const host = document.getElementById('bench-leaderboard-list');
+    const search = document.getElementById('bench-leaderboard-search').value.trim().toLowerCase();
+    const testCategory = document.getElementById('bench-leaderboard-test-category')?.value || '';
+    const scoreCategory = document.getElementById('bench-leaderboard-category')?.value || '';
+    const metric = helcyonBenchLeaderboardMetric;
+    const descriptions = {
+      current: "Showing each model's latest saved result in every benchmark category.",
+      best: "Showing each model's highest saved result in every benchmark category; newest breaks ties.",
+      historical_average: "Showing each model's average across every saved result in each benchmark category."
+    };
+    document.getElementById('bench-leaderboard-description').textContent = scoreCategory
+      ? descriptions[metric].replace('result', `${scoreCategory} score`)
+      : descriptions[metric];
+    const categories = helcyonBenchStrength.benchmark_categories || [];
+    const visibleCategories = testCategory ? [testCategory] : categories;
+    document.getElementById('bench-leaderboard-context').textContent =
+      testCategory
+        ? `${scoreCategory || 'Overall'} ranking within ${testCategory} test results. Models without a saved ${testCategory} result are not ranked here.`
+        : `${scoreCategory ? `${scoreCategory} ranking` : 'Fair cross-category ranking'} across all ${categories.length} benchmark categories (${categories.join(', ')}). Each model's score is averaged only over the categories it has been tested in. Cards marked Low sample rest on too few prompts or opponents to trust the rank.`;
+    const sourceRows = scoreCategory
+      ? buildBenchScoreCategoryLeaderboard(scoreCategory)
+      : helcyonBenchStrength.leaderboard || [];
+    const rows = [...sourceRows]
+      .filter(row => !search || row.model.toLowerCase().includes(search))
+      .sort((a, b) => {
+        const scoreA = testCategory ? Number(a.category_scores?.[testCategory]?.[metric] || 0) : Number(a[metric]);
+        const scoreB = testCategory ? Number(b.category_scores?.[testCategory]?.[metric] || 0) : Number(b[metric]);
+        return scoreB - scoreA || a.model.localeCompare(b.model);
+      });
+    host.innerHTML = '';
+    rows.forEach((row, index) => {
+      const card = document.createElement('article');
+      card.className = 'bench-leaderboard-card';
+      const rank = document.createElement('div');
+      rank.className = 'bench-rank';
+      rank.textContent = index < 3 ? ['1st', '2nd', '3rd'][index] : `#${index + 1}`;
+      const model = document.createElement('div');
+      const incomplete = (row.missing_categories || []).length > 0;
+      const lowSample = testCategory
+        ? Boolean(row.category_scores?.[testCategory]?.low_sample)
+        : Boolean(row.low_sample);
+      model.className = 'bench-ranked-model';
+      model.innerHTML = `<h3></h3><p>${row.tested_categories.length}/${row.categories_total} categories tested ${incomplete ? '<b>Incomplete</b>' : ''}${lowSample ? ' <b class="bench-low-sample-badge">Low sample</b>' : ''}</p><small>${row.run_count} saved run${row.run_count === 1 ? '' : 's'}</small>`;
+      model.querySelector('h3').textContent = row.model;
+      const score = document.createElement('div');
+      score.className = 'bench-leaderboard-score';
+      const rankedScore = testCategory
+        ? Number(row.category_scores?.[testCategory]?.[metric] || 0)
+        : Number(row[metric]);
+      score.innerHTML = `<strong>${rankedScore.toFixed(2)}</strong><span>/ 10</span>`;
+      const chips = document.createElement('div');
+      chips.className = 'bench-category-chips';
+      visibleCategories.forEach(category => {
+        const chip = document.createElement('span');
+        const categoryData = row.category_scores[category];
+        if (categoryData) {
+          chip.innerHTML = `<b>${Number(categoryData[metric]).toFixed(2)}</b>`;
+          chip.prepend(document.createTextNode(category + ' '));
+        } else {
+          chip.className = 'untested';
+          chip.innerHTML = '<b>untested</b>';
+          chip.prepend(document.createTextNode(category + ' '));
+        }
+        chips.appendChild(chip);
+      });
+      const missing = document.createElement('p');
+      missing.className = 'bench-missing-copy';
+      missing.textContent = incomplete ? `Missing: ${row.missing_categories.join(', ')}` : 'Complete category coverage';
+      card.append(rank, model, score, chips, missing);
+      if (lowSample) {
+        const sampleNote = document.createElement('p');
+        sampleNote.className = 'bench-low-sample-copy';
+        if (testCategory) {
+          const categoryData = row.category_scores?.[testCategory];
+          sampleNote.textContent = categoryData
+            ? `Low sample: ${categoryData.prompt_count} prompt${categoryData.prompt_count === 1 ? '' : 's'} against ${categoryData.opponent_count} opponent${categoryData.opponent_count === 1 ? '' : 's'} in ${testCategory}. Treat this rank as provisional.`
+            : 'Low sample. Treat this rank as provisional.';
+        } else {
+          sampleNote.textContent = `Low sample in: ${row.low_sample_categories.join(', ')}. Treat this rank as provisional.`;
+        }
+        card.append(sampleNote);
+      }
+      host.appendChild(card);
+    });
+    if (!rows.length) host.innerHTML = '<p class="bench-muted">No leaderboard models match that filter.</p>';
+  }
+
+  function initialiseBenchFilters() {
+    populateSelect(document.getElementById('bench-results-category'), helcyonBenchStrength.benchmark_categories || [], 'All benchmark categories');
+    populateSelect(document.getElementById('bench-results-model'), (helcyonBenchStrength.models || []).map(row => row.model), 'All models');
+    populateSelect(document.getElementById('bench-results-score'), helcyonBenchStrength.score_categories || [], 'All score categories');
+    populateSelect(document.getElementById('bench-leaderboard-test-category'), helcyonBenchStrength.benchmark_categories || [], 'All test categories');
+    populateSelect(document.getElementById('bench-leaderboard-category'), helcyonBenchStrength.score_categories || [], 'Overall');
+    const existing = [...new Map(
+      (helcyonBenchStrength.models || [])
+        .map(row => String(row.model || '').trim())
+        .filter(Boolean)
+        .map(name => [name.toLocaleLowerCase(), name])
+    ).values()].sort((a, b) => a.localeCompare(b));
+    ['A', 'B'].forEach(slot => {
+      const select = document.getElementById(`bench-existing-model-${slot.toLowerCase()}`);
+      if (!select) return;
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = 'Select an existing model...';
+      select.replaceChildren(placeholder, ...existing.map(name => {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        return option;
+      }));
+      syncBenchExistingModelSelector(slot);
+    });
+  }
+
+  function syncBenchExistingModelSelector(slot) {
+    const input = document.getElementById(`bench-model-${slot.toLowerCase()}`);
+    const select = document.getElementById(`bench-existing-model-${slot.toLowerCase()}`);
+    if (!input || !select) return;
+    const match = [...select.options].find(
+      option => option.value && option.value.toLocaleLowerCase() === input.value.trim().toLocaleLowerCase()
+    );
+    select.value = match ? match.value : '';
+  }
+
+  function selectBenchExistingModel(slot, select) {
+    if (!select.value) return;
+    const input = document.getElementById(`bench-model-${slot.toLowerCase()}`);
+    if (!input) return;
+    input.value = select.value;
+    saveBenchFormState();
+    updateBenchRunProgress();
+  }
+
+  function handleBenchModelNameInput(slot) {
+    syncBenchExistingModelSelector(slot);
+    saveBenchFormState();
+  }
+
+  async function initialiseHelcyonBench() {
+    await refreshHelcyonBenchTarget();
+    if (helcyonBenchInitialised) return;
+    helcyonBenchInitialised = true;
+    try {
+      const restoredState = await hydrateBenchSessionState();
+      const [packsPayload, resultsPayload, strengthPayload] = await Promise.all([
+        fetch('/api/helcyon-bench/prompt-packs', { cache: 'no-store' }).then(response => response.json()),
+        fetch('/api/helcyon-bench/results', { cache: 'no-store' }).then(response => response.json()),
+        fetch('/api/helcyon-bench/strength-map', { cache: 'no-store' }).then(response => response.json()),
+        loadBenchJudgeSettings(restoredState)
+      ]);
+      helcyonBenchPacks = packsPayload.prompt_packs || [];
+      helcyonBenchResults = resultsPayload.results || [];
+      helcyonBenchStrength = strengthPayload || helcyonBenchStrength;
+      await loadBenchCompletedResult(restoredState.last_result_file, true);
+      const categories = [...new Set(helcyonBenchPacks.map(pack => pack.category || 'Uncategorised'))].sort();
+      populateSelect(document.getElementById('bench-pack-category'), categories);
+      const restoredPack = helcyonBenchPacks.find(pack => pack.id === restoredState.selected_pack);
+      const restoredCategory = restoredPack?.category || restoredState.selected_category;
+      const categorySelect = document.getElementById('bench-pack-category');
+      if ([...categorySelect.options].some(option => option.value === restoredCategory)) {
+        categorySelect.value = restoredCategory;
+      }
+      filterBenchPackOptions();
+      const packSelect = document.getElementById('bench-pack-select');
+      if ([...packSelect.options].some(option => option.value === restoredState.selected_pack)) {
+        packSelect.value = restoredState.selected_pack;
+      }
+      restoreBenchFormState(restoredState);
+      loadSelectedBenchPack();
+      renderBenchHistory();
+      refreshBenchSavedSessionsList();
+      initialiseBenchFilters();
+      restoreBenchWorkspaceState(restoredState);
+      renderBenchAliases();
+      renderBenchDashboard();
+      renderBenchLeaderboard();
+      focusRestoredBenchResponse(restoredState);
+    } catch (error) {
+      helcyonBenchInitialised = false;
+      setBenchStatus('Helcyon-Bench data could not be loaded: ' + error.message, 'error');
+    }
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('tab') !== 'helcyon-bench') return;
+    const button = [...document.querySelectorAll('.config-tab')].find(
+      item => (item.getAttribute('onclick') || '').includes("'helcyon-bench'")
+    );
+    switchConfigTab('helcyon-bench', button);
+  });
 
   function openAdvancedSettings() {
     const overlay = document.getElementById('advanced-settings-overlay');
@@ -974,16 +3854,26 @@
     if (trigger) trigger.focus({ preventScroll: true });
   }
 
-  function onAdvancedSettingsOverlayClick(event) {
-    if (event.target && event.target.id === 'advanced-settings-overlay') {
-      closeAdvancedSettings();
-    }
-  }
-
   document.addEventListener('keydown', function(event) {
     if (event.key === 'Escape') {
+      const cloudConfirm = document.getElementById('cloud-confirm-modal');
+      if (cloudConfirm && cloudConfirm.style.display !== 'none') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        cancelCloudConnect();
+        return;
+      }
+      const themeOverlay = document.getElementById('theme-modal-overlay');
+      if (themeOverlay && themeOverlay.style.display !== 'none') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        closeThemeModal();
+        return;
+      }
       const overlay = document.getElementById('advanced-settings-overlay');
       if (overlay && overlay.classList.contains('open')) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
         closeAdvancedSettings();
       }
     }
@@ -1404,6 +4294,60 @@
     if (button) {
       button.disabled = false;
       button.textContent = "Apply";
+    }
+  }
+
+  function renderCharacterModelPairingToggle(enabled) {
+    const button = document.getElementById("character-model-pairing-toggle");
+    if (!button) return;
+    button.dataset.enabled = enabled ? "true" : "false";
+    button.setAttribute("aria-checked", enabled ? "true" : "false");
+    button.textContent = enabled ? "Auto: On" : "Auto: Off";
+    button.style.background = enabled ? "#1a3a2a" : "#252525";
+    button.style.borderColor = enabled ? "#2a6a4a" : "#444";
+    button.style.color = enabled ? "#6f6" : "#aaa";
+  }
+
+  async function loadCharacterModelPairingToggle() {
+    const button = document.getElementById("character-model-pairing-toggle");
+    if (!button) return;
+    button.disabled = true;
+    try {
+      const response = await fetch("/character_model_pairing_enabled", { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok || data.status !== "ok") throw new Error(data.error || "Load failed");
+      renderCharacterModelPairingToggle(data.enabled !== false);
+    } catch (err) {
+      console.warn("Failed to load character model pairing setting:", err);
+      renderCharacterModelPairingToggle(true);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function toggleCharacterModelPairing() {
+    const button = document.getElementById("character-model-pairing-toggle");
+    if (!button || button.disabled) return;
+    const previous = button.dataset.enabled !== "false";
+    const enabled = !previous;
+    button.disabled = true;
+    renderCharacterModelPairingToggle(enabled);
+    try {
+      const response = await fetch("/character_model_pairing_enabled", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled })
+      });
+      const data = await response.json();
+      if (!response.ok || data.status !== "ok") throw new Error(data.error || "Save failed");
+      renderCharacterModelPairingToggle(data.enabled !== false);
+      hwuiToast(data.enabled ? "Automatic character model loading enabled." : "Automatic character model loading disabled.", "success");
+    } catch (err) {
+      console.error("Failed to save character model pairing setting:", err);
+      renderCharacterModelPairingToggle(previous);
+      hwuiToast("Failed to update automatic model loading.", "error");
+    } finally {
+      button.disabled = false;
     }
   }
 
@@ -1836,7 +4780,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
   }
   
   // Confirm deletion
-  if (!await hwuiConfirm(`Are you sure you want to permanently delete "${charName}"?\n\nThis will delete:\n- Character data\n- Character image\n- All associated files\n\nThis cannot be undone.`)) {
+  if (!await hwuiConfirm(`Are you sure you want to permanently delete "${charName}"?\n\nThis will delete:\n- Character data\n- Character image\n- All chats for this character across every project\n- All associated files\n\nThis cannot be undone.`)) {
     return;
   }
   
@@ -1853,7 +4797,8 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     }
     
     console.log(`✅ Deleted character: ${charName}`);
-    hwuiToast(`Character "${charName}" deleted successfully.`, 'success');
+    const deletedChats = Number(result.deleted_chats || 0);
+    hwuiToast(`Character "${charName}" and ${deletedChats} related chat${deletedChats === 1 ? '' : 's'} deleted successfully.`, 'success');
     
     // Reload character list and clear the form
     await loadCharacterList();
@@ -2094,6 +5039,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
                                       // independent of loadLlamaConfig (which early-returns
                                       // on a llama-config error and would otherwise skip this)
     loadBindCharacterList();
+    loadCharacterModelPairingToggle();
 
     // ⚠️ The three SP fields (#global-system-prompt / -example-dialog /
     // -post-history) are written by BOTH loadGlobalSystemPrompt (the globally
@@ -2712,6 +5658,11 @@ const THEME_VARS = [
     { key: '--chat-bg',           label: 'Chat Panel BG' },
     { key: '--project-header-bg', label: 'Project Bar (top of chat)' },
   ]},
+  { group: 'Benchmark', vars: [
+    { key: '--bench-bg',  label: 'Bench BG' },
+    { key: '--bench-box', label: 'Bench Box' },
+    { key: '--bench-text-box', label: 'Text Box' },
+  ]},
   { group: 'Sidebar', vars: [
     { key: '--sidebar-bg',                label: 'Sidebar BG' },
     { key: '--sidebar-border',            label: 'Sidebar Border' },
@@ -2919,95 +5870,19 @@ function refreshPresetDropdown() {
 }
 
 async function loadPreset() {
-  const name = document.getElementById('theme-preset-select').value;
-  if (!name || !themePresets[name]) { hwuiToast('Pick a preset first.', 'info'); return; }
-  const colours = themePresets[name];
-  const currentFont = getComputedStyle(document.documentElement).getPropertyValue('--app-font-family').trim();
-  const updates = { '--app-font-family': currentFont, ...colours };
-  renderThemeEditor({ ...originalTheme, ...updates });
-  // Live preview
-  Object.entries(updates).forEach(([k, v]) => {
-    document.documentElement.style.setProperty(k, v);
-  });
-  // Persist selection and write to style.css
-  localStorage.setItem('hwui_last_preset', name);
-  try {
-    const res = await fetch('/save_theme', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates)
-    });
-    const data = await res.json();
-    if (data.status !== 'ok') {
-      hwuiToast('Preset loaded but failed to save to CSS: ' + (data.error || 'Unknown error'), 'error');
-    }
-  } catch(e) {
-    hwuiToast('Preset loaded but failed to save to CSS: ' + e, 'error');
-  }
+  showHwuiProModal('Theme Editor', 'Custom colour presets are a Pro feature.');
 }
 
 async function updatePreset() {
-  const name = document.getElementById('theme-preset-select').value;
-  if (!name) { hwuiToast('Pick a preset first.', 'info'); return; }
-  const colours = collectThemeUpdates();
-  try {
-    const res = await fetch('/theme_presets/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, colours })
-    });
-    const data = await res.json();
-    if (data.status === 'ok') {
-      themePresets[name] = colours;
-      // Also write to style.css
-      await fetch('/save_theme', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(colours)
-      });
-      const btn = document.querySelector('button[onclick="updatePreset()"]');
-      if (btn) { btn.textContent = '✓ Saved'; setTimeout(() => btn.textContent = 'Update', 1500); }
-    } else {
-      hwuiToast('Failed: ' + (data.error || 'Unknown error'), 'error');
-    }
-  } catch(e) { hwuiToast('Failed: ' + e, 'error'); }
+  showHwuiProModal('Theme Editor', 'Custom colour presets are a Pro feature.');
 }
 
 async function saveAsPreset() {
-  const name = await hwuiPrompt('Preset name:');
-  if (!name || !name.trim()) return;
-  const colours = collectThemeUpdates();
-  try {
-    const res = await fetch('/theme_presets/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name.trim(), colours })
-    });
-    const data = await res.json();
-    if (data.status === 'ok') {
-      themePresets[name.trim()] = colours;
-      refreshPresetDropdown();
-      document.getElementById('theme-preset-select').value = name.trim();
-      localStorage.setItem('hwui_last_preset', name.trim());
-    } else {
-      hwuiToast('Failed: ' + (data.error || 'Unknown error'), 'error');
-    }
-  } catch(e) { hwuiToast('Failed: ' + e, 'error'); }
+  showHwuiProModal('Theme Editor', 'Custom colour presets are a Pro feature.');
 }
 
 async function deletePreset() {
-  const name = document.getElementById('theme-preset-select').value;
-  if (!name) { hwuiToast('Pick a preset first.', 'info'); return; }
-  if (!await hwuiConfirm(`Delete preset "${name}"?`)) return;
-  try {
-    await fetch('/theme_presets/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name })
-    });
-    delete themePresets[name];
-    refreshPresetDropdown();
-  } catch(e) { hwuiToast('Failed: ' + e, 'error'); }
+  showHwuiProModal('Theme Editor', 'Custom colour presets are a Pro feature.');
 }
 
 function renderThemeEditor(data) {
@@ -3052,7 +5927,7 @@ function hwuiToast(message, kind = 'success', ms = 2200) {
 }
 
 // hwuiConfirm(message[, opts]) → Promise<boolean>. In-page replacement for native
-// confirm(). Resolves true on confirm, false on cancel / backdrop / Escape.
+// confirm(). Resolves true on confirm, false on cancel / Escape.
 function hwuiConfirm(message, opts = {}) {
   return new Promise((resolve) => {
     const prevFocus = document.activeElement;
@@ -3082,11 +5957,14 @@ function hwuiConfirm(message, opts = {}) {
       resolve(result);
     }
     function onKey(e) {
-      if (e.key === 'Escape') { e.preventDefault(); cleanup(false); }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        cleanup(false);
+      }
       else if (e.key === 'Enter') { e.preventDefault(); cleanup(true); }
     }
     document.addEventListener('keydown', onKey, true);
-    backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) cleanup(false); });
     cancelBtn.addEventListener('click', () => cleanup(false));
     okBtn.addEventListener('click', () => cleanup(true));
     okBtn.focus();
@@ -3094,7 +5972,7 @@ function hwuiConfirm(message, opts = {}) {
 }
 
 // hwuiPrompt(message[, defaultValue]) → Promise<string|null>. In-page replacement
-// for native prompt(). Resolves entered text, or null on cancel / backdrop / Escape.
+// for native prompt(). Resolves entered text, or null on cancel / Escape.
 function hwuiPrompt(message, defaultValue = '', opts = {}) {
   return new Promise((resolve) => {
     const prevFocus = document.activeElement;
@@ -3128,11 +6006,14 @@ function hwuiPrompt(message, defaultValue = '', opts = {}) {
       resolve(result);
     }
     function onKey(e) {
-      if (e.key === 'Escape') { e.preventDefault(); cleanup(null); }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        cleanup(null);
+      }
       else if (e.key === 'Enter') { e.preventDefault(); cleanup(field.value); }
     }
     document.addEventListener('keydown', onKey, true);
-    backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) cleanup(null); });
     cancelBtn.addEventListener('click', () => cleanup(null));
     okBtn.addEventListener('click', () => cleanup(field.value));
     field.focus(); field.select();
@@ -3140,26 +6021,7 @@ function hwuiPrompt(message, defaultValue = '', opts = {}) {
 }
 
 async function saveTheme() {
-  // Read from live CSS vars — authoritative source, never stale
-  const updates = collectThemeUpdates();
-  try {
-    const res = await fetch('/save_theme', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates)
-    });
-    const result = await res.json();
-    if (result.status === 'ok') {
-      const link = document.getElementById('active-theme-link');
-      const themeName = (document.getElementById('theme-file-select') || {}).value || _activeThemeName || 'midnight';
-      if (link) link.href = '/theme-files/' + themeName + '.css?v=' + Date.now();
-      hwuiToast('✅ Theme saved! Refresh the chat page to see changes.', 'success');
-    } else {
-      hwuiToast('❌ Save failed: ' + (result.error || 'Unknown error'), 'error');
-    }
-  } catch(e) {
-    hwuiToast('❌ Save failed: ' + e, 'error');
-  }
+  showHwuiProModal('Theme Editor', 'Saving custom theme colours is a Pro feature.');
 }
 
 async function resetTheme() {
@@ -4127,36 +6989,11 @@ async function switchThemeFile(name) {
 }
 
 async function newThemeFile() {
-  const name = await hwuiPrompt('New theme name (e.g. "dark-blue"):');
-  if (!name || !name.trim()) return;
-  try {
-    const res = await fetch('/themes/create', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ name: name.trim() })
-    });
-    const data = await res.json();
-    if (data.error) { hwuiToast('Error: ' + data.error, 'error'); return; }
-    await loadThemeFileList();
-    await switchThemeFile(name.trim());
-  } catch(e) { hwuiToast('Failed to create theme: ' + e, 'error'); }
+  showHwuiProModal('Theme Editor', 'Creating custom themes is a Pro feature.');
 }
 
 async function deleteThemeFile() {
-  const name = _activeThemeName;
-  if (!await hwuiConfirm(`Delete theme "${name}"? This cannot be undone.`)) return;
-  try {
-    const res = await fetch('/themes/delete', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ name })
-    });
-    const data = await res.json();
-    if (data.error) { hwuiToast('Error: ' + data.error, 'error'); return; }
-    await loadThemeFileList();
-    // Switch to whatever is now active
-    const listRes = await fetch('/themes/list');
-    const listData = await listRes.json();
-    await switchThemeFile(listData.active);
-  } catch(e) { hwuiToast('Failed to delete theme: ' + e, 'error'); }
+  showHwuiProModal('Theme Editor', 'Deleting themes is a Pro feature.');
 }
 
 function openThemeModal() {
@@ -4175,11 +7012,6 @@ function openThemeModal() {
 function closeThemeModal() {
   document.getElementById('theme-modal-overlay').style.display = 'none';
 }
-// Close on overlay click
-document.getElementById('theme-modal-overlay').addEventListener('mousedown', function(e) {
-  if (e.target === this) closeThemeModal();
-});
-
 // ---- Section definitions: each has a label, vars, and a preview renderer ----
 const THEME_SECTIONS = [
 
@@ -4247,6 +7079,25 @@ const THEME_SECTIONS = [
           </div>
           <div style="background:var(--chat-bg); border-radius:0 0 6px 6px; padding:12px; min-height:48px;">
             <span style="font-size:11px; color:var(--theme-preview-muted-text);">← Chat messages appear here</span>
+          </div>
+        </div>`;
+    }
+  },
+
+  {
+    title: 'Benchmark',
+    vars: [
+      { key: '--bench-bg', label: 'Bench BG' },
+      { key: '--bench-box', label: 'Bench Box' },
+      { key: '--bench-text-box', label: 'Text Box' },
+    ],
+    preview: (el) => {
+      el.innerHTML = `
+        <div style="background:var(--bench-bg); border:1px solid var(--field-border); border-radius:7px; padding:12px;">
+          <div style="font-size:10px; color:var(--theme-preview-muted-text); text-transform:uppercase; letter-spacing:.7px; margin-bottom:8px;">Bench workspace</div>
+          <div style="background:var(--bench-box); border:1px solid var(--field-border); border-radius:6px; padding:12px; color:#ddd; font-size:12px;">
+            Benchmark section box
+            <div style="background:var(--bench-text-box); border:1px solid var(--field-border); border-radius:5px; padding:9px; margin-top:8px;">Response text box</div>
           </div>
         </div>`;
     }

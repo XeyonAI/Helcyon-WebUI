@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <title>Helcyon-WebUI</title>
-  <link rel="stylesheet" href="/style.css?v=21">
+  <link rel="stylesheet" href="/style.css?v=23">
   <link rel="stylesheet" href="/theme-files/midnight.css" id="active-theme-link">
   <style>
     /* Cog dropdown menu — converted from the old #settings-link <a>.
@@ -95,7 +95,7 @@
     <div style="display:flex; align-items:center; gap:10px;">
       <span style="font-size:18px;">👋</span>
       <span style="color:#cceedd; font-size:13px;">
-        <strong style="color:#ffffff;">Welcome to HWUI-Pro!</strong>
+        <strong style="color:#ffffff;">Welcome to Helcyon-WebUI!</strong>
         &nbsp;Before you start, set your llama.cpp paths in Config so the AI can load.
       </span>
     </div>
@@ -179,6 +179,21 @@
         <path d="M5.6 5.6l2.1 2.1"></path>
       </svg>
     </button>
+    <button id="helcyon-bench-open-btn" onclick="window.location.href='/config?tab=helcyon-bench'" title="Open Helcyon-Bench" aria-label="Open Helcyon-Bench"
+      style="position:fixed; top:308px; right:12px; z-index:1001;
+             width:26px; height:26px; display:flex; align-items:center; justify-content:center;
+             border-radius:6px; border:1px solid var(--modal-border,#2d394b);
+             background:rgba(255,255,255,0.06); color:#e8e8e8; cursor:pointer;
+             -webkit-app-region:no-drag; padding:0; line-height:0;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M6.5 6.5v11"></path>
+        <path d="M3.5 9v6"></path>
+        <path d="M17.5 6.5v11"></path>
+        <path d="M20.5 9v6"></path>
+        <path d="M6.5 12h11"></path>
+      </svg>
+    </button>
     <script>
       // Reveal the reload button only inside the Electron launcher.
       if (navigator.userAgent.toLowerCase().indexOf('electron') !== -1) {
@@ -206,7 +221,7 @@
         </div>
       </div>
       <button id="model-display" onclick="toggleModelPicker()" title="Switch model" style="
-        background: transparent;
+        background: var(--modal-bg, #1a1f2a);
         border: 1px solid var(--modal-border, #2d394b);
         border-radius: 20px;
         padding: 7px 16px 7px 14px;
@@ -219,7 +234,7 @@
         white-space: nowrap;
         max-width: 280px;
         transition: border-color 0.15s, background 0.15s;
-      " onmouseover="this.style.borderColor='#4a6a8a'; this.style.background='rgba(255,255,255,0.05)'" onmouseout="this.style.borderColor='var(--modal-border, #2d394b)'; this.style.background='transparent'">
+      " onmouseover="this.style.borderColor='#4a6a8a'; this.style.background='#202733'" onmouseout="this.style.borderColor='var(--modal-border, #2d394b)'; this.style.background='var(--modal-bg, #1a1f2a)'">
         <span id="model-display-name" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Loading...</span>
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="flex-shrink:0; opacity:0.45;"><polyline points="6 9 12 15 18 9"></polyline></svg>
       </button>
@@ -288,7 +303,9 @@
       -webkit-app-region: no-drag;
     }
     #token-monitor.tm-open { display: block; opacity: 1; transform: translateX(-50%) translateY(0); }
-    .tm-screen {
+    .tm-panels { display: flex; align-items: stretch; gap: 8px; }
+    .tm-screen,
+    .tm-doc-screen {
       position: relative; overflow: hidden;
       background:
         radial-gradient(120% 140% at 50% -20%, rgba(0,80,40,0.20), rgba(0,0,0,0) 60%),
@@ -300,8 +317,11 @@
       color: #38f4a4; text-shadow: 0 0 4px rgba(40,255,150,0.45);
       font-size: 12.5px; letter-spacing: 0.4px; line-height: 1.5;
     }
+    .tm-screen { min-width: 360px; }
+    .tm-doc-screen { width: 285px; min-width: 285px; box-sizing: border-box; }
     /* faint scanlines */
-    .tm-screen::before {
+    .tm-screen::before,
+    .tm-doc-screen::before {
       content: ""; position: absolute; inset: 0; pointer-events: none;
       background: repeating-linear-gradient(
         to bottom, rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px, rgba(0,0,0,0.18) 3px);
@@ -333,39 +353,54 @@
     .tm-bar-fill.tm-warn { background: linear-gradient(90deg,#ffd23c,#ffae2e); box-shadow:0 0 8px rgba(255,190,60,0.7); }
     .tm-bar-fill.tm-crit { background: linear-gradient(90deg,#ff5b4d,#ff2e2e); box-shadow:0 0 9px rgba(255,70,60,0.8); }
     #token-monitor .tm-model { font-size: 11px; color: #2f8f6b; }
+    .tm-doc-list { max-height: 91px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #14583a #07150e; }
+    .tm-doc-row { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 2px 0; }
+    .tm-doc-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #7dffc0; }
+    .tm-doc-tokens { flex: 0 0 auto; color: #38f4a4; font-weight: 700; white-space: nowrap; }
+    .tm-doc-empty { color: #2f8f6b; padding-top: 2px; }
   </style>
   <div id="token-monitor" aria-hidden="true">
-    <div class="tm-screen">
-      <div class="tm-row tm-title">
-        <span>▌ TOKEN MONITOR</span>
-        <span class="tm-x" onclick="toggleTokenMonitor()" title="Hide">×</span>
+    <div class="tm-panels">
+      <div class="tm-screen">
+        <div class="tm-row tm-title">
+          <span>▌ TOKEN MONITOR</span>
+          <span class="tm-x" onclick="toggleTokenMonitor()" title="Hide">×</span>
+        </div>
+        <div class="tm-row">
+          <span class="tm-lbl">PROMPT</span>
+          <span class="tm-val" id="tm-prompt">––––</span><span class="tm-dim">tok</span>
+          <div class="tm-bar"><div class="tm-bar-fill" id="tm-bar"></div></div>
+          <span class="tm-val" id="tm-pct">––%</span>
+        </div>
+        <div class="tm-row">
+          <span class="tm-lbl">CONTEXT</span>
+          <span class="tm-val" id="tm-ctx">––––</span><span class="tm-dim">tok</span>
+          <span class="tm-dim">·&nbsp; HEADROOM</span>
+          <span class="tm-val" id="tm-headroom">––––</span>
+          <span class="tm-dim" id="tm-headroom-pct"></span>
+        </div>
+        <div class="tm-row">
+          <span class="tm-lbl">REPLY</span>
+          <span class="tm-dim">budget</span><span class="tm-val" id="tm-npredict">––––</span>
+          <span class="tm-dim">·&nbsp; last gen</span><span class="tm-val" id="tm-lastgen">––</span>
+        </div>
+        <div class="tm-row">
+          <span class="tm-lbl">HISTORY</span>
+          <span class="tm-dim">kept</span><span class="tm-val" id="tm-kept">––</span>
+          <span class="tm-dim">·&nbsp; dropped</span><span class="tm-val" id="tm-dropped">––</span>
+        </div>
+        <div class="tm-row tm-model">
+          <span class="tm-lbl">MODEL</span>
+          <span id="tm-model">––</span>
+        </div>
       </div>
-      <div class="tm-row">
-        <span class="tm-lbl">PROMPT</span>
-        <span class="tm-val" id="tm-prompt">––––</span><span class="tm-dim">tok</span>
-        <div class="tm-bar"><div class="tm-bar-fill" id="tm-bar"></div></div>
-        <span class="tm-val" id="tm-pct">––%</span>
-      </div>
-      <div class="tm-row">
-        <span class="tm-lbl">CONTEXT</span>
-        <span class="tm-val" id="tm-ctx">––––</span><span class="tm-dim">tok</span>
-        <span class="tm-dim">·&nbsp; HEADROOM</span>
-        <span class="tm-val" id="tm-headroom">––––</span>
-        <span class="tm-dim" id="tm-headroom-pct"></span>
-      </div>
-      <div class="tm-row">
-        <span class="tm-lbl">REPLY</span>
-        <span class="tm-dim">budget</span><span class="tm-val" id="tm-npredict">––––</span>
-        <span class="tm-dim">·&nbsp; last gen</span><span class="tm-val" id="tm-lastgen">––</span>
-      </div>
-      <div class="tm-row">
-        <span class="tm-lbl">HISTORY</span>
-        <span class="tm-dim">kept</span><span class="tm-val" id="tm-kept">––</span>
-        <span class="tm-dim">·&nbsp; dropped</span><span class="tm-val" id="tm-dropped">––</span>
-      </div>
-      <div class="tm-row tm-model">
-        <span class="tm-lbl">MODEL</span>
-        <span id="tm-model">––</span>
+      <div class="tm-doc-screen">
+        <div class="tm-row tm-title">
+          <span>▌ INJECTED DOCUMENTS</span>
+        </div>
+        <div id="tm-documents" class="tm-doc-list">
+          <div class="tm-doc-empty">No documents injected</div>
+        </div>
       </div>
     </div>
   </div>
@@ -408,6 +443,36 @@
       if (m !== '––') m = m.replace(/^.*[\\/]/, '').replace(/\.gguf$/i, '');
       if (d.gpu_layers !== null && d.gpu_layers !== undefined) m += '  ·  gpu ' + d.gpu_layers;
       set('tm-model', m);
+
+      const docsHost = document.getElementById('tm-documents');
+      if (docsHost) {
+        docsHost.innerHTML = '';
+        const documents = Array.isArray(d.injected_documents) ? d.injected_documents : [];
+        if (documents.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'tm-doc-empty';
+          empty.textContent = 'No documents injected';
+          docsHost.appendChild(empty);
+        } else {
+          documents.forEach(doc => {
+            const row = document.createElement('div');
+            row.className = 'tm-doc-row';
+
+            const name = document.createElement('span');
+            name.className = 'tm-doc-name';
+            name.textContent = doc.name || 'document';
+            name.title = doc.name || 'document';
+
+            const tokens = document.createElement('span');
+            tokens.className = 'tm-doc-tokens';
+            tokens.textContent = _tmFmt(doc.tokens) + ' tok';
+
+            row.appendChild(name);
+            row.appendChild(tokens);
+            docsHost.appendChild(row);
+          });
+        }
+      }
     }
 
     // Centre the panel on the chat bar (not the viewport): the input area is
@@ -541,6 +606,10 @@
             </div>
           </div>
         </div>
+        <section id="opening-question-starters" hidden aria-label="Opening questions">
+          <h3 id="opening-question-heading"></h3>
+          <div id="opening-question-cards"></div>
+        </section>
         <!-- Chat -->
         <div id="chat"></div>
         <!-- Input -->
@@ -555,6 +624,18 @@
           <!-- Hidden file input -->
           <input type="file" id="chat-image-input" accept="image/*" multiple style="display:none;" onchange="handleImageAttach(this)" />
           <input type="file" id="chat-document-input" accept=".txt,.md,.pdf,.docx,.odt,.py,.html" multiple style="display:none;" onchange="handleDocumentAttach(this)" />
+
+          <div id="bench-chat-control" class="bench-chat-control" hidden>
+            <div class="bench-chat-control-copy">
+              <span id="bench-chat-context" class="bench-chat-context"></span>
+              <strong id="bench-chat-state">Benchmark prompt loaded</strong>
+            </div>
+            <div class="bench-chat-control-actions">
+              <button id="bench-chat-dismiss" type="button" class="bench-chat-dismiss" onclick="hideActiveBenchPanel()" title="Hide Bench controls" aria-label="Hide Bench controls">×</button>
+              <button id="bench-chat-return" type="button" class="bench-chat-return" onclick="returnToActiveBench()">Return to Bench</button>
+              <button id="bench-chat-capture" type="button" class="bench-chat-capture" onclick="captureActiveBenchResponse()" hidden>Capture response &amp; return to Bench</button>
+            </div>
+          </div>
 
           <!-- Floating pill -->
           <div id="input-row" style="pointer-events:all;display:flex;flex-direction:row;align-items:center;gap:6px;background:var(--container-bg,#131922);border:1px solid var(--sidebar-border,#2a2a2a);border-radius:16px;padding:8px 10px;box-shadow:0 4px 24px rgba(0,0,0,0.5);width:100%;max-width:700px;box-sizing:border-box;overflow:visible;">
@@ -575,6 +656,7 @@
                 <button onclick="manualSaveChat(); closeInputMenu()" id="save-chat-btn">💾 Save Chat</button>
                 <button onclick="endSession(); closeInputMenu()" title="Generate a memory summary">🧠 End Session</button>
                 <button onclick="clearRuntimeState(); closeInputMenu()" title="Clear the live page state and reload this chat from disk">Clear Runtime State</button>
+                <button id="bench-chat-show-btn" onclick="showActiveBenchPanel(); closeInputMenu()" title="Restore the benchmark capture panel for this chat">&#127947; Show Bench Controls</button>
                 <div class="input-menu-divider"></div>
                 <button onclick="regenerate(); closeInputMenu()">🔄 Regenerate</button>
                 <div class="input-menu-divider"></div>
@@ -704,22 +786,47 @@ Examples:
   <div id="opening-line-modal" class="modal">
     <div class="modal-content">
       <div class="modal-header">
-        <h3>Opening Line</h3>
+        <div class="opening-modal-tabs" role="tablist" aria-label="Opening content">
+          <button id="opening-lines-tab" class="opening-modal-tab active" type="button"
+            role="tab" aria-selected="true" aria-controls="opening-lines-panel"
+            onclick="switchOpeningModalTab('lines')">Opening Lines</button>
+          <button id="opening-questions-tab" class="opening-modal-tab" type="button"
+            role="tab" aria-selected="false" aria-controls="opening-questions-panel"
+            onclick="switchOpeningModalTab('questions')">Opening Questions</button>
+        </div>
         <span class="close" onclick="closeOpeningLineModal()">&times;</span>
       </div>
       
       <div class="modal-body">
-        <label>
-          <input type="checkbox" id="opening-line-enabled"> Enable opening line for new chats
-        </label>
-        
-        <div id="opening-lines-container">
-          <!-- Opening lines will be dynamically added here -->
+        <div id="opening-lines-panel" class="opening-modal-panel" role="tabpanel"
+          aria-labelledby="opening-lines-tab">
+          <label>
+            <input type="checkbox" id="opening-line-enabled"> Enable opening line for new chats
+          </label>
+          
+          <div id="opening-lines-container">
+            <!-- Opening lines will be dynamically added here -->
+          </div>
+          
+          <button onclick="addOpeningLineField()" class="add-line-btn">
+            &#10133; Add New Line
+          </button>
         </div>
-        
-        <button onclick="addOpeningLineField()" class="add-line-btn">
-          ➕ Add New Line
-        </button>
+
+        <div id="opening-questions-panel" class="opening-modal-panel" role="tabpanel"
+          aria-labelledby="opening-questions-tab" hidden>
+          <label>
+            <input type="checkbox" id="opening-questions-enabled"> Enable opening questions for new chats
+          </label>
+
+          <div id="opening-questions-container">
+            <!-- Opening questions will be dynamically added here -->
+          </div>
+
+          <button onclick="addOpeningQuestionField()" class="add-line-btn">
+            &#10133; Add New Question
+          </button>
+        </div>
       </div>
       
       <div class="modal-footer">
@@ -857,7 +964,7 @@ Examples:
 <style>
   #paste-transcript-filename, #paste-transcript-content { border: 1px solid #2a2a2a; }
 </style>
-<div id="paste-transcript-modal" class="modal" onclick="if(event.target===this)closePasteTranscriptModal()">
+<div id="paste-transcript-modal" class="modal">
   <div class="modal-content" style="max-width:760px;">
     <div class="modal-header">
       <h3>📋 Paste Transcript</h3>
@@ -947,6 +1054,7 @@ Examples:
     </div>
   </div>
 </div>
+  <script src="/static/helcyon_bench_integration.js?v=9"></script>
   <!-- Sidebar Logic -->
 
 <script>
@@ -964,6 +1072,7 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
   // GLOBAL VARIABLES
   // ==================================================
   let currentChatFilename = null;
+  let currentChatId = null;
   let currentCharacter = {};
   let systemPrompt = '';
   let activeUserName = 'User';
@@ -972,6 +1081,482 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
   let lastPrompt = localStorage.getItem('lastPrompt') || '';
   let isCreatingNewChat = false;
   const CHAT_INPUT_DRAFT_KEY = 'hwui_chat_input_draft';
+
+  function createHwuiMessageId() {
+    return crypto.randomUUID
+      ? crypto.randomUUID()
+      : `message-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  function activeBenchSubmissionForSource(sourceUserMessageId) {
+    try {
+      const context = JSON.parse(
+        localStorage.getItem(HelcyonBenchPromptTransfer.CONTEXT_KEY) || 'null'
+      );
+      return context &&
+        context.source_user_message_id === sourceUserMessageId
+        ? context
+        : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  async function registerBenchSubmission(context) {
+    if (!context) return false;
+    if (!currentChatId) {
+      // Registration must never fail silently while generation continues.
+      HelcyonBenchPromptTransfer.updateAssociation(
+        localStorage,
+        context.association_id,
+        { status: 'error', generation_status: 'error', error: 'This chat has no stable id yet, so the benchmark turn could not be registered.' }
+      );
+      hwuiToast('Benchmark tracking failed: this chat has no stable id yet, so the response cannot be captured automatically.', 'error', 6000);
+      refreshBenchChatControl();
+      return false;
+    }
+    const payload = {
+      association_id: context.association_id,
+      run_id: context.run_id,
+      benchmark_id: context.benchmark_id,
+      benchmark_name: context.benchmark_name,
+      test_id: context.test_id,
+      test_title: context.test_title,
+      prompt_number: context.prompt_number,
+      category: context.category,
+      candidate_model_slot: context.candidate_model_slot,
+      candidate_model_name: context.candidate_model_name,
+      target_model: context.target_model,
+      chat_id: currentChatId,
+      target_chat_filename: currentChatFilename,
+      original_prompt: context.original_prompt || context.prompt_text,
+      submitted_prompt: context.submitted_prompt_text,
+      source_user_message_id: context.source_user_message_id,
+      source_user_position: context.source_user_position,
+      submitted_at: context.submitted_at,
+      character: context.character || currentCharName || currentCharacter?.name || ''
+    };
+    let response;
+    let result;
+    try {
+      response = await fetch('/api/helcyon-bench/capture-associations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      result = await response.json();
+    } catch (error) {
+      // A network hiccup here must not abort the send, and must be visible.
+      HelcyonBenchPromptTransfer.updateAssociation(
+        localStorage,
+        context.association_id,
+        { status: 'error', generation_status: 'error', error: 'Capture association could not be registered: ' + (error.message || error) }
+      );
+      hwuiToast('Benchmark registration failed: ' + (error.message || error), 'error', 6000);
+      refreshBenchChatControl();
+      return false;
+    }
+    if (!response.ok) {
+      HelcyonBenchPromptTransfer.updateAssociation(
+        localStorage,
+        context.association_id,
+        { status: 'error', generation_status: 'error', error: result.error || 'Capture association could not be registered.' }
+      );
+      hwuiToast('Benchmark registration failed: ' + (result.error || 'the capture association was rejected.'), 'error', 6000);
+      refreshBenchChatControl();
+      return false;
+    }
+    const registered = HelcyonBenchPromptTransfer.updateAssociation(
+      localStorage,
+      context.association_id,
+      { ...result.association, status: 'submitted', chat_id: currentChatId }
+    );
+    if (registered) {
+      try {
+        const state = HelcyonBenchPromptTransfer.applyAssociationToSession(
+          await loadIntegratedBenchSession(),
+          registered
+        );
+        state.associations = HelcyonBenchPromptTransfer.getAssociations(localStorage);
+        state.active_association_id = registered.association_id;
+        await saveIntegratedBenchSession(state);
+      } catch (error) {
+        console.warn('Integrated Bench session save failed:', error);
+      }
+    }
+    refreshBenchChatControl();
+    return true;
+  }
+
+  async function updateBenchGenerationState(sourceUserMessageId, status, assistantMessageId) {
+    let context = activeBenchSubmissionForSource(sourceUserMessageId);
+    if (!context || !context.association_id) return;
+    // Mirror generation_status locally: this call exists to track the server's
+    // generation_status PATCH, and leaving the old mirror behind creates a
+    // contradictory record ({status:'error', generation_status:'submitted'})
+    // that startup cleanup treats as live while the badge renders Error.
+    HelcyonBenchPromptTransfer.updateAssociation(
+      localStorage,
+      context.association_id,
+      {
+        status,
+        generation_status: status,
+        ...(assistantMessageId ? { expected_assistant_message_id: assistantMessageId } : {})
+      }
+    );
+    const patchStatus = () => fetch(
+      `/api/helcyon-bench/capture-associations/${encodeURIComponent(context.association_id)}/status`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status,
+          ...(assistantMessageId ? { assistant_message_id: assistantMessageId } : {})
+        })
+      }
+    );
+    try {
+      const response = await patchStatus();
+      if (!response.ok) {
+        const failure = await response.json().catch(() => ({}));
+        // A missing server association means the original registration failed
+        // (e.g. a transient save race). Re-register the submitted turn once so
+        // the completed response stays capturable.
+        if (
+          failure.code === 'association_missing' &&
+          context.source_user_message_id &&
+          !context.reregister_attempted
+        ) {
+          HelcyonBenchPromptTransfer.updateAssociation(
+            localStorage,
+            context.association_id,
+            { reregister_attempted: true }
+          );
+          context = { ...context, reregister_attempted: true };
+          if (await registerBenchSubmission(context)) {
+            HelcyonBenchPromptTransfer.updateAssociation(
+              localStorage,
+              context.association_id,
+              { status, generation_status: status }
+            );
+            await patchStatus();
+          }
+        }
+      }
+    } catch (error) {
+      console.warn('Benchmark capture state update failed:', error);
+    }
+    refreshBenchChatControl();
+  }
+
+  function activeBenchChatAssociation() {
+    const context = HelcyonBenchPromptTransfer.getContext(localStorage);
+    if (
+      context &&
+      context.status !== 'invalidated' &&
+      (!currentChatFilename || benchAssociationMatchesCurrentChat(context))
+    ) {
+      return context;
+    }
+    if (!currentChatFilename) return null;
+    const associations = Object.values(
+      HelcyonBenchPromptTransfer.getAssociations(localStorage)
+    ).filter(association =>
+      association &&
+      association.status !== 'invalidated' &&
+      association.generation_status !== 'invalidated' &&
+      benchAssociationMatchesCurrentChat(association)
+    );
+    associations.sort((left, right) => {
+      const leftTime = Date.parse(
+        left.captured_at || left.submitted_at || left.created_at || ''
+      ) || 0;
+      const rightTime = Date.parse(
+        right.captured_at || right.submitted_at || right.created_at || ''
+      ) || 0;
+      return rightTime - leftTime;
+    });
+    return associations.length
+      ? HelcyonBenchPromptTransfer.restoreContext(localStorage, associations[0])
+      : null;
+  }
+
+  function consumePendingBenchPrompt({ notifyMismatch = true } = {}) {
+    const input = document.getElementById('user-input');
+    const transfer = HelcyonBenchPromptTransfer.consume(
+      localStorage,
+      currentChatFilename,
+      input
+    );
+    if (transfer.ok) {
+      const association = HelcyonBenchPromptTransfer.getContext(localStorage);
+      resizeChatInput(input);
+      input.focus();
+      renderBenchChatControl(association);
+      settleBenchChatScroll(association);
+      hwuiToast('Benchmark prompt placed in the chat input. Edit it if needed, then click Generate.', 'success', 2200, 'top');
+    } else if (notifyMismatch && transfer.reason === 'chat-mismatch') {
+      hwuiToast('Benchmark prompt was not inserted because the active chat changed.', 'info');
+    }
+    return transfer;
+  }
+
+  function scrollBenchAssociationIntoView(association = activeBenchChatAssociation()) {
+    if (!association || !benchAssociationMatchesCurrentChat(association)) return false;
+    const chat = document.getElementById('chat');
+    if (!chat) return false;
+    const chatIsScrollable = chat.scrollHeight > chat.clientHeight + 1;
+    const scrollRoot = chatIsScrollable
+      ? chat
+      : (document.scrollingElement || document.documentElement);
+    const sourceId = String(association.source_user_message_id || '');
+    const target = sourceId
+      ? [...chat.querySelectorAll('[data-message-id]')].find(
+          element => element.dataset.messageId === sourceId
+        )
+      : null;
+    if (target && chatIsScrollable) {
+      const targetBottom = target.offsetTop + target.offsetHeight + 24;
+      scrollRoot.scrollTop = Math.max(0, Math.min(
+        targetBottom - scrollRoot.clientHeight,
+        scrollRoot.scrollHeight - scrollRoot.clientHeight
+      ));
+    } else if (target) {
+      const inputTop = document.getElementById('input-area')?.getBoundingClientRect().top
+        || window.innerHeight;
+      const targetBottom = target.getBoundingClientRect().bottom;
+      scrollRoot.scrollTop = Math.max(0, Math.min(
+        scrollRoot.scrollTop + targetBottom - inputTop + 24,
+        scrollRoot.scrollHeight - scrollRoot.clientHeight
+      ));
+    } else {
+      scrollRoot.scrollTop = scrollRoot.scrollHeight;
+    }
+    return Boolean(target);
+  }
+
+  function settleBenchChatScroll(association = activeBenchChatAssociation()) {
+    if (!association || !benchAssociationMatchesCurrentChat(association)) return;
+    const chat = document.getElementById('chat');
+    if (!chat) return;
+    let frame = 0;
+    let lastHeight = -1;
+    let stableFrames = 0;
+    const settle = () => {
+      if (!benchAssociationMatchesCurrentChat(association)) return;
+      scrollBenchAssociationIntoView(association);
+      const height = chat.scrollHeight;
+      stableFrames = height === lastHeight ? stableFrames + 1 : 0;
+      lastHeight = height;
+      frame += 1;
+      if (stableFrames < 2 && frame < 60) requestAnimationFrame(settle);
+    };
+    requestAnimationFrame(settle);
+  }
+
+  function benchAssociationMatchesCurrentChat(association) {
+    if (!association || !currentChatFilename) return false;
+    if (association.chat_id && currentChatId) return association.chat_id === currentChatId;
+    const resolved = association.resolved_chat_filename || association.target_chat_filename || '';
+    return resolved === currentChatFilename;
+  }
+
+  function benchChatStateLabel(association, sameChat) {
+    const slot = association?.candidate_model_slot || '';
+    if (!sameChat) return `Benchmark belongs to ${association?.resolved_chat_filename || association?.target_chat_filename || 'another chat'}`;
+    const labels = {
+      loaded_into_chat: 'Benchmark prompt loaded',
+      submitted: `Submitted for Model ${slot}`,
+      generating: 'Generating benchmark response',
+      ready_to_capture: `Ready to capture for Model ${slot}`,
+      captured: `Captured for Model ${slot}`,
+      cancelled: 'Capture unavailable: generation cancelled',
+      error: 'Capture unavailable: generation failed'
+    };
+    return labels[association?.status] || labels[association?.generation_status] || 'Benchmark prompt loaded';
+  }
+
+  function renderBenchChatControl(association) {
+    const control = document.getElementById('bench-chat-control');
+    if (!control) return;
+    const sameChat = benchAssociationMatchesCurrentChat(association);
+    const status = association?.status || association?.generation_status || '';
+    const usefulStates = new Set([
+      'loaded_into_chat',
+      'submitted',
+      'generating',
+      'ready_to_capture',
+      'captured',
+      'cancelled',
+      'error'
+    ]);
+    if (!association || !sameChat || !usefulStates.has(status)) {
+      control.hidden = true;
+      document.getElementById('chat')?.classList.remove('bench-control-visible');
+      window._activeBenchChatAssociation = null;
+      return;
+    }
+    const slot = association.candidate_model_slot || '';
+    const promptLabel = association.prompt_number
+      ? `Prompt ${association.prompt_number}${association.test_title ? ` · ${association.test_title}` : ''}`
+      : association.test_title || association.test_id || 'Benchmark prompt';
+    const packLabel = association.benchmark_name || association.benchmark_id || 'Helcyon-Bench';
+    document.getElementById('bench-chat-context').textContent =
+      `${packLabel} · ${promptLabel} · Model ${slot}`;
+    document.getElementById('bench-chat-state').textContent =
+      benchChatStateLabel(association, sameChat);
+    const capture = document.getElementById('bench-chat-capture');
+    capture.hidden = !(sameChat && (association.status === 'ready_to_capture' || association.generation_status === 'ready_to_capture'));
+    capture.disabled = capture.hidden;
+    const manuallyHidden = HelcyonBenchPromptTransfer.isPanelHidden(
+      localStorage,
+      association.association_id
+    );
+    control.hidden = manuallyHidden;
+    document.getElementById('chat')?.classList.toggle('bench-control-visible', !manuallyHidden);
+    control.classList.toggle('bench-chat-control-ready', !capture.hidden);
+    control.classList.remove('bench-chat-control-wrong-chat');
+    window._activeBenchChatAssociation = association;
+  }
+
+  async function refreshBenchChatControl() {
+    let association = activeBenchChatAssociation();
+    if (!association) {
+      renderBenchChatControl(null);
+      return null;
+    }
+    if (association.association_id && !['queued', 'loaded_into_chat', 'invalidated'].includes(association.status)) {
+      try {
+        const response = await fetch(
+          `/api/helcyon-bench/capture-associations/${encodeURIComponent(association.association_id)}/status`,
+          { cache: 'no-store' }
+        );
+        const result = await response.json();
+        if (result.association) {
+          const updates = {
+            ...result.association,
+            status: result.status || result.association.generation_status || association.status,
+            error: result.error || ''
+          };
+          association = HelcyonBenchPromptTransfer.updateAssociation(
+            localStorage,
+            association.association_id,
+            updates
+          ) || { ...association, ...updates };
+        } else if (result.code !== 'association_missing' && result.error) {
+          // Display-only: never durably downgrade the association from an
+          // error payload without its server record — resolve failures can be
+          // transient and 'association_missing' just means not registered yet.
+          association = { ...association, status: result.status || association.status, error: result.error };
+        }
+      } catch (error) {
+        association = { ...association, status: 'error', error: 'Capture readiness could not be checked.' };
+      }
+    }
+    renderBenchChatControl(association);
+    return association;
+  }
+
+  async function loadIntegratedBenchSession() {
+    let state = {};
+    try {
+      state = JSON.parse(localStorage.getItem(HelcyonBenchPromptTransfer.FORM_STATE_KEY) || '{}');
+    } catch (error) {}
+    try {
+      const response = await fetch('/api/helcyon-bench/session', { cache: 'no-store' });
+      const result = await response.json();
+      if (response.ok && result.session) state = { ...state, ...result.session };
+    } catch (error) {}
+    return state;
+  }
+
+  async function saveIntegratedBenchSession(state) {
+    localStorage.setItem(HelcyonBenchPromptTransfer.FORM_STATE_KEY, JSON.stringify(state));
+    const response = await fetch('/api/helcyon-bench/session', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(state)
+    });
+    if (!response.ok) throw new Error('The integrated Bench session could not be saved.');
+    return state;
+  }
+
+  async function returnToActiveBench() {
+    const association = window._activeBenchChatAssociation || activeBenchChatAssociation();
+    if (!association) return;
+    const state = HelcyonBenchPromptTransfer.applyAssociationToSession(
+      await loadIntegratedBenchSession(),
+      association
+    );
+    try {
+      await saveIntegratedBenchSession(state);
+    } catch (error) {
+      console.warn(error.message);
+    }
+    window.location.href = HelcyonBenchPromptTransfer.returnUrl(association);
+  }
+
+  function hideActiveBenchPanel() {
+    const association = window._activeBenchChatAssociation || activeBenchChatAssociation();
+    if (!association) return;
+    HelcyonBenchPromptTransfer.setPanelHidden(localStorage, association.association_id, true);
+    renderBenchChatControl(association);
+  }
+
+  async function showActiveBenchPanel() {
+    const pending = consumePendingBenchPrompt({ notifyMismatch: false });
+    if (pending.reason === 'input-not-empty') {
+      hwuiToast(
+        'A benchmark prompt is waiting, but the chat input already contains text. Send or clear that text first.',
+        'info',
+        5000
+      );
+      return;
+    }
+    let association = await refreshBenchChatControl();
+    if (!association || !benchAssociationMatchesCurrentChat(association)) {
+      hwuiToast(
+        'No saved benchmark context was found for this chat. Return to Bench and send a prompt here first.',
+        'info',
+        5000
+      );
+      return;
+    }
+    if (association.status === 'queued') {
+      // The pending transfer record was lost but its queued association
+      // survives — reload the prompt into the input so Generate can proceed.
+      const input = document.getElementById('user-input');
+      const inputText = String(input?.value || '').trim();
+      const promptText = String(association.prompt_text || '');
+      if (inputText && inputText !== promptText.trim()) {
+        hwuiToast(
+          'A benchmark prompt is waiting, but the chat input already contains text. Send or clear that text first.',
+          'info',
+          5000
+        );
+        return;
+      }
+      if (input && !inputText) {
+        input.value = promptText;
+        resizeChatInput(input);
+      }
+      association = HelcyonBenchPromptTransfer.updateAssociation(
+        localStorage,
+        association.association_id,
+        { status: 'loaded_into_chat' }
+      ) || { ...association, status: 'loaded_into_chat' };
+    }
+    HelcyonBenchPromptTransfer.restoreContext(localStorage, association);
+    HelcyonBenchPromptTransfer.setPanelHidden(localStorage, association.association_id, false);
+    renderBenchChatControl(association);
+    if (document.getElementById('bench-chat-control')?.hidden) {
+      hwuiToast('This chat has no active benchmark response to capture.', 'info', 5000);
+    }
+  }
+
+  async function captureActiveBenchResponse() {
+    showHwuiProModal('Capture Response', 'Capturing the exact assistant reply into a candidate slot is a Pro feature.');
+  }
 
   function getChatInputDraftContext() {
     const dropdown = document.getElementById('character-select');
@@ -1653,6 +2238,11 @@ if (typeof marked === "undefined") {
       const name = data.model || 'No model loaded';
       const label = data.label || name;
       const noModel = name === 'No model loaded';
+      HelcyonBenchPromptTransfer.pruneAssociationsForTarget(localStorage, {
+        chat: currentChatFilename || '',
+        chat_id: currentChatId || '',
+        model: noModel ? '__no_model__' : name
+      });
 
       const nameSpan = document.getElementById('model-display-name');
       if (nameSpan) { nameSpan.textContent = noModel ? 'No model loaded' : label; nameSpan.style.color = noModel ? '#a05050' : '#ccc'; }
@@ -1958,6 +2548,16 @@ if (typeof marked === "undefined") {
     const preferred = String(characterData?.preferred_model_id || '').trim();
     if (!preferred) return true;
 
+    try {
+      const settingRes = await fetch('/character_model_pairing_enabled', { cache: 'no-store' });
+      if (settingRes.ok) {
+        const setting = await settingRes.json();
+        if (setting.enabled === false) return true;
+      }
+    } catch (e) {
+      console.warn('Could not read automatic character model loading setting:', e);
+    }
+
     const displayName = preferredModelName(preferred);
     const preferredId = preferred.replace(/\\/g, '/').toLowerCase();
     const rememberedId = String(localStorage.getItem('llama_last_model') || '').replace(/\\/g, '/').toLowerCase();
@@ -2019,6 +2619,11 @@ if (typeof marked === "undefined") {
       if (nameSpanU) { nameSpanU.textContent = 'No model loaded'; nameSpanU.style.color = '#a05050'; }
       const actualElU = document.getElementById('picker-actual-model');
       if (actualElU) { actualElU.textContent = ''; actualElU.style.display = 'none'; }
+      HelcyonBenchPromptTransfer.pruneAssociationsForTarget(localStorage, {
+        chat: currentChatFilename || '',
+        chat_id: currentChatId || '',
+        model: '__no_model__'
+      });
       status.textContent = '✅ Unloaded';
       setTimeout(() => closeModelPicker(), 1000);
     } catch(e) {
@@ -2325,7 +2930,7 @@ if (typeof marked === "undefined") {
     buildCustomSelect();
   }
 
-  function showCharacterGroupEditor(container, initialValue, onSave) {
+  function showCharacterGroupEditor(container, initialValue, onSave, refresh = buildCustomSelect) {
     container.innerHTML = '';
     container.classList.add('character-group-editor');
 
@@ -2346,16 +2951,16 @@ if (typeof marked === "undefined") {
     const submit = () => {
       const name = input.value.trim();
       if (!name) return;
-      if (onSave(name) !== false) buildCustomSelect();
+      if (onSave(name) !== false) refresh();
     };
 
     input.addEventListener('click', e => e.stopPropagation());
     input.addEventListener('keydown', e => {
       if (e.key === 'Enter') { e.preventDefault(); submit(); }
-      if (e.key === 'Escape') { e.preventDefault(); buildCustomSelect(); }
+      if (e.key === 'Escape') { e.preventDefault(); refresh(); }
     });
     save.addEventListener('click', e => { e.stopPropagation(); submit(); });
-    cancel.addEventListener('click', e => { e.stopPropagation(); buildCustomSelect(); });
+    cancel.addEventListener('click', e => { e.stopPropagation(); refresh(); });
 
     container.append(input, save, cancel);
     input.focus();
@@ -2539,7 +3144,7 @@ if (typeof marked === "undefined") {
         const cur = sel.options[sel.selectedIndex];
         if (cur) {
           selected.textContent = cur.textContent;
-          document.querySelectorAll('.custom-select-item').forEach(i => {
+          document.querySelectorAll('#char-custom-options .custom-select-item').forEach(i => {
             i.classList.toggle('active', i.dataset.value === sel.value);
           });
         }
@@ -2548,29 +3153,233 @@ if (typeof marked === "undefined") {
   }, 150);
 
   // ── Custom Voice Select ──────────────────────────────
+  let voiceGroupsState = { groups: [], assignments: {}, collapsed: {} };
+  let voiceGroupsSaveQueue = Promise.resolve();
+
+  function getVoiceGroups() {
+    return voiceGroupsState;
+  }
+
+  async function loadVoiceGroups() {
+    try {
+      const response = await fetch('/api/tts/voice_groups', { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const saved = await response.json();
+      voiceGroupsState = {
+        groups: Array.isArray(saved.groups) ? saved.groups.filter(g => g && g.id && g.name) : [],
+        assignments: saved.assignments && typeof saved.assignments === 'object' ? saved.assignments : {},
+        collapsed: saved.collapsed && typeof saved.collapsed === 'object' ? saved.collapsed : {}
+      };
+    } catch (error) {
+      voiceGroupsState = { groups: [], assignments: {}, collapsed: {} };
+      console.error('Failed to load voice groups:', error);
+      hwuiToast('Could not load this build\'s voice groups.', 'error');
+    }
+  }
+
+  function setVoiceGroups(state) {
+    const snapshot = JSON.parse(JSON.stringify(state));
+    voiceGroupsState = snapshot;
+    voiceGroupsSaveQueue = voiceGroupsSaveQueue.then(async () => {
+      const response = await fetch('/api/tts/voice_groups', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(snapshot)
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.success) throw new Error(result.error || `HTTP ${response.status}`);
+    }).catch(error => {
+      console.error('Failed to save voice groups:', error);
+      hwuiToast('Could not save this build\'s voice groups.', 'error');
+    });
+  }
+
+  function createVoiceGroup(name) {
+    if (!name || !name.trim()) return null;
+    const state = getVoiceGroups();
+    const cleanName = name.trim();
+    if (state.groups.some(g => g.name.toLowerCase() === cleanName.toLowerCase())) {
+      hwuiToast('A voice group with that name already exists.', 'info');
+      return null;
+    }
+    const group = { id: 'voice-group-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7), name: cleanName };
+    state.groups.push(group);
+    setVoiceGroups(state);
+    return group;
+  }
+
+  function assignVoiceGroup(voiceName, groupId) {
+    const state = getVoiceGroups();
+    if (groupId) state.assignments[voiceName] = groupId;
+    else delete state.assignments[voiceName];
+    setVoiceGroups(state);
+    buildVoiceCustomSelect();
+  }
+
+  function renameVoiceGroup(groupId, name) {
+    const state = getVoiceGroups();
+    const group = state.groups.find(g => g.id === groupId);
+    if (!group || !name || !name.trim()) return false;
+    if (name.trim() === group.name) return true;
+    const cleanName = name.trim();
+    if (state.groups.some(g => g.id !== groupId && g.name.toLowerCase() === cleanName.toLowerCase())) {
+      hwuiToast('A voice group with that name already exists.', 'info');
+      return false;
+    }
+    group.name = cleanName;
+    setVoiceGroups(state);
+    return true;
+  }
+
+  function deleteVoiceGroup(groupId) {
+    const state = getVoiceGroups();
+    if (!state.groups.some(g => g.id === groupId)) return;
+    state.groups = state.groups.filter(g => g.id !== groupId);
+    Object.keys(state.assignments).forEach(name => {
+      if (state.assignments[name] === groupId) delete state.assignments[name];
+    });
+    delete state.collapsed[groupId];
+    setVoiceGroups(state);
+    buildVoiceCustomSelect();
+  }
+
   function buildVoiceCustomSelect() {
     const select = document.getElementById('tts-voice-select');
     const selected = document.getElementById('voice-custom-selected');
     const optList = document.getElementById('voice-custom-options');
+    const groupState = getVoiceGroups();
+    const allOpts = Array.from(select.options);
+
     optList.innerHTML = '';
-    Array.from(select.options).forEach(opt => {
+    const toolbar = document.createElement('div');
+    toolbar.className = 'character-group-toolbar';
+    const toolbarLabel = document.createElement('span');
+    toolbarLabel.textContent = 'Groups';
+    const addGroup = document.createElement('button');
+    addGroup.type = 'button';
+    addGroup.textContent = '+ New group';
+    addGroup.title = 'Create a voice group';
+    addGroup.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showCharacterGroupEditor(toolbar, '', name => !!createVoiceGroup(name), buildVoiceCustomSelect);
+    });
+    toolbar.append(toolbarLabel, addGroup);
+    optList.appendChild(toolbar);
+
+    function renderVoiceItem(opt) {
       const item = document.createElement('div');
-      item.className = 'custom-select-item' + (opt.value === select.value ? ' active' : '');
-      item.textContent = opt.textContent;
+      item.className = 'custom-select-item character-select-item voice-select-item' + (opt.value === select.value ? ' active' : '');
       item.dataset.value = opt.value;
+
+      const label = document.createElement('span');
+      label.textContent = opt.textContent;
+      label.className = 'character-option-label';
+
+      const folder = document.createElement('button');
+      folder.type = 'button';
+      folder.className = 'character-folder-button';
+      folder.textContent = '\uD83D\uDCC1';
+      folder.hidden = groupState.groups.length === 0;
+      const assignedGroup = groupState.groups.find(g => g.id === groupState.assignments[opt.value]);
+      folder.title = assignedGroup ? `Move from ${assignedGroup.name}` : 'Move to a group';
+      folder.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const existingMenu = item.querySelector('.character-group-menu');
+        optList.querySelectorAll('.character-group-menu').forEach(menu => menu.remove());
+        if (existingMenu) return;
+
+        const menu = document.createElement('div');
+        menu.className = 'character-group-menu';
+        [{ id: '', name: 'Ungrouped' }, ...groupState.groups].forEach(group => {
+          const choice = document.createElement('button');
+          choice.type = 'button';
+          choice.textContent = (groupState.assignments[opt.value] || '') === group.id ? `\u2713 ${group.name}` : group.name;
+          choice.addEventListener('click', (event) => {
+            event.stopPropagation();
+            assignVoiceGroup(opt.value, group.id);
+          });
+          menu.appendChild(choice);
+        });
+        item.appendChild(menu);
+      });
+
+      item.append(label, folder);
       item.addEventListener('click', () => {
         select.value = opt.value;
         select.dispatchEvent(new Event('change'));
         selected.textContent = opt.textContent;
-        optList.querySelectorAll('.custom-select-item').forEach(i => i.classList.remove('active'));
+        optList.querySelectorAll('.voice-select-item').forEach(i => i.classList.remove('active'));
         item.classList.add('active');
         document.getElementById('voice-custom-select').classList.remove('open');
       });
-      optList.appendChild(item);
+      return item;
+    }
+
+    function renderVoiceSection(title, options, sectionId, groupId = null) {
+      if (!options.length && !groupId) return;
+      const header = document.createElement('div');
+      header.className = 'character-group-header';
+      const isCollapsed = !!groupState.collapsed[sectionId];
+
+      const heading = document.createElement('button');
+      heading.type = 'button';
+      heading.className = 'character-group-heading';
+      heading.textContent = `${isCollapsed ? '\u25B8' : '\u25BE'} ${title} (${options.length})`;
+      heading.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const state = getVoiceGroups();
+        state.collapsed[sectionId] = !state.collapsed[sectionId];
+        setVoiceGroups(state);
+        buildVoiceCustomSelect();
+      });
+      header.appendChild(heading);
+
+      if (groupId) {
+        const controls = document.createElement('span');
+        controls.className = 'character-group-controls';
+        const rename = document.createElement('button');
+        rename.type = 'button';
+        rename.textContent = '\u270E';
+        rename.title = 'Rename group';
+        rename.addEventListener('click', (e) => {
+          e.stopPropagation();
+          showCharacterGroupEditor(header, title, name => renameVoiceGroup(groupId, name), buildVoiceCustomSelect);
+        });
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.textContent = '\u00D7';
+        remove.title = 'Delete group';
+        let deleteArmed = false;
+        remove.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (!deleteArmed) {
+            deleteArmed = true;
+            remove.textContent = 'Delete?';
+            remove.classList.add('delete-confirm');
+            return;
+          }
+          deleteVoiceGroup(groupId);
+        });
+        controls.append(rename, remove);
+        header.appendChild(controls);
+      }
+
+      optList.appendChild(header);
+      if (!isCollapsed) options.forEach(opt => optList.appendChild(renderVoiceItem(opt)));
+    }
+
+    groupState.groups.forEach(group => {
+      renderVoiceSection(group.name, allOpts.filter(opt => groupState.assignments[opt.value] === group.id), group.id, group.id);
     });
+    const knownGroupIds = new Set(groupState.groups.map(group => group.id));
+    const ungrouped = allOpts.filter(opt => !knownGroupIds.has(groupState.assignments[opt.value]));
+    renderVoiceSection(groupState.groups.length ? 'Ungrouped' : 'Voices', ungrouped, 'ungrouped');
+
     const cur = select.options[select.selectedIndex];
-    selected.textContent = cur ? cur.textContent : '—';
+    selected.textContent = cur ? cur.textContent : '\u2014';
   }
+
+  loadVoiceGroups().then(buildVoiceCustomSelect);
 
   document.getElementById('voice-custom-selected').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -2713,9 +3522,6 @@ async function loadChatHistory() {
       const userDiv = document.createElement('div');
       userDiv.className = 'message user-msg';
       
-      const userStrong = document.createElement('strong');
-      userStrong.textContent = userName + ': ';
-      
       const userText = document.createElement('div');
       userText.className = 'user-text';
       userText.textContent = entry.user;
@@ -2728,7 +3534,6 @@ async function loadChatHistory() {
       </svg>`;
       userCopyBtn.onclick = function() { copyMessage(this); };
       
-      userDiv.appendChild(userStrong);
       userDiv.appendChild(userText);
       userDiv.appendChild(userCopyBtn);
       chat.appendChild(userDiv);
@@ -2736,9 +3541,6 @@ async function loadChatHistory() {
       // Model message
       const modelDiv = document.createElement('div');
       modelDiv.className = 'message model-msg';
-      
-      const nameStrong = document.createElement('strong');
-      nameStrong.textContent = currentCharacter.name + ': ';
       
       const spanText = document.createElement('div');
       spanText.className = 'model-text';
@@ -2755,7 +3557,6 @@ async function loadChatHistory() {
       </svg>`;
       modelCopyBtn.onclick = function() { copyMessage(this); };
       
-      modelDiv.appendChild(nameStrong);
       modelDiv.appendChild(spanText);
       modelDiv.appendChild(modelCopyBtn);
       chat.appendChild(modelDiv);
@@ -2822,6 +3623,7 @@ function persistChatState() {
     sortChatList(chats);
     
     const list = document.getElementById('chat-list');
+    closeChatActionsMenu();
     list.innerHTML = '';
     
     chats.forEach(chat => {
@@ -2859,87 +3661,45 @@ function persistChatState() {
       const title = document.createElement('span');
       title.textContent = displayTitle;
       title.classList.add('chat-title');
-      
-      const metaDiv = document.createElement('div');
-      metaDiv.classList.add('chat-meta');
-      
+
+      const tooltip = document.createElement('span');
+      tooltip.classList.add('chat-title-tooltip');
+      tooltip.textContent = displayTitle;
+
+      const actions = document.createElement('div');
+      actions.classList.add('chat-row-actions');
+
       if (dateText) {
-        const date = document.createElement('span');
-        date.textContent = dateText;
-        date.classList.add('chat-date');
-        metaDiv.appendChild(date);
+        const inlineDate = document.createElement('span');
+        inlineDate.classList.add('chat-inline-date');
+        inlineDate.textContent = dateText;
+        actions.appendChild(inlineDate);
       }
-      
-      // Button container
-      const buttonContainer = document.createElement('div');
-      buttonContainer.classList.add('chat-buttons');
-      
-      // Duplicate button
-      const dup = document.createElement('span');
-      dup.textContent = '⧉';
-      dup.classList.add('duplicate-chat');
-      dup.title = 'Duplicate this chat';
-      
-      dup.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        
-        try {
-          const res = await fetch('/chats/copy', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              source_filename: chat.filename,
-              new_title: '-Branch'
-            })
-          });
-          
-          const result = await res.json();
-          
-          if (result.error) {
-            throw new Error(result.error);
-          }
-          
-          console.log('✅ Chat duplicated:', result.new_filename);
 
-          // Inherit the source chat's colour on the new (duplicated) chat.
-          // This copies the key and explicitly preserves the source tint.
-          copyChatColor(chat.filename, result.new_filename);
+      if (chat.pinned) {
+        const pin = document.createElement('span');
+        pin.classList.add('chat-pin-indicator');
+        pin.textContent = '📌';
+        pin.title = 'Pinned chat';
+        actions.appendChild(pin);
+      }
 
-          await loadChats();
-          await openChat(result.new_filename);
-          
-        } catch (err) {
-          console.error('❌ Duplicate failed:', err);
-          hwuiToast('Failed to duplicate chat: ' + err.message, 'error');
-        }
-      });
-      
-      // Delete button
-      const del = document.createElement('span');
-      del.textContent = '✕';
-      del.classList.add('delete-chat');
-      
-      del.addEventListener('click', async (e) => {
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.classList.add('chat-actions-trigger');
+      more.textContent = '⋯';
+      more.title = 'Chat options';
+      more.setAttribute('aria-label', 'Chat options for ' + displayTitle);
+      more.setAttribute('aria-expanded', 'false');
+      more.addEventListener('click', (e) => {
         e.stopPropagation();
-        
-        if (!await hwuiConfirm('Delete "' + displayTitle + '"?')) return;
-        
-        try {
-          await fetch('/chats/delete/' + chat.filename, { method: 'DELETE' });
-          loadChats();
-        } catch (err) {
-          console.error('Delete failed:', err);
-          hwuiToast('Failed to delete chat.', 'error');
-        }
+        showChatActionsMenu(e, chat, displayTitle, dateText, more);
       });
-      
-      buttonContainer.appendChild(dup);
-      buttonContainer.appendChild(del);
-      metaDiv.appendChild(buttonContainer);
+      actions.appendChild(more);
       
       // Assemble
       contentDiv.appendChild(title);
-      contentDiv.appendChild(metaDiv);
+      contentDiv.appendChild(actions);
       
       // Open chat on click - USE extractCharacterFromFilename()
       li.addEventListener('click', () => {
@@ -2978,12 +3738,290 @@ function persistChatState() {
       });
       
       li.appendChild(contentDiv);
+      li.appendChild(tooltip);
       list.appendChild(li);
     });
 
     // Apply saved colours after list is rendered
     applyChatColors();
+
+    // Reloading the sidebar should not make the open chat look unselected.
+    if (currentChatFilename) {
+      const activeItem = Array.from(list.querySelectorAll('.chat-item')).find(function(item) {
+        return item.dataset.filename === currentChatFilename;
+      });
+      if (activeItem) activeItem.classList.add('active');
+    }
+
+    return chats;
   }
+
+  function getMostRecentChat(chats, characterName) {
+    const targetCharacter = String(characterName || '').toLowerCase();
+    const candidates = (Array.isArray(chats) ? chats : []).filter(function(chat) {
+      if (!targetCharacter) return true;
+      return String(extractCharacterFromFilename(chat.filename) || '').toLowerCase() === targetCharacter;
+    });
+
+    return candidates.reduce(function(mostRecent, chat) {
+      if (!mostRecent) return chat;
+      const chatTime = Number(chat.modified) || Number(chat.created) || 0;
+      const recentTime = Number(mostRecent.modified) || Number(mostRecent.created) || 0;
+      return chatTime > recentTime ? chat : mostRecent;
+    }, null);
+  }
+
+  async function ensureChatSelected(chats, characterName) {
+    const availableChats = Array.isArray(chats) ? chats : [];
+    const targetCharacter = String(characterName || '').toLowerCase();
+    const currentStillAvailable = currentChatFilename && availableChats.some(function(chat) {
+      if (chat.filename !== currentChatFilename) return false;
+      return !targetCharacter ||
+        String(extractCharacterFromFilename(chat.filename) || '').toLowerCase() === targetCharacter;
+    });
+
+    if (currentStillAvailable) return true;
+
+    const mostRecent = getMostRecentChat(availableChats, characterName);
+    if (mostRecent) {
+      await openChat(mostRecent.filename);
+      return currentChatFilename === mostRecent.filename;
+    }
+
+    const dropdown = document.getElementById('character-select');
+    if (!dropdown || !dropdown.value) return false;
+    await createNewChat({ startRename: false });
+    return Boolean(currentChatFilename);
+  }
+
+  function closeChatActionsMenu() {
+    const menu = document.getElementById('chat-actions-menu');
+    if (menu) menu.remove();
+    document.querySelectorAll('.chat-actions-trigger[aria-expanded="true"]').forEach(button => {
+      button.setAttribute('aria-expanded', 'false');
+      const row = button.closest('.chat-item');
+      if (row) row.classList.remove('menu-open');
+    });
+  }
+
+  function addChatMenuButton(menu, label, handler, className = '') {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'chat-menu-item' + (className ? ' ' + className : '');
+    button.textContent = label;
+    button.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      closeChatActionsMenu();
+      await handler(e);
+    });
+    menu.appendChild(button);
+  }
+
+  async function copySidebarChat(chat, copyKind) {
+    try {
+      const res = await fetch('/chats/copy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_filename: chat.filename,
+          copy_kind: copyKind
+        })
+      });
+      const result = await res.json();
+      if (!res.ok || result.error) throw new Error(result.error || 'Copy failed');
+
+      copyChatColor(chat.filename, result.new_filename);
+      await loadChats();
+      await openChat(result.new_filename);
+    } catch (err) {
+      console.error('Chat copy failed:', err);
+      hwuiToast('Failed to ' + copyKind + ' chat: ' + err.message, 'error');
+    }
+  }
+
+  async function toggleSidebarChatPin(chat) {
+    try {
+      const res = await fetch('/chats/pin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: chat.filename, pinned: !chat.pinned })
+      });
+      const result = await res.json();
+      if (!res.ok || result.error) throw new Error(result.error || 'Pin failed');
+      await loadChats();
+    } catch (err) {
+      console.error('Pin chat failed:', err);
+      hwuiToast('Failed to update pin: ' + err.message, 'error');
+    }
+  }
+
+  async function moveSidebarChat(chat, targetProject, targetLabel) {
+    try {
+      const movedCurrentChat = currentChatFilename === chat.filename;
+      const res = await fetch('/chats/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: chat.filename, target_project: targetProject })
+      });
+      const result = await res.json();
+      if (!res.ok || result.error) throw new Error(result.error || 'Move failed');
+
+      // The server renames on collision — carry the colour key across if it did.
+      if (result.new_filename && result.new_filename !== chat.filename) {
+        copyChatColor(chat.filename, result.new_filename);
+        setChatColor(chat.filename, null);
+      }
+
+      // The chat now lives in another folder, so an open copy of it would keep
+      // autosaving back into THIS folder and recreate the file. Clear the pane.
+      if (movedCurrentChat) {
+        currentChatFilename = null;
+        document.getElementById('chat').innerHTML = '';
+        window.loadedChat = [];
+        localStorage.removeItem('lastOpenChat');
+        localStorage.removeItem('currentChatFilename');
+      }
+
+      const remainingChats = await loadChats();
+      if (movedCurrentChat) await ensureChatSelected(remainingChats);
+      hwuiToast('Moved to ' + targetLabel, 'success');
+    } catch (err) {
+      console.error('Move chat failed:', err);
+      hwuiToast('Failed to move chat: ' + err.message, 'error');
+    }
+  }
+
+  async function showMoveToFolderMenu(chat, trigger) {
+    closeChatActionsMenu();
+
+    const menu = document.createElement('div');
+    menu.id = 'chat-actions-menu';
+    menu.dataset.filename = chat.filename;
+    menu.setAttribute('role', 'menu');
+
+    const header = document.createElement('div');
+    header.className = 'chat-menu-date';
+    header.textContent = 'Move to folder';
+    menu.appendChild(header);
+
+    const listWrap = document.createElement('div');
+    listWrap.className = 'chat-menu-scroll';
+    menu.appendChild(listWrap);
+
+    document.body.appendChild(menu);
+    trigger.setAttribute('aria-expanded', 'true');
+    trigger.closest('.chat-item').classList.add('menu-open');
+
+    const position = () => {
+      const triggerRect = trigger.getBoundingClientRect();
+      const menuRect = menu.getBoundingClientRect();
+      const left = Math.max(8, Math.min(triggerRect.right - menuRect.width, window.innerWidth - menuRect.width - 8));
+      const top = Math.max(8, Math.min(triggerRect.bottom + 4, window.innerHeight - menuRect.height - 8));
+      menu.style.left = left + 'px';
+      menu.style.top = top + 'px';
+    };
+    position();
+
+    let projects = [];
+    try {
+      const res = await fetch('/projects/list');
+      const data = await res.json();
+      projects = data.projects || [];
+    } catch (err) {
+      console.error('Failed to load projects for move menu:', err);
+    }
+
+    // The menu can be dismissed while the fetch is in flight.
+    if (!document.body.contains(menu)) return;
+
+    const destinations = projects
+      .filter(p => p.name !== activeProjectName)
+      .map(p => ({ value: p.name, label: '📁 ' + (p.display_name || p.name) }));
+
+    // Global chats is only a destination when we're currently inside a project.
+    if (activeProjectName) {
+      destinations.unshift({ value: null, label: '🏠 Global chats' });
+    }
+
+    if (!destinations.length) {
+      const empty = document.createElement('div');
+      empty.className = 'chat-menu-empty';
+      empty.textContent = 'No other folders';
+      listWrap.appendChild(empty);
+    } else {
+      destinations.forEach(dest => {
+        addChatMenuButton(listWrap, dest.label, () => moveSidebarChat(chat, dest.value, dest.label.replace(/^\S+\s/, '')));
+      });
+    }
+
+    position();
+  }
+
+  async function deleteSidebarChat(chat, displayTitle) {
+    if (!await hwuiConfirm('Delete "' + displayTitle + '"?')) return;
+    try {
+      const deletedCurrentChat = currentChatFilename === chat.filename;
+      const res = await fetch('/chats/delete/' + encodeURIComponent(chat.filename), { method: 'DELETE' });
+      const result = await res.json();
+      if (!res.ok || result.error) throw new Error(result.error || 'Delete failed');
+      setChatColor(chat.filename, null);
+      if (deletedCurrentChat) {
+        currentChatFilename = null;
+        document.getElementById('chat').innerHTML = '';
+        window.loadedChat = [];
+        localStorage.removeItem('lastOpenChat');
+        localStorage.removeItem('currentChatFilename');
+      }
+      const remainingChats = await loadChats();
+      if (deletedCurrentChat) await ensureChatSelected(remainingChats);
+    } catch (err) {
+      console.error('Delete failed:', err);
+      hwuiToast('Failed to delete chat: ' + err.message, 'error');
+    }
+  }
+
+  function showChatActionsMenu(e, chat, displayTitle, dateText, trigger) {
+    const existing = document.getElementById('chat-actions-menu');
+    if (existing && existing.dataset.filename === chat.filename) {
+      closeChatActionsMenu();
+      return;
+    }
+    closeChatActionsMenu();
+
+    const menu = document.createElement('div');
+    menu.id = 'chat-actions-menu';
+    menu.dataset.filename = chat.filename;
+    menu.setAttribute('role', 'menu');
+
+    const date = document.createElement('div');
+    date.className = 'chat-menu-date';
+    date.textContent = dateText ? 'Date · ' + dateText : 'Date unavailable';
+    menu.appendChild(date);
+
+    addChatMenuButton(menu, '📋 Duplicate', () => copySidebarChat(chat, 'duplicate'));
+    addChatMenuButton(menu, '🌿 Branch', () => copySidebarChat(chat, 'branch'));
+    addChatMenuButton(menu, chat.pinned ? '📌 Unpin chat' : '📌 Pin chat', () => toggleSidebarChatPin(chat));
+    addChatMenuButton(menu, '📁 Move to folder…', () => showMoveToFolderMenu(chat, trigger));
+    addChatMenuButton(menu, '🎨 Colour', (clickEvent) => showColorMenu(clickEvent, chat.filename));
+    addChatMenuButton(menu, '🗑 Delete', () => deleteSidebarChat(chat, displayTitle), 'danger');
+
+    document.body.appendChild(menu);
+    const triggerRect = trigger.getBoundingClientRect();
+    const menuRect = menu.getBoundingClientRect();
+    const left = Math.max(8, Math.min(triggerRect.right - menuRect.width, window.innerWidth - menuRect.width - 8));
+    const top = Math.max(8, Math.min(triggerRect.bottom + 4, window.innerHeight - menuRect.height - 8));
+    menu.style.left = left + 'px';
+    menu.style.top = top + 'px';
+    trigger.setAttribute('aria-expanded', 'true');
+    trigger.closest('.chat-item').classList.add('menu-open');
+  }
+
+  document.addEventListener('click', (e) => {
+    const menu = document.getElementById('chat-actions-menu');
+    if (menu && !menu.contains(e.target) && !e.target.closest('.chat-actions-trigger')) {
+      closeChatActionsMenu();
+    }
+  });
   
   // ==================================================
   // EDIT SPECIFIC MESSAGE (inline)
@@ -3113,26 +4151,30 @@ function persistChatState() {
     const sel = document.getElementById('chat-sort-select');
     if (sel && sel.value !== sortMode) sel.value = sortMode;
 
-    if (sortMode === 'newest') {
-      chats.sort((a, b) => {
+    const sortWithinPins = (a, b) => {
+      if (sortMode === 'newest') {
         const da = parseDateFromFilename(a.filename) ?? (a.modified * 1000);
         const db = parseDateFromFilename(b.filename) ?? (b.modified * 1000);
         if (db !== da) return db - da;
         // Same date: fall back to mtime for within-day ordering
         return b.modified - a.modified;
-      });
-    } else if (sortMode === 'oldest') {
-      chats.sort((a, b) => {
+      } else if (sortMode === 'oldest') {
         const da = parseDateFromFilename(a.filename) ?? (a.created * 1000);
         const db = parseDateFromFilename(b.filename) ?? (b.created * 1000);
         if (da !== db) return da - db;
         return a.created - b.created;
-      });
-    } else if (sortMode === 'most_recent') {
-      chats.sort((a, b) => b.modified - a.modified);
-    } else if (sortMode === 'alphabetical') {
-      chats.sort((a, b) => a.title.localeCompare(b.title));
-    }
+      } else if (sortMode === 'most_recent') {
+        return b.modified - a.modified;
+      } else if (sortMode === 'alphabetical') {
+        return a.title.localeCompare(b.title);
+      }
+      return 0;
+    };
+
+    chats.sort((a, b) => {
+      if (Boolean(a.pinned) !== Boolean(b.pinned)) return a.pinned ? -1 : 1;
+      return sortWithinPins(a, b);
+    });
   }
   
   // ==================================================
@@ -3468,6 +4510,9 @@ async function openChat(filename) {
     }
     
     currentChatFilename = filename;
+    currentChatId = data.chat_id || null;
+    HelcyonBenchPromptTransfer.handleChatChanged(localStorage, currentChatFilename);
+    refreshBenchChatControl();
     saveCurrentChatState();
     
     // ✅ Save to localStorage so chat persists across page navigation
@@ -3489,6 +4534,11 @@ async function openChat(filename) {
       };
       if (msg.is_opening_line) mapped.is_opening_line = true;
       if (msg.timestamp) mapped.timestamp = msg.timestamp;
+      if (msg.message_id) mapped.message_id = msg.message_id;
+      if (msg.reply_to_message_id) mapped.reply_to_message_id = msg.reply_to_message_id;
+      if (msg.generation_status) mapped.generation_status = msg.generation_status;
+      if (msg.generation_started_at) mapped.generation_started_at = msg.generation_started_at;
+      if (msg.generation_completed_at) mapped.generation_completed_at = msg.generation_completed_at;
       return mapped;
     });
 
@@ -3499,6 +4549,7 @@ async function openChat(filename) {
 
     // Render from normalised loadedChat so avatar lookup gets the real name, not "User"
     renderChatMessages(window.loadedChat);
+    settleBenchChatScroll(activeBenchChatAssociation());
 
     console.log('💾 Loaded ' + window.loadedChat.length + ' messages into context');
     
@@ -3517,10 +4568,15 @@ async function openChat(filename) {
     
     console.log('✅ Chat opened successfully:', filename);
     
+    hideOpeningQuestions();
+
     // ✅ FIXED: Only display opening line if chat is actually empty
     if (data.messages.length === 0) {
       displayOpeningLineInChat();
       displayRpOpenerInChat();
+    }
+    if (data.messages.every(message => message.is_opening_line)) {
+      displayOpeningQuestions();
     }
     
   } catch (err) {
@@ -3594,6 +4650,7 @@ async function openChat(filename) {
         // Create wrapper container for avatar + message
         var wrapper = document.createElement("div");
         wrapper.classList.add("message-wrapper");
+        if (msg.message_id) wrapper.dataset.messageId = msg.message_id;
         
         // Create the message bubble
         var div = document.createElement("div");
@@ -3616,9 +4673,6 @@ async function openChat(filename) {
           userAvatar.onerror = function() { 
             this.src = '/static/images/default.png';
           };
-          
-          var userStrong = document.createElement("strong");
-          userStrong.textContent = userName + ": ";
           
           var userSpan = document.createElement("span");
           userSpan.className = "user-text";
@@ -3696,7 +4750,6 @@ async function openChat(filename) {
           userActionBar.appendChild(userEditBtn);
           userActionBar.appendChild(userDeleteBtn);
 
-          div.appendChild(userStrong);
           div.appendChild(userSpan);
           div.appendChild(makeTimestampEl(msg.timestamp));
 
@@ -3729,9 +4782,6 @@ async function openChat(filename) {
           modelAvatar.onerror = function() { 
             this.src = '/static/images/default.png';
           };          
-          
-          var modelStrong = document.createElement("strong");
-          modelStrong.textContent = charName + ": ";
           
           var modelSpan = document.createElement("div");
           modelSpan.className = "model-text";
@@ -3813,7 +4863,6 @@ async function openChat(filename) {
           modelActionBar.appendChild(modelBranchBtn);
           if (modelShardExportBtn) modelActionBar.appendChild(modelShardExportBtn);
 
-          div.appendChild(modelStrong);
           div.appendChild(modelSpan);
           div.appendChild(makeTimestampEl(msg.timestamp));
           // Span is now in DOM — render HTML with code blocks as proper siblings
@@ -3959,6 +5008,7 @@ async function openChat(filename) {
         }
         
         currentChatFilename = data.filename;
+        currentChatId = data.chat_id || null;
         console.log('✅ Auto-created chat:', currentChatFilename);
         
         saveCurrentChatState();
@@ -3989,6 +5039,7 @@ async function openChat(filename) {
     const hasDocs = window.attachedDocuments && window.attachedDocuments.length > 0;
 
     if (!input && !hasImages && !hasDocs) return;
+    hideOpeningQuestions();
 
     // Document text the model will read — folded into this turn's content,
     // wrapped in [ATTACHED DOCUMENT: …] markers. One-shot: it lives in this
@@ -3998,6 +5049,8 @@ async function openChat(filename) {
 
     lastPrompt = input;
     localStorage.setItem('lastPrompt', input);
+    const sourceUserMessageId = createHwuiMessageId();
+    const userMessageTimestamp = new Date().toISOString();
     const userName = localStorage.getItem('activeUserName') || activeUserName;
     
     // Create wrapper container for avatar + message
@@ -4018,9 +5071,6 @@ async function openChat(filename) {
     const userDiv = document.createElement("div");
     userDiv.className = "message user-msg";
     
-    const userStrong = document.createElement("strong");
-    userStrong.textContent = userName + ": ";
-    
     const userSpan = document.createElement("span");
     userSpan.className = "user-text";
     const formattedUser = input.replace(/\n/g, "<br>").replace(/\*(.*?)\*/gs, "<em>$1</em>");
@@ -4035,9 +5085,8 @@ async function openChat(filename) {
     userActionBar.className = "msg-action-bar";
     userActionBar.appendChild(userCopyBtn);
     
-    userDiv.appendChild(userStrong);
     userDiv.appendChild(userSpan);
-    userDiv.appendChild(makeTimestampEl(new Date().toISOString()));
+    userDiv.appendChild(makeTimestampEl(userMessageTimestamp));
 
     const userMessageStack = document.createElement("div");
     userMessageStack.className = "message-stack";
@@ -4054,6 +5103,7 @@ async function openChat(filename) {
     }
 
     chat.appendChild(userWrapper);
+    userWrapper.dataset.messageId = sourceUserMessageId;
     void userWrapper.offsetHeight;
     void userDiv.offsetHeight;   
     chat.scrollTop = chat.scrollHeight;
@@ -4075,7 +5125,7 @@ async function openChat(filename) {
         });
       });
       const _previewUrls = window.attachedImages.map(img => img.previewUrl);
-      window.loadedChat.push({ role: "user", content: contentParts, speaker: activeUserName, timestamp: new Date().toISOString(), hasImage: true, previewUrls: _previewUrls });
+      window.loadedChat.push({ role: "user", content: contentParts, speaker: activeUserName, timestamp: userMessageTimestamp, message_id: sourceUserMessageId, hasImage: true, previewUrls: _previewUrls });
       
       // Show thumbnails in the user message bubble
       window.attachedImages.forEach(img => {
@@ -4086,9 +5136,25 @@ async function openChat(filename) {
       window.attachedImages = [];
       renderImagePreviews();
     } else {
-      window.loadedChat.push({ role: "user", content: modelText, speaker: activeUserName, timestamp: new Date().toISOString() });
+      window.loadedChat.push({ role: "user", content: modelText, speaker: activeUserName, timestamp: userMessageTimestamp, message_id: sourceUserMessageId });
     }
     window._chatDirty = true;  // stale-write guard: user turn added locally
+    const sourceUserPosition = window.loadedChat.filter(message => !message.hidden).length - 1;
+    const benchSubmission = HelcyonBenchPromptTransfer.markSubmitted(
+      localStorage,
+      currentChatFilename,
+      input,
+      {
+        source_user_message_id: sourceUserMessageId,
+        source_user_position: sourceUserPosition,
+        chat_id: currentChatId,
+        character: currentCharName || currentCharacter?.name || '',
+        submitted_at: userMessageTimestamp
+      }
+    );
+    if (benchSubmission) {
+      renderBenchChatControl(benchSubmission);
+    }
 
     // Clear attached documents after sending — one-shot, now in this turn's content
     if (hasDocs) {
@@ -4103,7 +5169,13 @@ async function openChat(filename) {
     // still runs as the normal-path save once the assistant reply lands.
     // DO NOT remove: save-on-completion-only was the root cause of in-flight turns
     // vanishing on navigation. See changes.md (June 6 2026).
-    await autoSaveCurrentChat();
+    const initialSave = await autoSaveCurrentChat();
+    if (initialSave?.chat_id) currentChatId = initialSave.chat_id;
+    if (benchSubmission) {
+      benchSubmission.chat_id = currentChatId || benchSubmission.chat_id;
+      await registerBenchSubmission(benchSubmission);
+      settleBenchChatScroll(benchSubmission);
+    }
 
     let contextMessages = window.loadedChat;
     
@@ -4111,7 +5183,7 @@ async function openChat(filename) {
     box.style.height = 'auto';
     clearChatInputDraft();
     try {
-      await fetchAndDisplayResponse(input, chat, false, modelText);
+      await fetchAndDisplayResponse(input, chat, false, modelText, sourceUserMessageId);
     } catch (err) {
       console.error("⚠️ sendPrompt error:", err);
       chat.innerHTML += '<div class="message error-msg">⚠️ Error sending message.</div>';
@@ -4299,9 +5371,11 @@ async function openChat(filename) {
 // ==================================================
 // FETCH AND DISPLAY RESPONSE (WITH DEBUG LOGS)
 // ==================================================
-  async function fetchAndDisplayResponse(input, chat, isRegenerate = false, modelTextForSend = null) {
+  async function fetchAndDisplayResponse(input, chat, isRegenerate = false, modelTextForSend = null, sourceUserMessageId = null) {
     console.log('🚀🚀🚀 fetchAndDisplayResponse CALLED', new Date().getTime(), 'isRegenerate:', isRegenerate);
     console.trace();
+    let replySourceUserMessageId = sourceUserMessageId;
+    let generationStartedAt = null;
     
     try {
       if (window.isSending) {
@@ -4309,6 +5383,16 @@ async function openChat(filename) {
         return;
       }
       window.isSending = true;
+      window._generationCancelled = false;
+      const sourceMessage = [...(window.loadedChat || [])].reverse().find(message =>
+        message.role === 'user' && !message.hidden &&
+        (!sourceUserMessageId || message.message_id === sourceUserMessageId)
+      );
+      replySourceUserMessageId = sourceUserMessageId || sourceMessage?.message_id || null;
+      generationStartedAt = new Date().toISOString();
+      if (replySourceUserMessageId) {
+        await updateBenchGenerationState(replySourceUserMessageId, 'generating');
+      }
       
       // 🔴 ADD THIS LINE HERE 🔴
       const stopBtn = document.getElementById('stop-btn');
@@ -4320,6 +5404,7 @@ async function openChat(filename) {
         const data = await res.json();
         if (data.filename) {
           currentChatFilename = data.filename;
+          currentChatId = data.chat_id || null;
           await loadChats();
         }
       }
@@ -4420,6 +5505,9 @@ async function openChat(filename) {
         _errDiv.className = 'message error-msg';
         _errDiv.textContent = _errMsg;
         chat.appendChild(_errDiv);
+        if (replySourceUserMessageId) {
+          await updateBenchGenerationState(replySourceUserMessageId, 'error');
+        }
         return;
       }
       
@@ -4439,6 +5527,10 @@ async function openChat(filename) {
         console.log('📍 Taking NON-STREAMING path');
         const data = await response.json();
         const message = data.text || "⚠️ Unknown response";
+        const assistantMessageId = createHwuiMessageId();
+        const assistantCompleted = typeof data.text === 'string' && data.text.trim().length > 0;
+        const assistantStatus = assistantCompleted ? 'completed' : 'error';
+        const generationCompletedAt = new Date().toISOString();
 
         const modelWrapper = document.createElement("div");
         modelWrapper.className = "message-wrapper model-wrapper";
@@ -4456,9 +5548,6 @@ async function openChat(filename) {
         msgDiv.className = "message model-msg";
         msgDiv.dataset.id = chat.children.length;
 
-        const nameStrong = document.createElement("strong");
-        nameStrong.textContent = currentCharName + ': ';
-
         const spanText = document.createElement("div");
         spanText.className = "model-text";
 
@@ -4471,7 +5560,6 @@ async function openChat(filename) {
         modelActionBar.className = "msg-action-bar";
         modelActionBar.appendChild(copyBtn);
 
-        msgDiv.appendChild(nameStrong);
         msgDiv.appendChild(spanText);
         msgDiv.appendChild(makeTimestampEl(new Date().toISOString()));
 
@@ -4490,12 +5578,25 @@ async function openChat(filename) {
 
         if (!window.loadedChat) window.loadedChat = [];
         
-        const isDuplicate = window.loadedChat.some(msg => 
-          msg.role === "assistant" && msg.content === message
+        const lastLoadedMessage = window.loadedChat[window.loadedChat.length - 1];
+        const isDuplicate = Boolean(
+          lastLoadedMessage &&
+          lastLoadedMessage.role === "assistant" &&
+          lastLoadedMessage.content === message
         );
         
         if (!isDuplicate) {
-          window.loadedChat.push({ role: "assistant", content: message, speaker: currentCharacter?.name || charName, timestamp: new Date().toISOString() });
+          window.loadedChat.push({
+            role: "assistant",
+            content: message,
+            speaker: currentCharacter?.name || charName,
+            timestamp: generationCompletedAt,
+            message_id: assistantMessageId,
+            reply_to_message_id: replySourceUserMessageId,
+            generation_status: assistantStatus,
+            generation_started_at: generationStartedAt,
+            generation_completed_at: generationCompletedAt
+          });
           window._chatDirty = true;  // stale-write guard
           console.log('✅ Added non-streaming response to loadedChat');
         } else {
@@ -4503,6 +5604,13 @@ async function openChat(filename) {
         }
         
         await autoSaveCurrentChat();
+        if (replySourceUserMessageId) {
+          await updateBenchGenerationState(
+            replySourceUserMessageId,
+            assistantCompleted ? 'ready_to_capture' : 'error',
+            assistantMessageId
+          );
+        }
         await captureAutomaticMemory(input, message);
 
         // Auto-name if still a "New Chat" — filename guard is the sole trigger
@@ -4535,9 +5643,6 @@ async function openChat(filename) {
       msgDiv.className = "message model-msg";
       msgDiv.dataset.id = chat.children.length;
 
-      const nameStrong = document.createElement("strong");
-      nameStrong.textContent = currentCharName + ': ';
-
       const spanText = document.createElement("div");
       spanText.className = "model-text";
 
@@ -4553,7 +5658,6 @@ async function openChat(filename) {
       modelActionBar.className = "msg-action-bar";
       modelActionBar.appendChild(copyBtn);
 
-      msgDiv.appendChild(nameStrong);
       msgDiv.appendChild(spanText);
       msgDiv.appendChild(makeTimestampEl(new Date().toISOString()));
 
@@ -4583,6 +5687,7 @@ async function openChat(filename) {
       let cleanedMessage = "";    // final cleaned text — set when the drip finishes.
       let rawAll = "";            // raw stream incl. thinking sentinels (pre-demux)
       let prevAnswerLen = 0;      // answer chars already routed to TTS
+      let streamReadFailed = false;
 
       // Get user/char names for cleanup
       const userName = activeUserName || "User";
@@ -4663,6 +5768,7 @@ async function openChat(filename) {
         try {
           readResult = await reader.read();
         } catch (readErr) {
+          streamReadFailed = true;
           console.warn('⚠️ Stream read error (connection dropped?):', readErr);
           break;
         }
@@ -4717,10 +5823,13 @@ async function openChat(filename) {
       // Only retry if model sent nothing at all (fullMessage empty).
       // Checking cleanedMessage caused retries when stripping ate the content,
       // firing a 2nd /chat POST → browser drops 1st connection → srv stop: cancel task.
-      if (!fullMessage || fullMessage.trim().length < 2) {
+      if (!window._generationCancelled && (!fullMessage || fullMessage.trim().length < 2)) {
         if (isRegenerate === 'retry') {
           console.error('❌ Empty response on retry too — giving up.');
           streamEl.innerHTML = '<em style="color:#e07070; font-size:0.9em;">⚠️ Model returned empty response twice. Try regenerating manually.</em>';
+          if (replySourceUserMessageId) {
+            await updateBenchGenerationState(replySourceUserMessageId, 'error');
+          }
         } else {
           console.warn('⚠️ Empty response detected (model sent nothing) — retrying once...');
           streamEl.innerHTML = '<em style="color:#888; font-size:0.9em;">⟳ Empty response, retrying…</em>';
@@ -4729,7 +5838,7 @@ async function openChat(filename) {
           await new Promise(r => setTimeout(r, 900));
           if (modelWrapper && modelWrapper.parentNode) modelWrapper.remove();
           window.isSending = false;
-          await fetchAndDisplayResponse(input, chat, 'retry');
+          await fetchAndDisplayResponse(input, chat, 'retry', modelTextForSend, replySourceUserMessageId);
         }
         return;
       }
@@ -4749,17 +5858,37 @@ async function openChat(filename) {
 
       // 🔥 NO RE-RENDER NEEDED - TEXT IS ALREADY CLEANED!
       const finalText = cleanedMessage;
+      const assistantMessageId = createHwuiMessageId();
+      const generationCompletedAt = new Date().toISOString();
+      const assistantStatus = window._generationCancelled
+        ? 'cancelled'
+        : streamReadFailed
+        ? 'error'
+        : 'completed';
       // Keep raw pre-strip text for memory tag detection (tags are stripped from display but needed for parsing)
       const rawFullMessage = fullMessage || cleanedMessage;
 
       if (!window.loadedChat) window.loadedChat = [];
       
-      const isDuplicate = window.loadedChat.some(msg => 
-        msg.role === "assistant" && msg.content === finalText
+      const lastLoadedMessage = window.loadedChat[window.loadedChat.length - 1];
+      const isDuplicate = Boolean(
+        lastLoadedMessage &&
+        lastLoadedMessage.role === "assistant" &&
+        lastLoadedMessage.content === finalText
       );
       
       if (!isDuplicate) {
-        window.loadedChat.push({ role: "assistant", content: finalText, speaker: currentCharacter?.name || charName, timestamp: new Date().toISOString() });
+        window.loadedChat.push({
+          role: "assistant",
+          content: finalText,
+          speaker: currentCharacter?.name || charName,
+          timestamp: generationCompletedAt,
+          message_id: assistantMessageId,
+          reply_to_message_id: replySourceUserMessageId,
+          generation_status: assistantStatus,
+          generation_started_at: generationStartedAt,
+          generation_completed_at: generationCompletedAt
+        });
         window._chatDirty = true;  // stale-write guard
         console.log('✅ Added assistant response to loadedChat. Total messages:', window.loadedChat.length);
       } else {
@@ -4768,7 +5897,23 @@ async function openChat(filename) {
         console.log('🗑️ Removed duplicate DOM wrapper');
       }
 
+      // The assistant turn is in loadedChat now (or was a duplicate), so the
+      // partial mirror is stale THIS instant — drop it here, not only in
+      // finally. The awaits below (bench status PATCH, auto-memory model pass)
+      // keep isSending true for seconds while the Bench capture button is
+      // already visible; a pagehide beacon firing in that window must not
+      // re-append the landed reply as a second identical assistant turn
+      // (two replies to one user turn make capture ambiguous → invalidated).
+      window._streamingPartial = "";
+
       await autoSaveCurrentChat();
+      if (replySourceUserMessageId) {
+        await updateBenchGenerationState(
+          replySourceUserMessageId,
+          assistantStatus === 'completed' ? 'ready_to_capture' : assistantStatus,
+          assistantMessageId
+        );
+      }
 
       // Save trained memory output immediately. The server uses the model's
       // title, keywords, and summary directly; its classifier is only a
@@ -4815,6 +5960,9 @@ async function openChat(filename) {
     } catch (err) {
       console.error("❌ Chat fetch error:", err);
       chat.innerHTML += '<div class="message error-msg">⚠️ Failed to reach server.</div>';
+      if (replySourceUserMessageId) {
+        await updateBenchGenerationState(replySourceUserMessageId, 'error');
+      }
     } finally {
       // Hide stop button when done
       const stopBtn = document.getElementById('stop-btn');
@@ -4858,21 +6006,38 @@ async function openChat(filename) {
   async function autoNameChat(firstUserMessage) {
     if (!currentChatFilename) return;
     if (!currentChatFilename.includes('New Chat')) return;
+    const filenameBeingNamed = currentChatFilename;
+    const loadedChatBeingNamed = window.loadedChat;
+    const colourBeingNamed = getChatColors()[filenameBeingNamed] || null;
     try {
       const res = await fetch('/chats/auto-name', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: currentChatFilename, first_message: firstUserMessage })
+        body: JSON.stringify({ filename: filenameBeingNamed, first_message: firstUserMessage })
       });
       const data = await res.json();
       if (data.success && data.new_filename && !data.skipped) {
-        currentChatFilename = data.new_filename;
-        localStorage.setItem('currentChatFilename', currentChatFilename);
+        if (colourBeingNamed) {
+          const colors = getChatColors();
+          colors[data.new_filename] = colourBeingNamed;
+          if (colors[filenameBeingNamed] === colourBeingNamed) {
+            delete colors[filenameBeingNamed];
+          }
+          localStorage.setItem('chatColors', JSON.stringify(colors));
+        }
+
+        // The old New Chat filename can be reused while auto-name is in flight.
+        // Only redirect the active pane if it is still the same in-memory chat.
+        const stillViewingNamedChat =
+          currentChatFilename === filenameBeingNamed &&
+          window.loadedChat === loadedChatBeingNamed;
+        if (stillViewingNamedChat) {
+          currentChatFilename = data.new_filename;
+          localStorage.setItem('currentChatFilename', currentChatFilename);
+          saveCurrentChatState();
+        }
         console.log('🏷️ Auto-named chat:', data.new_filename);
         await loadChats();
-        document.querySelectorAll('.chat-item').forEach(item => {
-          item.classList.toggle('active', item.dataset.filename === currentChatFilename);
-        });
       }
     } catch (e) {
       console.warn('Auto-name failed (non-critical):', e);
@@ -4976,7 +6141,12 @@ async function openChat(filename) {
         // Preserve opening line flag so backend can exclude it from new chat detection
         ...(msg.is_opening_line ? { is_opening_line: true } : {}),
         // Preserve timestamp so it survives save/load cycles
-        ...(msg.timestamp ? { timestamp: msg.timestamp } : {})
+        ...(msg.timestamp ? { timestamp: msg.timestamp } : {}),
+        ...(msg.message_id ? { message_id: msg.message_id } : {}),
+        ...(msg.reply_to_message_id ? { reply_to_message_id: msg.reply_to_message_id } : {}),
+        ...(msg.generation_status ? { generation_status: msg.generation_status } : {}),
+        ...(msg.generation_started_at ? { generation_started_at: msg.generation_started_at } : {}),
+        ...(msg.generation_completed_at ? { generation_completed_at: msg.generation_completed_at } : {})
       }));
       
       const res = await fetch('/chats/save', {
@@ -4991,12 +6161,16 @@ async function openChat(filename) {
       });
 
       if (res.ok) {
+        let savedPayload = {};
+        try { savedPayload = await res.json(); } catch (error) {}
+        if (savedPayload.chat_id) currentChatId = savedPayload.chat_id;
         console.log('✅ Messages auto-saved');
         // What we just wrote IS the disk copy now — tab is clean.
         // (messages.length, not loadedChat.length: hidden turns are filtered
         // out of the file, and base_count must mirror the on-disk count.)
         window._chatDirty = false;
         window._chatBaseCount = messages.length;
+        return { ok: true, chat_id: currentChatId };
       } else if (res.status === 409) {
         // Disk is newer than this tab (chat continued on another device).
         // Don't fight over it — drop our stale copy and reload from disk.
@@ -5117,8 +6291,6 @@ async function openChat(filename) {
         modelAvatar.onerror = function() { this.src = '/static/images/default.png'; };
         const msgDiv = document.createElement('div');
         msgDiv.className = 'message model-msg';
-        const nameStrong = document.createElement('strong');
-        nameStrong.textContent = charName + ': ';
         streamEl = document.createElement('div');
         streamEl.className = 'model-text';
         const copyBtn = document.createElement('button');
@@ -5128,7 +6300,6 @@ async function openChat(filename) {
         const modelActionBar = document.createElement('div');
         modelActionBar.className = 'msg-action-bar';
         modelActionBar.appendChild(copyBtn);
-        msgDiv.appendChild(nameStrong);
         msgDiv.appendChild(streamEl);
         msgDiv.appendChild(makeTimestampEl(new Date().toISOString()));
         const modelMessageStack = document.createElement('div');
@@ -5172,10 +6343,31 @@ async function openChat(filename) {
 
       renderModelHTML(streamEl, typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(finalText)) : finalText);
       addCodeCopyButtons(streamEl.parentNode || streamEl);
-      window.loadedChat.push({ role: 'assistant', content: finalText, speaker: currentCharacter?.name || charName, timestamp: new Date().toISOString() });
+      const continuedSource = [...window.loadedChat].reverse().find(message =>
+        message.role === 'user' && !message.hidden
+      );
+      const continuedAt = new Date().toISOString();
+      const continuedAssistantId = createHwuiMessageId();
+      window.loadedChat.push({
+        role: 'assistant',
+        content: finalText,
+        speaker: currentCharacter?.name || charName,
+        timestamp: continuedAt,
+        message_id: continuedAssistantId,
+        reply_to_message_id: continuedSource?.message_id || null,
+        generation_status: 'completed',
+        generation_completed_at: continuedAt
+      });
       window._chatDirty = true;  // stale-write guard
       console.log('\u2705 Continue: complete');
       await autoSaveCurrentChat();
+      if (continuedSource?.message_id) {
+        await updateBenchGenerationState(
+          continuedSource.message_id,
+          'ready_to_capture',
+          continuedAssistantId
+        );
+      }
 
     } catch (err) {
       console.error('\u26a0\ufe0f Continue error:', err);
@@ -5218,6 +6410,7 @@ async function openChat(filename) {
     
     let lastUserMessage = null;
     let lastUserIndex = -1;
+    let lastUserMessageId = null;
     
     // Find the LAST VISIBLE user message. Skip hidden turns (e.g. the
     // memory-confirm trigger pushed with hidden:true, ~L5319) — they aren't
@@ -5227,6 +6420,7 @@ async function openChat(filename) {
       if (window.loadedChat[i].role === 'user' && !window.loadedChat[i].hidden) {
         lastUserMessage = window.loadedChat[i].content;
         lastUserIndex = i;
+        lastUserMessageId = window.loadedChat[i].message_id || null;
         break;
       }
     }
@@ -5276,7 +6470,7 @@ async function openChat(filename) {
     
     // 5. Generate new response (will append to existing DOM)
     try {
-      await fetchAndDisplayResponse(lastUserMessage, chat, true);
+      await fetchAndDisplayResponse(lastUserMessage, chat, true, null, lastUserMessageId);
       console.log('✅ Regeneration complete');
     } catch (err) {
       console.error('❌ Regenerate error:', err);
@@ -5288,6 +6482,10 @@ async function openChat(filename) {
 // Stop Generation
 // --------------------------------------------------
 async function stopGeneration() {
+  window._generationCancelled = true;
+  const cancelledSource = [...(window.loadedChat || [])].reverse().find(message =>
+    message.role === 'user' && !message.hidden
+  );
   console.log('🛑 Stop button clicked');
   
   try {
@@ -5297,6 +6495,9 @@ async function stopGeneration() {
     });
     
     if (response.ok) {
+      if (cancelledSource?.message_id) {
+        await updateBenchGenerationState(cancelledSource.message_id, 'cancelled');
+      }
       console.log('✅ Generation stopped');
       
       // Hide stop button
@@ -5317,6 +6518,21 @@ async function stopGeneration() {
   // OPENING LINE MODAL - DISK-BASED STORAGE
   // ==================================================
 
+  function switchOpeningModalTab(tabName) {
+    const showQuestions = tabName === 'questions';
+    const linesTab = document.getElementById('opening-lines-tab');
+    const questionsTab = document.getElementById('opening-questions-tab');
+    const linesPanel = document.getElementById('opening-lines-panel');
+    const questionsPanel = document.getElementById('opening-questions-panel');
+
+    linesTab.classList.toggle('active', !showQuestions);
+    questionsTab.classList.toggle('active', showQuestions);
+    linesTab.setAttribute('aria-selected', showQuestions ? 'false' : 'true');
+    questionsTab.setAttribute('aria-selected', showQuestions ? 'true' : 'false');
+    linesPanel.hidden = showQuestions;
+    questionsPanel.hidden = !showQuestions;
+  }
+
   async function openOpeningLineModal() {
     const modal = document.getElementById('opening-line-modal');
     const dropdown = document.getElementById('character-select');
@@ -5333,16 +6549,23 @@ async function stopGeneration() {
       const data = await res.json();
       
       document.getElementById('opening-line-enabled').checked = data.enabled;
+      document.getElementById('opening-questions-enabled').checked = data.questions_enabled === true;
       
       let lines = data.lines || [];
+      let questions = data.questions || [];
       
       // If no lines exist, add one empty field
       if (lines.length === 0) {
         lines = [''];
       }
+      if (questions.length === 0) {
+        questions = [''];
+      }
       
-      // Render the lines
+      // Render both tabs and open on the existing opening-lines view
       renderOpeningLines(lines);
+      renderOpeningQuestions(questions);
+      switchOpeningModalTab('lines');
       
       modal.style.display = 'block';
       
@@ -5399,7 +6622,7 @@ async function stopGeneration() {
     deleteBtn.textContent = '🗑️';
     deleteBtn.title = 'Delete this line';
     deleteBtn.onclick = function() {
-      const items = document.querySelectorAll('.opening-line-item');
+      const items = document.querySelectorAll('#opening-lines-container .opening-line-item');
       if (items.length === 1) {
         hwuiToast('You must have at least one opening line field.', 'info');
         return;
@@ -5414,6 +6637,66 @@ async function stopGeneration() {
     textarea.focus();
   }
 
+  function renderOpeningQuestions(questions) {
+    const container = document.getElementById('opening-questions-container');
+    container.innerHTML = '';
+
+    questions.forEach((question, index) => {
+      const questionDiv = document.createElement('div');
+      questionDiv.className = 'opening-line-item opening-question-item';
+
+      const textarea = document.createElement('textarea');
+      textarea.value = question;
+      textarea.placeholder = `Opening question ${index + 1}...`;
+      textarea.dataset.index = index;
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.textContent = '\u{1F5D1}\uFE0F';
+      deleteBtn.title = 'Delete this question';
+      deleteBtn.onclick = function() {
+        if (container.querySelectorAll('.opening-question-item').length === 1) {
+          hwuiToast('You must have at least one opening question field.', 'info');
+          return;
+        }
+        questionDiv.remove();
+      };
+
+      questionDiv.appendChild(textarea);
+      questionDiv.appendChild(deleteBtn);
+      container.appendChild(questionDiv);
+    });
+  }
+
+  function addOpeningQuestionField() {
+    const container = document.getElementById('opening-questions-container');
+    if (container.querySelectorAll('.opening-question-item').length >= 8) {
+      hwuiToast('You can add up to eight opening questions.', 'info');
+      return;
+    }
+
+    const questionDiv = document.createElement('div');
+    questionDiv.className = 'opening-line-item opening-question-item';
+
+    const textarea = document.createElement('textarea');
+    textarea.placeholder = 'New opening question...';
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.textContent = '\u{1F5D1}\uFE0F';
+    deleteBtn.title = 'Delete this question';
+    deleteBtn.onclick = function() {
+      if (container.querySelectorAll('.opening-question-item').length === 1) {
+        hwuiToast('You must have at least one opening question field.', 'info');
+        return;
+      }
+      questionDiv.remove();
+    };
+
+    questionDiv.appendChild(textarea);
+    questionDiv.appendChild(deleteBtn);
+    container.appendChild(questionDiv);
+    textarea.focus();
+  }
+
   async function saveOpeningLines() {
     const dropdown = document.getElementById('character-select');
     const charName = dropdown.value;
@@ -5424,15 +6707,26 @@ async function stopGeneration() {
     }
     
     const enabled = document.getElementById('opening-line-enabled').checked;
+    const questionsEnabled = document.getElementById('opening-questions-enabled').checked;
     
     // Collect all opening lines from textareas
     const textareas = document.querySelectorAll('#opening-lines-container textarea');
     const lines = Array.from(textareas)
       .map(ta => ta.value.trim())
       .filter(line => line.length > 0);
+    const questionTextareas = document.querySelectorAll('#opening-questions-container textarea');
+    const questions = Array.from(questionTextareas)
+      .map(ta => ta.value.trim())
+      .filter(question => question.length > 0)
+      .slice(0, 8);
     
     if (enabled && lines.length === 0) {
       hwuiToast('Please add at least one opening line or disable the feature.', 'info');
+      return;
+    }
+    if (questionsEnabled && questions.length === 0) {
+      switchOpeningModalTab('questions');
+      hwuiToast('Please add at least one opening question or disable the feature.', 'info');
       return;
     }
     
@@ -5444,7 +6738,9 @@ async function stopGeneration() {
         body: JSON.stringify({
           character: charName,
           enabled: enabled,
-          lines: lines
+          lines: lines,
+          questions_enabled: questionsEnabled,
+          questions: questions
         })
       });
       
@@ -5454,7 +6750,7 @@ async function stopGeneration() {
         throw new Error(result.error);
       }
       
-      console.log(`✅ Saved ${lines.length} opening line(s) for ${charName}`);
+      console.log(`✅ Saved ${lines.length} opening line(s) and ${questions.length} opening question(s) for ${charName}`);
       
       closeOpeningLineModal();
       
@@ -5464,6 +6760,10 @@ async function stopGeneration() {
         displayOpeningLineInChat();
         displayRpOpenerInChat();
       }
+      if (Array.isArray(window.loadedChat) &&
+          window.loadedChat.every(message => message.is_opening_line)) {
+        displayOpeningQuestions();
+      }
       
     } catch (err) {
       console.error('Failed to save opening lines:', err);
@@ -5471,13 +6771,6 @@ async function stopGeneration() {
     }
   }
 
-  // Close modal when clicking outside
-  window.onclick = function(event) {
-    const modal = document.getElementById('opening-line-modal');
-    if (event.target === modal) {
-      closeOpeningLineModal();
-    }
-  };
 // ==================================================
 // CLEAR CHAT (clear the actual file contents)
 // ==================================================
@@ -5512,6 +6805,7 @@ async function stopGeneration() {
         const chat = document.getElementById('chat');
         if (chat) chat.innerHTML = '';
         displayOpeningLineInChat();
+        displayOpeningQuestions();
         displayRpOpenerInChat();
       }
 
@@ -5572,6 +6866,7 @@ async function stopGeneration() {
       
       // ✅ RE-DISPLAY OPENING LINE AFTER CLEAR
       displayOpeningLineInChat();
+      displayOpeningQuestions();
       displayRpOpenerInChat();
       
     } catch (err) {
@@ -6125,12 +7420,15 @@ async function stopGeneration() {
               cleanup(value);
           }
           function onKey(e) {
-              if (e.key === 'Escape') { e.preventDefault(); cleanup(null); }
+              if (e.key === 'Escape') {
+                  e.preventDefault();
+                  e.stopImmediatePropagation();
+                  cleanup(null);
+              }
               else if (e.key === 'Enter') { e.preventDefault(); submit(); }
           }
 
           document.addEventListener('keydown', onKey, true);
-          backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) cleanup(null); });
           cancelBtn.addEventListener('click', () => cleanup(null));
           saveBtn.addEventListener('click', submit);
           setTimeout(() => input.focus(), 0);
@@ -6273,7 +7571,11 @@ async function stopGeneration() {
           try { if (prevFocus && prevFocus.focus) prevFocus.focus(); } catch (_) {}
       }
       function onKey(e) {
-          if (e.key === 'Escape') { e.preventDefault(); cleanup(); }
+          if (e.key === 'Escape') {
+              e.preventDefault();
+              e.stopImmediatePropagation();
+              cleanup();
+          }
       }
       function showStatus(html, color) {
           statusBox.style.display = 'block';
@@ -6350,7 +7652,6 @@ async function stopGeneration() {
       }
 
       document.addEventListener('keydown', onKey, true);
-      backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) cleanup(); });
       cancelBtn.addEventListener('click', cleanup);
       genBtn.addEventListener('click', generate);
       setTimeout(() => briefInput.focus(), 0);
@@ -7103,14 +8404,42 @@ function showAutoMemoryToast(character, title, undoToken) {
               : m.content,
             speaker: m.speaker || (m.role === 'user' ? activeUserNameFallback : charName),
             ...(m.is_opening_line ? { is_opening_line: true } : {}),
-            ...(m.timestamp ? { timestamp: m.timestamp } : {})
+            ...(m.timestamp ? { timestamp: m.timestamp } : {}),
+            ...(m.message_id ? { message_id: m.message_id } : {}),
+            ...(m.reply_to_message_id ? { reply_to_message_id: m.reply_to_message_id } : {}),
+            ...(m.generation_status ? { generation_status: m.generation_status } : {}),
+            ...(m.generation_started_at ? { generation_started_at: m.generation_started_at } : {}),
+            ...(m.generation_completed_at ? { generation_completed_at: m.generation_completed_at } : {})
           };
         });
 
         // Stream in progress → the assistant turn isn't pushed yet; preserve the
         // partial text so an interrupted reply survives the navigation.
+        // Guard: isSending stays true through the post-completion awaits (bench
+        // status PATCH, auto-memory pass), during which the completed turn IS
+        // already in loadedChat — appending the partial then would write a
+        // second assistant reply to the same user turn and block capture as
+        // ambiguous. Only append while the reply has genuinely not landed.
         if (window.isSending && window._streamingPartial && window._streamingPartial.trim().length > 0) {
-          msgs.push({ role: 'assistant', content: window._streamingPartial, speaker: charName, timestamp: new Date().toISOString() });
+          var sourceUser = [...window.loadedChat].reverse().find(function(message) {
+            return message.role === 'user' && !message.hidden;
+          });
+          var replyAlreadyLanded = Boolean(sourceUser) && window.loadedChat.some(function(message) {
+            return message.role === 'assistant' &&
+              !message.hidden &&
+              message.reply_to_message_id === sourceUser.message_id;
+          });
+          if (!replyAlreadyLanded) {
+            msgs.push({
+              role: 'assistant',
+              content: window._streamingPartial,
+              speaker: charName,
+              timestamp: new Date().toISOString(),
+              message_id: createHwuiMessageId(),
+              reply_to_message_id: sourceUser && sourceUser.message_id,
+              generation_status: window._generationCancelled ? 'cancelled' : 'incomplete'
+            });
+          }
         }
 
         // base_count lets the server reject this flush if the disk has moved
@@ -7156,6 +8485,8 @@ function showAutoMemoryToast(character, title, undoToken) {
     // guard inside focusChatInputIfIdle still prevents stealing focus from a modal.
     window.addEventListener('pageshow', () => setTimeout(() => {
       restoreChatInputDraft();
+      consumePendingBenchPrompt();
+      refreshBenchChatControl();
       focusChatInputIfIdle();
     }, 300));
     // ───────────────────────────────────────────────────────────────────────
@@ -7240,6 +8571,7 @@ function showAutoMemoryToast(character, title, undoToken) {
       currentChatFilename = null;
       document.getElementById('chat').innerHTML = '';
       localStorage.removeItem('lastOpenChat');
+      localStorage.removeItem('currentChatFilename');
       
       // Remove active state from all chat items
       document.querySelectorAll('.chat-item').forEach(function(item) {
@@ -7253,8 +8585,8 @@ function showAutoMemoryToast(character, title, undoToken) {
       window.loadedChat = [];
       
       // ✅ NOW display opening line with correct character loaded
-      displayOpeningLineInChat();
-      displayRpOpenerInChat();
+      const characterChats = await loadChats();
+      await ensureChatSelected(characterChats, selectedChar);
       
       console.log('✅ Ready for new chat with', selectedChar);
     });
@@ -7277,7 +8609,7 @@ function showAutoMemoryToast(character, title, undoToken) {
       if (document.visibilityState === 'hidden') saveChatInputDraft();
     });
     
-     await loadChats(); // ✅ Wait for chat list to fully load first
+    const startupChats = await loadChats(); // ✅ Wait for chat list to fully load first
     
     // ✅ Auto-restore last chat from localStorage
     const savedChatFilename = localStorage.getItem('currentChatFilename');
@@ -7296,7 +8628,7 @@ function showAutoMemoryToast(character, title, undoToken) {
           localStorage.removeItem('currentChatFilename');
           localStorage.removeItem('lastCharacter');
           window.loadedChat = [];
-          restoreLastChat();
+          await restoreLastChat();
         } else {
           // If we have a saved character, make sure dropdown matches
           if (savedCharacter) {
@@ -7316,9 +8648,15 @@ function showAutoMemoryToast(character, title, undoToken) {
         window.loadedChat = [];
       }
     } else {
-      restoreLastChat();
+      await restoreLastChat();
     }
+    if (!currentChatFilename) {
+      const selectedCharacter = document.getElementById('character-select')?.value || '';
+      await ensureChatSelected(startupChats, selectedCharacter);
+    }
+    consumePendingBenchPrompt();
     restoreChatInputDraft();
+    refreshBenchChatControl();
     
   });
   
@@ -7327,7 +8665,10 @@ function showAutoMemoryToast(character, title, undoToken) {
   // ==================================================
   // CREATE NEW CHAT (Global function for onclick)
   // ==================================================
-  async function createNewChat() {
+  async function createNewChat(options = {}) {
+    const shouldStartRename = options.startRename !== false;
+    const previousChatFilename = currentChatFilename;
+    const pendingBenchPromptText = document.getElementById('user-input')?.value || '';
     console.log('🔴 BEFORE ANYTHING - currentChatFilename:', currentChatFilename);
     console.log('🔴 BEFORE ANYTHING - window.loadedChat length:', window.loadedChat?.length || 0);
   
@@ -7360,6 +8701,18 @@ function showAutoMemoryToast(character, title, undoToken) {
         hwuiToast('Failed to create new chat.', 'error');
         return;
       }
+
+      HelcyonBenchPromptTransfer.rebindLoadedTransfer(
+        localStorage,
+        previousChatFilename,
+        data.filename,
+        pendingBenchPromptText
+      );
+      HelcyonBenchPromptTransfer.pruneAssociationsForTarget(localStorage, {
+        chat: data.filename,
+        chat_id: data.chat_id || '',
+        model: ''
+      });
       
       // ✅ Clear memory and DOM FIRST
       window.loadedChat = [];
@@ -7367,6 +8720,7 @@ function showAutoMemoryToast(character, title, undoToken) {
       
       // ✅ Set the new filename
       currentChatFilename = data.filename;
+      currentChatId = data.chat_id || null;
       localStorage.setItem('currentChatFilename', currentChatFilename);
       localStorage.setItem('lastCharacter', currentChar);
       
@@ -7391,7 +8745,7 @@ function showAutoMemoryToast(character, title, undoToken) {
         newChatItem.classList.add('active');
         
         var titleElement = newChatItem.querySelector('.chat-title');
-        if (titleElement) {
+        if (titleElement && shouldStartRename) {
           setTimeout(function() {
             startRename(titleElement, data.filename, titleElement.textContent);
           }, 0);
@@ -7399,6 +8753,7 @@ function showAutoMemoryToast(character, title, undoToken) {
       }
       
       console.log('✅ New chat created successfully');
+      return data.filename;
       
     } catch (err) {
       console.error('❌ Error creating new chat:', err);
@@ -7791,7 +9146,10 @@ async function createProject() {
     currentChatFilename = null;
     document.getElementById('chat').innerHTML = '';
     window.loadedChat = [];
-    await loadChats();
+    localStorage.removeItem('lastOpenChat');
+    localStorage.removeItem('currentChatFilename');
+    const projectChats = await loadChats();
+    await ensureChatSelected(projectChats);
     
     hwuiToast(`Project "${name}" created and activated!`, 'success');
     
@@ -7826,11 +9184,13 @@ async function switchProject(projectName) {
     currentChatFilename = null;
     document.getElementById('chat').innerHTML = '';
     window.loadedChat = [];
+    localStorage.removeItem('lastOpenChat');
     localStorage.removeItem('currentChatFilename');
     
     // Reload everything
     await loadProjects();
-    await loadChats();
+    const projectChats = await loadChats();
+    await ensureChatSelected(projectChats);
     
     // Close modal
     closeProjectModal();
@@ -8298,13 +9658,35 @@ document.addEventListener('click', (e) => {
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
+    const modalClosers = [
+      ['paste-transcript-modal', 'closePasteTranscriptModal'],
+      ['document-viewer-modal', 'closeDocumentViewer'],
+      ['brave-key-modal', 'closeBraveKeyModal'],
+      ['opening-line-modal', 'closeOpeningLineModal'],
+      ['global-docs-modal', 'closeGlobalDocsModal'],
+      ['memory-modal', 'closeMemoryModal'],
+      ['project-modal', 'closeProjectModal'],
+      ['author-note-modal', 'closeAuthorNote']
+    ];
+    for (const [modalId, closeFunction] of modalClosers) {
+      const modal = document.getElementById(modalId);
+      if (!modal || getComputedStyle(modal).display === 'none') continue;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      if (typeof window[closeFunction] === 'function') {
+        window[closeFunction]();
+      } else {
+        modal.style.display = 'none';
+      }
+      return;
+    }
+
+    closeChatActionsMenu();
     hideColorMenu();
     hideProjectColorMenu();
     const _ccm = document.getElementById('chat-char-menu');
     if (_ccm) _ccm.style.display = 'none';
     closeAvatarLightbox();
-    var pasteModal = document.getElementById('paste-transcript-modal');
-    if (pasteModal && pasteModal.style.display === 'flex') closePasteTranscriptModal();
   }
 });
 

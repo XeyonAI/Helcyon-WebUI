@@ -17,6 +17,7 @@ CHATTERBOX_SERVER_URL  = 'http://localhost:8004'
 QWEN_FAST_SERVER_URL   = 'http://127.0.0.1:8767'
 DEFAULT_VOICE = 'Sol'
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.json')
+VOICE_GROUPS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'voice_groups.json')
 
 
 def get_settings():
@@ -95,6 +96,79 @@ def get_server_url():
         return QWEN_FAST_SERVER_URL
     else:
         return F5_SERVER_URL
+
+
+# --------------------------------------------------
+# VOICE GROUPS — per-build dropdown organisation
+# --------------------------------------------------
+def _empty_voice_groups():
+    return {'groups': [], 'assignments': {}, 'collapsed': {}}
+
+
+@tts_bp.route('/voice_groups', methods=['GET'])
+def get_voice_groups():
+    try:
+        if not os.path.exists(VOICE_GROUPS_FILE):
+            return jsonify(_empty_voice_groups())
+        with open(VOICE_GROUPS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError('Voice group state must be a JSON object')
+        return jsonify({
+            'groups': data.get('groups', []),
+            'assignments': data.get('assignments', {}),
+            'collapsed': data.get('collapsed', {})
+        })
+    except Exception as e:
+        logging.error(f'Failed to read voice groups: {e}')
+        return jsonify(_empty_voice_groups())
+
+
+@tts_bp.route('/voice_groups', methods=['POST'])
+def save_voice_groups():
+    try:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({'success': False, 'error': 'Invalid group state'}), 400
+
+        raw_groups = data.get('groups', [])
+        raw_assignments = data.get('assignments', {})
+        raw_collapsed = data.get('collapsed', {})
+        if not isinstance(raw_groups, list) or not isinstance(raw_assignments, dict) or not isinstance(raw_collapsed, dict):
+            return jsonify({'success': False, 'error': 'Invalid group state'}), 400
+
+        groups = []
+        group_ids = set()
+        for raw_group in raw_groups:
+            if not isinstance(raw_group, dict):
+                return jsonify({'success': False, 'error': 'Invalid group'}), 400
+            group_id = str(raw_group.get('id', '')).strip()[:80]
+            name = str(raw_group.get('name', '')).strip()[:40]
+            if not group_id or not name or group_id in group_ids:
+                return jsonify({'success': False, 'error': 'Invalid or duplicate group'}), 400
+            group_ids.add(group_id)
+            groups.append({'id': group_id, 'name': name})
+
+        assignments = {}
+        for voice_name, group_id in raw_assignments.items():
+            if isinstance(voice_name, str) and isinstance(group_id, str) and group_id in group_ids:
+                assignments[voice_name[:200]] = group_id
+
+        collapsed = {}
+        allowed_sections = group_ids | {'ungrouped'}
+        for section_id, is_collapsed in raw_collapsed.items():
+            if section_id in allowed_sections and isinstance(is_collapsed, bool):
+                collapsed[section_id] = is_collapsed
+
+        state = {'groups': groups, 'assignments': assignments, 'collapsed': collapsed}
+        temp_path = VOICE_GROUPS_FILE + '.tmp'
+        with open(temp_path, 'w', encoding='utf-8') as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+        os.replace(temp_path, VOICE_GROUPS_FILE)
+        return jsonify({'success': True, **state})
+    except Exception as e:
+        logging.error(f'Failed to save voice groups: {e}')
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 # --------------------------------------------------

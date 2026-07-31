@@ -1,0 +1,28 @@
+{
+  "name": "Starter Reasoning",
+  "category": "Reasoning",
+  "description": "Template prompts for judgement, inference, and clear thinking.",
+  "judge_profile": "Reasoning",
+  "prompts": [
+    {
+      "title": "What follows",
+      "prompt": "Given these facts, what can we reasonably conclude, what is only a guess, and what would we need to know next?"
+    },
+    {
+      "title": "Hidden assumption",
+      "prompt": "I think this argument sounds convincing, but something feels off. Identify the hidden assumptions and which one matters most."
+    },
+    {
+      "title": "Common sense check",
+      "prompt": "Give me a common-sense read on this situation without flattening it into obvious advice."
+    },
+    {
+      "title": "Competing explanations",
+      "prompt": "Here are three possible explanations. Compare them and tell me which is most likely, not just that all are possible."
+    },
+    {
+      "title": "Land the conclusion",
+      "prompt": "Reason through this carefully, but do not hedge forever. I want a clear conclusion if one is warranted."
+    }
+  ]
+}

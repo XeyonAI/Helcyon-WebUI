@@ -1,0 +1,28 @@
+{
+  "name": "Starter Philosophy",
+  "category": "Philosophy",
+  "description": "Template prompts for philosophical clarity and exploration.",
+  "judge_profile": "Philosophy",
+  "prompts": [
+    {
+      "title": "Free will without slogans",
+      "prompt": "Can you explain the free will debate in a way that actually helps someone think, rather than just listing positions?"
+    },
+    {
+      "title": "Meaning without permanence",
+      "prompt": "If nothing lasts forever, does that weaken meaning or make meaning more concentrated?"
+    },
+    {
+      "title": "Selfhood",
+      "prompt": "What makes me the same person over time if my body, beliefs, memories, and personality all change?"
+    },
+    {
+      "title": "Beauty and truth",
+      "prompt": "Is beauty a clue to truth, or just something the mind projects onto the world?"
+    },
+    {
+      "title": "Practical philosophy",
+      "prompt": "What is one philosophical idea that actually changes how a person lives day to day if they take it seriously?"
+    }
+  ]
+}

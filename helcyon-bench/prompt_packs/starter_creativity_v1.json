@@ -1,0 +1,28 @@
+{
+  "name": "Starter Creativity",
+  "category": "Creativity",
+  "description": "Template prompts for creative generation and playful ideation.",
+  "judge_profile": "Creativity",
+  "prompts": [
+    {
+      "title": "Strange premise",
+      "prompt": "Give me three story premises based on this idea: a city where everyone receives one sentence from their future self, but nobody knows when it was written."
+    },
+    {
+      "title": "Better metaphor",
+      "prompt": "I need a fresh metaphor for grief that does not use weather, wounds, waves, or darkness. Give me a few options and explain why they work."
+    },
+    {
+      "title": "Character spark",
+      "prompt": "Create a character who seems ordinary at first, but whose smallest habit hints at something deeply unusual."
+    },
+    {
+      "title": "Scene opening",
+      "prompt": "Write the opening paragraph of a scene where two old friends meet after ten years, but neither is willing to say why they really came."
+    },
+    {
+      "title": "Unexpected angle",
+      "prompt": "Take the idea of a haunted house and make it feel new without relying on gore, jump scares, or a tragic ghost backstory."
+    }
+  ]
+}

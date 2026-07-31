@@ -12,6 +12,10 @@ import time
 import re
 import glob
 
+from tts_path_config import apply_tts_path_overrides
+
+apply_tts_path_overrides()
+
 app = Flask(__name__)
 CORS(app)
 

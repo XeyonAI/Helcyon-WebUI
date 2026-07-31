@@ -1,54 +1,87 @@
-# Helcyon-WebUI (HWUI) Free v1.0
+# Helcyon-WebUI + Benchmark
 
-**Professional AI chat interface for local LLMs**
+**A modern local AI workspace — chat, characters, memory, documents, web search, and integrated model benchmarking, all running on your own machine.**
 
 <p align="center">
   <img src="static/images/Main_UI.jpg" alt="HWUI Main Interface" width="48%" />
   &nbsp;&nbsp;
-  <img src="static/images/Project_manager.jpg" alt="Project Manager" width="48%" />
+  <img src="static/images/Chatacter_creator.png" alt="Character Creator" width="48%" />
 </p>
 <p align="center">
-  <img src="static/images/Chatacter_creator.png" alt="Character Creator" width="48%" />
+  <img src="static/images/Project_manager.jpg" alt="Project Manager" width="48%" />
   &nbsp;&nbsp;
-  <img src="static/images/Theme_designer.jpg" alt="Theme Designer — Pro Version" width="48%" />
+  <img src="static/images/benchmark_1.png" alt="Integrated Benchmark — Dashboard" width="48%" />
+</p>
+<p align="center">
+  <img src="static/images/benchmark_2.png" alt="Integrated Benchmark — Prompt Pack Editor" width="48%" />
+  &nbsp;&nbsp;
+  <img src="static/images/Theme_designer.jpg" alt="Theme Designer — Pro Edition" width="48%" />
 </p>
 
-A clean, powerful web interface designed specifically for [llama.cpp](https://github.com/ggerganov/llama.cpp) servers. Built to get out of the way and let you focus on conversations with your AI — no bloat, no unnecessary complexity.
+A clean, powerful web interface built specifically for [llama.cpp](https://github.com/ggerganov/llama.cpp) servers. HWUI gets out of the way and lets you focus on conversations with your AI — no bloat, no unnecessary complexity — while giving you the tools to organise, remember, and compare models properly.
 
-Optimized for [Helcyon](https://huggingface.co/XeyonAI) models for web search, document and memory functionality — but works great with any local LLM.
+Optimized for [Helcyon](https://huggingface.co/XeyonAI) models for web search, document, and memory functionality — but works great with any local LLM.
 
 ---
 
-## ✨ Features
+## ✨ What's inside
+
+HWUI is a full local AI workspace, not just a chat box:
+
+- **Chat** — streaming responses, message editing/regeneration, chat branching, multi-character conversations
+- **Characters** — a full creator with personality, tone, scenario, example dialogue, and author's notes
+- **Memory** — characters recall past conversations and facts across chats
+- **Projects** — organise chats by topic and inject documents (PDF, DOCX, MD, TXT, ODT) directly into context
+- **Web Search** — real-time search built in, the model decides when to search, no toggles required
+- **Benchmark** — an integrated model-comparison workspace: build prompt packs, write rubrics, browse past results, and track models on a dashboard and leaderboard, all from inside HWUI
+
+The Benchmark workspace here is the **integrated Helcyon-Bench experience built into HWUI itself** — a native Config-page workspace, not the standalone [Helcyon-Bench](https://github.com/XeyonAI) Streamlit tool. Every "Benchmark" feature described below refers to this integrated version.
+
+---
+
+## 🆓 Free vs 💎 Pro
+
+Everything you need to actually use HWUI — chat, characters, memory, documents, search, and the full Benchmark browsing/editing toolkit — is free and open source. Pro adds the pieces that make Benchmark hands-off and lets you fully customise the look.
 
 ### Free Version (This Repository)
 
-- **Character Creator** — Build custom AI personas with full control over personality, tone, and behavior
-- **Token Counter** — Real-time token tracking for messages and character cards
-- **Character Switching** — Seamlessly switch between multiple characters mid-conversation
-- **Custom User Persona** — Define your own user profile that carries across all chats
-- **Random Opening Lines** — Characters greet you differently each time
-- **Author's Note** — Add scene direction and tone adjustments on the fly
-- **Chat Persistence** — All conversations auto-save to your local chats folder
-- **Message Management** — Edit, delete, regenerate, or continue any message
-- **Duplicate Chat** — Branch conversations to explore different paths
-- **Streaming Responses** — Real-time token-by-token generation
-- **Multi-line Support** — Shift+Enter for paragraph breaks
-- **Time/Date Awareness** — Model knows the current time and date
-- **Custom System Prompts** — Full control via `system_prompt.txt`
-- **Markdown Rendering** — Full support for bold, italic, headers, bullet lists, separators and blockquotes
-- **Theme Switcher** — Switch between included themes from the settings menu
-- 🧠 **Memory System** — AI recalls and references past conversations across chats. Your characters actually remember you.
-- 📁 **Project Folders** — Organise chats by topic and inject documents (PDF, DOCX, MD, TXT, ODT) directly into conversation context
-- 🌐 **Web Search** — Real-time web search built in. Works just like Grok and ChatGPT — Helcyon searches and chats about the results. Optimized for Helcyon models (see [XeyonAI on HuggingFace](https://huggingface.co/XeyonAI))
+**Chat & characters**
+- Character Creator — build custom AI personas with full control over personality, tone, and behaviour
+- Character Switching — seamlessly switch between multiple characters mid-conversation
+- Custom User Persona — define your own user profile that carries across all chats
+- Random Opening Lines — characters greet you differently each time
+- Author's Note — add scene direction and tone adjustments on the fly
+- Message Management — edit, delete, regenerate, or continue any message
+- Duplicate Chat — branch conversations to explore different paths
+- Chat Persistence — all conversations auto-save locally
+- Streaming Responses — real-time token-by-token generation
+- Token Counter — real-time token tracking for messages and character cards
+- Custom System Prompts — full control via `system_prompt.txt` or the System Prompts panel
+- Markdown Rendering — bold, italic, headers, bullet lists, separators, blockquotes
+- Theme Switcher — switch between the two included themes from the Config page
 
-### Pro Version (£10)
+**Memory, projects & search**
+- 🧠 **Memory** — AI recalls and references past conversations across chats
+- 📁 **Projects** — organise chats by topic and inject documents (PDF, DOCX, MD, TXT, ODT) directly into conversation context
+- 🌐 **Web Search** — real-time web search, works automatically with a compatible Helcyon model
 
-Everything in Free, plus:
+**Benchmark (integrated)**
+- **Prompt Pack Editor** — create and edit the five-prompt test packs used for model comparisons
+- **Rubric Editor** — write and adjust the scoring rubrics the judge grades against
+- **Benchmark Browser** — browse every saved comparison and prompt pack
+- **Dashboard** — per-model, per-category score breakdowns, strengths/weaknesses, trends
+- **Leaderboard** — Current, Best, and Historical model rankings
 
-- 🎨 **Theme Editor** — Create and customise your own themes with a full visual editor. Tweak colours, backgrounds, and UI feel to make HWUI truly yours.
+### Pro Version (£20)
 
-👉 **[Get HWUI Pro on Gumroad](https://xeyonai.gumroad.com/l/bsmupk)**
+Everything in Free, plus the tools that make Benchmark automatic and HWUI fully your own:
+
+- 🎨 **Theme Editor** — create and customise your own themes with a full visual editor: colours, backgrounds, and UI feel
+- 🔁 **Send Prompt / Capture Response workflow** — send a benchmark prompt straight into your active chat and capture the exact reply back into the candidate slot, without copy-pasting
+- 🤖 **Automated Benchmarking** — run the full bidirectional judge across a whole prompt pack in one click
+- 💾 **Benchmark Session Management** — save, resume, and manage full benchmark runs across sessions
+
+👉 **[Get HWUI Pro on Gumroad](https://xeyonai.gumroad.com/l/bsmupk)** — one-time payment, no subscription, yours forever.
 
 ---
 
@@ -56,59 +89,64 @@ Everything in Free, plus:
 
 ### Requirements
 
-- **Python 3.8+**
-- **llama.cpp server** running locally (with a loaded model)
+- **Python 3.11+**
+- A [llama.cpp](https://github.com/ggerganov/llama.cpp) release for your platform (specifically `llama-server`/`llama-server.exe`) — HWUI launches and manages this for you, you just need the binary
+- A GGUF model to load
 - **Recommended:** 8GB+ VRAM for decent performance
 
-### Setup
+### Setup (Windows)
 
 1. **Clone this repository:**
+
+   ```bash
+   git clone https://github.com/XeyonAI/Helcyon-WebUI.git
+   cd Helcyon-WebUI
+   ```
+
+2. **Run the setup script:**
+
+   ```bash
+   Setup.bat
+   ```
+
+   This creates a virtual environment, installs all dependencies (including the correct PyTorch build for your GPU), creates a `C:\HWUI-Models` folder, and generates `settings.json`.
+
+3. **Get `llama-server.exe`:**
+
+   Download a build from the [llama.cpp releases page](https://github.com/ggerganov/llama.cpp/releases) — you don't need to run it yourself, HWUI starts it for you.
+
+4. **Add a model:**
+
+   Drop a `.gguf` model file into `C:\HWUI-Models` (or point HWUI at a different folder later from the Config page).
+
+5. **Launch HWUI:**
+
+   ```bash
+   START_UI.bat
+   ```
+
+   This opens `http://127.0.0.1:8081` in your browser automatically.
+
+6. **Point HWUI at llama.cpp:**
+
+   Open the ⚙️ **Config** page → **Llama.cpp** section, set **Server Executable Path** to your `llama-server.exe`, pick your model, and load it.
+
+### Setup (Linux/Mac)
 
 ```bash
 git clone https://github.com/XeyonAI/Helcyon-WebUI.git
 cd Helcyon-WebUI
-```
-
-2. **Install dependencies:**
-
-```bash
-pip install -r requirements.txt
-```
-
-Or run `Setup.bat`
-
-3. **Start your llama.cpp server:**
-
-Make sure you have a model loaded and llama.cpp server running.
-
-Example llama.cpp command:
-
-```bash
-./llama-server -m /path/to/your/model.gguf -c 8192 --port 5000
-```
-
-4. **Configure HWUI:**
-
-Edit `settings.json` to match your setup:
-- `llama_server_url` - URL of your llama.cpp server (default: `http://localhost:5000`)
-- `max_tokens` - Maximum response length
-- `temperature`, `top_p`, `repeat_penalty` - Sampling parameters
-
-5. **Run HWUI:**
-
-**Windows:**
-```bash
-START_AI.bat
-```
-
-**Linux/Mac:**
-```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt   # install PyTorch separately first — see requirements.txt
 python app.py
 ```
 
-6. **Open your browser:**
+Then open `http://localhost:8081` and configure `llama-server` from the Config page as in step 6 above.
 
-Navigate to `http://localhost:8081`
+### Full setup guide
+
+For a more detailed walkthrough — model management, vision/LoRA, TTS engines, Whisper voice input, mobile access, backups, and troubleshooting — see [HWUI_Setup_Guide.docx](HWUI_Setup_Guide.docx).
 
 ---
 
@@ -132,7 +170,7 @@ HWUI works with any local model served via llama.cpp:
 
 ### Creating Characters
 
-Use the **character creator** in Settings to build personas. Each character has:
+Use the **Character Creator** in Config to build personas. Each character has:
 - Main prompt (personality/style)
 - Description & tagline
 - Scenario context
@@ -158,27 +196,44 @@ Duplicate any chat to explore alternate conversation paths without losing the or
 
 HWUI's web search works automatically when using a compatible Helcyon model. The model decides when to search — you just have a conversation. No commands, no toggles.
 
+### Benchmarking Models
+
+Open the **Benchmark** tab on the Config page to compare models:
+1. Build or edit a five-prompt **Prompt Pack** for the category you want to test (creativity, philosophy, humour, etc.)
+2. Adjust the **Rubric** the judge scores against, if needed
+3. Collect Model A / Model B responses to each prompt (manually in Free; with one-click send/capture in Pro)
+4. Score the pair — automatically with one click in Pro, or by running your own comparison and recording it
+5. Browse results on the **Dashboard** and see overall standings on the **Leaderboard**
+
 ---
 
 ## 📂 File Structure
 
 ```
 Helcyon-WebUI/
-├── app.py                 # Main Flask application
-├── chat_routes.py         # Chat management endpoints
-├── extra_routes.py        # Character & user management
-├── project_routes.py      # Projects & document handling
-├── settings.json          # Configuration (edit this!)
-├── system_prompt.txt      # Global system prompt
-├── requirements.txt       # Python dependencies
-├── START_AI.bat           # Windows launcher
-├── characters/            # Character JSON files
-├── character_cards/       # Exported character cards
-├── users/                 # User persona data
-├── chats/                 # Saved conversations
-├── opening_lines/         # Random greeting text files
-├── static/                # CSS, JS, images
-└── templates/             # HTML templates
+├── app.py                     # Main Flask application
+├── chat_routes.py              # Chat management endpoints
+├── character_routes.py         # Character management
+├── project_routes.py           # Projects & document handling
+├── theme_routes.py             # Theme switching (+ Theme Editor, Pro)
+├── helcyon_bench_routes.py     # Integrated Benchmark endpoints
+├── helcyon_bench_adapter.py    # Benchmark prompt pack / results adapter
+├── helcyon_bench_judge.py      # Benchmark judging pipeline
+├── helcyon-bench/               # Bundled prompt packs, rubrics, judge engine
+├── settings.json                # Configuration (created by Setup.bat)
+├── system_prompt.txt            # Global system prompt
+├── requirements.txt              # Python dependencies
+├── Setup.bat                     # Windows installer
+├── START_UI.bat                  # Windows launcher
+├── characters/                   # Character JSON files
+├── character_cards/              # Exported character cards
+├── users/                        # User persona data
+├── chats/                        # Saved conversations
+├── projects/                     # Project folders & documents
+├── opening_lines/                 # Random greeting text files
+├── themes/                       # Included theme CSS files
+├── static/                       # CSS, JS, images
+└── templates/                    # HTML templates
 ```
 
 ---
@@ -186,20 +241,21 @@ Helcyon-WebUI/
 ## 🔧 Troubleshooting
 
 **"Connection refused" or server errors:**
-- Make sure llama.cpp server is running
-- Check `llama_server_url` in `settings.json` matches your llama.cpp server address
-- Default is `http://localhost:5000` — adjust if your server uses a different port
+- Make sure a model is loaded on the Config page's Llama.cpp panel
+- Check the **Server Executable Path** points at a real `llama-server`/`llama-server.exe`
 
 **Characters not loading:**
-- Ensure `/characters` folder has `.json` files
-- Default character is "Cal" — check it exists
+- Ensure `/characters` has `.json` files
 
 **Chats not saving:**
-- Check `/chats` folder has write permissions
+- Check `/chats` has write permissions
 
 **Model responses are cut off:**
-- Increase `max_tokens` in `settings.json`
-- Adjust llama.cpp context size (`-c` parameter)
+- Increase **Max Tokens** in the Config page's sampling settings
+- Increase the context size (`ctx_size`) in the Llama.cpp panel
+
+**Benchmark tab shows an error on startup:**
+- The `helcyon-bench/` folder (prompt packs, rubrics, judge engine) must be present alongside `app.py` — re-clone or re-download the repository if it's missing
 
 ---
 
@@ -211,16 +267,16 @@ Most local LLM interfaces are either:
 - Injecting weird templates that mess with model output
 
 HWUI is different:
-- **Clean output** — No weird prompts or formatting injections
-- **Fast** — Lightweight Flask backend, vanilla JS frontend
-- **Modular** — Easy to customise without breaking things
-- **Respectful** — Your data stays local. No telemetry, no cloud, no BS.
+- **Clean output** — no weird prompts or formatting injections
+- **Fast** — lightweight Flask backend, vanilla JS frontend
+- **Modular** — easy to customise without breaking things
+- **Respectful** — your data stays local. No telemetry, no cloud, no BS
 
 ---
 
 ## 📜 License
 
-HWUI Free is licensed under the **GNU General Public License v3.0**.
+Helcyon-WebUI Free is licensed under the **GNU General Public License v3.0** — see [LICENCE.txt](LICENCE.txt).
 
 This means you are free to:
 - Use the software for any purpose
@@ -230,7 +286,7 @@ This means you are free to:
 
 **However**, any modifications or derivative works must also be released under GPL v3.0.
 
-HWUI Pro is available under a separate proprietary license. See [Gumroad](https://xeyonai.gumroad.com/l/bsmupk) for details.
+HWUI Pro (£20) is available under a separate proprietary license and is not covered by the GPL above. See [Gumroad](https://xeyonai.gumroad.com/l/bsmupk) for details.
 
 ---
 
@@ -252,7 +308,7 @@ HWUI Pro is available under a separate proprietary license. See [Gumroad](https:
 - Implement features I don't personally need
 - Answer general coding questions
 
-**Want to support development and unlock the Theme Editor?** → [HWUI Pro (£10)](https://xeyonai.gumroad.com/l/bsmupk) includes the full visual Theme Editor and priority updates.
+**Want to support development, unlock the Theme Editor, and automate Benchmark runs?** → [HWUI Pro (£20)](https://xeyonai.gumroad.com/l/bsmupk)
 
 **Want to modify it yourself?** → Fork the repo! GPL v3 means you're free to build your own version.
 
@@ -266,5 +322,5 @@ Open an issue on GitHub or reach out on [HuggingFace](https://huggingface.co/Xey
 
 ---
 
-**Built by HardWire @ XeyonAI**  
+**Built by HardWire @ XeyonAI**
 Focus: Sovereign conversational AI with real emotional bandwidth.

@@ -6,6 +6,10 @@ PUSH_TO_GITHUB.bat
 Start Claude Code.bat
 *.bak
 
+# Internal engineering changelog - not for public repo
+changes.md
+changes-archive-*.md
+
 # Dev/personal files
 settings.json
 session_summaries/

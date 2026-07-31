@@ -1,36 +1,42 @@
-# Helcyon-WebUI Pro V1
+# Helcyon-WebUI + Benchmark (Free Edition)
 
-Professional AI chat interface for local LLMs.
+A modern local AI workspace: chat, characters, memory, documents, web
+search, and an integrated model-benchmarking workspace. See README.md
+for the full feature list and the Free vs Pro breakdown.
 
 ## Requirements
 - Python 3.11+
-- llama.cpp server running locally
-- 16GB+ RAM recommended
+- A llama.cpp release (llama-server / llama-server.exe) for your platform
+- 8GB+ VRAM recommended
 
 ## Installation
 
-1. Extract this ZIP to your desired location
-2. Open a terminal in the extracted folder
-3. Install dependencies:
-```
-   pip install -r requirements.txt
-```
-4. Start the server:
-```
-   python app.py
-```
-5. Open your browser to: http://127.0.0.1:8081
+1. Extract/clone this repository to your desired location
+2. Open a terminal in that folder
+3. Run:
+   Setup.bat
+   (creates the virtual environment, installs dependencies, and sets up
+   your models folder)
+4. Download llama-server.exe from https://github.com/ggerganov/llama.cpp/releases
+   and drop a .gguf model into C:\HWUI-Models
+5. Start the app:
+   START_UI.bat
+6. Open your browser to: http://127.0.0.1:8081
+7. In the Config page's Llama.cpp panel, point HWUI at your
+   llama-server.exe and load your model.
 
-## Activation
+## License
 
-1. Click the ⚙️ settings icon
-2. Enter your license key (provided in your purchase receipt)
-3. Click "Activate License"
+Helcyon-WebUI Free is licensed under the GNU General Public License
+v3.0 — see LICENCE.txt. HWUI Pro is a separate paid product available
+on Gumroad; it is not covered by this license.
 
 ## Support
 
-For questions or issues, contact: [your email or Discord]
+For questions or issues, open an issue on GitHub.
 
 ## Version
 
-This is V1. Critical bugfixes will be provided. Future major versions (if released) will be separate products with loyalty discounts.
+This is the Free edition of Helcyon-WebUI + Benchmark. Pro adds the
+Theme Editor, the Send Prompt / Capture Response workflow, automated
+benchmarking, and benchmark session management.

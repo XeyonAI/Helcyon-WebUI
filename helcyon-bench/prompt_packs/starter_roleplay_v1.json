@@ -1,0 +1,28 @@
+{
+  "name": "Starter Roleplay",
+  "category": "Roleplay",
+  "description": "Template prompts for immersive character and scene response.",
+  "judge_profile": "Roleplay",
+  "prompts": [
+    {
+      "title": "Tavern interruption",
+      "prompt": "You are the innkeeper of a remote mountain tavern. I arrive soaked, shaken, and carrying a sealed letter with your name on it."
+    },
+    {
+      "title": "Old rival",
+      "prompt": "Roleplay as my old rival. We have not seen each other in years, and now we are forced to work together. You still know exactly how to annoy me."
+    },
+    {
+      "title": "Starship quiet shift",
+      "prompt": "You are the night-shift engineer on a long-distance starship. I find you alone in the engine bay after the ship briefly loses power."
+    },
+    {
+      "title": "Character consistency",
+      "prompt": "Stay in character as a proud but tired royal guard who suspects I am lying, but cannot prove it yet."
+    },
+    {
+      "title": "Emotional RP",
+      "prompt": "You are someone I used to trust. I have come back after a long absence, and neither of us knows whether this is an apology or a goodbye."
+    }
+  ]
+}

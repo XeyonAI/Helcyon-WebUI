@@ -1,0 +1,28 @@
+{
+  "name": "Starter Coding",
+  "category": "Coding",
+  "description": "Template prompts for practical coding help and debugging.",
+  "judge_profile": "Coding",
+  "prompts": [
+    {
+      "title": "Bug diagnosis",
+      "prompt": "This function sometimes returns the right result and sometimes returns None. Walk me through how you would debug it before suggesting a fix."
+    },
+    {
+      "title": "Small refactor",
+      "prompt": "I have a messy helper that does three related things. How would you decide whether to split it up or leave it alone?"
+    },
+    {
+      "title": "Readable code",
+      "prompt": "Explain how you would make this code easier to read without changing behaviour or doing a broad redesign."
+    },
+    {
+      "title": "Test choice",
+      "prompt": "What focused tests would you add for a small persistence bug where saved settings reload incorrectly after refresh?"
+    },
+    {
+      "title": "Trade-off",
+      "prompt": "Should I add a new abstraction here or just duplicate a few lines? Give me a practical engineering judgement, not a generic rule."
+    }
+  ]
+}

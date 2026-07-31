@@ -1,0 +1,28 @@
+{
+  "name": "Starter Editing",
+  "category": "Editing",
+  "description": "Template prompts for rewriting and tightening prose.",
+  "judge_profile": "Editing",
+  "prompts": [
+    {
+      "title": "Make it cleaner",
+      "prompt": "Rewrite this paragraph so it is clearer and more natural, but keep my voice and do not make it sound corporate."
+    },
+    {
+      "title": "Sharper opening",
+      "prompt": "This introduction feels flat. Give me three stronger openings with different tones: direct, warm, and punchy."
+    },
+    {
+      "title": "Preserve meaning",
+      "prompt": "Tighten this text by about 30 percent without losing nuance or changing the argument."
+    },
+    {
+      "title": "Tone adjustment",
+      "prompt": "Make this message sound calmer and more diplomatic without making me sound weak or apologetic."
+    },
+    {
+      "title": "Find the weak spots",
+      "prompt": "Read this draft and tell me where the logic, flow, or wording gets muddy. Do not rewrite everything unless needed."
+    }
+  ]
+}

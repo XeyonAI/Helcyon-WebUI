@@ -128,6 +128,7 @@ const marked={parse:function(txt){
     @keyframes bounce { 0%,60%,100%{transform:translateY(0)} 30%{transform:translateY(-6px)} }
     #input-area { flex-shrink: 0; background: var(--surface); border-top: 1px solid var(--border); padding: 10px 14px; padding-bottom: max(10px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 8px; }
     #text-row { display: flex; gap: 8px; align-items: flex-end; }
+    #send-btn:disabled, #regen-btn:disabled, #continue-btn:disabled { opacity: 0.4; cursor: default; pointer-events: none; }
     #user-text { flex: 1; background: var(--surface2); border: 1px solid var(--border); border-radius: 12px; padding: 9px 13px; color: var(--text); font-size: 15px; resize: none; max-height: 80px; min-height: 40px; outline: none; font-family: inherit; line-height: 1.4; }
     #user-text:focus { border-color: var(--accent); }
     #user-text::placeholder { color: var(--text-dim); }
@@ -214,9 +215,9 @@ const marked={parse:function(txt){
       </button>
     </div>
     <div id="resume-row" style="display:flex;gap:6px;padding:0 0 4px;">
-      <button onclick="regenerateLastResponse()" style="flex:1;background:rgba(80,55,25,0.3);border:1px solid #6a4a2a;color:#f5b14a;border-radius:8px;padding:5px 0;font-size:12px;cursor:pointer;">🔁 Regen</button>
+      <button id="regen-btn" onclick="regenerateLastResponse()" style="flex:1;background:rgba(80,55,25,0.3);border:1px solid #6a4a2a;color:#f5b14a;border-radius:8px;padding:5px 0;font-size:12px;cursor:pointer;">🔁 Regen</button>
       <button onclick="resumeLastResponse()" style="flex:1;background:rgba(40,80,120,0.3);border:1px solid #2a4a6a;color:#7ab4f5;border-radius:8px;padding:5px 0;font-size:12px;cursor:pointer;">🔄 Resume</button>
-      <button onclick="continueResponse()" style="flex:1;background:rgba(40,60,40,0.3);border:1px solid #2a4a2a;color:#6dbf8a;border-radius:8px;padding:5px 0;font-size:12px;cursor:pointer;">▶ Continue</button>
+      <button id="continue-btn" onclick="continueResponse()" style="flex:1;background:rgba(40,60,40,0.3);border:1px solid #2a4a2a;color:#6dbf8a;border-radius:8px;padding:5px 0;font-size:12px;cursor:pointer;">▶ Continue</button>
     </div>
     <button id="ptt-btn" onclick="toggleMic()">
       <svg class="mic-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
@@ -311,6 +312,18 @@ const marked={parse:function(txt){
 <div id="toast"></div>
 <script>
 let characterName='Assistant',charFilename='Assistant',userName='User',chatHistory=[],ttsEnabled=false,ttsVoice=null,mobileChatFilename=null;
+// Guards against overlapping /chat requests — a double-tap or a mobile keyboard's
+// Enter key firing twice would otherwise send two concurrent generations. The
+// backend runs llama-server with parallel:1, so a second request preempts the
+// first mid-stream (KV cache gets rewound), which reads as the model repeating
+// text it already generated. Desktop (index.html) has always guarded this via
+// window.isSending; mobile never did, hence mobile-only repeat/regenerate loops.
+let mobileSending=false;
+function setSendBusy(busy){
+  const sb=document.getElementById('send-btn');if(sb)sb.disabled=busy;
+  const rb=document.getElementById('regen-btn');if(rb)rb.disabled=busy;
+  const cb=document.getElementById('continue-btn');if(cb)cb.disabled=busy;
+}
 let mediaRecorder=null,audioChunks=[],isRecording=false;
 let ttsQueue=[],ttsProcessing=false,currentAudio=null,isPlayingAudio=false,ttsOnComplete=null;
 let mobileTTSEngine='f5',mobileQwenCtx=null,mobileQwenNext=0,mobileQwenSources=[],mobileQwenAbort=null,mobileQwenLiveRun=0;
@@ -319,6 +332,9 @@ let ttsSentenceBuffer='',ttsStreamingComplete=false;
 // Code-block stripping state — persists across streaming chunks so a fenced
 // ```...``` block that spans multiple chunks is fully suppressed.
 let ttsInsideCodeBlock=false,ttsBacktickTail='';
+// Web-search source anchors can span browser stream chunks; suppress the full
+// anchor before any fragment can enter the mobile speech buffer.
+let ttsInsideLink=false,ttsLinkTagTail='';
 // Streaming sentence batcher — accumulates detected sentences before
 // queuing so each TTS request carries enough prosodic context. Without
 // this, F5 receives one-sentence-at-a-time requests during streaming
@@ -467,6 +483,13 @@ function hideMobilePreferredModelLoadingOverlay(){
 async function loadMobileCharacterPreferredModel(characterData){
   const preferred=String((characterData&&characterData.preferred_model_id)||'').trim();
   if(!preferred)return true;
+  try{
+    const settingRes=await fetch('/character_model_pairing_enabled',{cache:'no-store'});
+    if(settingRes.ok){
+      const setting=await settingRes.json();
+      if(setting.enabled===false)return true;
+    }
+  }catch(e){console.warn('Could not read automatic character model loading setting',e);}
   const displayName=mobilePreferredModelName(preferred);
   const preferredId=preferred.replace(/\\/g,'/').toLowerCase();
   const rememberedId=String(localStorage.getItem('llama_last_model')||'').replace(/\\/g,'/').toLowerCase();
@@ -674,8 +697,10 @@ async function saveAsDocumentFromChat(commandText){
 
 async function sendMessage(text){
   if(!text)return;
+  if(mobileSending){showToast('Still generating — please wait');return;}
   if(saveDocumentIntentGate(text)){await saveAsDocumentFromChat(text);return;}
   if(memoryIntentGate(text)){await saveMemoryFromChat(text);return;}
+  mobileSending=true;setSendBusy(true);
   const userTs=new Date().toISOString();
   addBubble('user',userName,text,userTs);chatHistory.push({role:'user',content:text,speaker:userName,timestamp:userTs});
   showTyping(true);setStatus('Thinking...');setPTTState('idle');
@@ -687,6 +712,7 @@ async function sendMessage(text){
     if(ct.includes('text/event-stream')&&res.body){await handleStream(res);}
     else{const data=await res.json();const reply=data.text||'';showTyping(false);addBubble('ai',characterName,reply);chatHistory.push({role:'assistant',content:reply});if(ttsEnabled)speakText(reply);setStatus('Ready');}
   }catch(err){showTyping(false);showToast('⚠️ Connection error');setStatus('Offline?');}
+  finally{mobileSending=false;setSendBusy(false);}
 }
 
 // Extended-thinking demux — peel Anthropic reasoning sentinels off the answer
@@ -1154,6 +1180,10 @@ function fixContractionsForTTS(text){
   return text;
 }
 
+function normaliseDecimalsForTTS(text){
+  return text.replace(/(\d)\.(?=\d)/g,'$1 point ');
+}
+
 function splitAndQueue(text){
   text=text.replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi,'')
            .replace(/\n*[\u{1F517}\uD83D\uDD17]*\s*Source:[^\n]*/gu,'')
@@ -1161,7 +1191,7 @@ function splitAndQueue(text){
            .replace(/\[([^\]]+)\]\([^)]*\)/g,'$1')
            .replace(/https?:\/\/\S+/g,'')
            .replace(/[\u{1F517}]/gu,'');
-  const cleaned=text.trim()
+  const cleaned=normaliseDecimalsForTTS(text).trim()
     .replace(/\s*\u2014\s*/g,', ')
     .replace(/\u{1F4AF}/gu,'one hundred percent')
     .replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu,'$1.')
@@ -1290,6 +1320,40 @@ function stripCodeForTTS(chunk){
   return out;
 }
 
+function stripStreamingAnchorsForTTS(chunk){
+  chunk=ttsLinkTagTail+chunk;
+  ttsLinkTagTail='';
+  let out='';
+  while(chunk){
+    if(ttsInsideLink){
+      const close=chunk.search(/<\/a\s*>/i);
+      if(close===-1){
+        const keep=Math.min(3,chunk.length);
+        ttsLinkTagTail=chunk.slice(-keep);
+        return out;
+      }
+      const closeTag=chunk.slice(close).match(/^<\/a\s*>/i)[0];
+      chunk=chunk.slice(close+closeTag.length);
+      ttsInsideLink=false;
+      continue;
+    }
+    const open=chunk.search(/<a(?=\s|>)/i);
+    if(open!==-1){
+      out+=chunk.slice(0,open);
+      chunk=chunk.slice(open+2);
+      ttsInsideLink=true;
+      continue;
+    }
+    const partialOpen=chunk.match(/<a?$/i);
+    if(partialOpen){
+      out+=chunk.slice(0,-partialOpen[0].length);
+      ttsLinkTagTail=partialOpen[0];
+    }else out+=chunk;
+    return out;
+  }
+  return out;
+}
+
 function bufferTextForTTS(chunk){
   if(!ttsEnabled||!chunk)return;
   // Reset code-block state at start of new response, BEFORE stripCodeForTTS
@@ -1299,6 +1363,8 @@ function bufferTextForTTS(chunk){
     ttsBacktickTail='';
   }
   chunk=stripCodeForTTS(chunk);
+  if(!chunk)return;
+  chunk=stripStreamingAnchorsForTTS(chunk);
   if(!chunk)return;
   chunk=chunk.replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi,'')
              .replace(/\n*[\u{1F517}\uD83D\uDD17]*\s*Source:[^\n]*/gu,'')
@@ -1311,7 +1377,7 @@ function bufferTextForTTS(chunk){
     ttsStreamingComplete=false;
     ttsFirstBatchSent=false;
   }
-  chunk=fixContractionsForTTS(chunk);
+  chunk=normaliseDecimalsForTTS(fixContractionsForTTS(chunk));
   chunk=chunk.replace(/\.{3}/g,'. ').replace(/\u2026/g,'. ').replace(/\.{2}/g,'. ');
   chunk=chunk.replace(/\s*\(\s*/g,'. ').replace(/\s*\)\s*/g,'. ');
   chunk=chunk.replace(/^>\s*/gm,'').replace(/\s*>\s*/g,'. ');
@@ -1319,6 +1385,7 @@ function bufferTextForTTS(chunk){
   chunk=chunk.replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu,'$1.');
   chunk=chunk.replace(/(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu,'');
   ttsSentenceBuffer+=chunk;
+  ttsSentenceBuffer=normaliseDecimalsForTTS(ttsSentenceBuffer);
   const lines=ttsSentenceBuffer.split('\n');
   ttsSentenceBuffer=lines.pop();
   // Paragraph break = natural prosody boundary \u2014 flush any pending
@@ -1332,8 +1399,10 @@ function bufferTextForTTS(chunk){
   // sentence stays in the buffer until the next newline and merges
   // with whatever comes next.
   const sentenceRegex=/[^.!?]+(?:[.!?]+|(?:[\u{1F000}-\u{1FFFF}\u{1F300}-\u{1FAFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}\u2600-\u27BF])+)[)"'*_]*\s*/gu;
+  // Hold a streamed trailing decimal dot until the next token arrives.
+  const sentenceScanBuffer=/\d\.$/.test(ttsSentenceBuffer)?ttsSentenceBuffer.slice(0,-1):ttsSentenceBuffer;
   let match,lastIndex=0;
-  while((match=sentenceRegex.exec(ttsSentenceBuffer))!==null){
+  while((match=sentenceRegex.exec(sentenceScanBuffer))!==null){
     batchAndQueue(match[0]);
     lastIndex=match.index+match[0].length;
   }
@@ -1365,6 +1434,8 @@ function flushTTSBuffer(){
   // of whether the closing ``` ever arrived.
   ttsBacktickTail='';
   ttsInsideCodeBlock=false;
+  ttsLinkTagTail='';
+  ttsInsideLink=false;
   flushPendingBatch();
   setTimeout(()=>{
     ttsStreamingComplete=true;
@@ -1556,6 +1627,8 @@ function stopAllAudio(){
   ttsOnComplete=null;
   ttsPendingBatch='';
   ttsFirstBatchSent=false;
+  ttsInsideLink=false;
+  ttsLinkTagTail='';
   const replayBtn=document.querySelector('.mobile-replay-btn.active');
   if(replayBtn)setReplayBtnIdle(replayBtn);
 }
@@ -1937,12 +2010,14 @@ function fmtTime(d){
 }
 // ── Regenerate / Resume / Continue ───────────────────────────────
 async function regenerateLastResponse(){
+  if(mobileSending){showToast('Still generating — please wait');return;}
   // Find last user message index in chatHistory
   let lastUserIdx=-1;
   for(let i=chatHistory.length-1;i>=0;i--){
     if(chatHistory[i].role==='user'){lastUserIdx=i;break;}
   }
   if(lastUserIdx===-1){showToast('No user message to regenerate from');return;}
+  mobileSending=true;setSendBusy(true);
   // Splice everything after last user message (removes any assistant response/error stub)
   chatHistory.splice(lastUserIdx+1);
   // Remove all bubbles after the last user bubble in the DOM
@@ -1965,6 +2040,7 @@ async function regenerateLastResponse(){
     if(ct.includes('text/event-stream')&&res.body){await handleStream(res);}
     else{const d=await res.json();const reply=d.text||'';const rgTs=new Date().toISOString();showTyping(false);addBubble('ai',characterName,reply,rgTs);chatHistory.push({role:'assistant',content:reply,speaker:characterName,timestamp:rgTs});await saveChatToDisk();if(ttsEnabled)speakText(reply);setStatus('Ready');}
   }catch(e){showTyping(false);showToast('⚠️ Error: '+e.message);}
+  finally{mobileSending=false;setSendBusy(false);}
 }
 async function resumeLastResponse() {
   if (!mobileChatFilename) { showToast('⚠️ No chat file to resume from'); return; }

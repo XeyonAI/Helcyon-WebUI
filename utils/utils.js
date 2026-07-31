@@ -32,16 +32,18 @@ function hwuiPositionToastHost(host) {
 
 window.addEventListener('resize', () => {
   hwuiPositionToastHost(document.getElementById('hwui-toast-host'));
+  hwuiPositionToastHost(document.getElementById('hwui-toast-host-top'));
   hwuiPositionToastHost(document.getElementById('hwui-toast'));
   hwuiPositionToastHost(document.getElementById('auto-memory-toast'));
 });
 
-function hwuiToast(message, kind = 'success', ms = 2200) {
-  let host = document.getElementById('hwui-toast-host');
+function hwuiToast(message, kind = 'success', ms = 2200, placement = 'bottom') {
+  const hostId = placement === 'top' ? 'hwui-toast-host-top' : 'hwui-toast-host';
+  let host = document.getElementById(hostId);
   if (!host) {
     host = document.createElement('div');
-    host.id = 'hwui-toast-host';
-    host.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:99999;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;';
+    host.id = hostId;
+    host.style.cssText = `position:fixed;${placement === 'top' ? 'top:16px' : 'bottom:20px'};left:50%;transform:translateX(-50%);z-index:99999;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;`;
     document.body.appendChild(host);
   }
   hwuiPositionToastHost(host);
@@ -59,7 +61,7 @@ function hwuiToast(message, kind = 'success', ms = 2200) {
 }
 
 // hwuiConfirm(message[, opts]) → Promise<boolean>. Resolves true on confirm,
-// false on cancel / backdrop click / Escape. opts: {confirmText, cancelText, danger}.
+// false on cancel / Escape. opts: {confirmText, cancelText, danger}.
 function hwuiConfirm(message, opts = {}) {
   return new Promise((resolve) => {
     const prevFocus = document.activeElement;
@@ -89,11 +91,14 @@ function hwuiConfirm(message, opts = {}) {
       resolve(result);
     }
     function onKey(e) {
-      if (e.key === 'Escape') { e.preventDefault(); cleanup(false); }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        cleanup(false);
+      }
       else if (e.key === 'Enter') { e.preventDefault(); cleanup(true); }
     }
     document.addEventListener('keydown', onKey, true);
-    backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) cleanup(false); });
     cancelBtn.addEventListener('click', () => cleanup(false));
     okBtn.addEventListener('click', () => cleanup(true));
     okBtn.focus();
@@ -101,7 +106,7 @@ function hwuiConfirm(message, opts = {}) {
 }
 
 // hwuiPrompt(message[, defaultValue]) → Promise<string|null>. Resolves the entered
-// text on OK/Enter, or null on cancel / backdrop click / Escape.
+// text on OK/Enter, or null on cancel / Escape.
 function hwuiPrompt(message, defaultValue = '', opts = {}) {
   return new Promise((resolve) => {
     const prevFocus = document.activeElement;
@@ -135,11 +140,14 @@ function hwuiPrompt(message, defaultValue = '', opts = {}) {
       resolve(result);
     }
     function onKey(e) {
-      if (e.key === 'Escape') { e.preventDefault(); cleanup(null); }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        cleanup(null);
+      }
       else if (e.key === 'Enter') { e.preventDefault(); cleanup(field.value); }
     }
     document.addEventListener('keydown', onKey, true);
-    backdrop.addEventListener('mousedown', (e) => { if (e.target === backdrop) cleanup(null); });
     cancelBtn.addEventListener('click', () => cleanup(null));
     okBtn.addEventListener('click', () => cleanup(field.value));
     field.focus(); field.select();
@@ -345,6 +353,90 @@ async function displayOpeningLineInChat() {
     
   } catch (err) {
     console.error('Failed to load opening line:', err);
+  }
+}
+
+function hideOpeningQuestions() {
+  const starters = document.getElementById('opening-question-starters');
+  if (starters) starters.hidden = true;
+}
+
+async function askOpeningQuestion(question) {
+  if (!question || window._sendPromptInFlight) return;
+
+  const history = Array.isArray(window.loadedChat) ? window.loadedChat : [];
+  if (history.some(message => !message.is_opening_line)) {
+    hideOpeningQuestions();
+    return;
+  }
+
+  const box = document.getElementById('user-input');
+  if (!box) return;
+
+  hideOpeningQuestions();
+  box.value = question;
+  box.dispatchEvent(new Event('input', { bubbles: true }));
+  await sendPrompt();
+}
+
+async function displayOpeningQuestions() {
+  const starters = document.getElementById('opening-question-starters');
+  const heading = document.getElementById('opening-question-heading');
+  const cards = document.getElementById('opening-question-cards');
+  if (!starters || !heading || !cards) return;
+
+  const history = Array.isArray(window.loadedChat) ? window.loadedChat : [];
+  if (history.some(message => !message.is_opening_line)) {
+    hideOpeningQuestions();
+    return;
+  }
+
+  const charName =
+    currentCharacter?.name ||
+    document.getElementById('character-select')?.value ||
+    localStorage.getItem('lastCharacter') ||
+    '';
+
+  if (!charName) {
+    hideOpeningQuestions();
+    return;
+  }
+
+  try {
+    const res = await fetch(`/get_opening_lines/${encodeURIComponent(charName)}`);
+    const data = await res.json();
+    const questions = Array.isArray(data.questions)
+      ? data.questions
+          .filter(question => typeof question === 'string' && question.trim())
+          .slice(0, 8)
+      : [];
+
+    if (!data.questions_enabled || questions.length === 0) {
+      hideOpeningQuestions();
+      return;
+    }
+
+    const latestHistory = Array.isArray(window.loadedChat) ? window.loadedChat : [];
+    if (latestHistory.some(message => !message.is_opening_line)) {
+      hideOpeningQuestions();
+      return;
+    }
+
+    heading.textContent = `Ask ${charName}`;
+    cards.innerHTML = '';
+    questions.forEach(question => {
+      const cleanQuestion = question.trim();
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'opening-question-card';
+      button.textContent = `“${cleanQuestion}”`;
+      button.onclick = () => askOpeningQuestion(cleanQuestion);
+      cards.appendChild(button);
+    });
+    starters.hidden = false;
+  } catch (err) {
+    hideOpeningQuestions();
+    console.error('Failed to load opening questions:', err);
   }
 }
 
@@ -558,6 +650,10 @@ let ttsStreamingComplete = false;
 // start of a ``` marker completed in the next chunk.
 let ttsInsideCodeBlock = false;
 let ttsBacktickTail = '';
+// Web-search source anchors can be split across browser stream chunks. Keep
+// enough state to suppress the whole <a ...>...</a> block before TTS sees it.
+let ttsInsideLink = false;
+let ttsLinkTagTail = '';
 const TTS_START_THRESHOLD = 1;  // Start playing after this many sentences buffered
 
 let lastTTSResponseText = '';  // 🔊 Stored for Replay button
@@ -650,6 +746,8 @@ function stopAllAudio() {
   ttsStreamingComplete = false;
   ttsInsideCodeBlock = false;
   ttsBacktickTail = '';
+  ttsInsideLink = false;
+  ttsLinkTagTail = '';
 
   const btn = document.getElementById('tts-toggle-btn');
   if (btn) btn.classList.remove('speaking');
@@ -669,6 +767,10 @@ function fixContractionsForTTS(text) {
   text = text.replace(/\u2019/g, "'").replace(/\u2018/g, "'");
   text = text.replace(/\bisn't\b/gi, 'isnt');
   return text;
+}
+
+function normaliseDecimalsForTTS(text) {
+  return text.replace(/(\d)\.(?=\d)/g, '$1 point ');
 }
 
 
@@ -723,6 +825,48 @@ function stripCodeForTTS(chunk) {
 }
 
 
+function stripStreamingAnchorsForTTS(chunk) {
+  chunk = ttsLinkTagTail + chunk;
+  ttsLinkTagTail = '';
+  let out = '';
+
+  while (chunk) {
+    if (ttsInsideLink) {
+      const close = chunk.search(/<\/a\s*>/i);
+      if (close === -1) {
+        // Preserve only a possible split closing tag; all anchor content stays muted.
+        const keep = Math.min(3, chunk.length);
+        ttsLinkTagTail = chunk.slice(-keep);
+        return out;
+      }
+      const closeTag = chunk.slice(close).match(/^<\/a\s*>/i)[0];
+      chunk = chunk.slice(close + closeTag.length);
+      ttsInsideLink = false;
+      continue;
+    }
+
+    const open = chunk.search(/<a(?=\s|>)/i);
+    if (open !== -1) {
+      out += chunk.slice(0, open);
+      chunk = chunk.slice(open + 2);
+      ttsInsideLink = true;
+      continue;
+    }
+
+    const partialOpen = chunk.match(/<a?$/i);
+    if (partialOpen) {
+      out += chunk.slice(0, -partialOpen[0].length);
+      ttsLinkTagTail = partialOpen[0];
+    } else {
+      out += chunk;
+    }
+    return out;
+  }
+
+  return out;
+}
+
+
 // Remove links so TTS never speaks a URL or a bare-domain citation.
 // ⚠️ Must run BEFORE any "(" → ". " paren-to-pause conversion — otherwise the
 // wrapped citation's parens are gone before we can recognise the form, and the
@@ -765,6 +909,8 @@ function bufferTextForTTS(chunk) {
   // into spoken artefacts.
   chunk = stripCodeForTTS(chunk);
   if (!chunk) return;
+  chunk = stripStreamingAnchorsForTTS(chunk);
+  if (!chunk) return;
 
   // Strip links FIRST via the shared helper (wrapped citations, bare-domain link
   // text, <a> tags, bare URLs) — MUST run before the "(" → ". " conversion below,
@@ -780,7 +926,7 @@ function bufferTextForTTS(chunk) {
                .replace(/[\u{1F517}\uD83D\uDD17]/gu, ''); // link emoji (all variants)
 
   // Fix contractions FIRST before apostrophes get stripped
-  chunk = fixContractionsForTTS(chunk);
+  chunk = normaliseDecimalsForTTS(fixContractionsForTTS(chunk));
 
   // Normalise dashes, strip ellipsis to single pause, no stacking dots
   chunk = chunk.replace(/\.{3}/g, '. ').replace(/\u2026/g, '. ').replace(/\.{2}/g, '. ');
@@ -793,6 +939,7 @@ function bufferTextForTTS(chunk) {
   chunk = chunk.replace(/(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '');
 
   ttsSentenceBuffer += chunk;
+  ttsSentenceBuffer = normaliseDecimalsForTTS(ttsSentenceBuffer);
 
   // Split on newlines first — each line is a reliable boundary
   const lines = ttsSentenceBuffer.split('\n');
@@ -809,9 +956,15 @@ function bufferTextForTTS(chunk) {
   // instead of punctuation; without this the sentence stays in the buffer unqueued,
   // gets merged with the next line, and F5 gets a run-on chunk with no prosody break.
   const sentenceRegex = /[^.!?]+(?:[.!?]+|(?:[\u{1F000}-\u{1FFFF}\u{1F300}-\u{1FAFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}\u2600-\u27BF])+)[)"'*_]*\s*/gu;
+  // A streamed token can end at "5." before the following "6" arrives.
+  // Hold that ambiguous trailing dot for one more chunk instead of treating it
+  // as a sentence ending; the next pass will produce "5 point 6".
+  const sentenceScanBuffer = /\d\.$/.test(ttsSentenceBuffer)
+    ? ttsSentenceBuffer.slice(0, -1)
+    : ttsSentenceBuffer;
   let match;
   let lastIndex = 0;
-  while ((match = sentenceRegex.exec(ttsSentenceBuffer)) !== null) {
+  while ((match = sentenceRegex.exec(sentenceScanBuffer)) !== null) {
     splitAndQueue(match[0]);
     lastIndex = match.index + match[0].length;
   }
@@ -850,7 +1003,7 @@ function splitAndQueue(text) {
              .replace(/\n*[\u{1F517}\*]*\s*Source:[^\n]*/gu, '') // Source: lines
              .replace(/https?:\/\/\S+/g, '')                 // bare URLs
              .replace(/[\u{1F517}]/gu, '');                    // link emoji
-  const cleaned = text.trim()
+  const cleaned = normaliseDecimalsForTTS(text).trim()
     .replace(/\s*\u2014\s*/g, ', ')
     .replace(/\u{1F4AF}/gu, 'one hundred percent')
     .replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '$1.')
@@ -943,6 +1096,8 @@ function flushTTSBuffer() {
   // of whether the closing ``` ever arrived.
   ttsBacktickTail = '';
   ttsInsideCodeBlock = false;
+  ttsLinkTagTail = '';
+  ttsInsideLink = false;
 
   // Delay setting streamingComplete so the queue processor's poll loop
   // has time to pick up any last-queued sentences before seeing "done"

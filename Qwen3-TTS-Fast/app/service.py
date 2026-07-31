@@ -100,6 +100,7 @@ class Runtime:
         self.cuda_graphs_captured = False
         self.prompts: dict[str, dict[str, Any]] = {}
         self.prompt_meta: dict[str, dict[str, Any]] = {}
+        self.primed_voices: set[str] = set()
         self.results: dict[str, dict[str, Any]] = {}
 
     def load(self) -> FasterQwen3TTS:
@@ -155,25 +156,7 @@ app = FastAPI(title="Faster Qwen3-TTS Native Windows Evaluation", version="1.0")
 def preload_runtime() -> None:
     if os.getenv("QWEN_FAST_PRELOAD", "1") != "1":
         return
-    model = runtime.load()
-    names = shared_voice_names()
-    if not names:
-        return
-    voice = "Sol_American_Female" if "Sol_American_Female" in names else names[0]
-    wav, transcript = shared_voice(voice)
-    prompt, _ = runtime.make_prompt(voice, wav, transcript)
-    torch.manual_seed(0)
-    torch.cuda.manual_seed_all(0)
-    for _chunk, _sr, _timing in model.generate_voice_clone_streaming(
-        text="Ready.", language="English", ref_text=transcript,
-        voice_clone_prompt=prompt, chunk_size=2, max_new_tokens=8,
-        temperature=0.9, top_k=50, top_p=0.95, do_sample=True,
-        repetition_penalty=1.05, xvec_only=False,
-        non_streaming_mode=False, append_silence=True,
-    ):
-        pass
-    torch.cuda.synchronize()
-    runtime.cuda_graphs_captured = bool(model._warmed_up)
+    runtime.load()
 
 
 def wav_header(sample_rate: int = 24000) -> bytes:
@@ -272,6 +255,27 @@ def generation_kwargs(text: str, language: str, transcript: str, ref: Path | Non
             "non_streaming_mode": False, "append_silence": True}
 
 
+def prime_hwui_voice(model: FasterQwen3TTS, voice: str, transcript: str,
+                     prompt: dict[str, Any]) -> bool:
+    """Prime the fast generation path with the voice HWUI actually selected."""
+    key = prompt_key(voice)
+    if key in runtime.primed_voices:
+        return False
+    torch.manual_seed(0)
+    torch.cuda.manual_seed_all(0)
+    model.generate_voice_clone(
+        text="Ready. All set.", language="English", ref_text=transcript,
+        voice_clone_prompt=prompt, max_new_tokens=32,
+        temperature=HWUI_VOICE_TEMPERATURE, top_k=50, top_p=0.95, do_sample=True,
+        repetition_penalty=1.05, xvec_only=False,
+        non_streaming_mode=False, append_silence=True,
+    )
+    torch.cuda.synchronize()
+    runtime.cuda_graphs_captured = bool(model._warmed_up)
+    runtime.primed_voices.add(key)
+    return True
+
+
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     return (ROOT / "app" / "static" / "index.html").read_text(encoding="utf-8")
@@ -317,9 +321,13 @@ def hwui_status() -> dict[str, Any]:
 def hwui_warmup(payload: dict[str, Any]) -> dict[str, Any]:
     voice = str(payload.get("voice") or "Sol")
     with runtime.lock:
+        model = runtime.load()
         wav, transcript = shared_voice(voice)
-        _prompt, seconds = runtime.make_prompt(voice, wav, transcript)
-    return {"status": "ok", "voice": voice, "voice_prompt_processing_seconds": round(seconds, 4)}
+        key = prompt_key(voice)
+        prompt, seconds = runtime.make_prompt(voice, wav, transcript) if key not in runtime.prompts else (runtime.prompts[key], 0.0)
+        primed = prime_hwui_voice(model, voice, transcript, prompt)
+    return {"status": "ok", "voice": voice, "voice_prompt_processing_seconds": round(seconds, 4),
+            "voice_primed": primed}
 
 
 @app.post("/tts_to_audio")
@@ -334,6 +342,7 @@ def hwui_tts_to_audio(payload: dict[str, Any]) -> FileResponse:
             wav_path, transcript = shared_voice(voice)
             key = prompt_key(voice)
             prompt, _seconds = runtime.make_prompt(voice, wav_path, transcript) if key not in runtime.prompts else (runtime.prompts[key], 0.0)
+            prime_hwui_voice(model, voice, transcript, prompt)
             torch.manual_seed(int(payload.get("seed", 42)))
             torch.cuda.manual_seed_all(int(payload.get("seed", 42)))
             wavs, sr = model.generate_voice_clone(
@@ -374,6 +383,7 @@ async def hwui_tts_stream(payload: dict[str, Any]) -> StreamingResponse:
                     wav_path, transcript = shared_voice(voice)
                     key = prompt_key(voice)
                     prompt, _seconds = runtime.make_prompt(voice, wav_path, transcript) if key not in runtime.prompts else (runtime.prompts[key], 0.0)
+                    prime_hwui_voice(model, voice, transcript, prompt)
                     stream = model.generate_voice_clone_streaming(**generation_kwargs(
                         text, str(payload.get("language") or "English"), transcript,
                         None, prompt, int(payload.get("seed", 42)),

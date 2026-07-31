@@ -1,0 +1,28 @@
+{
+  "name": "Starter Planning",
+  "category": "Planning",
+  "description": "Template prompts for concrete planning and prioritisation.",
+  "judge_profile": "Planning",
+  "prompts": [
+    {
+      "title": "Unstick a project",
+      "prompt": "I have too many possible next steps and I keep circling. Help me pick the next three actions that would create real momentum."
+    },
+    {
+      "title": "Realistic day plan",
+      "prompt": "Help me plan a day where I need to make progress, but I know my energy is limited and I cannot pretend I will be a productivity machine."
+    },
+    {
+      "title": "Prioritise features",
+      "prompt": "I have ten feature ideas for a small app. How should I decide which ones belong in the first version?"
+    },
+    {
+      "title": "Reduce scope",
+      "prompt": "This plan is too big. Help me cut it down without losing the actual goal."
+    },
+    {
+      "title": "Decision plan",
+      "prompt": "I need to choose between two options and I keep collecting more information. Build me a practical decision process with a stopping point."
+    }
+  ]
+}

@@ -1,0 +1,71 @@
+# Optional. Controls the Clear Winner / Narrow Preference / Effective Tie
+# classification shown alongside every comparison's confidence and stability.
+# Safe to omit entirely - both fields default to the values shown below.
+scoring:
+  # Absolute overall-score gaps (0-10 scale) at or below this are reported as
+  # an Effective Tie rather than a win for either side.
+  effective_tie_threshold: 0.25
+  # Absolute overall-score gaps at or above this are reported as a Clear
+  # Winner. Gaps strictly between the two thresholds are a Narrow Preference.
+  clear_winner_threshold: 1.0
+
+judge:
+  # Select the initial Judge endpoint shown in the sidebar.
+  default_endpoint: "Local"
+
+  # Write judge debug logs (judge_logs/judge_io.jsonl and judge_pipeline_debug.jsonl).
+  # Set to false to disable all judge debug JSONL logging.
+  debug_logging: true
+
+  # OpenAI-compatible chat completions endpoints.
+  # Examples:
+  #   http://127.0.0.1:5000/v1
+  #   http://127.0.0.1:5001/v1
+  #   http://localhost:8080/v1
+  #   http://localhost:1234/v1
+  #   https://openrouter.ai/api/v1
+  #   https://api.openai.com/v1
+  endpoints:
+    Local:
+      # Shared HWUI-managed llama.cpp server. Uses the currently loaded HWUI model.
+      base_url: "http://127.0.0.1:5000/v1"
+      # For local endpoints that ignore auth, any non-empty value is usually fine.
+      api_key: "local-key"
+      model: "local-model"
+      local_endpoint_mode: "shared_hwui"
+      # Optional once HWUI exposes these endpoints:
+      # bench_lock_url: "http://127.0.0.1:8081/bench/lock"
+      # bench_unlock_url: "http://127.0.0.1:8081/bench/unlock"
+      # Bench also sends X-HelcyonBench-Run: true on model/preflight/judge requests.
+      models:
+        - "local-model"
+      temperature: 0.0
+      # Some local/OpenAI-compatible endpoints, including older llama.cpp servers,
+      # still expect max_tokens.
+      max_tokens: 4800
+      # Seconds to wait for the judge HTTP request before cancelling it.
+      # Raise this if your local model is slow and gets cut off mid-generation.
+      timeout: 120
+
+    Local Dedicated:
+      # Optional advanced mode for a separately-running judge llama-server.
+      base_url: "http://127.0.0.1:5001/v1"
+      api_key: "local-key"
+      model: "local-model"
+      local_endpoint_mode: "external_dedicated"
+      models:
+        - "local-model"
+      temperature: 0.0
+      max_tokens: 4800
+      timeout: 120
+
+    OpenAI:
+      base_url: "https://api.openai.com/v1"
+      api_key: "sk-your-key-here"
+      model: "gpt-4o"
+      models:
+        - "gpt-4o"
+        - "gpt-5.5"
+      temperature: 0.0
+      # Preferred for current OpenAI models.
+      max_completion_tokens: 4800

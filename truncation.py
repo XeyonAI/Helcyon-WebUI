@@ -1,4 +1,109 @@
-import re, json, os
+import re, json, os, hashlib
+
+
+_INLINE_ATTACHED_DOC_RE = re.compile(
+    r"\[ATTACHED DOCUMENT:\s*([^\]\n]+)\]\n([\s\S]*?)\n\[END ATTACHED DOCUMENT\]"
+)
+_MODEL_REFERENCE_DOC_RE = re.compile(
+    r"(?:REFERENCE DOCUMENT|REFERENCE TRANSCRIPT - QUOTED PAST CONVERSATION)\n"
+    r"Filename:\s*([^\n]+)\n+([\s\S]*?)\n"
+    r"END REFERENCE (?:DOCUMENT|TRANSCRIPT)"
+)
+
+
+def _collect_inline_attachments(messages):
+    """Return durable inline attachments found in message history."""
+    attachments = []
+    seen = set()
+    for msg in messages or []:
+        if not isinstance(msg, dict) or msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            content = "\n".join(
+                str(part.get("text", ""))
+                for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+        if not isinstance(content, str):
+            continue
+        matches = _INLINE_ATTACHED_DOC_RE.findall(content)
+        if not matches:
+            matches = _MODEL_REFERENCE_DOC_RE.findall(content)
+        for filename, body in matches:
+            digest = hashlib.sha256(body.encode("utf-8", errors="replace")).hexdigest()
+            key = (filename.strip(), digest)
+            if key in seen:
+                continue
+            seen.add(key)
+            attachments.append({
+                "filename": filename.strip(),
+                "content": body,
+                "chars": len(body),
+                "sha256": digest,
+            })
+    return attachments
+
+
+def _clip_attachment_text(text, token_limit):
+    """Keep a head/tail excerpt within a rough-token allowance."""
+    text = str(text or "").strip()
+    if token_limit <= 0 or not text:
+        return ""
+    matches = list(re.finditer(r"\w+|[^\s\w]", text))
+    if len(matches) <= token_limit:
+        return text
+    if token_limit < 12:
+        return text[:max(1, token_limit * 4)].rstrip()
+
+    head_tokens = max(1, int(token_limit * 0.67))
+    tail_tokens = max(1, token_limit - head_tokens - 1)
+    head_end = matches[head_tokens - 1].end()
+    tail_start = matches[-tail_tokens].start()
+    return text[:head_end].rstrip() + "\n[...document excerpt trimmed...]\n" + text[tail_start:].lstrip()
+
+
+def _build_attachment_recall_block(attachments, token_budget):
+    """Build a bounded request-local reference block for dropped attachments."""
+    if not attachments or token_budget < 80:
+        return ""
+
+    per_doc = max(12, int(token_budget / len(attachments)) - 18)
+
+    while per_doc >= 8:
+        sections = []
+        for attachment in attachments:
+            excerpt = _clip_attachment_text(attachment["content"], per_doc)
+            sections.append(
+                f"[ATTACHED DOCUMENT: {attachment['filename']}]\n"
+                f"{excerpt}\n"
+                "[END ATTACHED DOCUMENT]"
+            )
+        block = "\n\n".join(sections)
+        if rough_token_count(block) <= token_budget:
+            return block
+        per_doc = int(per_doc * 0.8)
+    return ""
+
+
+def _prepend_to_latest_user(messages, text):
+    """Prepend text to the latest user turn without dropping multimodal parts."""
+    if not text:
+        return False
+    for msg in reversed(messages):
+        if not isinstance(msg, dict) or msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    part["text"] = text + "\n\n" + str(part.get("text", ""))
+                    return True
+            content.insert(0, {"type": "text", "text": text})
+            return True
+        msg["content"] = text + ("\n\n" + str(content) if content else "")
+        return True
+    return False
 
 def _read_ctx_size() -> int:
     """Read ctx_size live from settings.json — never stale even if changed without restart."""
@@ -126,6 +231,12 @@ def trim_chat_history(messages, token_budget: int = None, extra_system_overhead:
         trimmed.insert(0, msg)
         total += n
 
+    # The attachment body is durable message content, but a large attachment
+    # used to be kept only while it was the newest turn. Once a later turn made
+    # it part of the dropped prefix, the document disappeared wholesale.
+    dropped_prefix = body[:len(body) - len(trimmed)] if len(trimmed) < len(body) else []
+    dropped_attachments = _collect_inline_attachments(dropped_prefix)
+
     if trimmed and total > conversation_budget:
         print(f"⚠️ Latest turn alone is ~{total} rough tokens — over the "
               f"~{conversation_budget}-token conversation budget. Kept it whole "
@@ -152,6 +263,41 @@ def trim_chat_history(messages, token_budget: int = None, extra_system_overhead:
               f"to preserve S U A U A … U sequence")
     if _dropped_for_alternation:
         print(f"🗑️ Trim alternation guard: stripped {_dropped_for_alternation} leading assistant message(s)")
+
+    # Reconstruct only a bounded request-local excerpt. The full document stays
+    # in its original saved message; no large content is duplicated on disk.
+    # Chats without attachments remain byte-for-byte on the old trim path.
+    if dropped_attachments:
+        kept_tokens = sum(
+            rough_token_count(msg.get("content", "")) + 20
+            for msg in trimmed
+        )
+        available_tokens = max(conversation_budget - kept_tokens, 0)
+        recall_budget = min(available_tokens, max(256, conversation_budget // 4))
+        recall_block = _build_attachment_recall_block(
+            dropped_attachments,
+            recall_budget,
+        )
+        if recall_block and _prepend_to_latest_user(trimmed, recall_block):
+            diagnostic = [
+                {
+                    "filename": item["filename"],
+                    "chars": item["chars"],
+                    "sha256": item["sha256"][:12],
+                }
+                for item in dropped_attachments
+            ]
+            print(
+                f"📎 Reconstructed {len(dropped_attachments)} dropped attachment(s) "
+                f"within ~{rough_token_count(recall_block)} rough tokens; "
+                f"metadata={json.dumps(diagnostic, ensure_ascii=True)}"
+            )
+        else:
+            print(
+                f"⚠️ {len(dropped_attachments)} attachment(s) fell outside the "
+                f"history window and no excerpt fit the remaining "
+                f"~{available_tokens}-token budget"
+            )
 
     if system_msg:
         trimmed.insert(0, system_msg)

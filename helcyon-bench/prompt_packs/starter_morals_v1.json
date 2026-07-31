@@ -1,0 +1,28 @@
+{
+  "name": "Starter Morals",
+  "category": "Morals",
+  "description": "Template prompts for moral judgement and ethical reasoning.",
+  "judge_profile": "Morals",
+  "prompts": [
+    {
+      "title": "A useful lie",
+      "prompt": "If telling a small lie would genuinely make someone feel better and cause no obvious harm, is honesty still the better choice?"
+    },
+    {
+      "title": "Loyalty versus truth",
+      "prompt": "A close friend did something wrong, but exposing it would damage their life. Where is the line between loyalty and cowardice?"
+    },
+    {
+      "title": "Public forgiveness",
+      "prompt": "Do people deserve a path back after a serious mistake, or are some reputational consequences meant to be permanent?"
+    },
+    {
+      "title": "Good intentions",
+      "prompt": "How much should good intentions matter when someone causes real harm while trying to help?"
+    },
+    {
+      "title": "Judging the past",
+      "prompt": "When judging people from the past, how much should we account for the morals of their time without excusing what was wrong?"
+    }
+  ]
+}

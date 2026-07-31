@@ -8,6 +8,18 @@ SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "settings.json")
 
 THEMES_DIR = os.path.join(os.path.dirname(__file__), "themes")
 
+# This is the free (GitHub) build of HWUI. Users may switch between the two
+# included themes, but creating/editing/saving/deleting themes or presets
+# (the Theme Editor) is Pro-only.
+FREE_THEMES = {"claude", "gemini"}
+
+
+def _pro_only():
+    return jsonify({
+        "error": "The Theme Editor is available in HWUI Pro.",
+        "pro_required": True,
+    }), 403
+
 def get_active_theme_name():
     """Get active theme name from settings.json, default to 'midnight'."""
     try:
@@ -68,111 +80,43 @@ def get_theme():
 
 @theme_bp.route("/save_theme", methods=["POST"])
 def save_theme():
-    """Write updated CSS custom properties into :root in the active theme file."""
-    try:
-        data = request.get_json() or {}
-        path = get_active_theme_path()
-        print(f"💾 save_theme: writing to {path}, {len(data)} variables")
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                css = f.read()
-        else:
-            print(f"⚠️  save_theme: file not found, creating new")
-            css = ":root {\n}\n"
-
-        if "--app-font-family" not in data:
-            font_match = re.search(r'--app-font-family\s*:\s*([^;]+);', css)
-            if font_match:
-                data["--app-font-family"] = font_match.group(1).strip()
-            else:
-                data["--app-font-family"] = '"Segoe UI", Tahoma, Geneva, Verdana, sans-serif'
-
-        # Build fresh :root block from incoming data
-        root_vars = "\n".join(f"  {var}: {value};" for var, value in data.items())
-        root_block = f":root {{\n{root_vars}\n}}"
-
-        # Replace existing :root block if present, otherwise prepend one
-        root_match = re.search(r":root\s*\{[^}]*\}", css, re.DOTALL)
-        if root_match:
-            css = css[:root_match.start()] + root_block + css[root_match.end():]
-        else:
-            # Insert after opening comment block if present
-            comment_match = re.match(r"\s*/\*.*?\*/", css, re.DOTALL)
-            insert_at = comment_match.end() if comment_match else 0
-            css = css[:insert_at].rstrip() + "\n\n" + root_block + "\n\n" + css[insert_at:].lstrip()
-
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(css)
-        print(f"✅ Theme saved to {os.path.basename(path)}: {len(data)} vars")
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        print(f"❌ save_theme failed: {e}")
-        import traceback; traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+    """Custom theme colour editing is Pro-only in the free build."""
+    return _pro_only()
 
 @theme_bp.route("/save_bg", methods=["POST"])
 def save_bg():
-    """Save an uploaded background image to static/ as a real file and return
-    its URL. Storing the image as a file (not base64) avoids the localStorage
-    ~5MB quota that silently broke large wallpapers."""
-    try:
-        if 'file' not in request.files:
-            return jsonify({"error": "No file provided"}), 400
-        file = request.files['file']
-        if not file.filename:
-            return jsonify({"error": "No file selected"}), 400
-        ext = os.path.splitext(file.filename)[1].lower() or '.jpg'
-        if ext not in ('.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'):
-            return jsonify({"error": f"Unsupported image type: {ext}"}), 400
-        import glob as _glob
-        static_dir = os.path.join(os.path.dirname(__file__), "static")
-        os.makedirs(static_dir, exist_ok=True)
-        # Drop any previous background file (any extension) so old ones don't orphan
-        for old in _glob.glob(os.path.join(static_dir, "hwui-bg.*")):
-            try:
-                os.remove(old)
-            except Exception:
-                pass
-        save_name = f"hwui-bg{ext}"
-        file.save(os.path.join(static_dir, save_name))
-        print(f"🖼️ Background image saved: static/{save_name}")
-        return jsonify({"status": "ok", "url": f"/static/{save_name}"})
-    except Exception as e:
-        print(f"❌ save_bg failed: {e}")
-        return jsonify({"error": str(e)}), 500
+    """Custom theme editing (background image) is Pro-only in the free build."""
+    return _pro_only()
 
 @theme_bp.route("/clear_bg", methods=["POST"])
 def clear_bg():
-    """Delete the saved background image file(s)."""
-    try:
-        import glob as _glob
-        static_dir = os.path.join(os.path.dirname(__file__), "static")
-        for old in _glob.glob(os.path.join(static_dir, "hwui-bg.*")):
-            try:
-                os.remove(old)
-            except Exception:
-                pass
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    """Custom theme editing (background image) is Pro-only in the free build."""
+    return _pro_only()
 
 @theme_bp.route("/themes/list", methods=["GET"])
 def list_themes():
-    """List all available theme files."""
+    """List the themes available to switch between. Restricted to the two
+    included free themes even if extra theme files are present on disk."""
     try:
         os.makedirs(THEMES_DIR, exist_ok=True)
-        themes = sorted([f[:-4] for f in os.listdir(THEMES_DIR) if f.endswith('.css')])
-        return jsonify({"themes": themes, "active": get_active_theme_name()})
+        on_disk = {f[:-4] for f in os.listdir(THEMES_DIR) if f.endswith('.css')}
+        themes = sorted(on_disk & FREE_THEMES)
+        active = get_active_theme_name()
+        if active not in FREE_THEMES:
+            active = themes[0] if themes else active
+        return jsonify({"themes": themes, "active": active})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @theme_bp.route("/themes/switch", methods=["POST"])
 def switch_theme():
-    """Switch active theme."""
+    """Switch active theme. Free build: limited to the two included themes."""
     try:
         name = request.get_json().get("name", "").strip()
         if not name or not re.match(r'^[\w\- ]+$', name):
             return jsonify({"error": "Invalid theme name"}), 400
+        if name not in FREE_THEMES:
+            return _pro_only()
         path = os.path.join(THEMES_DIR, f"{name}.css")
         if not os.path.exists(path):
             return jsonify({"error": f"Theme '{name}' not found"}), 404
@@ -184,50 +128,13 @@ def switch_theme():
 
 @theme_bp.route("/themes/create", methods=["POST"])
 def create_theme():
-    """Create a new theme by copying the active theme."""
-    try:
-        name = request.get_json().get("name", "").strip()
-        print(f"🎨 create_theme: name='{name}', THEMES_DIR={THEMES_DIR}")
-        if not name or not re.match(r'^[\w\- ]+$', name):
-            print(f"❌ create_theme: invalid name rejected")
-            return jsonify({"error": "Invalid theme name"}), 400
-        os.makedirs(THEMES_DIR, exist_ok=True)
-        new_path = os.path.join(THEMES_DIR, f"{name}.css")
-        print(f"🎨 create_theme: new_path={new_path}")
-        if os.path.exists(new_path):
-            return jsonify({"error": f"Theme '{name}' already exists"}), 400
-        src = get_active_theme_path()
-        print(f"🎨 create_theme: src={src}, exists={os.path.exists(src)}")
-        if os.path.exists(src):
-            import shutil
-            shutil.copy2(src, new_path)
-        else:
-            with open(new_path, "w", encoding="utf-8") as f:
-                f.write(":root {\n}\n")
-        # Do NOT auto-switch — just create the file
-        print(f"✅ Created theme file: {new_path}")
-        return jsonify({"status": "ok", "created": name})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    """Creating custom themes is Pro-only in the free build."""
+    return _pro_only()
 
 @theme_bp.route("/themes/delete", methods=["POST"])
 def delete_theme():
-    """Delete a theme file."""
-    try:
-        name = request.get_json().get("name", "").strip()
-        if not name or not re.match(r'^[\w\- ]+$', name):
-            return jsonify({"error": "Invalid theme name"}), 400
-        path = os.path.join(THEMES_DIR, f"{name}.css")
-        if not os.path.exists(path):
-            return jsonify({"error": "Theme not found"}), 404
-        os.remove(path)
-        if get_active_theme_name() == name:
-            remaining = sorted([f[:-4] for f in os.listdir(THEMES_DIR) if f.endswith('.css')])
-            set_active_theme_name(remaining[0] if remaining else "midnight")
-        print(f"✅ Deleted theme: {name}")
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    """Deleting themes is Pro-only in the free build."""
+    return _pro_only()
 
 THEME_PRESETS_FILE = "theme_presets.json"
 
@@ -237,42 +144,16 @@ def load_theme_presets():
             return json.load(f)
     return {}
 
-def save_theme_presets(presets):
-    with open(THEME_PRESETS_FILE, "w", encoding="utf-8") as f:
-        json.dump(presets, f, indent=2)
-
 @theme_bp.route("/theme_presets", methods=["GET"])
 def get_theme_presets():
     return jsonify(load_theme_presets())
 
 @theme_bp.route("/theme_presets/save", methods=["POST"])
 def save_theme_preset():
-    try:
-        data = request.get_json()
-        name = data.get("name", "").strip()
-        colours = data.get("colours", {})
-        if not name:
-            return jsonify({"error": "No name provided"}), 400
-        presets = load_theme_presets()
-        presets[name] = colours
-        save_theme_presets(presets)
-        print(f"✅ Theme preset saved: {name}")
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        print(f"❌ save_theme_preset failed: {e}")
-        return jsonify({"error": str(e)}), 500
+    """Saving/exporting custom colour presets is Pro-only in the free build."""
+    return _pro_only()
 
 @theme_bp.route("/theme_presets/delete", methods=["POST"])
 def delete_theme_preset():
-    try:
-        data = request.get_json()
-        name = data.get("name", "").strip()
-        presets = load_theme_presets()
-        if name in presets:
-            del presets[name]
-            save_theme_presets(presets)
-            print(f"🗑️ Theme preset deleted: {name}")
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        print(f"❌ delete_theme_preset failed: {e}")
-        return jsonify({"error": str(e)}), 500
+    """Managing custom colour presets is Pro-only in the free build."""
+    return _pro_only()

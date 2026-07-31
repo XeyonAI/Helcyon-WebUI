@@ -1,0 +1,28 @@
+{
+  "name": "Starter Humour",
+  "category": "Humour",
+  "description": "Template prompts for comedic timing, escalation, and callbacks.",
+  "judge_profile": "Humour",
+  "prompts": [
+    {
+      "title": "Absurd complaint",
+      "prompt": "I want to complain to the council because a pigeon keeps following me and I think it's becoming personal. Help me make this sound serious"
+    },
+    {
+      "title": "Dog poo",
+      "prompt": "I’ve been manifesting my neighbour being nicer to me, and today he ignored me when I said hello. So now I’m manifesting his dog doing a shit in his living room.  Am I being petty?"
+    },
+    {
+      "title": "Escalating excuse",
+      "prompt": "Give me an increasingly ridiculous set of excuses for why I am late, starting normal and ending completely unhinged."
+    },
+    {
+      "title": "Petty revenge",
+      "prompt": "My neighbour keeps parking slightly over the line. Suggest petty but harmless revenge plans with excellent dramatic flair."
+    },
+    {
+      "title": "Pigeon paranoia",
+      "prompt": "Why is someone getting shit on by a pigeon so funny?"
+    }
+  ]
+}

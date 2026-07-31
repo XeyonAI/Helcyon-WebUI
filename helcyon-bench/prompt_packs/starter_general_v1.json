@@ -1,0 +1,28 @@
+{
+  "name": "Starter General",
+  "category": "General",
+  "description": "Template prompts for broad everyday usefulness.",
+  "judge_profile": "General",
+  "prompts": [
+    {
+      "title": "Explain simply",
+      "prompt": "Explain a complicated idea in a way that feels natural and useful, not dumbed down or overly formal."
+    },
+    {
+      "title": "Help me decide",
+      "prompt": "I am stuck between two ordinary choices. Help me think it through and actually land somewhere."
+    },
+    {
+      "title": "Make it practical",
+      "prompt": "Turn this vague intention into a practical next step I could do today."
+    },
+    {
+      "title": "Answer first",
+      "prompt": "Answer the actual question directly first, then add useful context only if it helps."
+    },
+    {
+      "title": "Human response",
+      "prompt": "Respond like a capable person who understands the situation, not like a policy document or a search result."
+    }
+  ]
+}

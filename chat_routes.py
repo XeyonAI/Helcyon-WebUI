@@ -2,6 +2,13 @@
 import os, json, re, shutil, subprocess
 from flask import Blueprint, jsonify, request
 from datetime import datetime
+from chat_message_metadata import (
+    chat_directories,
+    delete_chat_metadata,
+    merge_verified_message_metadata,
+    move_chat_metadata,
+    save_chat_metadata,
+)
 
 print("✅ chat_routes blueprint loaded")
 
@@ -119,6 +126,59 @@ def get_chats_dir():
             os.makedirs(CHATS_DIR)
         return CHATS_DIR
 
+
+def _project_chats_dir(project_name):
+    """Resolve any project's chats folder (not just the active one).
+
+    project_name of None/"" means the legacy global chats folder. Used by
+    /chats/move, which is the only route that touches a folder other than the
+    active project's.
+    """
+    if not project_name:
+        os.makedirs(CHATS_DIR, exist_ok=True)
+        return CHATS_DIR
+
+    projects_root = os.path.abspath(PROJECTS_DIR)
+    project_path = os.path.abspath(os.path.join(PROJECTS_DIR, project_name))
+
+    if project_path == projects_root or os.path.commonpath([projects_root, project_path]) != projects_root:
+        raise ValueError("Invalid project name")
+    if not os.path.isdir(project_path):
+        raise FileNotFoundError("Project not found")
+
+    chats_dir = os.path.join(project_path, "chats")
+    os.makedirs(chats_dir, exist_ok=True)
+    return chats_dir
+
+
+def _chat_pins_path(chats_dir=None):
+    """Keep pin state local to a chat folder (the active project's by default)."""
+    return os.path.join(chats_dir or get_chats_dir(), ".pinned_chats.json")
+
+
+def _load_chat_pins(chats_dir=None):
+    try:
+        with open(_chat_pins_path(chats_dir), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return [name for name in data if isinstance(name, str)] if isinstance(data, list) else []
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return []
+
+
+def _save_chat_pins(pins, chats_dir=None):
+    _atomic_write_text(
+        _chat_pins_path(chats_dir),
+        json.dumps(sorted(set(pins)), indent=2, ensure_ascii=False) + "\n"
+    )
+
+
+def _move_chat_pin(old_filename, new_filename):
+    pins = _load_chat_pins()
+    if old_filename not in pins:
+        return
+    pins = [new_filename if name == old_filename else name for name in pins]
+    _save_chat_pins(pins)
+
 def ensure_chats_dir():
     """Ensure the appropriate chats directory exists."""
     chats_dir = get_chats_dir()
@@ -154,6 +214,7 @@ def open_chats_folder():
 @chat_bp.route("/chats/list")
 def list_chats():
     chats_dir = get_chats_dir()
+    pinned_chats = set(_load_chat_pins())
     
     print(f"🪶 /chats/list route triggered")
     print(f"   Active project: {get_active_project()}")
@@ -178,25 +239,61 @@ def list_chats():
                 "title": title,
                 "filename": f,
                 "created": created,
-                "modified": modified
+                "modified": modified,
+                "pinned": f in pinned_chats
             })
     
     print(f"Returning {len(chats)} chats")
     return jsonify(chats)
+
+
+@chat_bp.route("/chats/pin", methods=["POST"])
+def pin_chat():
+    data = request.json or {}
+    filename = data.get("filename")
+    pinned = bool(data.get("pinned"))
+
+    if (
+        not filename
+        or os.path.basename(filename) != filename
+        or not filename.endswith(".txt")
+        or not os.path.exists(os.path.join(get_chats_dir(), filename))
+    ):
+        return jsonify({"error": "Chat not found"}), 404
+
+    pins = _load_chat_pins()
+    if pinned and filename not in pins:
+        pins.append(filename)
+    elif not pinned:
+        pins = [name for name in pins if name != filename]
+    _save_chat_pins(pins)
+    return jsonify({"success": True, "filename": filename, "pinned": pinned})
     
     
 @chat_bp.route("/chats/load", methods=["POST"])
 def check_chat_exists():
-    """Check whether a chat file exists on the server. Used by frontend to verify before restoring."""
+    """Check whether a chat file exists on the server. Used by frontend to verify before restoring.
+
+    Searches every project's chats folder (plus the legacy global one), not
+    just the currently active project. _active_project.json is a single
+    global file shared across every open tab — switching projects in ANY tab
+    flips it for every other tab immediately. A chat that lives in a project
+    other than whichever one happens to be "active" right now still exists;
+    scoping this check to only the active project turned an unrelated project
+    switch elsewhere into a false 404 here. Callers (Bench's send-to-model
+    flow, Chat's startup chat-restore) treated that 404 as "this chat is
+    gone" and reacted destructively — Bench silently aborted the send, and
+    Chat's restore path cleared currentChatFilename/lastCharacter and fell
+    back to a different chat entirely.
+    """
     data = request.get_json()
     filename = data.get("filename", "")
     if not filename:
         return jsonify({"error": "No filename provided"}), 400
-    chats_dir = get_chats_dir()
-    filepath = os.path.join(chats_dir, filename)
-    if not os.path.exists(filepath):
-        return jsonify({"error": "Chat not found"}), 404
-    return jsonify({"status": "ok", "filename": filename})
+    for chats_dir in chat_directories(os.getcwd()):
+        if os.path.exists(os.path.join(chats_dir, filename)):
+            return jsonify({"status": "ok", "filename": filename})
+    return jsonify({"error": "Chat not found"}), 404
 
 
 def _parse_chat_file(filepath, filename, verbose=True):
@@ -436,9 +533,21 @@ def open_chat(filename):
     print(f"{'='*60}\n")
 
     messages = _parse_chat_file(filepath, filename)
+    messages, chat_meta, metadata_error = merge_verified_message_metadata(
+        chats_dir,
+        filename,
+        messages,
+    )
+    if metadata_error:
+        print(f"Chat identity metadata unavailable for {filename}: {metadata_error}")
 
     print(f"📊 Loaded {len(messages)} messages")
-    return jsonify({"filename": filename, "messages": messages})
+    return jsonify({
+        "filename": filename,
+        "chat_id": chat_meta.get("chat_id") if chat_meta else None,
+        "message_identity_status": "verified" if not metadata_error else "invalid",
+        "messages": messages,
+    })
 
 # --------------------------------------------------
 # Rename chat (with character prefix preservation)
@@ -473,6 +582,8 @@ def rename_chat():
         return jsonify({"error": "A chat with that name already exists"}), 409
     
     os.rename(old_path, new_path)
+    move_chat_metadata(chats_dir, old_filename, chats_dir, new_filename)
+    _move_chat_pin(old_filename, new_filename)
     print(f"✏️ Renamed: {old_filename} → {new_filename}")
     
     return jsonify({"success": True, "new_filename": new_filename})
@@ -507,9 +618,10 @@ def new_chat():
     # Create empty file
     with open(filepath, "w", encoding="utf-8") as f:
         f.write("")
+    chat_meta = save_chat_metadata(chats_dir, filename, [])
     
     print(f"📝 Created new chat: {filename}")
-    return jsonify({"filename": filename})
+    return jsonify({"filename": filename, "chat_id": chat_meta["chat_id"]})
 # --------------------------------------------------
 # Auto-name Chat (from first user message — model-generated title)
 # --------------------------------------------------
@@ -658,6 +770,8 @@ def auto_name_chat():
         return jsonify({"success": True, "new_filename": new_filename, "skipped": True})
 
     os.rename(old_path, new_path)
+    move_chat_metadata(chats_dir, old_filename, chats_dir, new_filename)
+    _move_chat_pin(old_filename, new_filename)
     print(f"🏷️ Auto-named: {old_filename} → {new_filename}")
     return jsonify({"success": True, "new_filename": new_filename})
 
@@ -675,9 +789,80 @@ def delete_chat(filename):
     
     try:
         os.remove(filepath)
+        delete_chat_metadata(chats_dir, filename)
+        pins = [name for name in _load_chat_pins() if name != filename]
+        _save_chat_pins(pins)
         print(f"🗑️ Deleted: {filename}")
         return jsonify({"success": True, "deleted": filename})
     except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# --------------------------------------------------
+# Move Chat to another project folder
+# --------------------------------------------------
+@chat_bp.route("/chats/move", methods=["POST"])
+def move_chat():
+    """Move a chat file out of the active project into another project folder.
+
+    target_project of null/"" moves it to the legacy global chats folder.
+    Pin state lives per-folder (.pinned_chats.json), so it is carried across
+    rather than left dangling in the source folder.
+    """
+    data = request.json or {}
+    filename = data.get("filename")
+    target_project = data.get("target_project") or None
+
+    if (
+        not filename
+        or os.path.basename(filename) != filename
+        or not filename.endswith(".txt")
+    ):
+        return jsonify({"error": "Invalid filename"}), 400
+
+    source_dir = get_chats_dir()
+    source_path = os.path.join(source_dir, filename)
+    if not os.path.exists(source_path):
+        return jsonify({"error": "Chat not found"}), 404
+
+    try:
+        target_dir = _project_chats_dir(target_project)
+    except FileNotFoundError:
+        return jsonify({"error": "Target project not found"}), 404
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    if os.path.abspath(target_dir) == os.path.abspath(source_dir):
+        return jsonify({"error": "Chat is already in that folder"}), 400
+
+    try:
+        # Don't clobber a same-named chat already sitting in the target folder.
+        base_new = filename[:-len(".txt")]
+        new_filename = filename
+        counter = 2
+        while os.path.exists(os.path.join(target_dir, new_filename)):
+            new_filename = f"{base_new} ({counter}).txt"
+            counter += 1
+
+        shutil.move(source_path, os.path.join(target_dir, new_filename))
+        move_chat_metadata(source_dir, filename, target_dir, new_filename)
+
+        source_pins = _load_chat_pins(source_dir)
+        if filename in source_pins:
+            _save_chat_pins([name for name in source_pins if name != filename], source_dir)
+            target_pins = _load_chat_pins(target_dir)
+            target_pins.append(new_filename)
+            _save_chat_pins(target_pins, target_dir)
+
+        print(f"📁 Moved: {filename} → {target_project or 'global chats'} ({new_filename})")
+        return jsonify({
+            "success": True,
+            "filename": filename,
+            "new_filename": new_filename,
+            "target_project": target_project
+        })
+
+    except Exception as e:
+        print(f"❌ Move failed: {e}")
         return jsonify({"error": str(e)}), 500
 
 # --------------------------------------------------
@@ -718,8 +903,9 @@ def save_chat_messages():
 
         text = _format_chat_messages(messages, char_name)
         _atomic_write_text(filepath, text)
+        chat_meta = save_chat_metadata(chats_dir, filename, messages)
         print(f"💾 Saved {len(messages)} messages to {filename} ({len(text)} chars)")
-        return jsonify({"success": True})
+        return jsonify({"success": True, "chat_id": chat_meta["chat_id"]})
 
     except Exception as e:
         print(f"❌ Failed to save chat: {e}")
@@ -750,6 +936,8 @@ def append_chat_turn():
         with open(filepath, "a", encoding="utf-8") as f:
             f.write(f"[{now_ts}] User: {user_msg}\n\n")
             f.write(f"[{now_ts}] {character}: {model_msg}\n\n")
+        parsed_messages = _parse_chat_file(filepath, filename, verbose=False)
+        save_chat_metadata(chats_dir, filename, parsed_messages)
         
         print(f"💾 Appended turn to {filename}")
         return jsonify({"status": "ok"})
@@ -787,8 +975,9 @@ def update_chat():
 
         text = _format_chat_messages(messages, char_name)
         _atomic_write_text(filepath, text)
+        chat_meta = save_chat_metadata(chats_dir, filename, messages)
         print(f"📝 Updated: {filename}")
-        return jsonify({"success": True})
+        return jsonify({"success": True, "chat_id": chat_meta["chat_id"]})
 
     except Exception as e:
         print(f"❌ Update failed: {e}")
@@ -804,6 +993,7 @@ def copy_chat():
     try:
         data = request.json
         source_filename = data.get("source_filename")
+        copy_kind = data.get("copy_kind", "branch")
         
         if not source_filename:
             return jsonify({"error": "No source file"}), 400
@@ -816,6 +1006,7 @@ def copy_chat():
         
         # Parse the filename: "Character - Title - Date.txt"
         name_without_ext = source_filename.replace(".txt", "")
+        suffix = "Copy" if copy_kind == "duplicate" else "Branch"
         
         # Find LAST " - " (this is before the date)
         last_dash_index = name_without_ext.rfind(" - ")
@@ -825,11 +1016,17 @@ def copy_chat():
             before_date = name_without_ext[:last_dash_index]
             date_suffix = name_without_ext[last_dash_index:]  # Includes " - "
             
-            # Insert " - Branch" before the date
-            new_filename = f"{before_date} - Branch{date_suffix}.txt"
+            # Insert the copy/branch label before the date
+            base_new = f"{before_date} - {suffix}{date_suffix}"
         else:
-            # No date found, just append " - Branch"
-            new_filename = f"{name_without_ext} - Branch.txt"
+            # No date found, just append the label
+            base_new = f"{name_without_ext} - {suffix}"
+
+        new_filename = f"{base_new}.txt"
+        counter = 2
+        while os.path.exists(os.path.join(chats_dir, new_filename)):
+            new_filename = f"{base_new} ({counter}).txt"
+            counter += 1
         
         new_path = os.path.join(chats_dir, new_filename)
         

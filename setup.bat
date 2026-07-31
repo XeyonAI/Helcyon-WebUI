@@ -1,6 +1,6 @@
 @echo off
 echo ============================================
-echo   Helcyon-WebUI Setup
+echo   Helcyon-WebUI Free Setup
 echo ============================================
 echo.
 
@@ -12,19 +12,19 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [1/5] Creating virtual environment...
+echo [1/6] Creating virtual environment...
 python -m venv venv
 
-echo [2/5] Activating environment...
+echo [2/6] Activating environment...
 call venv\Scripts\activate.bat
 
-echo [3/5] Installing PyTorch...
+echo [3/6] Installing PyTorch...
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 --quiet
 
-echo [4/5] Installing remaining dependencies...
-pip install flask flask-cors requests psutil faster-whisper openai-whisper python-docx odfpy PyPDF2 --quiet
+echo [4/6] Installing remaining dependencies...
+pip install flask flask-cors requests psutil faster-whisper openai-whisper python-docx odfpy PyPDF2 PyYAML --quiet
 
-echo [5/5] Setting up model, TTS and config folders...
+echo [5/6] Setting up model, TTS and config folders...
 
 :: Create default models folder at C:\HWUI-Models
 if not exist "C:\HWUI-Models" (
@@ -61,6 +61,26 @@ if not exist settings.json (
         echo Created settings.json from defaults.
     )
 )
+
+echo [6/6] Checking integrated Benchmark data...
+
+:: app.py always loads the Helcyon-Bench blueprint, which imports the bundled
+:: llmbench package. If this bundled data is missing, HWUI will not start at
+:: all, not just the Benchmark tab. Fail here with a clear message instead.
+set BENCH_OK=1
+if not exist "helcyon-bench\llmbench" set BENCH_OK=0
+if not exist "helcyon-bench\prompt_packs" set BENCH_OK=0
+if not exist "helcyon-bench\rubrics" set BENCH_OK=0
+if not exist "helcyon-bench\config.example.yaml" set BENCH_OK=0
+if "%BENCH_OK%"=="0" (
+    echo.
+    echo ERROR: Integrated Benchmark data was not found under helcyon-bench\.
+    echo Helcyon-WebUI requires this folder ^(llmbench, prompt_packs, rubrics, config.example.yaml^)
+    echo to start. Re-clone or re-download the full repository and run setup again.
+    pause
+    exit /b 1
+)
+echo Integrated Benchmark data found.
 
 echo.
 echo ============================================
