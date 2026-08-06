@@ -319,13 +319,19 @@ let characterName='Assistant',charFilename='Assistant',userName='User',chatHisto
 // text it already generated. Desktop (index.html) has always guarded this via
 // window.isSending; mobile never did, hence mobile-only repeat/regenerate loops.
 let mobileSending=false;
+let mobileRequestSequence=0,mobileActiveRequest=null;
+let mobileTTSRun=0,mobileQwenOwnerRun=0,mobileQwenMode=null;
+function mobileRequestHash(text){let h=2166136261;for(let i=0;i<text.length;i++){h^=text.charCodeAt(i);h=Math.imul(h,16777619);}return (h>>>0).toString(16).padStart(8,'0');}
+function mobileRequestIsActive(requestId){return !!mobileActiveRequest&&mobileActiveRequest.id===requestId;}
+function mobileLogResponse(stage,requestId,text){console.log(`📱 Mobile response ${stage}`,{request_id:requestId,active_request_id:mobileActiveRequest?.id||null,response_length:text.length,response_hash:mobileRequestHash(text)});}
+function abortMobileRequest(reason){if(mobileActiveRequest){console.warn('📱 Mobile request aborted',{request_id:mobileActiveRequest.id,reason});mobileActiveRequest.controller.abort();}}
 function setSendBusy(busy){
   const sb=document.getElementById('send-btn');if(sb)sb.disabled=busy;
   const rb=document.getElementById('regen-btn');if(rb)rb.disabled=busy;
   const cb=document.getElementById('continue-btn');if(cb)cb.disabled=busy;
 }
 let mediaRecorder=null,audioChunks=[],isRecording=false;
-let ttsQueue=[],ttsProcessing=false,currentAudio=null,isPlayingAudio=false,ttsOnComplete=null;
+let ttsQueue=[],ttsProcessing=false,ttsProcessingRun=0,currentAudio=null,isPlayingAudio=false,ttsOnComplete=null;
 let mobileTTSEngine='f5',mobileQwenCtx=null,mobileQwenNext=0,mobileQwenSources=[],mobileQwenAbort=null,mobileQwenLiveRun=0;
 let replayTimeout=null;
 let ttsSentenceBuffer='',ttsStreamingComplete=false;
@@ -622,10 +628,15 @@ function setPTTState(state){
 
 async function sendText(){const ta=document.getElementById('user-text');const text=ta.value.trim();if(!text)return;ta.value='';ta.style.height='';await sendMessage(text);}
 
+// Anchored on an imperative command at the START of the message (mirrors
+// templates/index.html) so casual mentions of "document" elsewhere in a
+// sentence don't false-trigger — only a clear command like "turn this into
+// a document" / "save this as a document" / "make a document from this".
+const SAVE_DOC_RE=/^\s*(?:please\s+|can you\s+|could you\s+|would you\s+|hey\s+)?(?:(?:turn|save|write|store|put|convert)\s+(?:this|that|it|the above|our conversation|this conversation|this chat)\s+(?:into|as|in|to)\s+(?:a\s+)?(?:global\s+)?(?:reference\s+)?doc(?:ument)?\b|(?:make|create|convert)\s+(?:a\s+)?(?:global\s+)?(?:reference\s+)?doc(?:ument)?\s+(?:from|out of|of|using)\s+(?:this|that|it|the above|our conversation|this conversation|this chat)\b)/i;
+
 function saveDocumentIntentGate(userMsg){
   if(!userMsg||typeof userMsg!=='string')return false;
-  const SAVE_DOC_RE=/\b(?:save|write|turn|make|convert|store|put)\b.{0,80}\b(?:as|to|into|in)\b.{0,30}\b(?:a\s+)?(?:global\s+)?(?:reference\s+)?doc(?:ument)?\b|\b(?:save|write|store)\s+(?:that|this|it)\s+(?:as|to|into)\s+(?:a\s+)?(?:global\s+)?(?:reference\s+)?doc(?:ument)?\b/i;
-  return SAVE_DOC_RE.test(userMsg);
+  return SAVE_DOC_RE.test(userMsg.trim());
 }
 
 function memoryIntentGate(userMsg){
@@ -680,18 +691,54 @@ function recentVisibleChatForDocument(){
   }).filter(msg=>(msg.role==='user'||msg.role==='assistant')&&String(msg.content||'').trim());
 }
 
+function _setDocAckBubbleText(bubbleWrap,text){
+  if(!bubbleWrap)return;
+  const b=bubbleWrap.querySelector('.msg-bubble');
+  if(!b)return;
+  if(typeof marked!=='undefined')b.innerHTML=marked.parse(text);
+  else b.textContent=text;
+}
+
 async function saveAsDocumentFromChat(commandText){
   const history=recentVisibleChatForDocument();
   if(!history.length){showToast('No conversation to save as a document yet');setStatus('Ready');return;}
+
+  // Never silently swallow the message: it becomes a normal chat turn,
+  // followed by a brief assistant-style acknowledgement.
+  const userTs=new Date().toISOString();
+  addBubble('user',userName,commandText,userTs);
+  chatHistory.push({role:'user',content:commandText,speaker:userName,timestamp:userTs});
+
+  const ackText='One moment — turning this into a document...';
+  const ackBubble=addBubble('ai',characterName,ackText,new Date().toISOString());
+  const ackMsg={role:'assistant',content:ackText,speaker:characterName,timestamp:new Date().toISOString()};
+  chatHistory.push(ackMsg);
+  await saveChatToDisk();
+
   setStatus('Saving document...');
   showToast('Saving document...');
   try{
     const res=await fetch('/global_documents/save_from_chat',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({messages:history,user_name:userName,instruction:commandText})});
     const data=await res.json().catch(()=>({}));
-    if(res.ok&&data.success)showToast('✅ Document saved: '+data.filename);
-    else showToast('⚠️ '+(data.error||'Failed to save document'));
-  }catch(e){showToast('⚠️ Error: '+e.message);}
+    if(res.ok&&data.success){
+      const doneText='Done — saved as a document: "'+(data.title||data.filename)+'".';
+      ackMsg.content=doneText;
+      _setDocAckBubbleText(ackBubble,doneText);
+      showToast('✅ Document saved: '+data.filename);
+    }else{
+      const failText='I couldn\'t save that as a document: '+(data.error||'unknown error')+'.';
+      ackMsg.content=failText;
+      _setDocAckBubbleText(ackBubble,failText);
+      showToast('⚠️ '+(data.error||'Failed to save document'));
+    }
+  }catch(e){
+    const failText='I couldn\'t save that as a document: '+e.message+'.';
+    ackMsg.content=failText;
+    _setDocAckBubbleText(ackBubble,failText);
+    showToast('⚠️ Error: '+e.message);
+  }
+  await saveChatToDisk();
   setStatus('Ready');
 }
 
@@ -701,18 +748,23 @@ async function sendMessage(text){
   if(saveDocumentIntentGate(text)){await saveAsDocumentFromChat(text);return;}
   if(memoryIntentGate(text)){await saveMemoryFromChat(text);return;}
   mobileSending=true;setSendBusy(true);
+  const requestId=`mob-${Date.now()}-${++mobileRequestSequence}-${Math.random().toString(36).slice(2,8)}`;
+  const requestController=new AbortController();
+  mobileActiveRequest={id:requestId,controller:requestController};
+  console.log('📱 Mobile request start',{request_id:requestId,active_request_id:requestId,text_length:text.length,text_hash:mobileRequestHash(text)});
   const userTs=new Date().toISOString();
   addBubble('user',userName,text,userTs);chatHistory.push({role:'user',content:text,speaker:userName,timestamp:userTs});
   showTyping(true);setStatus('Thinking...');setPTTState('idle');
   showToast('Sending as char: '+charFilename);
   try{
-    const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({character:characterName,user_name:userName,current_chat_filename:null,conversation_history:chatHistory,author_note:'',temperature:0.8,max_tokens:4096,stop:[]})});
+    console.log('📱 Mobile /chat submit',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null,history_length:chatHistory.length});
+    const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({character:characterName,user_name:userName,current_chat_filename:null,conversation_history:chatHistory,author_note:'',temperature:0.8,max_tokens:4096,stop:[],request_id:requestId}),signal:requestController.signal});
     if(!res.ok){showTyping(false);showToast('⚠️ Server error '+res.status);setStatus('Error');return;}
     const ct=res.headers.get('content-type')||'';
-    if(ct.includes('text/event-stream')&&res.body){await handleStream(res);}
-    else{const data=await res.json();const reply=data.text||'';showTyping(false);addBubble('ai',characterName,reply);chatHistory.push({role:'assistant',content:reply});if(ttsEnabled)speakText(reply);setStatus('Ready');}
-  }catch(err){showTyping(false);showToast('⚠️ Connection error');setStatus('Offline?');}
-  finally{mobileSending=false;setSendBusy(false);}
+    if(ct.includes('text/event-stream')&&res.body){await handleStream(res,requestId);}
+    else{const data=await res.json();const reply=data.text||'';mobileLogResponse('received',requestId,reply);if(!mobileRequestIsActive(requestId)){console.warn('📱 Mobile stale completion ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});return;}showTyping(false);addBubble('ai',characterName,reply);chatHistory.push({role:'assistant',content:reply});console.log('📱 Mobile assistant append',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null,response_length:reply.length,response_hash:mobileRequestHash(reply)});if(ttsEnabled)speakText(reply);setStatus('Ready');}
+  }catch(err){if(err.name!=='AbortError'){showTyping(false);showToast('⚠️ Connection error');setStatus('Offline?');}}
+  finally{console.log('📱 Mobile request end',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});if(mobileActiveRequest?.id===requestId){mobileActiveRequest=null;mobileSending=false;setSendBusy(false);}else{console.warn('📱 Mobile stale request end ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});}}
 }
 
 // Extended-thinking demux — peel Anthropic reasoning sentinels off the answer
@@ -730,7 +782,10 @@ function _mobSplit(raw){
   return{thinking:raw.slice(after,c),answer:before+raw.slice(c+_M_CLOSE.length)};
 }
 
-async function handleStream(res){
+async function handleStream(res,requestId=null){
+  stopAllAudio();
+  const responseRun=++mobileTTSRun;
+  mobileQwenOwnerRun=0;mobileQwenMode=null;
   const reader=res.body.getReader(),decoder=new TextDecoder();let fullText='';let rawAll='';let prevAns=0;let thinkEl=null;
   showTyping(false);
   // Reset TTS buffer for new response
@@ -746,38 +801,44 @@ async function handleStream(res){
   document.getElementById('chat').insertBefore(wrap,document.getElementById('typing-indicator'));
 
   // HWUI streams raw text chunks — append and buffer for TTS simultaneously
+  function consumeDecodedChunk(chunk){
+    if(!chunk)return;
+    rawAll+=chunk;
+    const parts=_mobSplit(rawAll);
+    if(parts.thinking){
+      if(!thinkEl){
+        thinkEl=document.createElement('details');
+        thinkEl.open=true;
+        thinkEl.style.cssText='margin:0 0 8px 0;border:1px solid rgba(140,140,160,0.3);border-radius:8px;background:rgba(120,120,140,0.08);font-size:0.88em;';
+        const sm=document.createElement('summary');
+        sm.textContent='💭 Thinking';
+        sm.style.cssText='cursor:pointer;padding:6px 10px;color:var(--text-dim);font-weight:600;list-style:none;';
+        const bd=document.createElement('div');
+        bd.style.cssText='padding:8px 11px;color:var(--text-dim);font-style:italic;white-space:pre-wrap;overflow-wrap:break-word;max-height:280px;overflow-y:auto;line-height:1.5;';
+        thinkEl.appendChild(sm);thinkEl.appendChild(bd);thinkEl._body=bd;
+        bubble.insertBefore(thinkEl,textSpan);
+      }
+      thinkEl._body.textContent=parts.thinking;
+    }
+    const ansDelta=parts.answer.slice(prevAns);
+    prevAns=parts.answer.length;
+    fullText=parts.answer;
+    if(typeof marked!=='undefined'){textSpan.innerHTML=marked.parse(fullText);}
+    else{textSpan.textContent=fullText;}
+    if(ttsEnabled&&ansDelta)bufferTextForTTS(ansDelta);
+    scrollToBottom();
+  }
   while(true){
+    if(requestId&&!mobileRequestIsActive(requestId)){console.warn('📱 Mobile stale stream ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});await reader.cancel();return;}
     const{done,value}=await reader.read();
     if(done)break;
-    const chunk=decoder.decode(value,{stream:true});
-    if(chunk){
-      rawAll+=chunk;
-      const parts=_mobSplit(rawAll);
-      if(parts.thinking){
-        if(!thinkEl){
-          thinkEl=document.createElement('details');
-          thinkEl.open=true;
-          thinkEl.style.cssText='margin:0 0 8px 0;border:1px solid rgba(140,140,160,0.3);border-radius:8px;background:rgba(120,120,140,0.08);font-size:0.88em;';
-          const sm=document.createElement('summary');
-          sm.textContent='💭 Thinking';
-          sm.style.cssText='cursor:pointer;padding:6px 10px;color:var(--text-dim);font-weight:600;list-style:none;';
-          const bd=document.createElement('div');
-          bd.style.cssText='padding:8px 11px;color:var(--text-dim);font-style:italic;white-space:pre-wrap;overflow-wrap:break-word;max-height:280px;overflow-y:auto;line-height:1.5;';
-          thinkEl.appendChild(sm);thinkEl.appendChild(bd);thinkEl._body=bd;
-          bubble.insertBefore(thinkEl,textSpan);
-        }
-        thinkEl._body.textContent=parts.thinking;
-      }
-      const ansDelta=parts.answer.slice(prevAns);
-      prevAns=parts.answer.length;
-      fullText=parts.answer;
-      if(typeof marked!=='undefined'){textSpan.innerHTML=marked.parse(fullText);}
-      else{textSpan.textContent=fullText;}
-      if(ttsEnabled&&ansDelta)bufferTextForTTS(ansDelta);
-      scrollToBottom();
-    }
+    consumeDecodedChunk(decoder.decode(value,{stream:true}));
   }
+  // Drain any multibyte UTF-8 character buffered across the final transport chunk.
+  consumeDecodedChunk(decoder.decode());
   if(thinkEl)thinkEl.open=false;
+  if(requestId&&!mobileRequestIsActive(requestId)){console.warn('📱 Mobile stale stream completion ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});return;}
+  mobileLogResponse('stream-complete',requestId||'untracked',fullText);
 
   // Replay button — state driven purely by globals (isPlayingAudio, ttsProcessing, replayTimeout)
   // exactly like utils.js. No local flags, no watchers, no callbacks for button state.
@@ -803,6 +864,7 @@ async function handleStream(res){
     setReplayBtnActive(replayBtn2);
     replayTimeout=setTimeout(()=>{
       replayTimeout=null;
+      ++mobileTTSRun;mobileQwenOwnerRun=0;mobileQwenMode=null;
       const lines=fullText.replace(/\*\*/g,'').replace(/\*/g,'').replace(/_/g,'').replace(/#{1,6}\s/g,'').split('\n');
       for(const line of lines){const t=line.trim();if(t.length>2)splitAndQueue(t);}
       ttsStreamingComplete=true;
@@ -816,7 +878,9 @@ async function handleStream(res){
   const ts=document.createElement('div');ts.className='msg-time';ts.textContent=fmtTime(new Date(aiTs));wrap.appendChild(ts);
   attachLongPress(wrap,fullText,'ai');
   if(typeof marked!=='undefined'){textSpan.innerHTML=marked.parse(fullText);}
+  if(requestId&&!mobileRequestIsActive(requestId)){console.warn('📱 Mobile stale assistant append ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});return;}
   chatHistory.push({role:'assistant',content:fullText,speaker:characterName,timestamp:new Date().toISOString()});
+  console.log('📱 Mobile assistant append',{request_id:requestId||'untracked',active_request_id:mobileActiveRequest?.id||null,response_length:fullText.length,response_hash:mobileRequestHash(fullText),tts_run:responseRun});
   await saveChatToDisk();
   // Auto-name if still a "New Chat" — filename guard prevents re-firing after rename
   if(mobileChatFilename&&mobileChatFilename.includes('New Chat')){
@@ -835,6 +899,7 @@ async function handleStream(res){
 function speakText(text){
   lastSpokenText=text;
   stopAllAudio();
+  ++mobileTTSRun;
   const lines=text.replace(/\*\*/g,'').replace(/\*/g,'').replace(/_/g,'').replace(/#{1,6}\s/g,'').split('\n');
   for(const line of lines){const t=line.trim();if(t.length>2)splitAndQueue(t);}
   ttsStreamingComplete=true;
@@ -901,6 +966,7 @@ async function restoreMobileChat(){
 }
 
 async function openChatList(){
+  abortMobileRequest('open-chat-list');
   stopAllAudio();
   document.getElementById('chat-panel').style.display='flex';
   document.getElementById('chat').style.display='none';
@@ -1206,7 +1272,7 @@ function splitAndQueue(text){
   const withPunct=/[.!?]$/.test(cleaned)?cleaned:cleaned+'.';
   if(withPunct.length<=TTS_MAX_CHUNK_LENGTH){
     if(withPunct.length>2){
-      ttsQueue.push(withPunct);
+      ttsQueue.push({text:withPunct,run:mobileTTSRun});
       if(!ttsProcessing&&ttsQueue.length>=TTS_START_THRESHOLD)processQueue();
     }
     return;
@@ -1228,7 +1294,7 @@ function splitAndQueue(text){
   if(remaining.length>2)subChunks.push(remaining);
   for(const sub of subChunks){
     if(sub.length<=2)continue;
-    ttsQueue.push(/[.!?]$/.test(sub)?sub:sub+'.');
+    ttsQueue.push({text:/[.!?]$/.test(sub)?sub:sub+'.',run:mobileTTSRun});
   }
   if(!ttsProcessing&&ttsQueue.length>=TTS_START_THRESHOLD)processQueue();
 }
@@ -1445,28 +1511,32 @@ function flushTTSBuffer(){
 
 function stopMobileQwen(){
   mobileQwenLiveRun++;
+  mobileQwenOwnerRun=0;mobileQwenMode=null;
   if(mobileQwenAbort){mobileQwenAbort.abort();mobileQwenAbort=null;}
-  mobileQwenSources.forEach(s=>{try{s.stop();}catch(e){}});mobileQwenSources=[];mobileQwenNext=0;
+  mobileQwenSources.forEach(entry=>{try{entry.source.stop();}catch(e){}});mobileQwenSources=[];mobileQwenNext=0;
   if(mobileQwenCtx){mobileQwenCtx.close().catch(()=>{});mobileQwenCtx=null;}
 }
 
-async function streamMobileQwen(sentence){
+async function streamMobileQwen(sentence,run){
+  if(run!==mobileTTSRun)return;
   if(!mobileQwenCtx||mobileQwenCtx.state==='closed'){mobileQwenCtx=new AudioContext();mobileQwenNext=0;}
   await mobileQwenCtx.resume();mobileQwenAbort=new AbortController();
   const r=await fetch('/api/tts/generate_stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:sentence,voice:ttsVoice||'Sol',language:'English',chunk_size:2}),signal:mobileQwenAbort.signal});
   if(!r.ok)throw new Error((await r.json().catch(()=>({}))).error||`Qwen Fast returned ${r.status}`);
   const reader=r.body.getReader(),FRAME=3840;let header=44,carry=new Uint8Array(0),samples=[];
-  const schedule=a=>{if(!a.length||!mobileQwenCtx)return;const b=mobileQwenCtx.createBuffer(1,a.length,24000),c=b.getChannelData(0);for(let i=0;i<a.length;i++)c[i]=a[i]/32768;const s=mobileQwenCtx.createBufferSource();s.buffer=b;s.connect(mobileQwenCtx.destination);if(!mobileQwenNext)mobileQwenNext=mobileQwenCtx.currentTime+.08;else if(mobileQwenNext<mobileQwenCtx.currentTime+.015)mobileQwenNext=mobileQwenCtx.currentTime+.06;s.start(mobileQwenNext);mobileQwenNext+=a.length/24000;mobileQwenSources.push(s);s.onended=()=>{const i=mobileQwenSources.indexOf(s);if(i>=0)mobileQwenSources.splice(i,1);};};
-  while(ttsEnabled){const {done,value}=await reader.read();if(done)break;let bytes=value;if(header){const n=Math.min(header,bytes.length);bytes=bytes.slice(n);header-=n;}if(!bytes.length)continue;if(carry.length){const j=new Uint8Array(carry.length+bytes.length);j.set(carry);j.set(bytes,carry.length);bytes=j;}const even=bytes.length-bytes.length%2,v=new DataView(bytes.buffer,bytes.byteOffset,even);for(let i=0;i<even;i+=2)samples.push(v.getInt16(i,true));carry=even<bytes.length?bytes.slice(even):new Uint8Array(0);while(samples.length>=FRAME)schedule(samples.splice(0,FRAME));}schedule(samples);mobileQwenAbort=null;
+  const schedule=a=>{if(!a.length||!mobileQwenCtx||run!==mobileTTSRun)return;const b=mobileQwenCtx.createBuffer(1,a.length,24000),c=b.getChannelData(0);for(let i=0;i<a.length;i++)c[i]=a[i]/32768;const s=mobileQwenCtx.createBufferSource();s.buffer=b;s.connect(mobileQwenCtx.destination);if(!mobileQwenNext)mobileQwenNext=mobileQwenCtx.currentTime+.08;else if(mobileQwenNext<mobileQwenCtx.currentTime+.015)mobileQwenNext=mobileQwenCtx.currentTime+.06;s.start(mobileQwenNext);mobileQwenNext+=a.length/24000;const entry={source:s,run};mobileQwenSources.push(entry);s.onended=()=>{const i=mobileQwenSources.indexOf(entry);if(i>=0)mobileQwenSources.splice(i,1);};};
+  while(ttsEnabled&&run===mobileTTSRun){const {done,value}=await reader.read();if(done)break;let bytes=value;if(header){const n=Math.min(header,bytes.length);bytes=bytes.slice(n);header-=n;}if(!bytes.length)continue;if(carry.length){const j=new Uint8Array(carry.length+bytes.length);j.set(carry);j.set(bytes,carry.length);bytes=j;}const even=bytes.length-bytes.length%2,v=new DataView(bytes.buffer,bytes.byteOffset,even);for(let i=0;i<even;i+=2)samples.push(v.getInt16(i,true));carry=even<bytes.length?bytes.slice(even):new Uint8Array(0);while(samples.length>=FRAME)schedule(samples.splice(0,FRAME));}schedule(samples);if(mobileQwenAbort?.signal.aborted)return;mobileQwenAbort=null;
 }
 
-async function processMobileQwen(){
-  while(ttsEnabled){if(ttsQueue.length){try{await streamMobileQwen(ttsQueue.shift());}catch(e){if(e.name!=='AbortError')console.error('Qwen Fast stream failed:',e);}continue;}if(ttsStreamingComplete)break;await new Promise(r=>setTimeout(r,25));}
+async function processMobileQwen(run){
+  while(ttsEnabled&&run===mobileTTSRun){if(ttsQueue.length){const item=ttsQueue.shift();if(item.run!==run)continue;try{await streamMobileQwen(item.text,run);}catch(e){if(e.name!=='AbortError')console.error('Qwen Fast stream failed:',e);}continue;}if(ttsStreamingComplete)break;await new Promise(r=>setTimeout(r,25));}
+  if(run!==mobileTTSRun)return;
   if(mobileQwenCtx&&ttsEnabled){const ms=Math.max(0,(mobileQwenNext-mobileQwenCtx.currentTime)*1000);if(ms)await new Promise(r=>setTimeout(r,ms));}
   ttsProcessing=false;isPlayingAudio=false;const cb=ttsOnComplete;ttsOnComplete=null;if(cb)cb();const replayBtn=document.querySelector('.mobile-replay-btn.active');if(replayBtn)setReplayBtnIdle(replayBtn);
 }
 
-async function fetchMobileQwenWav(sentence,run){
+async function fetchMobileQwenWav(sentence,run,liveRun){
+  if(run!==mobileTTSRun||liveRun!==mobileQwenLiveRun)return null;
   for(let attempt=0;attempt<2;attempt++){
     const controller=new AbortController();
     mobileQwenAbort=controller;
@@ -1474,7 +1544,7 @@ async function fetchMobileQwenWav(sentence,run){
       const response=await fetch('/api/tts/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:sentence,voice:ttsVoice||'Sol'}),signal:controller.signal});
       if(response.ok){
         const blob=await response.blob();
-        if(run!==mobileQwenLiveRun)return null;
+        if(run!==mobileTTSRun||liveRun!==mobileQwenLiveRun)return null;
         return URL.createObjectURL(blob);
       }
       console.warn(`Qwen Fast WAV fetch ${response.status} (attempt ${attempt+1})`);
@@ -1490,11 +1560,11 @@ async function fetchMobileQwenWav(sentence,run){
 }
 
 async function processMobileQwenLiveWav(){
-  const run=++mobileQwenLiveRun;
+  const run=mobileTTSRun,liveRun=++mobileQwenLiveRun;
   let nextAudio=null;
-  while(ttsEnabled&&run===mobileQwenLiveRun){
+  while(ttsEnabled&&run===mobileTTSRun&&liveRun===mobileQwenLiveRun){
     if(!nextAudio){
-      if(ttsQueue.length)nextAudio=fetchMobileQwenWav(ttsQueue.shift(),run);
+      if(ttsQueue.length){const item=ttsQueue.shift();nextAudio=item.run===run?fetchMobileQwenWav(item.text,run,liveRun):null;}
       else if(ttsStreamingComplete)break;
       else{await new Promise(r=>setTimeout(r,25));continue;}
     }
@@ -1503,14 +1573,15 @@ async function processMobileQwenLiveWav(){
     try{audioUrl=await nextAudio;}catch(e){if(e.name!=='AbortError')console.error('Qwen Fast WAV failed:',e);break;}
     nextAudio=null;
     if(!audioUrl)continue;
-    if(!ttsEnabled||run!==mobileQwenLiveRun){URL.revokeObjectURL(audioUrl);continue;}
+    if(!ttsEnabled||run!==mobileTTSRun||liveRun!==mobileQwenLiveRun){URL.revokeObjectURL(audioUrl);continue;}
 
     await new Promise(resolve=>{
       const audio=new Audio(audioUrl);
       currentAudio=audio;isPlayingAudio=true;
       const prefetchInterval=setInterval(()=>{
-        if(!nextAudio&&ttsQueue.length&&ttsEnabled&&run===mobileQwenLiveRun){
-          nextAudio=fetchMobileQwenWav(ttsQueue.shift(),run);
+        if(!nextAudio&&ttsQueue.length&&ttsEnabled&&run===mobileTTSRun&&liveRun===mobileQwenLiveRun){
+          const item=ttsQueue.shift();
+          if(item.run===run)nextAudio=fetchMobileQwenWav(item.text,run,liveRun);
         }
       },25);
       let cleaned=false;
@@ -1530,17 +1601,22 @@ async function processMobileQwenLiveWav(){
     });
   }
 
-  if(run!==mobileQwenLiveRun)return;
+  if(run!==mobileTTSRun||liveRun!==mobileQwenLiveRun)return;
   ttsProcessing=false;isPlayingAudio=false;const cb=ttsOnComplete;ttsOnComplete=null;if(cb)cb();const replayBtn=document.querySelector('.mobile-replay-btn.active');if(replayBtn)setReplayBtnIdle(replayBtn);
 }
 
 async function processQueue(){
   if(ttsProcessing)return;
   ttsProcessing=true;
+  const run=mobileTTSRun;
+  ttsProcessingRun=run;
 
   if(mobileTTSEngine==='qwen-fast'){
-    if(!ttsStreamingComplete)await processMobileQwenLiveWav();
-    else await processMobileQwen();
+    if(mobileQwenOwnerRun&&mobileQwenOwnerRun!==run){ttsProcessing=false;return;}
+    mobileQwenOwnerRun=run;
+    if(!mobileQwenMode)mobileQwenMode=ttsStreamingComplete?'pcm':'wav';
+    if(mobileQwenMode==='wav')await processMobileQwenLiveWav();
+    else await processMobileQwen(run);
     return;
   }
 
@@ -1560,7 +1636,7 @@ async function processQueue(){
 
   const prefetchBuffer=[];
   const PREFETCH_DEPTH=3;
-  const topUp=()=>{while(prefetchBuffer.length<PREFETCH_DEPTH&&ttsQueue.length>0)prefetchBuffer.push(fetchAudio(ttsQueue.shift()));};
+  const topUp=()=>{while(prefetchBuffer.length<PREFETCH_DEPTH&&ttsQueue.length>0){const item=ttsQueue.shift();if(item.run===run)prefetchBuffer.push(fetchAudio(item.text));}};
   topUp();
 
   while(true){
@@ -1582,6 +1658,7 @@ async function processQueue(){
       });
       topUp();
     }
+    if(run!==mobileTTSRun)break;
     if(prefetchBuffer.length===0&&ttsQueue.length===0){
       if(ttsStreamingComplete)break;
       // Streaming still in flight — wait briefly for more sentences
@@ -1662,6 +1739,7 @@ function addBubble(role,sender,text,isoTimestamp){
       setReplayBtnActive(replayBtn);
       replayTimeout=setTimeout(()=>{
         replayTimeout=null;
+        ++mobileTTSRun;mobileQwenOwnerRun=0;mobileQwenMode=null;
         const lines=text.replace(/\*\*/g,'').replace(/\*/g,'').replace(/_/g,'').replace(/#{1,6}\s/g,'').split('\n');
         for(const line of lines){const t=line.trim();if(t.length>2)splitAndQueue(t);}
         ttsStreamingComplete=true;
@@ -1674,6 +1752,7 @@ function addBubble(role,sender,text,isoTimestamp){
   wrap.appendChild(t);
   attachLongPress(wrap, text, role);
   chat.insertBefore(wrap,document.getElementById('typing-indicator'));scrollToBottom();
+  return wrap;
 }
 
 function confirmDeleteChat(filename, title, itemEl){

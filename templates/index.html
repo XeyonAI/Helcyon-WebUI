@@ -638,7 +638,7 @@
           </div>
 
           <!-- Floating pill -->
-          <div id="input-row" style="pointer-events:all;display:flex;flex-direction:row;align-items:center;gap:6px;background:var(--container-bg,#131922);border:1px solid var(--sidebar-border,#2a2a2a);border-radius:16px;padding:8px 10px;box-shadow:0 4px 24px rgba(0,0,0,0.5);width:100%;max-width:700px;box-sizing:border-box;overflow:visible;">
+          <div id="input-row" style="pointer-events:all;display:flex;flex-direction:row;align-items:center;gap:6px;background:var(--container-bg,#131922);border:1px solid var(--sidebar-border,#2a2a2a);border-radius:16px;padding:5px 10px;box-shadow:0 4px 24px rgba(0,0,0,0.5);width:100%;max-width:760px !important;box-sizing:border-box;overflow:visible;">
 
             <!-- + menu button -->
             <div id="input-menu-wrap" style="position:relative;flex-shrink:0;line-height:0;">
@@ -667,7 +667,7 @@
 
             <!-- Textarea -->
             <textarea id="user-input" placeholder="Type your message here..."
-              style="flex:1 1 0%;width:0;min-width:0;max-width:none;min-height:40px;max-height:320px;resize:vertical;border-radius:10px;padding:8px 12px;font-size:15px;box-sizing:border-box;margin:0;line-height:1.5;align-self:center;overflow-y:auto;"
+              style="flex:1 1 0%;width:0;height:34px;min-width:0;max-width:none;min-height:34px;max-height:320px;resize:vertical;border-radius:10px;padding:4px 12px;font-size:15px;box-sizing:border-box;margin:0;line-height:1.3;align-self:center;overflow-y:auto;"
               oninput="resizeChatInput(this); saveChatInputDraft();"></textarea>
 
             <!-- Right buttons -->
@@ -1991,7 +1991,10 @@ function stripChatMLOutsideCodeBlocks(text, charName, userName) {
       .replace(/\bim_end\|?>/gi, '')
       .replace(/<\/\|im_end\|>/gi, '')
       .replace(/_end\|?>/gi, '')
-      .replace(/End\|>?/gi, '')
+      // Only remove a standalone damaged control-marker tail. Both punctuation
+      // characters are explicit so ordinary words such as backend/weekend/friend
+      // can never lose their "end" substring again.
+      .replace(/(?<![\p{L}\p{N}_])End(?:\|>|[|>])(?![\p{L}\p{N}_])/giu, '')
       .replace(/\n(?:user|assistant|system)(?:\n|:)/gi, '\n')  // strip role header only — [\s\S]*$ was wiping real responses mid-stream
       .replace(new RegExp('^' + (charName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':\\s*', 'gim'), '')
       .replace(new RegExp('^' + (userName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':\\s*', 'gim'), '')
@@ -2003,8 +2006,7 @@ function stripChatMLOutsideCodeBlocks(text, charName, userName) {
       .replace(/\[MEMORY[_ ]ADD:[^\]]*\]/gi, '')
       .replace(/^MEMORY[_ ]ADD:[^|]*\|[^|]*\|(.+)$/gim, '$1')
       .replace(/^MEMORY[_ ]ADD:[^|]*\|(.+)$/gim, '$1')
-      .replace(/^MEMORY[_ ]ADD:[^\n]*$/gim, '')
-      .replace(/^[ \t]+/gm, '');
+      .replace(/^MEMORY[_ ]ADD:[^\n]*$/gim, '');
   }).join('');
 }
 
@@ -5275,10 +5277,17 @@ async function openChat(filename) {
     }
   }
 
+  // Anchored on an imperative command at the START of the message (optionally
+  // after a short polite lead-in) so casual mentions of "document" elsewhere
+  // in a sentence — e.g. "I'm going to write this in a document later" — do
+  // not false-trigger. Only fires on a clear command directed at the
+  // assistant, e.g. "turn this into a document" / "save this as a document" /
+  // "make a document from this".
+  const SAVE_DOC_RE = /^\s*(?:please\s+|can you\s+|could you\s+|would you\s+|hey\s+)?(?:(?:turn|save|write|store|put|convert)\s+(?:this|that|it|the above|our conversation|this conversation|this chat)\s+(?:into|as|in|to)\s+(?:a\s+)?(?:global\s+)?(?:reference\s+)?doc(?:ument)?\b|(?:make|create|convert)\s+(?:a\s+)?(?:global\s+)?(?:reference\s+)?doc(?:ument)?\s+(?:from|out of|of|using)\s+(?:this|that|it|the above|our conversation|this conversation|this chat)\b)/i;
+
   function saveDocumentIntentGate(userMsg) {
     if (!userMsg || typeof userMsg !== 'string') return false;
-    const SAVE_DOC_RE = /\b(?:save|write|turn|make|convert|store|put)\b.{0,80}\b(?:as|to|into|in)\b.{0,30}\b(?:a\s+)?(?:global\s+)?(?:reference\s+)?doc(?:ument)?\b|\b(?:save|write|store)\s+(?:that|this|it)\s+(?:as|to|into)\s+(?:a\s+)?(?:global\s+)?(?:reference\s+)?doc(?:ument)?\b/i;
-    return SAVE_DOC_RE.test(userMsg);
+    return SAVE_DOC_RE.test(userMsg.trim());
   }
 
   function recentVisibleChatForDocument() {
@@ -5302,30 +5311,66 @@ async function openChat(filename) {
       inputBox.style.height = 'auto';
     }
     clearChatInputDraft();
-    hwuiToast('Saving document...');
+
+    if (!window.loadedChat) window.loadedChat = [];
+    const charName = (currentCharacter && currentCharacter.name) || currentCharName || 'Assistant';
+    const userName = activeUserName || localStorage.getItem('activeUserName') || 'User';
+
+    // Never silently swallow the message: it becomes a normal chat turn,
+    // followed by a brief assistant-style acknowledgement so it's visible
+    // that the command was received, not dropped.
+    window.loadedChat.push({
+      role: 'user',
+      content: commandText,
+      speaker: userName,
+      timestamp: new Date().toISOString(),
+      message_id: createHwuiMessageId()
+    });
+
+    const ackMessageId = createHwuiMessageId();
+    window.loadedChat.push({
+      role: 'assistant',
+      content: 'One moment — turning this into a document...',
+      speaker: charName,
+      timestamp: new Date().toISOString(),
+      message_id: ackMessageId
+    });
+
+    renderChatMessages(window.loadedChat);
+    await autoSaveCurrentChat();
+
     try {
       const res = await fetch('/global_documents/save_from_chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           messages: history,
-          user_name: activeUserName || localStorage.getItem('activeUserName') || 'User',
+          user_name: userName,
           instruction: commandText
         })
       });
       const data = await res.json().catch(() => ({}));
+      const ackMsg = window.loadedChat.find(m => m.message_id === ackMessageId);
+
       if (res.ok && data.success) {
+        if (ackMsg) ackMsg.content = `Done — saved as a document: "${data.title || data.filename}".`;
         hwuiToast(`Document saved: ${data.filename}`);
         if (typeof loadGlobalDocs === 'function') {
           try { loadGlobalDocs(); } catch (e) {}
         }
       } else {
+        if (ackMsg) ackMsg.content = `I couldn't save that as a document: ${data.error || 'unknown error'}.`;
         hwuiToast(data.error || 'Failed to save document.', 'error');
       }
     } catch (err) {
       console.error('Save as document failed:', err);
+      const ackMsg = window.loadedChat.find(m => m.message_id === ackMessageId);
+      if (ackMsg) ackMsg.content = `I couldn't save that as a document: ${err.message}.`;
       hwuiToast('Failed to contact server: ' + err.message, 'error');
     }
+
+    renderChatMessages(window.loadedChat);
+    await autoSaveCurrentChat();
   }
 
   async function captureAutomaticMemory(userText, assistantText) {
@@ -5763,19 +5808,8 @@ async function openChat(filename) {
       });
 
       // ── Reader loop (producer only — no rendering) ────────────────────────
-      while (true) {
-        let readResult;
-        try {
-          readResult = await reader.read();
-        } catch (readErr) {
-          streamReadFailed = true;
-          console.warn('⚠️ Stream read error (connection dropped?):', readErr);
-          break;
-        }
-        const { value, done } = readResult;
-        if (done) { console.log('✅ Stream done signal received'); break; }
-
-        const chunk = decoder.decode(value, { stream: true });
+      function consumeDecodedChunk(chunk) {
+        if (!chunk) return;
         rawAll += chunk;
 
         // Demux extended-thinking sentinels: reasoning → collapsible panel,
@@ -5809,6 +5843,25 @@ async function openChat(filename) {
         cleanedFull = stripChatMLOutsideCodeBlocks(fullMessage, charName, userName).trim();
         window._streamingPartial = cleanedFull;   // expose for the pagehide beacon
       }
+
+      while (true) {
+        let readResult;
+        try {
+          readResult = await reader.read();
+        } catch (readErr) {
+          streamReadFailed = true;
+          console.warn('⚠️ Stream read error (connection dropped?):', readErr);
+          break;
+        }
+        const { value, done } = readResult;
+        if (done) { console.log('✅ Stream done signal received'); break; }
+
+        consumeDecodedChunk(decoder.decode(value, { stream: true }));
+      }
+
+      // Finalise the stateful UTF-8 decoder. A multibyte character split across
+      // the final transport boundary is buffered until this no-argument drain.
+      consumeDecodedChunk(decoder.decode());
 
       // Signal the drip we're done; it flushes the remainder on its next tick.
       streamDone = true;
@@ -6178,6 +6231,7 @@ async function openChat(filename) {
         try { staleInfo = await res.json(); } catch (e) {}
         console.warn('⚠️ Stale save rejected by server (disk is newer) — reloading from disk:', staleInfo);
         if (currentChatFilename) await openChat(currentChatFilename);
+        return { ok: false, conflict: true };
       } else {
         console.error('❌ Auto-save failed:', res.status);
       }
@@ -6337,7 +6391,9 @@ async function openChat(filename) {
         renderLiveModelHTML(streamEl, typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(cleaned)) : cleaned);
         chat.scrollTop = chat.scrollHeight;
       }
-      decoder.decode();
+      // Preserve any final multibyte character held by the stateful decoder.
+      const decoderTail = decoder.decode();
+      if (decoderTail) rawFull += decoderTail;
 
       let finalText = stripChatMLOutsideCodeBlocks(splitThinking(rawFull).answer, charName, userName).trim();
 
@@ -6435,6 +6491,7 @@ async function openChat(filename) {
     
     // 2. DELETE EVERYTHING after the last user message in window.loadedChat
     window.loadedChat.splice(lastUserIndex + 1);
+    const regenerationHistory = window.loadedChat.map(message => ({ ...message }));
     window._chatDirty = true;  // stale-write guard: regenerate mutates history
     
     console.log('📦 loadedChat after deletion:', window.loadedChat);
@@ -6465,7 +6522,13 @@ async function openChat(filename) {
     console.log('🎨 DOM cleaned (removed assistant messages only)');
     
     // 4. FORCE SAVE before regenerating
-    await autoSaveCurrentChat();
+    const saveResult = await autoSaveCurrentChat();
+    if (saveResult && saveResult.conflict) {
+      // autoSaveCurrentChat reloads the newer disk copy on 409. Keep the
+      // explicitly regenerated branch pruned so the failed assistant reply
+      // cannot be sent back to the model.
+      window.loadedChat = regenerationHistory;
+    }
     console.log('💾 Forced save BEFORE regeneration');
     
     // 5. Generate new response (will append to existing DOM)

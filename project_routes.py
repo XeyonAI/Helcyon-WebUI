@@ -1222,46 +1222,140 @@ def save_global_document():
     return jsonify({"success": True, "filename": safe})
 
 
-@project_bp.route("/global_documents/save_from_chat", methods=["POST"])
-def save_global_document_from_chat():
-    """Generate and save a factual global reference document from recent chat."""
-    from app_runtime_helpers import get_api_url, get_stop_tokens
+def _document_generation_system_prompt(user_name):
+    """System prompt for the save-from-chat document generator.
 
-    ensure_global_docs_dir()
-    data = request.get_json(force=True, silent=True) or {}
-    messages = data.get("messages") or []
-    user_name = (data.get("user_name") or "User").strip() or "User"
-    instruction = (data.get("instruction") or "").strip()
-
-    system_prompt = (
+    Explicitly forbids direct address / character voice, since the completion
+    runs on whatever roleplay-tuned model is currently loaded for the chat and
+    the transcript it's fed is full of that model's own in-character, second-
+    person dialogue — a strong pull that a single up-front instruction doesn't
+    reliably override.
+    """
+    name = user_name or "the user"
+    return (
         "You create durable factual reference documents for a local chat application's "
-        "global_documents folder. Write neutral informational material only. Do not "
-        "write in character voice, do not write first-person diary or memory prose, "
-        "and do not mention that you are saving a file. Use only information grounded "
-        "in the provided transcript, including any web/search result text present in it. "
-        "If the transcript is thin, make a concise reference note rather than inventing details.\n\n"
+        "global_documents folder. Write neutral, third-person reference prose only — "
+        f"describe what was discussed using {name}'s name, e.g. \"{name} said...\" or "
+        f"\"{name} explained...\". Do not address {name} directly, do not use the word "
+        "\"you\", do not continue the conversation, do not write in character voice, "
+        "do not write dialogue, do not write first-person assistant prose, and never "
+        f"write phrases like \"Yes {name}\" or \"Hi {name}\". Do not write first-person "
+        "diary or memory prose, and do not mention that you are saving a file. Use only "
+        "information grounded in the provided transcript, including any web/search "
+        "result text present in it. If the transcript is thin, make a concise reference "
+        "note rather than inventing details.\n\n"
         "Return only the reference document body. Do not include JSON, filename, "
         "keywords, save-result labels, or metadata fields. Start with a concise "
         "topic heading, then write clear factual notes. Use short headings or "
         "bullet points when helpful."
     )
+
+
+def _document_generation_reminder(user_name, corrective=False):
+    """Short directive placed immediately before the assistant generation
+    marker — closest to the generation point, where it carries the most
+    weight against the transcript's own in-character pull."""
+    name = user_name or "the user"
+    reminder = (
+        f"REMINDER: Output neutral third-person reference prose only, using "
+        f"\"{name}\" by name (e.g. \"{name} said...\", \"{name} explained...\"). "
+        f"Do not address {name} directly, do not use the word \"you\", do not "
+        "continue the conversation, do not speak as the character, do not write "
+        f"dialogue, and never begin a sentence with \"Yes {name}\" or similar. "
+        "Write the reference document body now."
+    )
+    if corrective:
+        reminder = (
+            "Your previous attempt slipped into direct address or character voice. "
+            + reminder
+        )
+    return reminder
+
+
+def _build_document_generation_prompt(user_name, instruction, transcript_text, corrective=False):
+    system_prompt = _document_generation_system_prompt(user_name)
+    reminder = _document_generation_reminder(user_name, corrective=corrective)
+    return (
+        "<|im_start|>system\n"
+        f"{system_prompt}\n"
+        "<|im_end|>\n"
+        "<|im_start|>user\n"
+        f"User requesting save: {user_name}\n"
+        f"Save command: {instruction or '(none)'}\n\n"
+        "CONVERSATION TRANSCRIPT:\n"
+        f"{transcript_text}\n\n"
+        f"{reminder}\n"
+        "<|im_end|>\n"
+        "<|im_start|>assistant\n"
+    )
+
+
+_DOC_SECOND_PERSON_RE = re.compile(r"\byou(?:'re|r|'ve|'ll)?\b|\byourself\b", re.IGNORECASE)
+_DOC_FIRST_PERSON_ASSISTANT_RE = re.compile(
+    r"\b(?:I'll|I will|I think|I believe|I feel|I'm going to|as an ai|as your)\b",
+    re.IGNORECASE,
+)
+
+
+def _document_direct_address_re(user_name):
+    escaped = re.escape(user_name)
+    return re.compile(
+        rf"\b(?:yes|hey|hi|oh|well|no|okay|ok|sure|right)\b[\s,]{{1,3}}{escaped}\b"
+        rf"|\b{escaped}\b\s*[,!]",
+        re.IGNORECASE,
+    )
+
+
+def _looks_like_character_voice_leak(text, user_name):
+    """Heuristic check for direct-address / in-character leakage in a
+    generated reference document body. Used to decide whether to retry once
+    with a stricter corrective prompt."""
+    if not text:
+        return False
+    if user_name and _document_direct_address_re(user_name).search(text):
+        return True
+    if len(_DOC_SECOND_PERSON_RE.findall(text)) >= 3:
+        return True
+    if _DOC_FIRST_PERSON_ASSISTANT_RE.search(text):
+        return True
+    return False
+
+
+def _request_document_completion(prompt, n_predict):
+    from app_runtime_helpers import get_api_url, get_stop_tokens
+
+    payload = {
+        "prompt": prompt,
+        "temperature": 0.3,
+        "n_predict": n_predict,
+        "top_p": 0.9,
+        "repeat_penalty": 1.05,
+        "stream": False,
+        "stop": get_stop_tokens(),
+    }
+    resp = requests.post(f"{get_api_url()}/completion", json=payload, timeout=90)
+    if resp.status_code >= 400:
+        body_text = resp.text[:500] if resp.text else ""
+        raise RuntimeError(f"llama.cpp returned {resp.status_code}: {body_text or 'no body'}")
+    return (resp.json() or {}).get("content", "").strip()
+
+
+@project_bp.route("/global_documents/save_from_chat", methods=["POST"])
+def save_global_document_from_chat():
+    """Generate and save a factual global reference document from recent chat."""
+    ensure_global_docs_dir()
+    data = request.get_json(force=True, silent=True) or {}
+    messages = data.get("messages") or []
+    user_name = (data.get("user_name") or "User").strip() or "User"
+    instruction = (data.get("instruction") or "").strip()
     transcript_limit = 40
 
     def _build_prompt(limit):
         transcript_text = _plain_chat_transcript(messages, limit=limit)
         if not transcript_text:
             return "", ""
-        return transcript_text, (
-            "<|im_start|>system\n"
-            f"{system_prompt}\n"
-            "<|im_end|>\n"
-            "<|im_start|>user\n"
-            f"User requesting save: {user_name}\n"
-            f"Save command: {instruction or '(none)'}\n\n"
-            "CONVERSATION TRANSCRIPT:\n"
-            f"{transcript_text}\n"
-            "<|im_end|>\n"
-            "<|im_start|>assistant\n"
+        return transcript_text, _build_document_generation_prompt(
+            user_name, instruction, transcript_text
         )
 
     transcript, prompt = _build_prompt(transcript_limit)
@@ -1284,23 +1378,7 @@ def save_global_document_from_chat():
     n_predict = min(gen_target, max(gen_min, ctx_size - est_real))
 
     try:
-        payload = {
-            "prompt": prompt,
-            "temperature": 0.3,
-            "n_predict": n_predict,
-            "top_p": 0.9,
-            "repeat_penalty": 1.05,
-            "stream": False,
-            "stop": get_stop_tokens(),
-        }
-        resp = requests.post(f"{get_api_url()}/completion", json=payload, timeout=90)
-        if resp.status_code >= 400:
-            body = resp.text[:500] if resp.text else ""
-            return jsonify({
-                "success": False,
-                "error": f"llama.cpp returned {resp.status_code}: {body or 'no body'}",
-            }), 500
-        raw = (resp.json() or {}).get("content", "").strip()
+        raw = _request_document_completion(prompt, n_predict)
     except Exception as e:
         print(f"Failed to generate global document: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
@@ -1308,6 +1386,21 @@ def save_global_document_from_chat():
     body = _strip_document_metadata_wrappers(raw)
     if not body:
         return jsonify({"success": False, "error": "Generated document body was empty."}), 500
+
+    if _looks_like_character_voice_leak(body, user_name):
+        print("📄 Document generation showed direct-address/character-voice leakage — retrying once")
+        corrective_prompt = _build_document_generation_prompt(
+            user_name, instruction, transcript, corrective=True
+        )
+        corrective_est = int(rough_token_count(corrective_prompt) * 1.25)
+        corrective_n_predict = min(gen_target, max(gen_min, ctx_size - corrective_est))
+        try:
+            retry_raw = _request_document_completion(corrective_prompt, corrective_n_predict)
+            retry_body = _strip_document_metadata_wrappers(retry_raw)
+            if retry_body:
+                body = retry_body
+        except Exception as e:
+            print(f"Document retry generation failed, keeping first attempt: {e}")
 
     title = _derive_topic_title(body, transcript)
     filename_seed = _filename_seed_from_title(title)

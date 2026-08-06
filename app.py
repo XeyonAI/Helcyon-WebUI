@@ -8,6 +8,17 @@ from tts_routes import tts_bp
 from utils.session_handler import get_system_prompt, get_instruction_layer, get_tone_primer
 from whisper_routes import whisper_bp
 
+_LIVE_HISTORY_FRAME_INSTRUCTION = (
+    "Keep separate dreams, stories, hypotheticals, examples, and real-life events distinct. "
+    "Do not transfer a fact from one frame into another unless the user explicitly links them. "
+    "Answer the current user turn first."
+)
+
+
+def _live_history_frame_packet():
+    """Return the one shared live-history frame-separation instruction packet."""
+    return f"[OOC: {_LIVE_HISTORY_FRAME_INSTRUCTION}]"
+
 # ============================================================================
 # Persistent rotating console logs  (added 2026-06-04)
 # ----------------------------------------------------------------------------
@@ -512,8 +523,8 @@ def _extract_perspective(content):
 # --------------------------------------------------
 # Load Documents
 # --------------------------------------------------
-def load_project_documents(project_name, user_query=""):
-    """Load the best-matching document from a project's documents folder.
+def load_project_documents(project_name, user_query="", max_docs=2):
+    """Load the top matching documents from a project's documents folder.
     Scores filename (×3), an optional leading 'Keywords:' line (×3), and
     content preview (×1).
     Returns empty string when no match or no usable keywords."""
@@ -532,7 +543,7 @@ def load_project_documents(project_name, user_query=""):
 
     all_files = [f for f in os.listdir(docs_dir) if os.path.isfile(os.path.join(docs_dir, f))]
 
-    best_file, best_score = None, 0
+    matches = []
     for fname in all_files:
         # Gate: require at least one keyword in the filename before reading content.
         # Pure content-only hits (score 1-2) are too weak — they match incidentally mentioned
@@ -542,37 +553,50 @@ def load_project_documents(project_name, user_query=""):
             continue
         s = _score_doc(fname, os.path.join(docs_dir, fname), query_keywords,
                        query_lower=user_query.lower())
-        if s > best_score:
-            best_score, best_file = s, fname
+        if s >= 3:
+            matches.append((s, fname))
 
-    if not best_file or best_score < 3:
+    if not matches:
         print(f"⏭️ No document matched keywords: {query_keywords}")
         return ""
 
-    print(f"✅ Best match: '{best_file}' (score={best_score}, keywords={query_keywords})")
+    matches.sort(key=lambda item: item[0], reverse=True)
+    selected = matches[:max(1, int(max_docs))]
+    print(f"✅ Top document matches: {selected} (keywords={query_keywords})")
 
     MAX_CHARS_PER_DOC = 8000
-    content = _read_doc_content(os.path.join(docs_dir, best_file), max_chars=MAX_CHARS_PER_DOC)
-    if not content:
+    document_sections = []
+    for _, selected_file in selected:
+        content = _read_doc_content(
+            os.path.join(docs_dir, selected_file), max_chars=MAX_CHARS_PER_DOC
+        )
+        if not content:
+            continue
+
+        original_len = len(content)
+        if original_len == MAX_CHARS_PER_DOC:
+            print(f"✂️ Trimmed {selected_file} to {MAX_CHARS_PER_DOC} chars")
+        else:
+            print(f"📄 Loaded {selected_file}: {original_len} chars (~{original_len//4} tokens)")
+
+        # Strip any curated Keywords line before injection (retrieval tag, not
+        # content) — must run before _extract_perspective so a leading Keywords
+        # line can't hide a PERSPECTIVE tag on the line below it.
+        _, content = _extract_doc_keywords(content)
+        prefix, suffix, content = _extract_perspective(content)
+        document_sections.append(
+            f"### Document: {selected_file}\n\n{prefix}{content}{suffix}"
+        )
+
+    if not document_sections:
         return ""
 
-    original_len = len(content)
-    if original_len == MAX_CHARS_PER_DOC:
-        print(f"✂️ Trimmed {best_file} to {MAX_CHARS_PER_DOC} chars")
-    else:
-        print(f"📄 Loaded {best_file}: {original_len} chars (~{original_len//4} tokens)")
-
-    # Strip any curated Keywords line before injection (retrieval tag, not
-    # content) — must run before _extract_perspective so a leading Keywords
-    # line can't hide a PERSPECTIVE tag on the line below it.
-    _, content = _extract_doc_keywords(content)
-    prefix, suffix, content = _extract_perspective(content)
     return (
         "\n\n"
         "═══════════════════════════════════════════════════════════\n"
         "PROJECT DOCUMENTS\n"
         "═══════════════════════════════════════════════════════════\n\n"
-        f"### Document: {best_file}\n\n{prefix}{content}{suffix}\n\n"
+        + "\n\n".join(document_sections) + "\n\n"
         "═══════════════════════════════════════════════════════════\n"
         "END PROJECT DOCUMENTS\n"
         "═══════════════════════════════════════════════════════════\n\n"
@@ -582,7 +606,7 @@ def load_project_documents(project_name, user_query=""):
 # Load Global Documents (always available, no project required)
 # --------------------------------------------------
 def load_global_documents(user_query=""):
-    """Load the best-matching document from the global_documents folder.
+    """Load the top two matching documents from the global_documents folder.
 
     A document is eligible when the query shares a keyword with EITHER its
     filename OR an optional leading 'Keywords: a, b, c' line (same convention
@@ -617,7 +641,7 @@ def load_global_documents(user_query=""):
     _untagged_min = 3 if _n_kws == 1 else (5 if _n_kws == 2 else 6)
     _tagged_min = 3
 
-    best_file, best_score = None, 0
+    matches = []
     for fname in all_files:
         fpath = os.path.join(global_docs_dir, fname)
         doc_keywords, preview_lower = _doc_scoring_data(fpath)
@@ -635,38 +659,51 @@ def load_global_documents(user_query=""):
         s = _score_doc(fname, fpath, query_keywords, doc_keywords,
                        preview_lower, query_lower)
         _min = _tagged_min if doc_keywords else _untagged_min
-        if s >= _min and s > best_score:
-            best_score, best_file = s, fname
+        if s >= _min:
+            matches.append((s, fname))
 
-    if not best_file:
+    if not matches:
         print(f"⭕ Global docs: no strong match (keywords={query_keywords})")
         return ""
 
-    print(f"🌐 Global doc match: '{best_file}' (score={best_score}, keywords={query_keywords})")
+    matches.sort(key=lambda item: item[0], reverse=True)
+    selected = matches[:2]
+    print(f"🌐 Global doc matches: {selected} (keywords={query_keywords})")
 
     MAX_CHARS_PER_DOC = 12000
-    content = _read_doc_content(os.path.join(global_docs_dir, best_file), max_chars=MAX_CHARS_PER_DOC)
-    if not content:
+    document_sections = []
+    for _, selected_file in selected:
+        content = _read_doc_content(
+            os.path.join(global_docs_dir, selected_file), max_chars=MAX_CHARS_PER_DOC
+        )
+        if not content:
+            continue
+
+        original_len = len(content)
+        if original_len == MAX_CHARS_PER_DOC:
+            print(f"✂️ Trimmed global doc {selected_file} to {MAX_CHARS_PER_DOC} chars")
+        else:
+            print(f"📄 Global doc loaded: {selected_file} ({original_len} chars)")
+
+        # Strip the curated Keywords line before injection — it's a retrieval tag,
+        # not content the model should see (same as memory blocks). Must run before
+        # _extract_perspective so a leading Keywords line doesn't hide a PERSPECTIVE
+        # tag on the line below it.
+        _, content = _extract_doc_keywords(content)
+        prefix, suffix, content = _extract_perspective(content)
+        document_sections.append(
+            f"### Document: {selected_file}\n\n{prefix}{content}{suffix}"
+        )
+
+    if not document_sections:
         return ""
 
-    original_len = len(content)
-    if original_len == MAX_CHARS_PER_DOC:
-        print(f"✂️ Trimmed global doc {best_file} to {MAX_CHARS_PER_DOC} chars")
-    else:
-        print(f"📄 Global doc loaded: {best_file} ({original_len} chars)")
-
-    # Strip the curated Keywords line before injection — it's a retrieval tag,
-    # not content the model should see (same as memory blocks). Must run before
-    # _extract_perspective so a leading Keywords line doesn't hide a PERSPECTIVE
-    # tag on the line below it.
-    _, content = _extract_doc_keywords(content)
-    prefix, suffix, content = _extract_perspective(content)
     return (
         "\n\n"
         "═══════════════════════════════════════════════════════════\n"
         "GLOBAL REFERENCE DOCUMENTS\n"
         "═══════════════════════════════════════════════════════════\n\n"
-        f"### Document: {best_file}\n\n{prefix}{content}{suffix}\n\n"
+        + "\n\n".join(document_sections) + "\n\n"
         "═══════════════════════════════════════════════════════════\n"
         "END GLOBAL REFERENCE DOCUMENTS\n"
         "═══════════════════════════════════════════════════════════\n\n"
@@ -1172,9 +1209,12 @@ def strip_chatml_leakage(text):
     # Partial tokens mid-string (e.g. scraped page content containing ChatML)
     text = re.sub(r"<\|im_end[|]?", "", text)
     text = re.sub(r"<\|im_start[|]?\w*", "", text)
-    # Fix: \b doesn't match before _ — use explicit pattern instead
-    text = re.sub(r"(?<![<|])_end\|?>", "", text)
-    text = re.sub(r"(?<![<|])_start\|?\w*", "", text)
+    # Partial underscore tails must be standalone from ordinary identifier text
+    # and must include the marker's closing '>'. These boundaries preserve names
+    # such as range_end>value and range_start_value while still catching a tail
+    # split from <|im_end|> / <|im_start|> at a stream boundary.
+    text = re.sub(r"(?<![\w<|])_end\|?>", "", text)
+    text = re.sub(r"(?<![\w<|])_start\|?>\w*", "", text)
     # Bare "end|>" fragment — left behind when "<|im_" was stripped from previous chunk
     text = re.sub(r"\bend\|?>", "", text)
     # Orphan boundary fragment from a cross-chunk <|im_end|> split: the "<|im_end"
@@ -1214,8 +1254,9 @@ def strip_chatml_leakage(text):
     # Individual lines (cross-chunk fallback \u2014 one line per chunk)
     text = re.sub(r'\u26a0\ufe0f\s*REMINDER:[^\n]*\n?', '', text)
     text = re.sub(r'\u26a0\ufe0f\s*Repeating\s+or\s+paraphrasing[^\n]*\n?', '', text)
-    # Orphaned \u2550{3,} separator lines left after REMINDER content is stripped
-    text = re.sub(r'\u2550{3,}[^\n]*\n?', '', text)
+    # Remove only an orphaned separator-only line. Do not consume arbitrary text
+    # following box-drawing characters; models may legitimately use them in prose.
+    text = re.sub(r'(?m)^[ \t]*\u2550{3,}[ \t]*(?:\r?\n|$)', '', text)
     # Log if chunk was significantly shortened
     if len(original) > 10 and len(text) < len(original) * 0.5:
         print(f"\u26a0\ufe0f [strip_chatml] Chunk shrank >50%: {len(original)}\u2192{len(text)} chars. End was: {repr(original[-60:])}", flush=True)
@@ -3040,7 +3081,9 @@ def _anthropic_text_for_count(value):
         )
     return value if isinstance(value, str) else str(value or "")
 
-def _anthropic_dynamic_context_packet(global_documents="", memory="", project_instructions=""):
+def _anthropic_dynamic_context_packet(
+    global_documents="", memory="", project_instructions="", frame_instruction=""
+):
     parts = [
         (
             "PASSIVE REFERENCE CONTEXT - NOT THE USER'S CURRENT REQUEST\n"
@@ -3062,6 +3105,8 @@ def _anthropic_dynamic_context_packet(global_documents="", memory="", project_in
         parts.append("GLOBAL REFERENCE DOCUMENTS - PASSIVE\n" + str(global_documents).strip())
     if memory:
         parts.append("RELEVANT MEMORIES - PASSIVE\n" + str(memory).strip())
+    if frame_instruction:
+        parts.append("LIVE HISTORY FRAME GUIDANCE\n" + str(frame_instruction).strip())
     if not any(p.strip() for p in parts):
         return ""
     return "\n\n".join(p for p in parts if p.strip())
@@ -4400,7 +4445,7 @@ def _load_documents(user_input, _attached_doc_present):
                 # Check if user is asking for a DIFFERENT doc than the pinned one
                 if user_requesting_different_doc(user_input, sticky_doc_file):
                     print(f"📌 Sticky override - user requesting different doc, doing keyword search")
-                    project_documents = load_project_documents(active_project, user_input)
+                    project_documents = load_project_documents(active_project, user_input, max_docs=1)
                     if project_documents:
                         # Update the pinned doc to the newly loaded one
                         match = re.search(r'### Document: (.+?)\n', project_documents)
@@ -4456,7 +4501,7 @@ def _load_documents(user_input, _attached_doc_present):
                             print(f"⚠️ Could not save auto-pin: {e}")
                 elif (any(t in user_input_lower for t in _DOC_STRONG_TRIGGERS) or bool(_DOC_NOUN_RE.search(user_input))):
                     # Multiple docs - use intent trigger to find and pin one
-                    project_documents = load_project_documents(active_project, user_input)
+                    project_documents = load_project_documents(active_project, user_input, max_docs=1)
                     if project_documents:
                         print(f"📌 Sticky mode - first trigger, loading and pinning doc")
                         match = re.search(r'### Document: (.+?)\n', project_documents)
@@ -4778,18 +4823,17 @@ def chat():
         for _document_block in (project_documents, global_documents):
             if not _document_block:
                 continue
-            _name_match = re.search(r'### Document: (.+?)\n', _document_block)
-            if _name_match:
-                _document_content = _document_block[_name_match.end():].lstrip()
-                _end_match = re.search(
-                    r'\n\n═+\nEND (?:PROJECT DOCUMENTS|GLOBAL REFERENCE DOCUMENTS)',
-                    _document_content,
-                )
-                if _end_match:
-                    _document_content = _document_content[:_end_match.start()].rstrip()
+            _document_matches = list(re.finditer(
+                r'### Document: (.+?)\n\n(.*?)(?='
+                r'\n\n### Document: |'
+                r'\n\n[^\n]+\nEND (?:PROJECT DOCUMENTS|GLOBAL REFERENCE DOCUMENTS))',
+                _document_block,
+                re.DOTALL,
+            ))
+            for _document_match in _document_matches:
                 _injected_documents_for_monitor.append({
-                    "name": _name_match.group(1).strip(),
-                    "content": _document_content,
+                    "name": _document_match.group(1).strip(),
+                    "content": _document_match.group(2).strip(),
                 })
 
     # --------------------------------------------------
@@ -5525,6 +5569,12 @@ def chat():
     # ───────────────────────────────────────────────────────────────────────
     _reply_instr_items = []
     _global_post_history_directive = ""
+    _frame_packet = _live_history_frame_packet()
+
+    # Shared live-history guidance. The local ChatML path receives it through
+    # the existing final reply-instruction packet below; the provider branches
+    # reuse the same packet so each backend receives it exactly once.
+    _reply_instr_items.append(_frame_packet)
 
     if char_data.get("example_dialogue", "").strip():
         _reply_instr_items.append(
@@ -6005,7 +6055,9 @@ def chat():
                 _merged_chat.append(dict(_m))
 
         # Step 2: fold system prompt into first user message (Gemma 3 has no system role)
-        _sys_content = _nuke_chatml_vision((system_text + "\n" + memory).strip())
+        _sys_content = _nuke_chatml_vision(
+            (system_text + "\n" + memory + "\n\n" + _frame_packet).strip()
+        )
         if _merged_chat and _merged_chat[0]["role"] == "user":
             _first = _merged_chat[0]
             if isinstance(_first["content"], list):
@@ -6122,8 +6174,11 @@ def chat():
                 if _content:
                     _oai_messages.append({"role": _role, "content": _content})
 
+            _oai_packet = "\n\n".join(
+                part for part in (_cloud_project_packet, _frame_packet) if part
+            )
             _oai_messages = _prepend_to_last_user_message(
-                _oai_messages, _cloud_project_packet, "OpenAI"
+                _oai_messages, _oai_packet, "OpenAI"
             )
 
             # ── Web-search toggle (OpenAI branch only) ───────────────
@@ -6247,6 +6302,7 @@ def chat():
                 global_documents,
                 memory,
                 project_instructions,
+                frame_instruction=_frame_packet,
             )
             _ant_system = _anthropic_system_blocks_for_cache(
                 _anthropic_static_system_text,
@@ -6396,7 +6452,10 @@ def chat():
                     return " ".join(p.get("text","") for p in m["content"] if p.get("type")=="text")
                 return m.get("content","")
 
-            _sys_content = _nuke_chatml(system_text + ("\n" + memory if memory else ""))
+            _sys_content = _nuke_chatml(
+                system_text
+                + ("\n" + memory if memory else "")
+            )
             _text_messages = []  # system folded into first user message for Gemma 3 compatibility
             for m in [m for m in messages if m.get("role") in ("user", "assistant")]:
                 _text_messages.append({
@@ -6417,6 +6476,18 @@ def chat():
                 else:
                     _alt_messages.append(dict(_tm))
             _text_messages = _alt_messages
+
+            # Keep the existing first-user system folding, but place the
+            # shared reply-instruction packet at the generation boundary too.
+            # This is the messages-array equivalent of the local ChatML
+            # final-user packet above.  The frame instruction is already the
+            # first item in _reply_instr_items, so it appears exactly once.
+            _jinja_reply_packet = _nuke_chatml("\n\n".join(_reply_instr_items).strip())
+            if _jinja_reply_packet:
+                for _tm in reversed(_text_messages):
+                    if _tm.get("role") == "user":
+                        _tm["content"] = (_tm.get("content", "").rstrip() + "\n\n" + _jinja_reply_packet).strip()
+                        break
             print(f"🧹 ChatML nuked from {len(_text_messages)} messages", flush=True)
 
             try:

@@ -1,9 +1,0 @@
-# Memory: Sample entry — how memory works
-Keywords: example, demo, memory system
-
-This is a sample memory entry bundled with Helcyon-WebUI to show the format the Memory system uses. During a chat, Helcyon can save short notes like this one and recall them automatically in later conversations when the keywords come up. You can delete this file's contents from Config → Memory at any time — new memories will be saved as you chat.
-
-# Memory: Weekend woodworking project
-Keywords: woodworking, bookshelf, weekend project
-
-You mentioned you're building a bookshelf for your office on weekends, and that you enjoy the slow, methodical pace of woodworking after a busy work week.
