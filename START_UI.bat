@@ -5,8 +5,8 @@ echo ================================================
 
 cd /d "%~dp0"
 
-:: Read port from settings.json (falls back to 8081 if not set)
-for /f %%p in ('python -c "import json; d=json.load(open('settings.json')); print(d.get('port', 8081))"') do set HWUI_PORT=%%p
+:: Read the public launcher port from the shipped defaults.
+for /f %%p in ('python -c "import json; d=json.load(open('settings.default.json')); print(d.get('port', 8081))"') do set "HWUI_PORT=%%p"
 
 :: Kill any existing process on that port before starting
 echo Checking for existing processes on port %HWUI_PORT%...
