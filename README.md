@@ -1,6 +1,10 @@
 # Helcyon-WebUI + Benchmark
 
-**A modern local AI workspace — chat, characters, memory, documents, web search, and integrated model benchmarking, all running on your own machine.**
+## The complete ecosystem for local AI.
+
+Helcyon-WebUI is an integrated workspace for chatting with, managing, organising, and evaluating local AI models.
+
+Build characters, manage long-term memory, organise projects, search the web, work with documents, compare responses, and benchmark models—all from one application.
 
 <p align="center">
   <img src="static/images/Main_UI.jpg" alt="HWUI Main Interface" width="48%" />
@@ -20,13 +24,13 @@
 
 A clean, powerful web interface built specifically for [llama.cpp](https://github.com/ggerganov/llama.cpp) servers. HWUI gets out of the way and lets you focus on conversations with your AI — no bloat, no unnecessary complexity — while giving you the tools to organise, remember, and compare models properly.
 
-Optimized for [Helcyon](https://huggingface.co/XeyonAI) models for web search, document, and memory functionality — but works great with any local LLM.
+Designed alongside the [Helcyon](https://huggingface.co/XeyonAI) model series for seamless web search, document, and memory integration—but works great with any local LLM.
 
 ---
 
 ## ✨ What's inside
 
-HWUI is a full local AI workspace, not just a chat box:
+HWUI is more than a chat interface—it’s a complete workspace for local AI.
 
 - **Chat** — streaming responses, message editing/regeneration, chat branching, multi-character conversations
 - **Characters** — a full creator with personality, tone, scenario, example dialogue, and author's notes
@@ -82,6 +86,15 @@ Everything in Free, plus the tools that make Benchmark automatic and HWUI fully 
 - 💾 **Benchmark Session Management** — save, resume, and manage full benchmark runs across sessions
 
 👉 **[Get HWUI Pro on Gumroad](https://xeyonai.gumroad.com/l/bsmupk)** — one-time payment, no subscription, yours forever.
+
+---
+
+## 💡 Why HWUI?
+
+- **Complete** — chat, memory, projects, benchmarking and character creation in one place
+- **Clean** — no unnecessary prompt pollution or hidden formatting tricks
+- **Fast** — lightweight Flask backend with a responsive interface
+- **Private** — your data stays local. No telemetry, no cloud, no BS.
 
 ---
 
@@ -256,21 +269,6 @@ Helcyon-WebUI/
 
 **Benchmark tab shows an error on startup:**
 - The `helcyon-bench/` folder (prompt packs, rubrics, judge engine) must be present alongside `app.py` — re-clone or re-download the repository if it's missing
-
----
-
-## 💡 Why HWUI?
-
-Most local LLM interfaces are either:
-- Overcomplicated with features you'll never use
-- Designed for devs, not conversations
-- Injecting weird templates that mess with model output
-
-HWUI is different:
-- **Clean output** — no weird prompts or formatting injections
-- **Fast** — lightweight Flask backend, vanilla JS frontend
-- **Modular** — easy to customise without breaking things
-- **Respectful** — your data stays local. No telemetry, no cloud, no BS
 
 ---
 
