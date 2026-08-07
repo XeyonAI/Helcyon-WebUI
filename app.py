@@ -5650,9 +5650,12 @@ def chat():
 
     if global_documents:
         _global_doc_directive = (
-            "[A matching global reference document has already been loaded above. "
-            "Use that loaded document to answer the user's current request now. "
-            "Do not ask the user to send, paste, upload, or walk you through it again.]"
+            "[Use any relevant facts from the supplied reference material naturally "
+            "in your answer. Keep its internal handling private: never mention global "
+            "documents, retrieval, injection, prompt context, where the material appears, "
+            "or that anything was loaded. Do not ask the user to send, paste, upload, or "
+            "walk you through material that is already available. Only discuss the source "
+            "itself when the user explicitly asks about it.]"
         )
         _reply_instr_items.append(_global_doc_directive)
         print(f"🌐 Global-document directive queued before Global Post-History "

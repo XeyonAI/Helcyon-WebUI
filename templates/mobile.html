@@ -311,7 +311,7 @@ const marked={parse:function(txt){
 
 <div id="toast"></div>
 <script>
-let characterName='Assistant',charFilename='Assistant',userName='User',chatHistory=[],ttsEnabled=false,ttsVoice=null,mobileChatFilename=null;
+let characterName='Assistant',charFilename='Assistant',userName='User',chatHistory=[],ttsEnabled=false,ttsVoice=null,mobileChatFilename=null,mobileChatBaseCount=0;
 // Guards against overlapping /chat requests — a double-tap or a mobile keyboard's
 // Enter key firing twice would otherwise send two concurrent generations. The
 // backend runs llama-server with parallel:1, so a second request preempts the
@@ -426,6 +426,7 @@ async function switchCharacter(name){
   setActiveCharacterServer(name);
   chatHistory=[];
   mobileChatFilename=null;
+  mobileChatBaseCount=0;
   localStorage.removeItem('mobile_chat_filename');
   localStorage.removeItem('mobile_chat_character');
   document.getElementById('chat').innerHTML='<div id="typing-indicator"><span></span><span></span><span></span></div>';
@@ -754,6 +755,14 @@ async function sendMessage(text){
   console.log('📱 Mobile request start',{request_id:requestId,active_request_id:requestId,text_length:text.length,text_hash:mobileRequestHash(text)});
   const userTs=new Date().toISOString();
   addBubble('user',userName,text,userTs);chatHistory.push({role:'user',content:text,speaker:userName,timestamp:userTs});
+  // Persist the user's turn before generation begins so an interrupted mobile
+  // request cannot take the prompt and its newly-created thread with it.
+  const promptSaved=await saveChatToDisk();
+  if(!promptSaved){
+    mobileActiveRequest=null;mobileSending=false;setSendBusy(false);
+    showToast('Chat changed elsewhere - reloaded the saved copy');
+    return;
+  }
   showTyping(true);setStatus('Thinking...');setPTTState('idle');
   showToast('Sending as char: '+charFilename);
   try{
@@ -762,7 +771,7 @@ async function sendMessage(text){
     if(!res.ok){showTyping(false);showToast('⚠️ Server error '+res.status);setStatus('Error');return;}
     const ct=res.headers.get('content-type')||'';
     if(ct.includes('text/event-stream')&&res.body){await handleStream(res,requestId);}
-    else{const data=await res.json();const reply=data.text||'';mobileLogResponse('received',requestId,reply);if(!mobileRequestIsActive(requestId)){console.warn('📱 Mobile stale completion ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});return;}showTyping(false);addBubble('ai',characterName,reply);chatHistory.push({role:'assistant',content:reply});console.log('📱 Mobile assistant append',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null,response_length:reply.length,response_hash:mobileRequestHash(reply)});if(ttsEnabled)speakText(reply);setStatus('Ready');}
+    else{const data=await res.json();const reply=data.text||'';mobileLogResponse('received',requestId,reply);if(!mobileRequestIsActive(requestId)){console.warn('📱 Mobile stale completion ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});return;}showTyping(false);addBubble('ai',characterName,reply);chatHistory.push({role:'assistant',content:reply});console.log('📱 Mobile assistant append',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null,response_length:reply.length,response_hash:mobileRequestHash(reply)});await saveChatToDisk();if(ttsEnabled)speakText(reply);setStatus('Ready');}
   }catch(err){if(err.name!=='AbortError'){showTyping(false);showToast('⚠️ Connection error');setStatus('Offline?');}}
   finally{console.log('📱 Mobile request end',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});if(mobileActiveRequest?.id===requestId){mobileActiveRequest=null;mobileSending=false;setSendBusy(false);}else{console.warn('📱 Mobile stale request end ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});}}
 }
@@ -939,6 +948,7 @@ async function switchProject(name){
     if(name){sel.classList.add('active');showToast('Project: '+name);}
     else{sel.classList.remove('active');showToast('No project');}
     mobileChatFilename=null;
+    mobileChatBaseCount=0;
     localStorage.removeItem('mobile_chat_filename');
     localStorage.removeItem('mobile_chat_character');
     chatHistory=[];
@@ -1114,6 +1124,7 @@ async function loadMobileChat(filename, title){
     if(!res.ok){showToast('Could not load chat');return;}
     const data=await res.json();
     const messages=data.messages||[];
+    mobileChatBaseCount=messages.length;
     // Clear UI and history
     chatHistory=[];
     const chat=document.getElementById('chat');
@@ -1141,9 +1152,22 @@ async function clearMobileChat(){
   // Overwrite file with empty content if we have one
   if(mobileChatFilename){
     try{
-      await fetch('/chats/save',{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({filename:mobileChatFilename,messages:[]})});
-    }catch(e){}
+      const res=await fetch('/chats/save',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({filename:mobileChatFilename,messages:[],base_count:mobileChatBaseCount,allow_empty:true})});
+      if(res.status===409){
+        const currentFilename=mobileChatFilename;
+        await loadMobileChat(currentFilename,currentFilename.replace(/\.txt$/,''));
+        showToast('Chat changed elsewhere - reloaded instead of clearing');
+        return;
+      }
+      if(!res.ok)throw new Error('Clear failed');
+      mobileChatBaseCount=0;
+    }catch(e){
+      const currentFilename=mobileChatFilename;
+      if(currentFilename)await loadMobileChat(currentFilename,currentFilename.replace(/\.txt$/,''));
+      showToast('Clear failed - reloaded the saved copy');
+      return;
+    }
   }
   showToast('Chat cleared');
 }
@@ -1152,6 +1176,7 @@ async function newMobileChat(){
   closeChatList();
   history.pushState({view:'chat',filename:null},'');
   mobileChatFilename=null;
+  mobileChatBaseCount=0;
   localStorage.removeItem('mobile_chat_filename');
   localStorage.removeItem('mobile_chat_character');
   chatHistory=[];
@@ -1218,6 +1243,7 @@ async function ensureChatFile(){
     if(!r.ok)return false;
     const d=await r.json();
     mobileChatFilename=d.filename;
+    mobileChatBaseCount=0;
     localStorage.setItem('mobile_chat_filename',mobileChatFilename);
     localStorage.setItem('mobile_chat_character',charFilename);
     return true;
@@ -1775,6 +1801,7 @@ function confirmDeleteChat(filename, title, itemEl){
       if(res.ok){
         if(filename===mobileChatFilename){
           mobileChatFilename=null;
+          mobileChatBaseCount=0;
           localStorage.removeItem('mobile_chat_filename');
           localStorage.removeItem('mobile_chat_character');
           chatHistory=[];
@@ -1962,10 +1989,17 @@ async function unloadModel(){
   }
 }
 
-async function saveChatToDisk(){
+async function saveChatToDisk(options={}){
+  const allowEmpty=Boolean(options.allowEmpty);
+  // A reset or stale empty runtime must not erase a real transcript. Explicit
+  // clear/delete actions opt in when an empty history is genuinely intended.
+  if((!chatHistory||chatHistory.length===0)&&!allowEmpty){
+    console.warn('Blocked unintentional empty mobile chat save');
+    return false;
+  }
   await ensureChatFile();
-  if(!mobileChatFilename)return;
-  if(window.mobileSaving){return;}
+  if(!mobileChatFilename)return false;
+  if(window.mobileSaving){return false;}
   window.mobileSaving=true;
   try{
     // Deduplicate — same protection as desktop
@@ -1989,10 +2023,19 @@ async function saveChatToDisk(){
       ...(m.timestamp?{timestamp:m.timestamp}:{})
     }));
     const res=await fetch('/chats/save',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({filename:mobileChatFilename,messages})});
-    if(!res.ok)console.error('Save failed:',res.status);
+      body:JSON.stringify({filename:mobileChatFilename,messages,base_count:mobileChatBaseCount,allow_empty:allowEmpty})});
+    if(res.ok){mobileChatBaseCount=messages.length;return true;}
+    if(res.status===409){
+      console.warn('Mobile chat save rejected to protect newer disk history');
+      const currentFilename=mobileChatFilename;
+      if(currentFilename)await loadMobileChat(currentFilename,currentFilename.replace(/\.txt$/,''));
+      return false;
+    }
+    console.error('Save failed:',res.status);
+    return false;
   }catch(e){console.error('Save failed:',e);}
   finally{window.mobileSaving=false;}
+  return false;
 }
 
 function closePopover(){
@@ -2052,7 +2095,7 @@ function showDeletePopover(wrap, text, role){
       }
     }
     wrap.remove();
-    await saveChatToDisk();
+    await saveChatToDisk({allowEmpty:true});
     showToast('Message deleted');
   };
 

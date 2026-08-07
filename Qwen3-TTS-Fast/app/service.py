@@ -58,6 +58,11 @@ def prompt_key(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_.-]+", "_", name.strip())[:60] or "voice"
 
 
+def normalise_text_for_qwen(text: str) -> str:
+    """Keep the spoken word ``am`` from being tokenised as the initials A.M."""
+    return re.sub(r"\bI\s+AM\b", "I am", text)
+
+
 class Sampler:
     def __init__(self) -> None:
         self.stop = threading.Event()
@@ -336,6 +341,7 @@ def hwui_tts_to_audio(payload: dict[str, Any]) -> FileResponse:
     voice = str(payload.get("voice") or "Sol")
     if not text:
         raise HTTPException(400, "No text provided")
+    spoken_text = normalise_text_for_qwen(text)
     with runtime.lock:
         try:
             model = runtime.load()
@@ -346,7 +352,7 @@ def hwui_tts_to_audio(payload: dict[str, Any]) -> FileResponse:
             torch.manual_seed(int(payload.get("seed", 42)))
             torch.cuda.manual_seed_all(int(payload.get("seed", 42)))
             wavs, sr = model.generate_voice_clone(
-                text=text, language=str(payload.get("language") or "English"),
+                text=spoken_text, language=str(payload.get("language") or "English"),
                 ref_text=transcript, voice_clone_prompt=prompt,
                 max_new_tokens=int(payload.get("max_new_tokens", 512)),
                 temperature=HWUI_VOICE_TEMPERATURE, top_k=50, top_p=0.95, do_sample=True,
@@ -367,6 +373,7 @@ async def hwui_tts_stream(payload: dict[str, Any]) -> StreamingResponse:
     voice = str(payload.get("voice") or "Sol")
     if not text:
         raise HTTPException(400, "No text provided")
+    spoken_text = normalise_text_for_qwen(text)
     async def generate() -> AsyncIterator[bytes]:
         items: queue.Queue[bytes | Exception | object] = queue.Queue()
         done = object()
@@ -385,7 +392,7 @@ async def hwui_tts_stream(payload: dict[str, Any]) -> StreamingResponse:
                     prompt, _seconds = runtime.make_prompt(voice, wav_path, transcript) if key not in runtime.prompts else (runtime.prompts[key], 0.0)
                     prime_hwui_voice(model, voice, transcript, prompt)
                     stream = model.generate_voice_clone_streaming(**generation_kwargs(
-                        text, str(payload.get("language") or "English"), transcript,
+                        spoken_text, str(payload.get("language") or "English"), transcript,
                         None, prompt, int(payload.get("seed", 42)),
                         max(1, int(payload.get("chunk_size", 2))), int(payload.get("max_new_tokens", 512)),
                         temperature=HWUI_VOICE_TEMPERATURE,
@@ -435,11 +442,12 @@ async def clone(text: str = Form(...), language: str = Form("English"), referenc
                 voice_prompt_id: str | None = Form(None), cache_voice_name: str | None = Form(None),
                 seed: int = Form(42), max_new_tokens: int = Form(512)) -> dict[str, Any]:
     ref = await reference_file(reference_audio, reference_audio_path)
+    spoken_text = normalise_text_for_qwen(text)
     with runtime.lock:
         try:
             model = runtime.load(); prompt, transcript, prompt_seconds, prompt_name = resolve_prompt(model, ref, reference_text, voice_prompt_id, cache_voice_name)
             torch.manual_seed(seed); torch.cuda.manual_seed_all(seed); sampler = Sampler(); sampler.start(); started = time.perf_counter()
-            wavs, sr = model.generate_voice_clone(text=text, language=language, ref_audio=str(ref) if ref and prompt is None else None,
+            wavs, sr = model.generate_voice_clone(text=spoken_text, language=language, ref_audio=str(ref) if ref and prompt is None else None,
                 ref_text=transcript, voice_clone_prompt=prompt, max_new_tokens=max_new_tokens, temperature=0.9,
                 top_k=50, top_p=0.95, do_sample=True, repetition_penalty=1.05, xvec_only=False,
                 non_streaming_mode=False, append_silence=True)
@@ -457,12 +465,13 @@ async def clone_stream(text: str = Form(...), language: str = Form("English"), r
                        voice_prompt_id: str | None = Form(None), cache_voice_name: str | None = Form(None),
                        seed: int = Form(42), chunk_size: int = Form(2), max_new_tokens: int = Form(512)):
     ref = await reference_file(reference_audio, reference_audio_path); request_id = uuid.uuid4().hex
+    spoken_text = normalise_text_for_qwen(text)
     def generate() -> Iterator[bytes]:
         with runtime.lock:
             sampler = Sampler(); chunks: list[np.ndarray] = []; arrivals: list[float] = []; started = time.perf_counter(); sampler.start()
             try:
                 model = runtime.load(); prompt, transcript, prompt_seconds, prompt_name = resolve_prompt(model, ref, reference_text, voice_prompt_id, cache_voice_name)
-                stream = model.generate_voice_clone_streaming(**generation_kwargs(text, language, transcript, ref, prompt, seed, max(1, chunk_size), max_new_tokens))
+                stream = model.generate_voice_clone_streaming(**generation_kwargs(spoken_text, language, transcript, ref, prompt, seed, max(1, chunk_size), max_new_tokens))
                 first = None; sr = 24000
                 yield wav_header(sr)
                 for chunk, sr, timing in stream:

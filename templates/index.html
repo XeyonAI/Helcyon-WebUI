@@ -6097,7 +6097,7 @@ async function openChat(filename) {
     }
   }
 
-  async function autoSaveCurrentChat() {
+  async function autoSaveCurrentChat(options = {}) {
     console.log('🔴🔴🔴 autoSaveCurrentChat CALLED 🔴🔴🔴');
     console.log('🔴 currentChatFilename:', currentChatFilename);
     console.log('🔴 window.loadedChat length:', window.loadedChat?.length || 0);
@@ -6209,7 +6209,8 @@ async function openChat(filename) {
           filename: currentChatFilename,
           messages: messages,
           character: charName,
-          base_count: window._chatBaseCount
+          base_count: window._chatBaseCount,
+          allow_empty: Boolean(options.allowEmpty)
         })
       });
 
@@ -6898,7 +6899,8 @@ async function stopGeneration() {
         body: JSON.stringify({
           filename: currentChatFilename,
           messages: [],  // Empty array = empty file
-          base_count: window._chatBaseCount
+          base_count: window._chatBaseCount,
+          allow_empty: true
         })
       });
 
@@ -7041,7 +7043,7 @@ async function stopGeneration() {
     
     // Save to file (using the centralized auto-save with lock)
     try {
-      await autoSaveCurrentChat();
+      await autoSaveCurrentChat({ allowEmpty: true });
       console.log('✅ Deleted last message, ' + window.loadedChat.length + ' messages remaining');
     } catch (err) {
       console.error('❌ Failed to delete messages:', err);
@@ -7881,7 +7883,7 @@ async function stopGeneration() {
   
   // Save to file
   try {
-    await autoSaveCurrentChat();
+    await autoSaveCurrentChat({ allowEmpty: true });
     console.log('✅ Message deleted and chat saved');
   } catch (err) {
     console.error('❌ Failed to save after deleting message:', err);

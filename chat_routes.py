@@ -496,6 +496,18 @@ def _check_stale_save(filepath, filename, incoming_count, base_count):
     return None
 
 
+def _check_unintentional_empty_overwrite(filepath, filename, messages, allow_empty):
+    """Reject an unmarked empty full-save over a non-empty transcript."""
+    if messages or allow_empty or not os.path.exists(filepath):
+        return None
+    try:
+        disk_count = len(_parse_chat_file(filepath, filename, verbose=False))
+    except Exception as e:
+        print(f"Empty-overwrite check failed for {filename}: {e} - protecting non-empty file")
+        return 1 if os.path.getsize(filepath) > 0 else None
+    return disk_count if disk_count > 0 else None
+
+
 def _dedupe_adjacent_duplicate_messages(messages):
     """Drop exact adjacent duplicate turns before rendering or saving chats."""
     deduped = []
@@ -891,6 +903,16 @@ def save_chat_messages():
         # Stale-write guard — see _check_stale_save. Clients send base_count
         # (the count they believe is on disk); legacy callers omit it and
         # write as before.
+        protected_disk_count = _check_unintentional_empty_overwrite(
+            filepath, filename, messages, bool(data.get("allow_empty"))
+        )
+        if protected_disk_count is not None:
+            print(f"Blocked unintentional empty overwrite for {filename}: disk={protected_disk_count}")
+            return jsonify({
+                "status": "empty_overwrite_blocked",
+                "disk_count": protected_disk_count,
+            }), 409
+
         stale_disk_count = _check_stale_save(filepath, filename, len(messages), data.get("base_count"))
         if stale_disk_count is not None:
             print(f"⛔ Stale save REJECTED for {filename}: disk={stale_disk_count}, base={data.get('base_count')}, incoming={len(messages)}")
@@ -964,6 +986,16 @@ def update_chat():
         filepath = os.path.join(chats_dir, filename)
 
         # Stale-write guard — same as /chats/save (see _check_stale_save).
+        protected_disk_count = _check_unintentional_empty_overwrite(
+            filepath, filename, messages, bool(data.get("allow_empty"))
+        )
+        if protected_disk_count is not None:
+            print(f"Blocked unintentional empty update for {filename}: disk={protected_disk_count}")
+            return jsonify({
+                "status": "empty_overwrite_blocked",
+                "disk_count": protected_disk_count,
+            }), 409
+
         stale_disk_count = _check_stale_save(filepath, filename, len(messages), data.get("base_count"))
         if stale_disk_count is not None:
             print(f"⛔ Stale update REJECTED for {filename}: disk={stale_disk_count}, base={data.get('base_count')}, incoming={len(messages)}")
