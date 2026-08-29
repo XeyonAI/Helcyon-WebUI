@@ -20,10 +20,15 @@ from helcyon_bench_adapter import (
 from chat_routes import _parse_chat_file
 from helcyon_bench_capture import (
     CaptureError,
+    capture_association,
+    delete_benchmark_session,
     list_benchmark_sessions,
+    load_benchmark_session,
     load_integrated_session,
+    persist_captured_response,
     register_association,
     resolve_association,
+    save_benchmark_session,
     save_integrated_session,
     update_association_status,
 )
@@ -31,6 +36,7 @@ from helcyon_bench_judge import (
     ApiError,
     ConfigError,
     IntegratedJudgeError,
+    JudgeError,
     judge_run_manager,
     load_judge_settings,
     refresh_judge_models,
@@ -41,18 +47,8 @@ from helcyon_bench_judge import (
 
 helcyon_bench_bp = Blueprint("helcyon_bench", __name__)
 
-
-# ── Free-build feature gate ─────────────────────────────────────────────
-# This is the free (GitHub) build of HWUI. Prompt pack/rubric editing and
-# read-only browsing (results, leaderboard, saved-session listing) stay
-# fully functional. Sending a benchmark prompt into chat, capturing the
-# exact reply, running the automated Judge, and saved-session automation
-# (create/load/delete) are Pro-only; those routes return this instead.
 def _pro_only():
-    return jsonify({
-        "error": "This feature is available in HWUI Pro.",
-        "pro_required": True,
-    }), 403
+    return jsonify({"error": "This feature is available in HWUI Pro.", "pro_required": True}), 403
 
 
 @helcyon_bench_bp.route("/api/helcyon-bench/prompt-packs", methods=["GET"])
@@ -192,24 +188,39 @@ def get_saved_benchmark_sessions():
 
 @helcyon_bench_bp.route("/api/helcyon-bench/saved-sessions", methods=["POST"])
 def create_saved_benchmark_session():
-    """Saved-session automation is Pro-only in the free build."""
-    return _pro_only()
+    try:
+        session = save_benchmark_session(request.get_json(silent=True) or {})
+        return jsonify({"session": session, "sessions": list_benchmark_sessions()}), 201
+    except CaptureError as error:
+        return jsonify({"error": str(error), "code": error.code}), 422
+    except OSError as error:
+        return jsonify({"error": f"Could not save the benchmark session: {error}"}), 500
 
 
 @helcyon_bench_bp.route("/api/helcyon-bench/saved-sessions/<filename>", methods=["GET"])
 def get_saved_benchmark_session(filename: str):
-    """Saved-session automation is Pro-only in the free build."""
-    return _pro_only()
+    try:
+        return jsonify({"session": load_benchmark_session(filename)})
+    except CaptureError as error:
+        status = 404 if error.code == "session_missing" else 422
+        return jsonify({"error": str(error), "code": error.code}), status
 
 
 @helcyon_bench_bp.route("/api/helcyon-bench/saved-sessions/<filename>", methods=["DELETE"])
 def delete_saved_benchmark_session(filename: str):
-    """Saved-session automation is Pro-only in the free build."""
-    return _pro_only()
+    try:
+        deleted_name = delete_benchmark_session(filename)
+        return jsonify({"deleted": deleted_name, "sessions": list_benchmark_sessions()})
+    except CaptureError as error:
+        status = 404 if error.code == "session_missing" else 422
+        return jsonify({"error": str(error), "code": error.code}), status
+    except OSError as error:
+        return jsonify({"error": f"Could not delete the benchmark session: {error}"}), 500
 
 
 @helcyon_bench_bp.route("/api/helcyon-bench/capture-associations", methods=["POST"])
 def create_capture_association():
+    return _pro_only()
     try:
         association = register_association(request.get_json(silent=True) or {}, _parse_chat_file)
         return jsonify({"association": association}), 201
@@ -251,8 +262,18 @@ def get_capture_association_status(association_id):
     methods=["POST"],
 )
 def capture_benchmark_response(association_id):
-    """Capturing the exact chat reply into a candidate slot is Pro-only in the free build."""
     return _pro_only()
+    data = request.get_json(silent=True) or {}
+    try:
+        captured = capture_association(
+            association_id,
+            _parse_chat_file,
+            candidate_model_slot=data.get("candidate_model_slot"),
+        )
+        captured["session"] = persist_captured_response(captured)
+        return jsonify(captured)
+    except CaptureError as error:
+        return jsonify({"error": str(error), "code": error.code, "status": error.status}), 409
 
 
 @helcyon_bench_bp.route("/api/helcyon-bench/judge/settings", methods=["GET"])
@@ -315,8 +336,21 @@ def test_integrated_judge_connection():
 
 @helcyon_bench_bp.route("/api/helcyon-bench/judge/runs", methods=["POST"])
 def start_integrated_judge_run():
-    """The automated Judge run is Pro-only in the free build."""
-    return _pro_only()
+    data = request.get_json(silent=True) or {}
+    try:
+        job = judge_run_manager.start(
+            str(data.get("endpoint") or ""),
+            str(data.get("model") or ""),
+        )
+        return jsonify({"job": job}), 202
+    except (ApiError, ConfigError, JudgeError, IntegratedJudgeError, OSError) as error:
+        return jsonify(
+            {
+                "error": str(error),
+                "raw_response": getattr(error, "raw_response", None),
+                "status_code": getattr(error, "status_code", None),
+            }
+        ), 422
 
 
 @helcyon_bench_bp.route(

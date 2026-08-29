@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 import os, json
+from user_config import load_user_config_section, save_user_config_section
 
 sampling_bp = Blueprint('sampling', __name__)
 
@@ -13,21 +14,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAMPLING_PRESETS_FILE = os.path.join(BASE_DIR, "sampling_presets.json")
 
 def load_sampling_presets():
-    if os.path.exists(SAMPLING_PRESETS_FILE):
-        try:
-            with open(SAMPLING_PRESETS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"load_sampling_presets failed: {e}")
-    return {}
+    return load_user_config_section("sampling_presets")
 
 def save_sampling_presets(presets):
-    # Atomic write so a crash mid-save can't truncate the file.
-    import tempfile, shutil
-    tmp = SAMPLING_PRESETS_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(presets, f, indent=2)
-    shutil.move(tmp, SAMPLING_PRESETS_FILE)
+    save_user_config_section("sampling_presets", presets)
 
 @sampling_bp.route("/sampling_presets", methods=["GET"])
 def get_sampling_presets():

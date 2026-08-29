@@ -8,11 +8,15 @@ import subprocess
 from flask import Blueprint, jsonify, request
 from datetime import datetime
 from truncation import rough_token_count
+from user_config import load_user_config_section, save_user_config_section
 
 print("✅ project_routes blueprint loaded")
 
 project_bp = Blueprint("project_bp", __name__)
-PROJECTS_DIR = os.path.join(os.getcwd(), "projects")
+# Keep project selection/state on the same code-root as app.py's document
+# loader. Using cwd here split the active-project state from the documents
+# folder when HWUI was launched by a shortcut or launcher with another cwd.
+PROJECTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "projects")
 
 def ensure_projects_dir():
     """Ensure projects directory exists."""
@@ -570,13 +574,7 @@ PROJECT_COLOURS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 
 
 
 def load_project_colours():
-    if os.path.exists(PROJECT_COLOURS_FILE):
-        try:
-            with open(PROJECT_COLOURS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"⚠️ Failed to read project colours: {e}")
-    return {}
+    return load_user_config_section("project_colours")
 
 
 @project_bp.route("/projects/colours", methods=["GET"])
@@ -591,8 +589,7 @@ def save_project_colours():
     if not isinstance(colours, dict):
         return jsonify({"error": "colours must be an object"}), 400
     try:
-        with open(PROJECT_COLOURS_FILE, "w", encoding="utf-8") as f:
-            json.dump(colours, f, indent=2, ensure_ascii=False)
+        save_user_config_section("project_colours", colours)
     except OSError as e:
         return jsonify({"error": str(e)}), 500
     print(f"🎨 Project colours saved: {list(colours.keys())}")

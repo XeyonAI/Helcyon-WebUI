@@ -985,8 +985,8 @@ async function initTTSEngine() {
     const data = await res.json();
     const engine = data.engine || 'f5';
     ttsEngine = engine;
-    TTS_MAX_CHUNK_LENGTH = (engine === 'chatterbox') ? 150 : (engine === 'qwen-fast' ? 220 : 300);
-    if (engine === 'qwen-fast' && (document.getElementById('tts-voice-select')?.options.length || 0) <= 1) {
+    TTS_MAX_CHUNK_LENGTH = (engine === 'chatterbox') ? 150 : ((engine === 'qwen-fast' || engine === 'omnivoice') ? 220 : 300);
+    if ((engine === 'qwen-fast' || engine === 'qwentts-cpp' || engine === 'omnivoice') && (document.getElementById('tts-voice-select')?.options.length || 0) <= 1) {
       loadTTSVoices();
     }
     console.log(`🔊 TTS engine: ${engine} — chunk length: ${TTS_MAX_CHUNK_LENGTH}`);
@@ -1152,7 +1152,12 @@ async function processQueue() {
     return;
   }
 
-  // Pre-fetch buffer: always keep 3 sentences generating ahead
+  // OmniVoice requests are serialized and GPU-heavy; avoid queueing three
+  // simultaneous jobs behind its server-side lock. Other engines retain the
+  // existing prefetch depth and behavior.
+  const prefetchDepth = ttsEngine === 'omnivoice' ? 1 : 3;
+
+  // Pre-fetch buffer: keep sentences generating ahead
   const prefetchBuffer = [];
 
   // Start fetching first sentence immediately — play it as soon as ready,
@@ -1170,7 +1175,7 @@ async function processQueue() {
     const audioUrl = prefetchBuffer.length > 0 ? await prefetchBuffer.shift() : null;
 
     // Immediately start fetching more to keep buffer full
-    while (prefetchBuffer.length < 3 && ttsQueue.length > 0) {
+    while (prefetchBuffer.length < prefetchDepth && ttsQueue.length > 0) {
       prefetchBuffer.push(fetchAudio(ttsQueue.shift()));
     }
 
@@ -1183,7 +1188,7 @@ async function processQueue() {
 
         // Poll during playback so next sentences start fetching immediately
         const prefetchInterval = setInterval(() => {
-          while (prefetchBuffer.length < 3 && ttsQueue.length > 0) {
+          while (prefetchBuffer.length < prefetchDepth && ttsQueue.length > 0) {
             prefetchBuffer.push(fetchAudio(ttsQueue.shift()));
           }
         }, 50);
@@ -1211,7 +1216,7 @@ async function processQueue() {
       });
 
       // Keep buffer topped up after each sentence plays
-      while (prefetchBuffer.length < 3 && ttsQueue.length > 0) {
+      while (prefetchBuffer.length < prefetchDepth && ttsQueue.length > 0) {
         prefetchBuffer.push(fetchAudio(ttsQueue.shift()));
       }
     }
@@ -1224,7 +1229,7 @@ async function processQueue() {
         // Wait for more sentences from streaming
         await new Promise(r => setTimeout(r, 25));
         if (ttsQueue.length > 0) {
-          while (prefetchBuffer.length < 3 && ttsQueue.length > 0) {
+          while (prefetchBuffer.length < prefetchDepth && ttsQueue.length > 0) {
             prefetchBuffer.push(fetchAudio(ttsQueue.shift()));
           }
         } else if (ttsStreamingComplete) {
@@ -1303,9 +1308,10 @@ async function loadTTSVoices() {
       select.appendChild(option);
     });
     clearTimeout(loadTTSVoices.retryTimer);
-    if (data.engine === 'qwen-fast' && data.backend_online === false) {
+    if ((data.engine === 'qwen-fast' || data.engine === 'qwentts-cpp') && data.backend_online === false) {
       loadTTSVoices.retryCount = (loadTTSVoices.retryCount || 0) + 1;
-      if (loadTTSVoices.retryCount <= 45) loadTTSVoices.retryTimer = setTimeout(loadTTSVoices, 2000);
+      const retryLimit = data.engine === 'qwentts-cpp' ? 150 : 45;
+      if (loadTTSVoices.retryCount <= retryLimit) loadTTSVoices.retryTimer = setTimeout(loadTTSVoices, 2000);
       return;
     }
 

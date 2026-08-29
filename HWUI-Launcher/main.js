@@ -1,14 +1,14 @@
 /*
  * HWUI Launcher — standalone Electron wrapper.
  *
- * Lives entirely under C:\HWUI-Launcher\ and has no hardcoded dependency
+ * Lives entirely inside its installed launcher folder and has no dependency
  * on any particular HWUI install folder. Each HWUI install is registered in
  * builds.json (path + friendly name + service list) and selected at runtime.
  *
  * Boot flow:
  *   1. If builds.json is empty/missing → first-run setup; user adds builds.
  *   2. Show the picker so the user confirms which build to launch.
- *   3. Pre-kill anything bound to Flask :8081 and F5 :8003.
+ *   3. Resolve the selected build's Flask port, then clear it and F5 :8003.
  *   4. Spawn Flask via the selected build's venv python; F5 via the build's
  *      Start_F5_XTTS.bat (.bat handles its own venv activation).
  *   5. Detect HTTPS via local cert files in the build root; poll Flask.
@@ -30,7 +30,7 @@ const fs    = require('fs');
 const os    = require('os');
 const http  = require('http');
 const https = require('https');
-const { spawn, exec, execSync } = require('child_process');
+const { spawn, exec, execSync, execFileSync } = require('child_process');
 
 // Redirect Chromium's disk cache to a writable temp location and disable the
 // GPU shader cache. Avoids "Unable to move cache / Access denied" spam when
@@ -45,9 +45,14 @@ app.commandLine.appendSwitch('disk-cache-dir', path.join(os.tmpdir(), 'hwui-laun
 // the Flask Cache-Control: no-store header. ⚠️ DO NOT revert.
 app.commandLine.appendSwitch('disable-features', 'BackForwardCache');
 
-const FLASK_PORT       = 8081;
 const F5_PORT          = 8003;
 const QWEN_FAST_PORT   = 8767;
+const QWENTTS_CPP_PORT = 8768;
+const OMNIVOICE_PORT   = 8001;
+const OMNIVOICE_ROOT   = 'I:\\OmniVoice';
+const OMNIVOICE_DEMO   = path.join(OMNIVOICE_ROOT, 'omnivoice_venv', 'Scripts', 'omnivoice-demo.exe');
+const OMNIVOICE_REPO   = path.join(OMNIVOICE_ROOT, 'OmniVoice');
+const OMNIVOICE_CACHE  = path.join(OMNIVOICE_ROOT, 'hf_cache');
 const READY_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 300;
 const TRAY_ICON_PATH   = path.join(__dirname, 'assets', 'icon.png');
@@ -68,6 +73,7 @@ let setupWindow   = null;
 let tray          = null;
 let isQuitting    = false;
 let selectedBuild = null;
+let selectedFlaskPort = null;
 
 let currentZoom    = 0;     // applied zoom level for the live main window
 let _saveZoomTimer = null;  // debounce handle for persisting zoom to builds.json
@@ -132,6 +138,31 @@ function detectScheme(buildPath) {
   const cert = path.join(buildPath, 'music.tail39b776.ts.net.crt');
   const key  = path.join(buildPath, 'music.tail39b776.ts.net.key');
   return (fs.existsSync(cert) && fs.existsSync(key)) ? 'https' : 'http';
+}
+
+// Ask the selected build's own resolver for its installation-local web port.
+// This also performs the normal first-run assignment before Flask is spawned,
+// keeping launcher probes and app.py on one source of truth.
+function resolveBuildFlaskPort(buildPath, buildSettings) {
+  const configured = Number(buildSettings && buildSettings.port);
+  if (Number.isInteger(configured) && configured > 0 && configured <= 65535) {
+    return configured;
+  }
+
+  const python = path.join(buildPath, 'venv', 'Scripts', 'python.exe');
+  if (!fs.existsSync(python)) throw new Error(`Python not found at ${python}`);
+
+  const output = execFileSync(
+    python,
+    ['-c', 'from app_runtime_helpers import resolve_web_port; print(resolve_web_port())'],
+    { cwd: buildPath, encoding: 'utf8', windowsHide: true }
+  );
+  const match = output.trim().match(/(\d+)\s*$/);
+  const port = match ? Number(match[1]) : NaN;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid Flask port returned by ${buildPath}: ${output.trim() || '(empty output)'}`);
+  }
+  return port;
 }
 
 // --------------------------------------------------------------------------
@@ -211,6 +242,34 @@ function spawnExternalPythonService(name, scriptPath) {
   return child;
 }
 
+// OmniVoice is deliberately launched from its own installation and cache;
+// it must never inherit or reuse a HWUI/Qwen/F5 environment.
+function spawnOmniVoiceService() {
+  if (!fs.existsSync(OMNIVOICE_DEMO)) throw new Error(`OmniVoice demo not found at ${OMNIVOICE_DEMO}`);
+  if (!fs.existsSync(OMNIVOICE_REPO)) throw new Error(`OmniVoice repo not found at ${OMNIVOICE_REPO}`);
+  const args = ['--ip', '127.0.0.1', '--port', String(OMNIVOICE_PORT), '--no-asr'];
+  logLine(`Spawning omnivoice: ${OMNIVOICE_DEMO} ${args.join(' ')}  (cwd=${OMNIVOICE_REPO})`);
+  const child = spawn(OMNIVOICE_DEMO, args, {
+    cwd: OMNIVOICE_REPO,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+    env: {
+      ...process.env,
+      PYTHONIOENCODING: 'utf-8',
+      HF_HOME: OMNIVOICE_CACHE,
+      HF_HUB_CACHE: path.join(OMNIVOICE_CACHE, 'hub'),
+      HF_HUB_OFFLINE: '1',
+    },
+  });
+  const stream = fs.createWriteStream(LOG_PATH, { flags: 'a' });
+  stream.write(`\n=== ${new Date().toISOString()} omnivoice spawn (root=${OMNIVOICE_ROOT}) ===\n`);
+  child.stdout.on('data', d => stream.write(d));
+  child.stderr.on('data', d => stream.write(d));
+  child.on('exit', (code, sig) => logLine(`omnivoice exited code=${code} sig=${sig}`));
+  subprocesses.push({ name: 'omnivoice', child });
+  return child;
+}
+
 // Spawn via cmd.exe /c <bat> for services whose launch script handles its own
 // venv activation. The python process started by the .bat is a direct child
 // of cmd.exe, so taskkill /T /F on the cmd PID reaps it on quit.
@@ -271,19 +330,22 @@ function killPortSync(port) {
   }
 }
 
-// Catch-all on quit: sweep the known service ports. Flask (8081) and F5 (8003)
+// Catch-all on quit: sweep the selected build's Flask port and F5 (8003)
 // are direct children, but llama-server is a GRANDCHILD (Flask spawns it) and
 // often runs in its own console window, so the PID-tree kill can miss it — its
 // port (build-specific, default 5000) is read from the build's settings.json
 // and swept explicitly so no stray server/console is left behind.
 function killKnownPortsSync() {
-  const ports = [FLASK_PORT, F5_PORT];
+  const ports = [F5_PORT];
+  if (selectedFlaskPort) ports.unshift(selectedFlaskPort);
   try {
     if (selectedBuild && selectedBuild.path) {
       const sp = path.join(selectedBuild.path, 'settings.json');
       if (fs.existsSync(sp)) {
         const s = JSON.parse(fs.readFileSync(sp, 'utf8'));
         if (s && s.tts_engine === 'qwen-fast') ports.push(QWEN_FAST_PORT);
+        if (s && s.tts_engine === 'qwentts-cpp') ports.push(QWENTTS_CPP_PORT);
+        if (s && s.tts_engine === 'omnivoice') ports.push(OMNIVOICE_PORT);
         const lport = s && s.llama_args && s.llama_args.port;
         if (lport && !ports.includes(lport)) ports.push(lport);
       }
@@ -297,10 +359,10 @@ function killKnownPortsSync() {
 // --------------------------------------------------------------------------
 // Wait for Flask to respond on the chosen scheme
 // --------------------------------------------------------------------------
-function waitForFlask(scheme) {
+function waitForFlask(scheme, port) {
   return new Promise((resolve) => {
     const start = Date.now();
-    const url   = `${scheme}://127.0.0.1:${FLASK_PORT}/`;
+    const url   = `${scheme}://127.0.0.1:${port}/`;
     const mod   = scheme === 'https' ? https : http;
     const opts  = scheme === 'https' ? { rejectUnauthorized: false } : {};
 
@@ -310,6 +372,26 @@ function waitForFlask(scheme) {
       req.on('error', () => {
         if (Date.now() - start >= READY_TIMEOUT_MS) return resolve(false);
         setTimeout(tryOnce, POLL_INTERVAL_MS);
+      });
+    };
+    tryOnce();
+  });
+}
+
+function waitForLocalHealth(port, healthPath, timeoutMs = 300000) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const tryOnce = () => {
+      const req = http.get(`http://127.0.0.1:${port}${healthPath}`, (res) => {
+        res.resume();
+        if (res.statusCode === 200) return resolve(true);
+        if (Date.now() - start >= timeoutMs) return resolve(false);
+        setTimeout(tryOnce, 1000);
+      });
+      req.setTimeout(2000, () => req.destroy());
+      req.on('error', () => {
+        if (Date.now() - start >= timeoutMs) return resolve(false);
+        setTimeout(tryOnce, 1000);
       });
     };
     tryOnce();
@@ -896,8 +978,19 @@ app.whenReady().then(async () => {
   }
   const selectedTTSEngine = buildSettings.tts_engine || 'f5';
 
-  const portsToClear = [killPort(FLASK_PORT), killPort(F5_PORT)];
+  try {
+    selectedFlaskPort = resolveBuildFlaskPort(selectedBuild.path, buildSettings);
+    logLine(`Resolved selected build Flask port: ${selectedFlaskPort}`);
+  } catch (e) {
+    dialog.showErrorBox('HWUI Launcher: port resolution failed', e.message);
+    quitApp();
+    return;
+  }
+
+  const portsToClear = [killPort(selectedFlaskPort), killPort(F5_PORT)];
   if (selectedTTSEngine === 'qwen-fast') portsToClear.push(killPort(QWEN_FAST_PORT));
+  if (selectedTTSEngine === 'qwentts-cpp') portsToClear.push(killPort(QWENTTS_CPP_PORT));
+  if (selectedTTSEngine === 'omnivoice') portsToClear.push(killPort(OMNIVOICE_PORT));
   await Promise.all(portsToClear);
 
   // Belt-and-braces: make sure the picker is fully gone before the main window
@@ -917,13 +1010,43 @@ app.whenReady().then(async () => {
   }
 
   const services = Array.isArray(selectedBuild.services) ? selectedBuild.services : [];
-  if (selectedTTSEngine === 'qwen-fast') {
+  if (selectedTTSEngine === 'omnivoice') {
     try {
-      const serverPath = buildSettings.qwen_tts_fast_server;
-      if (!serverPath) throw new Error('qwen_tts_fast_server is not set in settings.json');
-      spawnExternalPythonService('qwen3-tts-fast', serverPath);
+      spawnOmniVoiceService();
+      logLine(`Polling OmniVoice on http://127.0.0.1:${OMNIVOICE_PORT}/ ...`);
+      waitForLocalHealth(OMNIVOICE_PORT, '/').then((ready) => {
+        logLine(ready
+          ? 'OmniVoice demo health check ready'
+          : 'OmniVoice demo health check timed out after 60 seconds');
+      });
     } catch (e) {
-      logLine(`Qwen3-TTS Fast spawn failed (non-fatal): ${e.message}`);
+      logLine(`OmniVoice spawn failed (non-fatal): ${e.message}`);
+    }
+  } else if (selectedTTSEngine === 'qwen-fast') {
+    try {
+      const serverPath = buildSettings.qwentts_cpp_server || path.join(selectedBuild.path, 'qwentts_cpp_server.py');
+      spawnService('qwen3-tts-native', serverPath, selectedBuild.path);
+      logLine(`Polling native Qwen3-TTS health on http://127.0.0.1:${QWEN_FAST_PORT}/health ...`);
+      waitForLocalHealth(QWEN_FAST_PORT, '/health').then((ready) => {
+        logLine(ready
+          ? 'Native Qwen3-TTS health check ready'
+          : 'Native Qwen3-TTS health check timed out after 300 seconds');
+      });
+    } catch (e) {
+      logLine(`Native Qwen3-TTS spawn failed (non-fatal): ${e.message}`);
+    }
+  } else if (selectedTTSEngine === 'qwentts-cpp') {
+    try {
+      const serverPath = buildSettings.qwentts_cpp_server || path.join(selectedBuild.path, 'qwentts_cpp_server.py');
+      spawnExternalPythonService('qwentts-cpp', serverPath);
+      logLine(`Polling qwentts.cpp health on http://127.0.0.1:${QWENTTS_CPP_PORT}/health ...`);
+      waitForLocalHealth(QWENTTS_CPP_PORT, '/health').then((ready) => {
+        logLine(ready
+          ? 'qwentts.cpp health check ready'
+          : 'qwentts.cpp health check timed out after 300 seconds');
+      });
+    } catch (e) {
+      logLine(`qwentts.cpp spawn failed (non-fatal): ${e.message}`);
     }
   } else if (services.includes('f5')) {
     try {
@@ -937,18 +1060,18 @@ app.whenReady().then(async () => {
   }
 
   const scheme = detectScheme(selectedBuild.path);
-  logLine(`Polling ${scheme}://127.0.0.1:${FLASK_PORT}/ ...`);
-  const ready = await waitForFlask(scheme);
+  logLine(`Polling ${scheme}://127.0.0.1:${selectedFlaskPort}/ ...`);
+  const ready = await waitForFlask(scheme, selectedFlaskPort);
   if (!ready) {
     dialog.showErrorBox(
       'HWUI Launcher: Flask did not start',
-      `No response on ${scheme}://127.0.0.1:${FLASK_PORT}/ within ${READY_TIMEOUT_MS/1000}s.\n\nSee ${LOG_PATH}`
+      `No response on ${scheme}://127.0.0.1:${selectedFlaskPort}/ within ${READY_TIMEOUT_MS/1000}s.\n\nSee ${LOG_PATH}`
     );
     quitApp();
     return;
   }
 
-  logLine(`Flask ready — navigating window to ${scheme}://127.0.0.1:${FLASK_PORT}/`);
+  logLine(`Flask ready — navigating window to ${scheme}://127.0.0.1:${selectedFlaskPort}/`);
   if (mainWindow) {
     // Push keyboard focus into the page whenever it finishes loading. Without
     // this, after a programmatic loadURL() (or a reload) on an already-shown
@@ -972,7 +1095,7 @@ app.whenReady().then(async () => {
       forceFocusMain();
       setTimeout(forceFocusMain, 300);
     });
-    mainWindow.loadURL(`${scheme}://127.0.0.1:${FLASK_PORT}/`);
+    mainWindow.loadURL(`${scheme}://127.0.0.1:${selectedFlaskPort}/`);
   }
 });
 }  // end single-instance-lock else

@@ -2,6 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <!-- Build-scoped storage: must load before any script that touches
+       localStorage, so each build gets its own namespace on the shared
+       127.0.0.1 origin. -->
+  <script src="/build_scope.js"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -63,6 +67,14 @@ const marked={parse:function(txt){
     return '<div class="m-code-wrap">'+
       '<div class="m-code-hdr">'+langLabel+'<button class="m-copy-btn" onclick="mCopyCode(this)">Copy</button></div>'+
       '<pre><code>'+escaped+'</code></pre></div>';
+  });
+  // Models sometimes emit numbered items inline ("1. ... 2. ..."). Give the
+  // Markdown parser real list-item line breaks, while leaving ordinary prose
+  // containing isolated numbers alone.
+  txt=txt.replace(/[^\r\n]*/g,function(line){
+    if(!/(?:^|[ \t])1\.\s+\S/.test(line)||!/[ \t]2\.\s+\S/.test(line))return line;
+    line=line.replace(/^(.+?)[ \t]+(1\.\s+)/,"$1\n\n$2");
+    return line.replace(/[ \t]+(?=\d+\.\s+)/g,'\n');
   });
   txt=txt.replace(/^[ \t]*([-*_]{3,})[ \t]*$/gm,'\n\n$1\n\n');
   let blocks=txt.split(/\n\n+/);
@@ -514,7 +526,7 @@ async function loadMobileCharacterPreferredModel(characterData){
       if(sameModel){localStorage.setItem('llama_last_model',preferred);return true;}
     }
     if(!overlayShown){showMobilePreferredModelLoadingOverlay(displayName,characterData.name);overlayShown=true;}
-    const loaded=await loadModel(preferred,displayName);
+    const loaded=await loadModel(preferred,displayName,{reason:'character_preferred_model'});
     showToast(loaded?'Loaded '+displayName:'Could not load preferred model');
     return loaded;
   }catch(e){
@@ -767,7 +779,7 @@ async function sendMessage(text){
   showToast('Sending as char: '+charFilename);
   try{
     console.log('📱 Mobile /chat submit',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null,history_length:chatHistory.length});
-    const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({character:characterName,user_name:userName,current_chat_filename:null,conversation_history:chatHistory,author_note:'',temperature:0.8,max_tokens:4096,stop:[],request_id:requestId}),signal:requestController.signal});
+    const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({character:charFilename||characterName,user_name:userName,current_chat_filename:mobileChatFilename,conversation_history:chatHistory,author_note:'',temperature:0.8,max_tokens:4096,stop:[],request_id:requestId}),signal:requestController.signal});
     if(!res.ok){showTyping(false);showToast('⚠️ Server error '+res.status);setStatus('Error');return;}
     const ct=res.headers.get('content-type')||'';
     if(ct.includes('text/event-stream')&&res.body){await handleStream(res,requestId);}
@@ -776,7 +788,7 @@ async function sendMessage(text){
   finally{console.log('📱 Mobile request end',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});if(mobileActiveRequest?.id===requestId){mobileActiveRequest=null;mobileSending=false;setSendBusy(false);}else{console.warn('📱 Mobile stale request end ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});}}
 }
 
-// Extended-thinking demux — peel Anthropic reasoning sentinels off the answer
+// Extended-thinking demux — peel Anthropic/local reasoning sentinels off the answer
 // and show them in a small collapsible. Sentinels are STX-delimited (matches
 // app.py); built via fromCharCode so the source stays plain ASCII. On every
 // other backend these markers never appear, so _mobSplit is a no-op.
@@ -784,11 +796,17 @@ var _MSTX=String.fromCharCode(2);
 var _M_OPEN=_MSTX+_MSTX+'THINK'+_MSTX+_MSTX, _M_CLOSE=_MSTX+_MSTX+'/THINK'+_MSTX+_MSTX;
 function _mobTrail(buf,tok){var max=Math.min(buf.length,tok.length-1);for(var k=max;k>0;k--){if(buf.slice(buf.length-k)===tok.slice(0,k))return k;}return 0;}
 function _mobSplit(raw){
-  var o=raw.indexOf(_M_OPEN);
-  if(o===-1){var hb=_mobTrail(raw,_M_OPEN);return{thinking:'',answer:hb?raw.slice(0,raw.length-hb):raw};}
-  var after=o+_M_OPEN.length, before=raw.slice(0,o), c=raw.indexOf(_M_CLOSE,after);
-  if(c===-1){var t=raw.slice(after);var h=_mobTrail(t,_M_CLOSE);if(h)t=t.slice(0,t.length-h);return{thinking:t,answer:before};}
-  return{thinking:raw.slice(after,c),answer:before+raw.slice(c+_M_CLOSE.length)};
+  var thinking='',answer='',pos=0;
+  function addThink(text){if(!text)return;if(thinking)thinking+='\n\n';thinking+=text;}
+  while(pos<raw.length){
+    var o=raw.indexOf(_M_OPEN,pos);
+    if(o===-1){var tail=raw.slice(pos),hb=_mobTrail(tail,_M_OPEN);answer+=hb?tail.slice(0,tail.length-hb):tail;return{thinking:thinking,answer:answer};}
+    answer+=raw.slice(pos,o);
+    var after=o+_M_OPEN.length,c=raw.indexOf(_M_CLOSE,after);
+    if(c===-1){var t=raw.slice(after),h=_mobTrail(t,_M_CLOSE);if(h)t=t.slice(0,t.length-h);addThink(t);return{thinking:thinking,answer:answer};}
+    addThink(raw.slice(after,c));pos=c+_M_CLOSE.length;
+  }
+  return{thinking:thinking,answer:answer};
 }
 
 async function handleStream(res,requestId=null){
@@ -1345,7 +1363,7 @@ async function initTTSEngine(){
       TTS_FIRST_BATCH_MIN=80;
       TTS_BATCH_MIN=180;
     }
-    if(engine==='qwen-fast'&&(document.getElementById('mobile-voice-select')?.options.length||0)<=1){
+    if((engine==='qwen-fast'||engine==='qwentts-cpp'||engine==='omnivoice')&&(document.getElementById('mobile-voice-select')?.options.length||0)<=1){
       loadMobileVoices();
     }
     console.log(`\uD83D\uDD0A TTS engine: ${engine} \u2014 max=${TTS_MAX_CHUNK_LENGTH}, batch=${TTS_FIRST_BATCH_MIN}/${TTS_BATCH_MIN}`);
@@ -1661,7 +1679,7 @@ async function processQueue(){
   if(ttsQueue.length===0){ttsProcessing=false;const cb=ttsOnComplete;ttsOnComplete=null;if(cb)cb();return;}
 
   const prefetchBuffer=[];
-  const PREFETCH_DEPTH=3;
+  const PREFETCH_DEPTH=mobileTTSEngine==='omnivoice'?1:3;
   const topUp=()=>{while(prefetchBuffer.length<PREFETCH_DEPTH&&ttsQueue.length>0){const item=ttsQueue.shift();if(item.run===run)prefetchBuffer.push(fetchAudio(item.text));}};
   topUp();
 
@@ -1850,9 +1868,10 @@ async function loadMobileVoices(){
       sel.appendChild(o);
     });
     clearTimeout(loadMobileVoices.retryTimer);
-    if(data.engine==='qwen-fast'&&data.backend_online===false){
+    if((data.engine==='qwen-fast'||data.engine==='qwentts-cpp')&&data.backend_online===false){
       loadMobileVoices.retryCount=(loadMobileVoices.retryCount||0)+1;
-      if(loadMobileVoices.retryCount<=45)loadMobileVoices.retryTimer=setTimeout(loadMobileVoices,2000);
+      const retryLimit=data.engine==='qwentts-cpp'?150:45;
+      if(loadMobileVoices.retryCount<=retryLimit)loadMobileVoices.retryTimer=setTimeout(loadMobileVoices,2000);
       return;
     }
     loadMobileVoices.retryCount=0;
@@ -1925,7 +1944,7 @@ async function openModelPicker(){
         name.textContent=(isActive?'▶ ':'')+label;
         item.appendChild(dot);item.appendChild(name);
         const fullPath=group.folder?group.folder+'/'+m:m;
-        item.onclick=()=>loadModel(fullPath,label);
+        item.onclick=()=>loadModel(fullPath,label,{forceReload:true,reason:'model_picker'});
         el.appendChild(item);
       });
     });
@@ -1937,7 +1956,7 @@ function closeModelPicker(){
   document.getElementById('model-status').style.display='none';
 }
 
-async function loadModel(filename,label){
+async function loadModel(filename,label,options={}){
   const status=document.getElementById('model-status');
   const el=document.getElementById('model-list-items');
   const cur=document.getElementById('model-current');
@@ -1947,7 +1966,7 @@ async function loadModel(filename,label){
   status.textContent='⏳ Loading '+displayName+'...';
   el.style.opacity='0.4';el.style.pointerEvents='none';
   try{
-    const r=await fetch('/load_model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:filename})});
+    const r=await fetch('/load_model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:filename,force_reload:options.forceReload===true,reason:options.reason||'unspecified'})});
     const d=await r.json();
     if(d.status==='ok'){
       localStorage.setItem('llama_last_model',filename);
@@ -2140,6 +2159,9 @@ async function regenerateLastResponse(){
   }
   if(lastUserIdx===-1){showToast('No user message to regenerate from');return;}
   mobileSending=true;setSendBusy(true);
+  const requestId=`mob-regen-${Date.now()}-${++mobileRequestSequence}-${Math.random().toString(36).slice(2,8)}`;
+  const requestController=new AbortController();
+  mobileActiveRequest={id:requestId,controller:requestController};
   // Splice everything after last user message (removes any assistant response/error stub)
   chatHistory.splice(lastUserIdx+1);
   // Remove all bubbles after the last user bubble in the DOM
@@ -2151,18 +2173,23 @@ async function regenerateLastResponse(){
   if(lastUserDomIdx!==-1){
     for(let i=lastUserDomIdx+1;i<allWraps.length;i++){allWraps[i].remove();}
   }
-  await saveChatToDisk();
+  const promptSaved=await saveChatToDisk();
+  if(!promptSaved){
+    mobileActiveRequest=null;mobileSending=false;setSendBusy(false);
+    showToast('Chat changed elsewhere - reloaded the saved copy');
+    return;
+  }
   showTyping(true);setStatus('Thinking...');
   try{
     const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({character:charFilename,user_name:userName,current_chat_filename:null,
-        conversation_history:chatHistory,author_note:'',temperature:0.8,max_tokens:4096,stop:[]})});
+      body:JSON.stringify({character:charFilename||characterName,user_name:userName,current_chat_filename:mobileChatFilename,
+        conversation_history:chatHistory,author_note:'',temperature:0.8,max_tokens:4096,stop:[],request_id:requestId}),signal:requestController.signal});
     if(!res.ok){showTyping(false);showToast('⚠️ Server error');return;}
     const ct=res.headers.get('content-type')||'';
-    if(ct.includes('text/event-stream')&&res.body){await handleStream(res);}
-    else{const d=await res.json();const reply=d.text||'';const rgTs=new Date().toISOString();showTyping(false);addBubble('ai',characterName,reply,rgTs);chatHistory.push({role:'assistant',content:reply,speaker:characterName,timestamp:rgTs});await saveChatToDisk();if(ttsEnabled)speakText(reply);setStatus('Ready');}
-  }catch(e){showTyping(false);showToast('⚠️ Error: '+e.message);}
-  finally{mobileSending=false;setSendBusy(false);}
+    if(ct.includes('text/event-stream')&&res.body){await handleStream(res,requestId);}
+    else{const d=await res.json();const reply=d.text||'';if(!mobileRequestIsActive(requestId))return;const rgTs=new Date().toISOString();showTyping(false);addBubble('ai',characterName,reply,rgTs);chatHistory.push({role:'assistant',content:reply,speaker:characterName,timestamp:rgTs});await saveChatToDisk();if(ttsEnabled)speakText(reply);setStatus('Ready');}
+  }catch(e){if(e.name!=='AbortError'){showTyping(false);showToast('⚠️ Error: '+e.message);}}
+  finally{if(mobileActiveRequest?.id===requestId){mobileActiveRequest=null;mobileSending=false;setSendBusy(false);}}
 }
 async function resumeLastResponse() {
   if (!mobileChatFilename) { showToast('⚠️ No chat file to resume from'); return; }

@@ -13,12 +13,17 @@ if defined HWUI_F5_VENV (
         set "HWUI_F5_VENV_READY=1"
     )
 )
-if not defined HWUI_F5_VENV_READY if exist "C:\HWUI-TTS\F5\venv\Scripts\activate.bat" (
-    call "C:\HWUI-TTS\F5\venv\Scripts\activate.bat"
+if not defined HWUI_F5_VENV_READY if exist "I:\F5-TTS\f5_venv\Scripts\activate.bat" (
+    set "HWUI_F5_VENV=I:\F5-TTS\f5_venv"
+    call "I:\F5-TTS\f5_venv\Scripts\activate.bat"
     set "HWUI_F5_VENV_READY=1"
 )
 if not defined HWUI_F5_VENV_READY (
     call venv\Scripts\activate.bat
 )
-python f5_server.py
+if defined HWUI_F5_VENV_READY (
+    "%HWUI_F5_VENV%\Scripts\python.exe" f5_server.py
+) else (
+    python f5_server.py
+)
 pause

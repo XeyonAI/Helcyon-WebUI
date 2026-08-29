@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import socket
 
 import requests
 
@@ -21,6 +22,78 @@ def get_api_url():
     settings = _read_settings()
     port = settings.get("llama_args", {}).get("port", 8080)
     return f"http://127.0.0.1:{port}"
+
+
+WEB_PORT_SCAN_START = 8082
+WEB_PORT_SCAN_END = 8179
+
+
+def _web_port_is_free(port):
+    """True when nothing is already bound on 0.0.0.0:port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 0)
+        try:
+            probe.bind(("0.0.0.0", int(port)))
+            return True
+        except OSError:
+            return False
+
+
+def resolve_web_port(persist=True):
+    """Return this installation's own HWUI web port, assigning one on first run.
+
+    Mirrors how the llama port is handled. Ownership lives in settings.json,
+    which is gitignored and seeded from settings.default.json, so it is already
+    installation-local and untouched by code updates. The seed used to hardcode
+    8081, so every install claimed the same web port and only one UI could run
+    at a time.
+
+    Resolution order:
+      1. An existing numeric port in settings.json wins, always — existing
+         installs are never moved off the port they already run on.
+      2. Otherwise (missing/null/non-numeric, i.e. a fresh install seeded from
+         the default) scan from WEB_PORT_SCAN_START for the first free port and
+         persist it, so app.py, the launchers, URL generation and any
+         self-reference all resolve the same value.
+
+    The scan deliberately starts above 8081 so a fresh install never claims the
+    legacy default out from under an existing one that is merely stopped.
+
+    `persist=False` resolves without writing, for callers that only need to
+    display or probe the port.
+    """
+    settings = _read_settings()
+    existing = settings.get("port")
+    try:
+        if existing is not None and int(existing) > 0:
+            return int(existing)
+    except (TypeError, ValueError):
+        pass
+
+    chosen = next(
+        (p for p in range(WEB_PORT_SCAN_START, WEB_PORT_SCAN_END + 1) if _web_port_is_free(p)),
+        WEB_PORT_SCAN_START,
+    )
+    if not persist:
+        return chosen
+
+    settings["port"] = chosen
+    try:
+        tmp = _SETTINGS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=2)
+        os.replace(tmp, _SETTINGS_FILE)
+        print(
+            "First run: assigned this installation its own HWUI web port "
+            "{} (persisted to settings.json).".format(chosen),
+            flush=True,
+        )
+    except Exception as exc:
+        print(
+            "WARNING: could not persist assigned web port {}: {!r}".format(chosen, exc),
+            flush=True,
+        )
+    return chosen
 
 
 def substitute_placeholders(text, char_label, user_label):

@@ -22,6 +22,8 @@
   --user-msg-text: #f0f0f0;
   --model-msg-bg: #131d27;
   --model-msg-text: #e0e0e0;
+  --user-avatar-border: rgba(100, 200, 255, 0.2);
+  --model-avatar-border: rgba(255, 100, 200, 0.2);
   --message-preview-bg: #0a0d10;
   --msg-border: #27394b;
   --hr-color: #ffffff4d;
@@ -2296,6 +2298,17 @@ small {
   position: relative;
 }
 
+.chat-list-section-label {
+  color: #999;
+  font-size: 11px;
+  padding: 10px 6px 5px;
+  list-style: none;
+}
+
+.chat-list-section-label:first-child {
+  padding-top: 4px;
+}
+
 .chat-item:hover {
   background: var(--sidebar-button-hover, #2D3E4F);
 }
@@ -2949,11 +2962,11 @@ hr.msg-separator {
 }
 
 .user-wrapper .avatar {
-  border-color: rgba(100, 200, 255, 0.2);
+  border-color: var(--user-avatar-border);
 }
 
 .model-wrapper .avatar {
-  border-color: rgba(255, 100, 200, 0.2);
+  border-color: var(--model-avatar-border);
 }
 
 .message {
@@ -3536,7 +3549,7 @@ hr.msg-separator {
 #memory-btn:hover,
 #global-docs-btn:hover {
   background: var(--sidebar-button-hover);
-  border-color: var(--button-border-light);
+  border-color: var(--sidebar-footer-btn-border);
 }
 
 #active-project-indicator {
@@ -3925,6 +3938,7 @@ hr.msg-separator {
 }
 #edit-project-instructions {
   min-height: 160px !important;
+  max-height: none !important;
   resize: vertical !important;
 }
 #edit-project-rp-opener {
@@ -4772,6 +4786,8 @@ button#stop-btn {
   display: block;
   width: 100%;
   max-width: 100%;
+  min-width: 0;
+  align-self: stretch;
   box-sizing: border-box;
   position: relative;
   margin: 8px 0;
@@ -4830,6 +4846,7 @@ button.code-copy-btn:hover,
   border: none !important;
   overflow-x: auto !important;
   width: 100% !important;
+  min-width: 0 !important;
   box-sizing: border-box !important;
   white-space: pre-wrap !important;
   word-break: break-word !important;
@@ -4842,9 +4859,13 @@ button.code-copy-btn:hover,
   min-width: 0 !important;
 }
 .code-block-wrapper pre code {
+  display: block !important;
+  width: 100% !important;
+  max-width: 100% !important;
   white-space: pre-wrap !important;
   word-break: break-word !important;
   overflow-wrap: break-word !important;
+  min-width: 0 !important;
   background: none !important;
   padding: 0 !important;
   font-size: 13px !important;

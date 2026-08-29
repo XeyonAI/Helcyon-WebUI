@@ -2,6 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <!-- Build-scoped storage: must load before any script that touches
+       localStorage, so each build gets its own namespace on the shared
+       127.0.0.1 origin. -->
+  <script src="/build_scope.js"></script>
   <title>Helcyon Config</title>
   <link rel="stylesheet" href="/style.css?v=41" />
   <style>
@@ -41,6 +45,60 @@
     }
     .config-tab-panel.active {
       display: block;
+    }
+    .voice-forge-note {
+      padding: 10px 12px;
+      margin-bottom: 16px;
+      border: 1px solid #554b27;
+      border-radius: 6px;
+      background: #292513;
+      color: #d8ca8a;
+      font-size: 12px;
+    }
+    .voice-forge-sources {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+    .voice-forge-card {
+      padding: 14px;
+      border: 1px solid #333;
+      border-radius: 8px;
+      background: #171717;
+    }
+    .voice-forge-card h4 { margin: 0 0 10px; color: #ddd; }
+    .voice-forge-card label { margin-top: 8px; }
+    .voice-forge-existing-row { display: flex; align-items: center; gap: 8px; }
+    .voice-forge-existing-row select { flex: 1; min-width: 0; }
+    .voice-forge-delete-button { background: #3a1a1a; border-color: #6a2a2a; color: #e88; white-space: nowrap; }
+    .voice-forge-upload-row { display: flex; align-items: center; gap: 8px; }
+    .voice-forge-upload-input { display: none; }
+    .voice-forge-file-button { padding: 7px 11px; background: #1f3a5a; border-color: #315777; color: #c9def0; white-space: nowrap; }
+    .voice-forge-file-button:hover { background: #274967; border-color: #3d6d94; color: #fff; }
+    .voice-forge-file-name { flex: 1; min-width: 0; padding: 7px 9px; border: 1px solid #333; border-radius: 5px; background: #111; color: #777; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .voice-forge-file-name.has-file { color: #ccc; border-color: #465668; }
+    .voice-forge-source-actions { display: flex; gap: 8px; margin-top: 10px; }
+    .voice-forge-source-actions button { padding: 5px 10px; font-size: 12px; }
+    .voice-forge-or { margin: 8px 0 2px; text-align: center; color: #666; font-size: 11px; }
+    .voice-forge-ratio-row { display: flex; align-items: center; gap: 12px; margin: 18px 0 8px; }
+    .voice-forge-ratio-row input[type="range"] { flex: 1; }
+    .voice-forge-ratio-label { min-width: 88px; color: #bbb; font-size: 12px; }
+    .voice-forge-presets { display: flex; justify-content: center; gap: 8px; margin-bottom: 16px; }
+    .voice-forge-presets button { padding: 5px 12px; font-size: 12px; }
+    .voice-forge-tuning-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 16px; }
+    .voice-forge-tuning-control { padding: 12px; border: 1px solid #333; border-radius: 7px; background: #171717; }
+    .voice-forge-tuning-control label { display: flex; justify-content: space-between; margin: 0 0 8px; }
+    .voice-forge-tuning-control input[type="range"] { width: 100%; }
+    .voice-forge-tuning-control small { display: block; margin-top: 6px; color: #777; font-size: 11px; }
+    .voice-forge-result { margin-top: 16px; padding: 14px; border: 1px solid #333; border-radius: 8px; background: #141414; }
+    .voice-forge-result audio { width: 100%; margin: 4px 0 12px; }
+    .voice-forge-save-row { display: flex; gap: 8px; }
+    .voice-forge-save-row input { flex: 1; }
+    #voice-forge-status[data-kind="error"] { color: #e88; }
+    #voice-forge-status[data-kind="success"] { color: #7dce91; }
+    @media (max-width: 800px) {
+      .voice-forge-sources { grid-template-columns: 1fr; }
+      .voice-forge-tuning-grid { grid-template-columns: 1fr; }
     }
     #advanced-settings-overlay {
       position: fixed;
@@ -246,13 +304,15 @@
         </div>
       </div>
       <button id="model-display" onclick="toggleModelPicker()" title="Switch model" style="
-        background: var(--modal-bg, #1a1f2a); border: 1px solid var(--modal-border, #2d394b);
-        border-radius: 20px; padding: 7px 16px 7px 14px; font-size: 14px; color: #ccc;
+        background: rgba(210, 130, 20, 0.18); border: 1px solid rgba(255, 175, 55, 0.55);
+        border-radius: 20px; padding: 7px 16px 7px 14px; font-size: 14px; color: #fff0cf;
         cursor: pointer; display: flex; align-items: center; gap: 7px; white-space: nowrap;
-        max-width: 280px; transition: border-color 0.15s, background 0.15s;
-      " onmouseover="this.style.borderColor='#4a6a8a'; this.style.background='#202733'" onmouseout="this.style.borderColor='var(--modal-border, #2d394b)'; this.style.background='var(--modal-bg, #1a1f2a)'">
-        <span id="model-display-name" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Loading...</span>
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="flex-shrink:0; opacity:0.45;"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        max-width: 190px; transition: border-color 0.15s, background 0.15s;
+        position: relative; overflow: hidden;
+      " onmouseover="this.style.borderColor='#ffb347'; this.style.background='rgba(220,140,20,0.28)'" onmouseout="this.style.borderColor='rgba(255,175,55,0.55)'; this.style.background='rgba(210,130,20,0.18)'">
+        <span id="model-load-progress" aria-hidden="true" style="position:absolute; inset:0 auto 0 0; width:0; background:rgba(235,145,25,0.42); pointer-events:none;"></span>
+        <span id="model-display-name" style="position:relative; z-index:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Loading...</span>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="position:relative; z-index:1; flex-shrink:0; opacity:0.45;"><polyline points="6 9 12 15 18 9"></polyline></svg>
       </button>
     </div>
 
@@ -334,9 +394,29 @@
           <label class="sampling-field-label">Repeat Penalty:</label>
           <input type="number" id="repeat_penalty" step="0.01" min="0.8" max="2" />
         </div>
+
+        <div class="sampling-field-row">
+          <label class="sampling-field-label">DRY Multiplier:</label>
+          <input type="number" id="dry_multiplier" step="0.05" min="0" />
+        </div>
+
+        <div class="sampling-field-row">
+          <label class="sampling-field-label">DRY Base:</label>
+          <input type="number" id="dry_base" step="0.05" min="0" />
+        </div>
+
+        <div class="sampling-field-row">
+          <label class="sampling-field-label">DRY Allowed Length:</label>
+          <input type="number" id="dry_allowed_length" step="1" min="0" />
+        </div>
+
+        <div class="sampling-field-row">
+          <label class="sampling-field-label">DRY Penalty Last N:</label>
+          <input type="number" id="dry_penalty_last_n" step="1" min="-1" />
+        </div>
       </div>
       <div id="local-only-note" style="display:none; font-size:11px; color:#666; margin-bottom:10px; padding:5px 8px; background:rgba(255,255,255,0.03); border-radius:4px; border:1px solid #2a2a2a;">
-        ⚠️ Min P, Top K and Repeat Penalty are not used by OpenAI
+        ⚠️ Min P, Top K, Repeat Penalty and DRY controls are not used by OpenAI
       </div>
 
       <div class="sampling-field-row">
@@ -459,7 +539,7 @@
               <label for="anthropic-thinking-budget" style="font-size:11px; color:#aaa;">Thinking budget (tokens)</label>
               <input id="anthropic-thinking-budget" type="number" min="1024" step="1024" value="2048" style="width:90px; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:12px;">
             </div>
-            <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Streams Claude's reasoning into a collapsible panel above each reply. Only supported models emit it. Budget must be &gt;= 1024 and below your max-tokens; temperature is ignored while thinking is on.</div>
+            <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Shows supported Claude or local llama.cpp reasoning in the same collapsible panel above each reply. The budget and temperature notes apply only to Anthropic: budget must be &gt;= 1024 and below max-tokens; temperature is ignored while Claude thinking is on.</div>
             <div id="anthropic-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
             <button onclick="saveAnthropicSettings()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">&#128190; Save Anthropic Settings</button>
           </section>
@@ -470,14 +550,33 @@
           <section class="advanced-settings-card">
             <h3>TTS Engine</h3>
             <label>Engine:</label>
-            <select id="tts-engine-select" style="width:100%; margin-bottom:8px;">
+            <select id="tts-engine-select" onchange="updateTTSEngineStatus(this.value)" style="width:100%; margin-bottom:8px;">
               <option value="f5">F5-TTS</option>
               <option value="xtts">XTTS v2</option>
               <option value="chatterbox">Chatterbox</option>
-              <option value="qwen-fast">Qwen3-TTS Fast (Streaming)</option>
+              <option value="qwen-fast">Qwen3-TTS Native 0.6B (Streaming)</option>
+              <option value="qwentts-cpp">qwentts.cpp 1.7B Base (Experimental)</option>
+              <option value="omnivoice">OmniVoice — zero-shot cloning</option>
               <option value="kokoro">Kokoro</option>
               <option value="none">None (Disabled)</option>
             </select>
+            <div id="qwentts-cpp-options" style="display:none; margin-bottom:8px;">
+              <label for="qwentts-cpp-quantization">qwentts.cpp quantization:</label>
+              <select id="qwentts-cpp-quantization" style="width:100%;">
+                <option value="Q8_0">Q8_0 (quality baseline)</option>
+                <option value="Q4_K_M">Q4_K_M (lower VRAM)</option>
+                <option value="Q3_K_M">Q3_K_M (lowest VRAM, Q4 tokenizer)</option>
+              </select>
+              <div style="font-size:10px; color:#666; margin-top:4px;">Changing backend or quantization takes effect after restarting the HWUI Launcher.</div>
+            </div>
+            <div id="qwen-fast-options" style="display:none; margin-bottom:8px;">
+              <label for="qwen-fast-talker-quantization">Qwen3-TTS Native talker quantization:</label>
+              <select id="qwen-fast-talker-quantization" style="width:100%;">
+                <option value="Q8_0">Q8_0 (quality baseline)</option>
+                <option value="Q4_K_M">Q4_K_M (lower VRAM)</option>
+              </select>
+              <div style="font-size:10px; color:#666; margin-top:4px;">Select the native 0.6B talker variant; the proven Q8 tokenizer/codec stays unchanged. Restart the HWUI Launcher after switching.</div>
+            </div>
             <div id="tts-engine-status" style="font-size:12px; color:#aaa; margin-bottom:10px;"></div>
             <button id="saveTTSEngineBtn" style="background-color:#1f3a5a; border-color:#245080; color:white; width:100%;">&#128190; Save TTS Engine</button>
           </section>
@@ -492,6 +591,37 @@
             <div id="brave-key-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
             <button onclick="saveBraveKey()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:4px;">&#128190; Save Search Key</button>
             <button onclick="clearBraveKey()" style="background:#3a1a1a; border:1px solid #6a2a2a; color:#e88; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">&#10005; Clear Key (use DDG fallback)</button>
+          </section>
+
+          <section class="advanced-settings-card">
+            <h3>ComfyUI Image Generation</h3>
+            <div style="font-size:10px; color:#777; margin-bottom:8px; line-height:1.4;">Uses an external ComfyUI API workflow. HWUI unloads Helcyon for the job, asks ComfyUI to release VRAM, then restores the same model configuration.</div>
+            <div style="display:grid; grid-template-columns:1fr 82px; gap:6px; margin-bottom:8px;">
+              <div>
+                <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Host</label>
+                <input id="comfyui-host" type="text" placeholder="127.0.0.1" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
+              </div>
+              <div>
+                <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Port</label>
+                <input id="comfyui-port" type="number" min="1" max="65535" placeholder="8188" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
+              </div>
+            </div>
+            <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">API Workflow JSON</label>
+            <div style="display:flex; gap:6px; align-items:center; margin-bottom:8px;">
+              <input id="comfyui-workflow-path" type="text" placeholder="C:\path\to\workflow_api.json" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:11px; min-width:0;">
+              <button onclick="browseFile('comfyui-workflow-path','json')" title="Browse for a ComfyUI API workflow JSON" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0;">&#128193;</button>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:8px;">
+              <div>
+                <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Prompt Node ID</label>
+                <input id="comfyui-prompt-node-id" type="text" placeholder="6" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
+              </div>
+              <div>
+                <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Output Node ID</label>
+                <input id="comfyui-output-node-id" type="text" placeholder="9" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
+              </div>
+            </div>
+            <button onclick="saveComfyUISettings()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer;">&#128190; Save ComfyUI Settings</button>
           </section>
           </div>
           <div class="advanced-settings-column">
@@ -509,15 +639,12 @@
               <button onclick="browseFolder('llama-models-dir')" title="Browse for folder" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">&#128193;</button>
             </div>
 
-            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Vision Projector - mmproj <span style="color:#777;">(optional - leave blank for no vision)</span></label>
-            <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Vision Projector - mmproj <span style="color:#777;">(optional - loaded alongside the current model so image turns work without model switching)</span></label>
+            <div style="display:flex; align-items:center; gap:6px; margin-bottom:12px;">
               <input id="llama-mmproj-path" type="text" placeholder="C:\path\to\model.mmproj.gguf" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
               <button onclick="browseFile('llama-mmproj-path','gguf')" title="Browse for an mmproj .gguf file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">&#128193;</button>
-              <button onclick="attachMmproj()" title="Save the mmproj path (applied on next llama.cpp launch)" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Attach</button>
-              <button onclick="detachMmproj()" title="Clear the mmproj path" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Detach</button>
-            </div>
-            <div style="margin-bottom:12px;">
-              <button onclick="autoDetectMmproj()" title="Scan the Models Folder and its subfolders for a matching mmproj file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; white-space:nowrap;">&#128269; Auto-Detect</button>
+              <button onclick="attachMmproj()" title="Save the mmproj path and apply it to the current local model configuration" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Attach</button>
+              <button onclick="detachMmproj()" title="Clear the mmproj path so the projector is detached from future model launches" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Detach</button>
             </div>
 
             <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">LoRA <span style="color:#777;">(optional - adapter applied on next llama.cpp launch)</span></label>
@@ -541,7 +668,7 @@
               <div style="grid-column:1 / -1;">
                 <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Chat Template</label>
                 <select id="llama-chat-template" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
-                  <option value="chatml">ChatML - Mistral 3, Llama 3.2-3B, most fine-tunes</option>
+                  <option value="chatml">ChatML - Nemo/ChatML fine-tunes, Llama 3.2-3B</option>
                   <option value="llama3">Llama 3 - Meta Llama 3 / 3.1 / 3.3 / 3.2-8B+</option>
                   <option value="llama2">Llama 2 - legacy [INST] format</option>
                   <option value="gemma">Gemma - Google Gemma 2 / 3</option>
@@ -553,9 +680,20 @@
                   <option value="command-r">Command R - Cohere Command R/R+</option>
                   <option value="openchat">OpenChat - OpenChat 3.5 / 3.6</option>
                   <option value="vicuna">Vicuna - Vicuna / WizardLM</option>
-                  <option value="jinja">Jinja - use model's built-in template</option>
+                  <option value="jinja">Native GGUF/Jinja - Ministral 3, Gemma, model metadata</option>
                 </select>
               </div>
+              <div style="grid-column:1 / -1;">
+                <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Ministral Template</label>
+                <select id="llama-ministral-template-mode" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
+                  <option value="native">Native template - current behaviour</option>
+                  <option value="clean">Clean template - text-only [SYSTEM_PROMPT]/[INST]</option>
+                </select>
+              </div>
+              <label style="grid-column:1 / -1; display:flex; align-items:center; gap:8px; font-size:11px; color:#aaa; cursor:pointer;" title="Allow reasoning/thinking for models that support it. This can increase time to first token.">
+                <input type="checkbox" id="llama-reasoning-enabled" style="width:14px; height:14px; margin:0; cursor:pointer;">
+                Reasoning / Thinking
+              </label>
             </div>
             <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:#aaa; margin-bottom:10px; cursor:pointer;">
               <input type="checkbox" id="llama-show-console" style="width:14px; height:14px; cursor:pointer;">
@@ -936,13 +1074,104 @@
 
       </div><!-- end tab-appearance -->
 
+      <!-- ===== TAB: VOICE FORGE ===== -->
+      <div id="tab-voice-forge" class="config-tab-panel" style="display:none;">
+        <h3>🎙 Voice Forge</h3>
+        <div class="voice-forge-note">
+          Experimental Qwen3-TTS feature. Voice Forge blends speaker embeddings only; it does not mix reference audio or codec data.
+        </div>
+
+        <div class="voice-forge-sources">
+          <section class="voice-forge-card">
+            <h4>Voice A</h4>
+            <label for="voice-forge-a-select">Existing HWUI voice</label>
+            <div class="voice-forge-existing-row">
+              <select id="voice-forge-a-select" onchange="selectVoiceForgeExisting('A')"><option value="">Loading voices...</option></select>
+              <button id="voice-forge-a-delete" class="voice-forge-delete-button" type="button" onclick="deleteVoiceForgeExisting('A')" disabled>🗑 Delete</button>
+            </div>
+            <div class="voice-forge-or">OR UPLOAD A REFERENCE</div>
+            <label for="voice-forge-a-upload">WAV or MP3</label>
+            <div class="voice-forge-upload-row">
+              <input id="voice-forge-a-upload" class="voice-forge-upload-input" type="file" accept="audio/wav,audio/mpeg,.wav,.mp3" onchange="selectVoiceForgeUpload('A')">
+              <button class="voice-forge-file-button" type="button" onclick="document.getElementById('voice-forge-a-upload').click()">↑ Choose audio</button>
+              <span id="voice-forge-a-filename" class="voice-forge-file-name" title="No file selected">No file selected</span>
+              <button id="voice-forge-a-clear" type="button" onclick="clearVoiceForgeUpload('A')" disabled>✕ Remove</button>
+            </div>
+            <div class="voice-forge-source-actions">
+              <button id="voice-forge-a-preview" type="button" onclick="toggleVoiceForgePreview('A')" disabled>▶ Preview A</button>
+            </div>
+          </section>
+          <section class="voice-forge-card">
+            <h4>Voice B</h4>
+            <label for="voice-forge-b-select">Existing HWUI voice</label>
+            <div class="voice-forge-existing-row">
+              <select id="voice-forge-b-select" onchange="selectVoiceForgeExisting('B')"><option value="">Loading voices...</option></select>
+              <button id="voice-forge-b-delete" class="voice-forge-delete-button" type="button" onclick="deleteVoiceForgeExisting('B')" disabled>🗑 Delete</button>
+            </div>
+            <div class="voice-forge-or">OR UPLOAD A REFERENCE</div>
+            <label for="voice-forge-b-upload">WAV or MP3</label>
+            <div class="voice-forge-upload-row">
+              <input id="voice-forge-b-upload" class="voice-forge-upload-input" type="file" accept="audio/wav,audio/mpeg,.wav,.mp3" onchange="selectVoiceForgeUpload('B')">
+              <button class="voice-forge-file-button" type="button" onclick="document.getElementById('voice-forge-b-upload').click()">↑ Choose audio</button>
+              <span id="voice-forge-b-filename" class="voice-forge-file-name" title="No file selected">No file selected</span>
+              <button id="voice-forge-b-clear" type="button" onclick="clearVoiceForgeUpload('B')" disabled>✕ Remove</button>
+            </div>
+            <div class="voice-forge-source-actions">
+              <button id="voice-forge-b-preview" type="button" onclick="toggleVoiceForgePreview('B')" disabled>▶ Preview B</button>
+            </div>
+          </section>
+        </div>
+
+        <div class="voice-forge-ratio-row">
+          <span id="voice-forge-a-percent" class="voice-forge-ratio-label">A 50%</span>
+          <input id="voice-forge-ratio" type="range" min="0" max="100" value="50" oninput="updateVoiceForgeRatio()" aria-label="Voice A blend percentage">
+          <span id="voice-forge-b-percent" class="voice-forge-ratio-label" style="text-align:right;">B 50%</span>
+        </div>
+        <div class="voice-forge-presets">
+          <button type="button" onclick="setVoiceForgeRatio(75)">75 / 25</button>
+          <button type="button" onclick="setVoiceForgeRatio(50)">50 / 50</button>
+          <button type="button" onclick="setVoiceForgeRatio(25)">25 / 75</button>
+        </div>
+
+        <div class="voice-forge-tuning-grid">
+          <div class="voice-forge-tuning-control">
+            <label for="voice-forge-expression"><span>Expression</span><strong id="voice-forge-expression-value">0.80</strong></label>
+            <input id="voice-forge-expression" type="range" min="0.6" max="1.1" step="0.05" value="0.8" oninput="updateVoiceForgeTuning()">
+            <small>Lower is steadier; higher is more varied and expressive.</small>
+          </div>
+          <div class="voice-forge-tuning-control">
+            <label for="voice-forge-speed"><span>Speed</span><strong id="voice-forge-speed-value">1.00×</strong></label>
+            <input id="voice-forge-speed" type="range" min="0.75" max="1.25" step="0.05" value="1" oninput="updateVoiceForgeTuning()">
+            <small>Pitch-preserving tempo applied only to the merged WAV.</small>
+          </div>
+        </div>
+
+        <label for="voice-forge-text">Test text</label>
+        <textarea id="voice-forge-text" rows="5" placeholder="Enter the line the blended voice should speak...">Hello. This is a test of a newly blended voice.</textarea>
+        <button id="voice-forge-save-text" type="button" onclick="saveVoiceForgeTestText()" style="margin-top:6px; background-color:#1f3a5a; border-color:#245080; color:white;">💾 Save Test Text</button>
+        <label for="voice-forge-seed" style="margin-top:10px;">Seed <span style="color:#777; font-weight:normal;">(optional)</span></label>
+        <input id="voice-forge-seed" type="number" step="1" placeholder="Random">
+        <button id="voice-forge-generate" type="button" onclick="generateVoiceForgeBlend()" style="margin-top:14px; background-color:#1f5a3a; border-color:#248050; color:white;">Generate Blend</button>
+        <div id="voice-forge-status" role="status" aria-live="polite" style="min-height:18px; margin-top:10px; font-size:12px; color:#aaa;"></div>
+
+        <section id="voice-forge-result" class="voice-forge-result" hidden>
+          <label for="voice-forge-audio">Blended voice preview</label>
+          <audio id="voice-forge-audio" controls preload="metadata"></audio>
+          <label for="voice-forge-save-name">Save as HWUI Voice</label>
+          <div class="voice-forge-save-row">
+            <input id="voice-forge-save-name" type="text" maxlength="80" placeholder="New voice name">
+            <button id="voice-forge-save" type="button" onclick="saveVoiceForgeVoice()" disabled style="background-color:#1f3a5a; border-color:#245080; color:white; white-space:nowrap;">Save as HWUI Voice</button>
+          </div>
+        </section>
+      </div><!-- end tab-voice-forge -->
+
       <!-- ===== TAB: HELCYON-BENCH ===== -->
       <div id="tab-helcyon-bench" class="config-tab-panel">
         <div class="bench-app-shell">
           <aside class="bench-nav-rail">
             <div class="bench-brand">
               <span class="bench-brand-mark">HB</span>
-              <div><strong>Helcyon-Bench</strong><small>Free tools, Pro automation</small></div>
+              <div><strong>Helcyon-Bench</strong><small>Native Pro workspace</small></div>
             </div>
 
             <section class="bench-rail-section">
@@ -1257,6 +1486,342 @@
     const container = document.getElementById('container');
     if (container) container.scrollTop = 0;
     if (tabId === 'helcyon-bench') initialiseHelcyonBench();
+    // Voice Forge is Pro-only in the Free build.
+  }
+
+  let voiceForgeInitialised = false;
+  let voiceForgeSettingsLoaded = false;
+  let voiceForgeResultId = '';
+  let voiceForgeResultTranscript = '';
+  const voiceForgePreviews = {
+    A: { audio: null, objectUrl: '' },
+    B: { audio: null, objectUrl: '' }
+  };
+
+  function voiceForgeSlotElements(slot) {
+    const key = slot.toLowerCase();
+    return {
+      select: document.getElementById(`voice-forge-${key}-select`),
+      upload: document.getElementById(`voice-forge-${key}-upload`),
+      fileName: document.getElementById(`voice-forge-${key}-filename`),
+      clear: document.getElementById(`voice-forge-${key}-clear`),
+      preview: document.getElementById(`voice-forge-${key}-preview`),
+      deleteButton: document.getElementById(`voice-forge-${key}-delete`)
+    };
+  }
+
+  function stopVoiceForgePreview(slot) {
+    const state = voiceForgePreviews[slot];
+    if (state.audio) {
+      state.audio.onended = null;
+      state.audio.onerror = null;
+      state.audio.pause();
+      state.audio.removeAttribute('src');
+      state.audio = null;
+    }
+    if (state.objectUrl) {
+      URL.revokeObjectURL(state.objectUrl);
+      state.objectUrl = '';
+    }
+    const button = voiceForgeSlotElements(slot).preview;
+    if (button) button.textContent = `▶ Preview ${slot}`;
+  }
+
+  function updateVoiceForgeSourceControls(slot) {
+    const elements = voiceForgeSlotElements(slot);
+    const hasUpload = !!elements.upload?.files?.[0];
+    const hasExisting = !!elements.select?.value;
+    if (elements.fileName) {
+      const name = hasUpload ? elements.upload.files[0].name : 'No file selected';
+      elements.fileName.textContent = name;
+      elements.fileName.title = name;
+      elements.fileName.classList.toggle('has-file', hasUpload);
+    }
+    if (elements.clear) elements.clear.disabled = !hasUpload;
+    if (elements.preview) elements.preview.disabled = !hasUpload && !hasExisting;
+    if (elements.deleteButton) elements.deleteButton.disabled = !hasExisting;
+  }
+
+  function selectVoiceForgeExisting(slot) {
+    const elements = voiceForgeSlotElements(slot);
+    if (elements.select.value && elements.upload.files.length) {
+      elements.upload.value = '';
+    }
+    stopVoiceForgePreview(slot);
+    updateVoiceForgeSourceControls(slot);
+  }
+
+  function selectVoiceForgeUpload(slot) {
+    const elements = voiceForgeSlotElements(slot);
+    if (elements.upload.files.length) {
+      elements.select.value = '';
+    }
+    stopVoiceForgePreview(slot);
+    updateVoiceForgeSourceControls(slot);
+  }
+
+  function clearVoiceForgeUpload(slot) {
+    const elements = voiceForgeSlotElements(slot);
+    elements.upload.value = '';
+    stopVoiceForgePreview(slot);
+    updateVoiceForgeSourceControls(slot);
+  }
+
+  async function deleteVoiceForgeExisting(slot) {
+    const elements = voiceForgeSlotElements(slot);
+    const voice = elements.select.value;
+    if (!voice) return;
+    const confirmed = await hwuiConfirm(
+      `Permanently delete the HWUI voice “${voice}”?\n\n` +
+      `This removes both ${voice}.wav and ${voice}.txt from the shared voices directory. ` +
+      `The voice will disappear from every HWUI voice selector, and characters using it will need another voice.\n\n` +
+      `This cannot be undone.`
+    );
+    if (!confirmed) return;
+
+    ['A', 'B'].forEach(otherSlot => {
+      const other = voiceForgeSlotElements(otherSlot);
+      if (other.select.value === voice && other.deleteButton) other.deleteButton.disabled = true;
+    });
+    setVoiceForgeStatus(`Deleting “${voice}”...`);
+    try {
+      const response = await fetch(`/api/tts/voice-forge/voice?voice=${encodeURIComponent(voice)}`, {
+        method: 'DELETE'
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Could not delete the voice');
+      ['A', 'B'].forEach(otherSlot => {
+        const other = voiceForgeSlotElements(otherSlot);
+        if (other.select.value === voice) {
+          stopVoiceForgePreview(otherSlot);
+          other.select.value = '';
+        }
+        updateVoiceForgeSourceControls(otherSlot);
+      });
+      await initialiseVoiceForge(true);
+      setVoiceForgeStatus(`Deleted “${data.voice}” and its matching transcript.`, 'success');
+    } catch (error) {
+      updateVoiceForgeSourceControls('A');
+      updateVoiceForgeSourceControls('B');
+      setVoiceForgeStatus(error.message, 'error');
+    }
+  }
+
+  function normaliseVoiceForgeSource(slot) {
+    const elements = voiceForgeSlotElements(slot);
+    if (elements.upload.files.length && elements.select.value) {
+      elements.select.value = '';
+    }
+    updateVoiceForgeSourceControls(slot);
+  }
+
+  async function toggleVoiceForgePreview(slot) {
+    const state = voiceForgePreviews[slot];
+    if (state.audio && !state.audio.paused) {
+      stopVoiceForgePreview(slot);
+      return;
+    }
+
+    normaliseVoiceForgeSource(slot);
+    const elements = voiceForgeSlotElements(slot);
+    const upload = elements.upload.files[0];
+    const existing = elements.select.value;
+    if (!upload && !existing) return;
+
+    stopVoiceForgePreview(slot === 'A' ? 'B' : 'A');
+    stopVoiceForgePreview(slot);
+    let source;
+    if (upload) {
+      state.objectUrl = URL.createObjectURL(upload);
+      source = state.objectUrl;
+    } else {
+      source = `/api/tts/voice-forge/reference?voice=${encodeURIComponent(existing)}`;
+    }
+
+    const audio = new Audio(source);
+    state.audio = audio;
+    elements.preview.textContent = `■ Stop ${slot}`;
+    audio.onended = () => stopVoiceForgePreview(slot);
+    audio.onerror = () => {
+      if (state.audio !== audio) return;
+      stopVoiceForgePreview(slot);
+      setVoiceForgeStatus(`Could not preview Voice ${slot}.`, 'error');
+    };
+    try {
+      await audio.play();
+    } catch (error) {
+      if (state.audio === audio) {
+        stopVoiceForgePreview(slot);
+        setVoiceForgeStatus(`Could not preview Voice ${slot}.`, 'error');
+      }
+    }
+  }
+
+  function setVoiceForgeStatus(message, kind = '') {
+    const status = document.getElementById('voice-forge-status');
+    if (!status) return;
+    status.textContent = message;
+    status.dataset.kind = kind;
+  }
+
+  function updateVoiceForgeRatio() {
+    const ratio = Number(document.getElementById('voice-forge-ratio')?.value || 50);
+    document.getElementById('voice-forge-a-percent').textContent = `A ${ratio}%`;
+    document.getElementById('voice-forge-b-percent').textContent = `B ${100 - ratio}%`;
+  }
+
+  function setVoiceForgeRatio(value) {
+    document.getElementById('voice-forge-ratio').value = value;
+    updateVoiceForgeRatio();
+  }
+
+  function updateVoiceForgeTuning() {
+    const expression = Number(document.getElementById('voice-forge-expression')?.value || 0.8);
+    const speed = Number(document.getElementById('voice-forge-speed')?.value || 1);
+    document.getElementById('voice-forge-expression-value').textContent = expression.toFixed(2);
+    document.getElementById('voice-forge-speed-value').textContent = `${speed.toFixed(2)}×`;
+  }
+
+  async function loadVoiceForgeTestText() {
+    if (voiceForgeSettingsLoaded) return;
+    try {
+      const response = await fetch('/api/tts/voice-forge/settings');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Could not load saved test text');
+      if (typeof data.test_text === 'string' && data.test_text.trim()) {
+        document.getElementById('voice-forge-text').value = data.test_text;
+      }
+      voiceForgeSettingsLoaded = true;
+    } catch (error) {
+      console.warn('Voice Forge test text could not be loaded:', error);
+    }
+  }
+
+  async function saveVoiceForgeTestText() {
+    const textarea = document.getElementById('voice-forge-text');
+    const text = textarea.value.trim();
+    if (!text) return setVoiceForgeStatus('Test text cannot be empty.', 'error');
+    const button = document.getElementById('voice-forge-save-text');
+    button.disabled = true;
+    try {
+      const response = await fetch('/api/tts/voice-forge/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ test_text: text })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Could not save test text');
+      textarea.value = data.test_text;
+      voiceForgeSettingsLoaded = true;
+      setVoiceForgeStatus('Voice Forge test text saved.', 'success');
+    } catch (error) {
+      setVoiceForgeStatus(error.message, 'error');
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function initialiseVoiceForge(force = false) {
+    await loadVoiceForgeTestText();
+    if (voiceForgeInitialised && !force) return;
+    const selects = [document.getElementById('voice-forge-a-select'), document.getElementById('voice-forge-b-select')];
+    try {
+      const response = await fetch('/api/tts/voice-forge/voices');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Qwen3-TTS Fast is unavailable');
+      selects.forEach(select => {
+        const previous = select.value;
+        select.innerHTML = '<option value="">-- Select existing voice --</option>';
+        (data.voices || []).forEach(voice => {
+          const option = document.createElement('option');
+          option.value = voice.name;
+          option.textContent = voice.label || voice.name;
+          select.appendChild(option);
+        });
+        if ([...select.options].some(option => option.value === previous)) select.value = previous;
+      });
+      updateVoiceForgeSourceControls('A');
+      updateVoiceForgeSourceControls('B');
+      voiceForgeInitialised = true;
+      setVoiceForgeStatus('Qwen3-TTS Fast is ready.');
+    } catch (error) {
+      selects.forEach(select => { select.innerHTML = '<option value="">Qwen unavailable</option>'; });
+      updateVoiceForgeSourceControls('A');
+      updateVoiceForgeSourceControls('B');
+      setVoiceForgeStatus(error.message, 'error');
+    }
+  }
+
+  async function generateVoiceForgeBlend() {
+    normaliseVoiceForgeSource('A');
+    normaliseVoiceForgeSource('B');
+    const sourceA = document.getElementById('voice-forge-a-select').value;
+    const sourceB = document.getElementById('voice-forge-b-select').value;
+    const uploadA = document.getElementById('voice-forge-a-upload').files[0];
+    const uploadB = document.getElementById('voice-forge-b-upload').files[0];
+    const text = document.getElementById('voice-forge-text').value.trim();
+    if (!sourceA && !uploadA) return setVoiceForgeStatus('Choose or upload Voice A.', 'error');
+    if (!sourceB && !uploadB) return setVoiceForgeStatus('Choose or upload Voice B.', 'error');
+    if (!text) return setVoiceForgeStatus('Enter some test text.', 'error');
+
+    const form = new FormData();
+    form.append('text', text);
+    form.append('blend_ratio', document.getElementById('voice-forge-ratio').value);
+    form.append('expression', document.getElementById('voice-forge-expression').value);
+    form.append('speed', document.getElementById('voice-forge-speed').value);
+    if (sourceA) form.append('voice_a', sourceA);
+    if (sourceB) form.append('voice_b', sourceB);
+    if (uploadA) form.append('voice_a_audio', uploadA, uploadA.name);
+    if (uploadB) form.append('voice_b_audio', uploadB, uploadB.name);
+    const seed = document.getElementById('voice-forge-seed').value.trim();
+    if (seed) form.append('seed', seed);
+
+    const generateButton = document.getElementById('voice-forge-generate');
+    const saveButton = document.getElementById('voice-forge-save');
+    generateButton.disabled = true;
+    saveButton.disabled = true;
+    voiceForgeResultId = '';
+    setVoiceForgeStatus('Extracting speaker embeddings and generating the blend...');
+    try {
+      const response = await fetch('/api/tts/voice-forge/blend', { method: 'POST', body: form });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Voice Forge generation failed');
+      voiceForgeResultId = data.result_id;
+      voiceForgeResultTranscript = text;
+      const audio = document.getElementById('voice-forge-audio');
+      audio.src = `${data.audio_url}?v=${Date.now()}`;
+      document.getElementById('voice-forge-result').hidden = false;
+      saveButton.disabled = false;
+      setVoiceForgeStatus(`Blend generated at expression ${Number(data.expression).toFixed(2)} and ${Number(data.speed).toFixed(2)}× speed, with seed ${data.seed}.`, 'success');
+      audio.load();
+    } catch (error) {
+      setVoiceForgeStatus(error.message, 'error');
+    } finally {
+      generateButton.disabled = false;
+    }
+  }
+
+  async function saveVoiceForgeVoice() {
+    const voiceName = document.getElementById('voice-forge-save-name').value.trim();
+    if (!voiceForgeResultId) return setVoiceForgeStatus('Generate a blend before saving it.', 'error');
+    if (!voiceName) return setVoiceForgeStatus('Enter a name for the new HWUI voice.', 'error');
+    const form = new FormData();
+    form.append('result_id', voiceForgeResultId);
+    form.append('voice_name', voiceName);
+    form.append('transcript', voiceForgeResultTranscript);
+    const saveButton = document.getElementById('voice-forge-save');
+    saveButton.disabled = true;
+    setVoiceForgeStatus('Saving the WAV and matching transcript...');
+    try {
+      const response = await fetch('/api/tts/voice-forge/save', { method: 'POST', body: form });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Could not save the HWUI voice');
+      await initialiseVoiceForge(true);
+      setVoiceForgeStatus(`Saved “${data.voice}” to the shared HWUI voices directory.`, 'success');
+    } catch (error) {
+      setVoiceForgeStatus(error.message, 'error');
+      saveButton.disabled = false;
+    }
   }
 
   const BENCH_FORM_STATE_KEY = HelcyonBenchPromptTransfer.FORM_STATE_KEY;
@@ -1707,7 +2272,21 @@
   }
 
   async function saveBenchSession() {
-    showHwuiProModal('Benchmark Session Automation', 'Saving and resuming full benchmark sessions is a Pro feature.');
+    saveBenchFormState();
+    let pack;
+    let items;
+    try {
+      ({ pack, items } = collectBenchSessionItems());
+    } catch (error) {
+      setBenchSessionMessage(error.message, 'error');
+      return;
+    }
+    try {
+      const session = await postBenchSession(pack, items, false);
+      setBenchSessionMessage(`Saved ${session.filename}.`, 'success');
+    } catch (error) {
+      setBenchSessionMessage(error.message, 'error');
+    }
   }
 
   // Runs automatically once a judge run completes, so a set of captured test
@@ -1776,13 +2355,41 @@
   }
 
   async function loadSelectedBenchSession() {
-    showHwuiProModal('Benchmark Session Automation', 'Saving and resuming full benchmark sessions is a Pro feature.');
+    const filename = document.getElementById('bench-session-select')?.value;
+    if (!filename) {
+      setBenchSessionMessage('Select a saved session to load first.', 'error');
+      return;
+    }
+    try {
+      const response = await fetch(`/api/helcyon-bench/saved-sessions/${encodeURIComponent(filename)}`, {
+        cache: 'no-store'
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Could not load the saved session.');
+      applyLoadedBenchSession(data.session);
+      setBenchSessionMessage(`Loaded ${filename}.`, 'success');
+      setBenchStatus(`Loaded full benchmark session ${filename}.`, 'success');
+    } catch (error) {
+      setBenchSessionMessage(error.message, 'error');
+    }
   }
 
   let helcyonBenchSessionDeleteTarget = '';
 
   function requestBenchSessionDelete() {
-    showHwuiProModal('Benchmark Session Automation', 'Saving and resuming full benchmark sessions is a Pro feature.');
+    const filename = document.getElementById('bench-session-select')?.value;
+    if (!filename) {
+      setBenchSessionMessage('Select a saved session to delete first.', 'error');
+      return;
+    }
+    helcyonBenchSessionDeleteTarget = filename;
+    const session = helcyonBenchSavedSessions.find(item => item.filename === filename);
+    const label = document.getElementById('bench-session-delete-confirm-label');
+    if (label) {
+      const description = session ? `${session.model_a || 'Model A'} vs ${session.model_b || 'Model B'}` : filename;
+      label.textContent = `Permanently delete the saved session ${description} (${filename})? This cannot be undone.`;
+    }
+    document.getElementById('bench-session-delete-confirm').hidden = false;
   }
 
   function cancelBenchSessionDelete() {
@@ -1922,7 +2529,74 @@
   }
 
   async function captureBenchResponse(pack, item, slot, area, button, statusElement) {
-    showHwuiProModal('Capture Response', 'Capturing the exact assistant reply into a candidate slot is a Pro feature.');
+    showHwuiProModal('Benchmark Response Capture', 'Benchmark response capture is available in HWUI Pro.');
+    return;
+    const runId = currentBenchRunId(pack.id);
+    const association = HelcyonBenchPromptTransfer.getAssociation(
+      localStorage,
+      runId,
+      pack.id,
+      item.test_id,
+      slot
+    );
+    if (!association) {
+      setBenchStatus(`Model ${slot} has no submitted prompt association to capture.`, 'error');
+      return;
+    }
+    if (area.value.trim() && !window.confirm(
+      `Model ${slot}'s response field already contains text. Replace it with the exact captured HWUI response?`
+    )) {
+      setBenchStatus(`Model ${slot} capture cancelled; the existing response was preserved.`, '');
+      return;
+    }
+    button.disabled = true;
+    try {
+      const response = await fetch(
+        `/api/helcyon-bench/capture-associations/${encodeURIComponent(association.association_id)}/capture`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ candidate_model_slot: slot })
+        }
+      );
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'The exact response could not be captured.');
+      area.value = result.response_text;
+      const state = {
+        ...readBenchFormState(),
+        ...(result.session || {})
+      };
+      state.responses = state.responses || {};
+      state.response_meta = state.response_meta || {};
+      const key = benchResponseKey(pack.id, item.test_id, slot);
+      state.responses[key] = result.response_text;
+      state.response_meta[key] = {
+        origin: 'captured',
+        association_id: association.association_id,
+        assistant_message_id: result.assistant_message_id,
+        captured_at: result.association?.captured_at || new Date().toISOString()
+      };
+      state.selected_view = 'test';
+      state.selected_category = pack.category || item.category || '';
+      state.selected_pack = pack.id;
+      state.active_prompt_test_id = item.test_id;
+      state.current_candidate_slot = slot;
+      state.last_focused_response_key = key;
+      localStorage.setItem(BENCH_FORM_STATE_KEY, JSON.stringify(state));
+      const updated = HelcyonBenchPromptTransfer.updateAssociation(
+        localStorage,
+        association.association_id,
+        { ...(result.association || {}), status: 'captured' }
+      );
+      const nextButton = button.closest('.bench-response-actions')?.querySelector('[data-next-button="true"]');
+      applyBenchCaptureState(button, statusElement, updated || { ...association, status: 'captured' }, nextButton);
+      configureBenchContinuation(nextButton, pack, item, button.closest('.bench-prompt-card'));
+      updateBenchRunProgress();
+      setBenchStatus(`Captured the exact Model ${slot} assistant reply from ${result.assistant_metadata?.source_chat || 'its bound chat'}.`, 'success');
+    } catch (error) {
+      setBenchStatus(error.message, 'error');
+      await refreshBenchCaptureStates();
+    }
   }
 
   function advanceBenchPrompt(currentCard) {
@@ -2589,7 +3263,46 @@
   }
 
   async function startBenchJudgeRun() {
-    showHwuiProModal('Automated Judge Benchmark', 'Running the automated benchmark judge is a Pro feature.');
+    updateBenchJudgeAvailability();
+    const buttons = [...document.querySelectorAll('[data-bench-judge-run]')];
+    if (!buttons.length || buttons[0].disabled) {
+      setBenchStatus(buttons[0]?.title || 'The benchmark is not ready to judge.', 'error');
+      return;
+    }
+    const state = saveBenchFormState();
+    await persistBenchSessionState(state);
+    setBenchStatus('Starting judge preflight...', '');
+    setBenchRawResponse(null);
+    buttons.forEach(button => { button.disabled = true; });
+    renderBenchJudgingOverlay({
+      status: 'queued',
+      message: 'Starting judge preflight...',
+      passes_completed: 0,
+      passes_total: document.querySelectorAll('.bench-response-area').length
+    });
+    try {
+      const response = await fetch('/api/helcyon-bench/judge/runs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          endpoint: selectedBenchJudgeEndpoint(),
+          model: selectedBenchJudgeModel()
+        })
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        setBenchRawResponse(result.raw_response);
+        throw new Error(result.error || 'Judge run could not start.');
+      }
+      helcyonBenchJudgeJob = result.job;
+      renderBenchJudgeJob(result.job);
+      pollBenchJudgeRun();
+    } catch (error) {
+      helcyonBenchJudgeJob = null;
+      renderBenchJudgingOverlay(null);
+      setBenchStatus(error.message, 'error');
+      updateBenchJudgeAvailability();
+    }
   }
 
   function renderBenchJudgingOverlay(job) {
@@ -3078,10 +3791,7 @@
         send.onclick = () => sendBenchPrompt(pack, item, slot);
         const capture = document.createElement('button');
         capture.type = 'button';
-        // Free build: capture always shows the Pro-upgrade modal regardless of
-        // association state, so the button stays clickable rather than waiting
-        // on a "ready to capture" association that Send Prompt never creates.
-        capture.disabled = false;
+        capture.disabled = true;
         capture.textContent = `Capture Model ${slot} response`;
         capture.dataset.captureButton = 'true';
         const association = HelcyonBenchPromptTransfer.getAssociation(
@@ -3161,7 +3871,76 @@
   }
 
   async function sendBenchPrompt(pack, item, slot) {
-    showHwuiProModal('Send Prompt to Active Chat', 'Sending benchmark prompts directly into your active chat is a Pro feature.');
+    showHwuiProModal('Benchmark Prompt Transfer', 'Sending benchmark prompts into chat is available in HWUI Pro.');
+    return;
+    let target = await refreshHelcyonBenchTarget();
+    if (!target.chat) {
+      setBenchStatus('No active chat is selected. Open Chat, choose or create a chat, then return here.', 'error');
+      return;
+    }
+    if (!target.model) {
+      setBenchStatus('No active model is selected or connected.', 'error');
+      return;
+    }
+    try {
+      const draft = JSON.parse(
+        localStorage.getItem(HelcyonBenchPromptTransfer.DRAFT_KEY) || 'null'
+      );
+      if (draft && String(draft.text || '').trim()) {
+        setBenchStatus(
+          'The chat input already contains a draft. It has been preserved; send or clear it before transferring a benchmark prompt.',
+          'error'
+        );
+        return;
+      }
+    } catch (error) {}
+    const runId = currentBenchRunId(pack.id);
+    let prepared;
+    try {
+      prepared = await prepareBenchCandidateChat(target, pack, runId, slot);
+      target = prepared.target;
+    } catch (error) {
+      setBenchStatus(error.message, 'error');
+      return;
+    }
+    const candidateName = document.getElementById(`bench-model-${slot.toLowerCase()}`)?.value.trim();
+    const queued = HelcyonBenchPromptTransfer.queue(localStorage, {
+      benchmark_id: pack.id,
+      benchmark_name: pack.name,
+      test_id: item.test_id,
+      test_title: item.title,
+      prompt_number: pack.prompts.findIndex(prompt => prompt.test_id === item.test_id) + 1,
+      category: item.category || pack.category,
+      prompt_text: item.prompt,
+      original_prompt: item.prompt,
+      run_id: runId,
+      candidate_model_slot: slot,
+      candidate_model_name: candidateName || `Model ${slot}`
+    }, target);
+    if (!queued.ok) {
+      const messages = {
+        'no-chat': 'No active chat is selected. Open Chat, choose or create a chat, then return here.',
+        'no-model': 'No active model is selected or connected.',
+        'draft-exists': 'The chat input already contains a draft. It has been preserved; send or clear it before transferring a benchmark prompt.'
+      };
+      setBenchStatus(messages[queued.reason] || 'The prompt could not be transferred.', 'error');
+      return;
+    }
+    const state = saveBenchFormState();
+    state.selected_view = 'test';
+    state.selected_category = pack.category || item.category || '';
+    state.selected_pack = pack.id;
+    state.active_prompt_test_id = item.test_id;
+    state.current_candidate_slot = slot;
+    localStorage.setItem(BENCH_FORM_STATE_KEY, JSON.stringify(state));
+    await persistBenchSessionState(state);
+    setBenchStatus(
+      prepared.created
+        ? `Fresh chat prepared for candidate ${slot}. Opening it with the benchmark prompt...`
+        : `Prompt queued for candidate ${slot}. Opening its bound HWUI chat...`,
+      'success'
+    );
+    window.location.href = '/';
   }
 
   function renderBenchHistory() {
@@ -3828,11 +4607,12 @@
 
   document.addEventListener('DOMContentLoaded', () => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('tab') !== 'helcyon-bench') return;
+    const requestedTab = params.get('tab');
+    if (!['helcyon-bench', 'voice-forge'].includes(requestedTab)) return;
     const button = [...document.querySelectorAll('.config-tab')].find(
-      item => (item.getAttribute('onclick') || '').includes("'helcyon-bench'")
+      item => (item.getAttribute('onclick') || '').includes(`'${requestedTab}'`)
     );
-    switchConfigTab('helcyon-bench', button);
+    switchConfigTab(requestedTab, button);
   });
 
   function openAdvancedSettings() {
@@ -4989,6 +5769,10 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       document.getElementById('min_p').value          = settings.min_p             ?? 0.05;
       document.getElementById('top_k').value          = settings.top_k             ?? 40;
       document.getElementById('repeat_penalty').value    = settings.repeat_penalty    ?? 1.1;
+      document.getElementById('dry_multiplier').value    = settings.dry_multiplier    ?? 0.8;
+      document.getElementById('dry_base').value          = settings.dry_base          ?? 1.75;
+      document.getElementById('dry_allowed_length').value = settings.dry_allowed_length ?? 2;
+      document.getElementById('dry_penalty_last_n').value = settings.dry_penalty_last_n ?? -1;
       document.getElementById('frequency_penalty').value = settings.frequency_penalty ?? 0.0;
       document.getElementById('presence_penalty').value  = settings.presence_penalty  ?? 0.0;
       document.getElementById('auto-memory-enabled').checked = settings.auto_memory?.enabled === true;
@@ -5499,6 +6283,10 @@ async function loadTTSEngine() {
     if (select && data.engine) {
       select.value = data.engine;
     }
+    const quantization = document.getElementById('qwentts-cpp-quantization');
+    if (quantization) quantization.value = data.qwentts_cpp_quantization || 'Q8_0';
+    const qwenFastQuantization = document.getElementById('qwen-fast-talker-quantization');
+    if (qwenFastQuantization) qwenFastQuantization.value = data.qwen_fast_talker_quantization || 'Q8_0';
     updateTTSEngineStatus(data.engine);
   } catch (err) {
     console.error('Failed to load TTS engine:', err);
@@ -5512,11 +6300,17 @@ function updateTTSEngineStatus(engine) {
     f5: '🟢 F5-TTS — fast, good quality',
     xtts: '🟢 XTTS v2 — voice cloning',
     chatterbox: '🟢 Chatterbox — voice cloning, expressive',
-    'qwen-fast': '🟢 Qwen3-TTS Fast — cloned voice, genuine low-latency streaming (restart launcher after switching)',
+    'qwen-fast': `🟢 Qwen3-TTS Native 0.6B ${document.getElementById('qwen-fast-talker-quantization')?.value || 'Q8_0'} — quantized cloned voice with low-VRAM streaming (restart launcher after switching)`,
     kokoro: '🟢 Kokoro — lightweight, natural',
     none: '🔴 TTS disabled'
   };
+  labels['qwentts-cpp'] = 'Experimental qwentts.cpp — 1.7B Base GGUF voice cloning (restart launcher after switching)';
+  labels['omnivoice'] = '🟢 OmniVoice — zero-shot voice cloning (restart launcher after switching)';
   statusEl.textContent = labels[engine] || engine;
+    const options = document.getElementById('qwentts-cpp-options');
+    if (options) options.style.display = engine === 'qwentts-cpp' ? 'block' : 'none';
+    const qwenFastOptions = document.getElementById('qwen-fast-options');
+    if (qwenFastOptions) qwenFastOptions.style.display = engine === 'qwen-fast' ? 'block' : 'none';
 }
 
 async function saveTTSEngine() {
@@ -5526,7 +6320,11 @@ async function saveTTSEngine() {
     const res = await fetch('/api/tts/engine', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ engine })
+      body: JSON.stringify({
+        engine,
+        qwentts_cpp_quantization: document.getElementById('qwentts-cpp-quantization')?.value || 'Q8_0',
+        qwen_fast_talker_quantization: document.getElementById('qwen-fast-talker-quantization')?.value || 'Q8_0'
+      })
     });
     const data = await res.json();
     if (data.engine) {
@@ -5677,11 +6475,13 @@ const THEME_VARS = [
     { key: '--sidebar-footer-btn-border', label: 'Footer Btn Border' },
   ]},
   { group: 'Messages', vars: [
-    { key: '--user-msg-bg',    label: 'Your Msg BG' },
-    { key: '--user-msg-text',  label: 'Your Msg Text' },
-    { key: '--model-msg-bg',   label: 'AI Reply BG' },
-    { key: '--model-msg-text', label: 'AI Reply Text' },
-    { key: '--message-preview-bg', label: 'Preview Panel BG' },
+      { key: '--user-msg-bg',    label: 'Your Msg BG' },
+      { key: '--user-msg-text',  label: 'Your Msg Text' },
+      { key: '--model-msg-bg',   label: 'AI Reply BG' },
+      { key: '--model-msg-text', label: 'AI Reply Text' },
+      { key: '--user-avatar-border',  label: 'User Avatar Border' },
+      { key: '--model-avatar-border', label: 'AI Avatar Border' },
+      { key: '--message-preview-bg', label: 'Preview Panel BG' },
     { key: '--msg-timestamp-text', label: 'Message Timestamp' },
     { key: '--msg-border',     label: 'Message Border' },
     { key: '--hr-color',        label: 'Section Divider' },
@@ -5871,19 +6671,101 @@ function refreshPresetDropdown() {
 }
 
 async function loadPreset() {
-  showHwuiProModal('Theme Editor', 'Custom colour presets are a Pro feature.');
+  const name = document.getElementById('theme-preset-select').value;
+  if (!name || !themePresets[name]) { hwuiToast('Pick a preset first.', 'info'); return; }
+  const colours = themePresets[name];
+  const currentFont = getComputedStyle(document.documentElement).getPropertyValue('--app-font-family').trim();
+  const updates = { '--app-font-family': currentFont, ...colours };
+  renderThemeEditor({ ...originalTheme, ...updates });
+  // Live preview
+  Object.entries(updates).forEach(([k, v]) => {
+    document.documentElement.style.setProperty(k, v);
+  });
+  // Persist selection and write to style.css
+  localStorage.setItem('hwui_last_preset', name);
+  try {
+    const res = await fetch('/save_theme', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates)
+    });
+    const data = await res.json();
+    if (data.status !== 'ok') {
+      hwuiToast('Preset loaded but failed to save to CSS: ' + (data.error || 'Unknown error'), 'error');
+    }
+  } catch(e) {
+    hwuiToast('Preset loaded but failed to save to CSS: ' + e, 'error');
+  }
 }
 
 async function updatePreset() {
-  showHwuiProModal('Theme Editor', 'Custom colour presets are a Pro feature.');
+  showHwuiProModal('Theme Editor', 'Theme editing is available in HWUI Pro.');
+  return;
+  const name = document.getElementById('theme-preset-select').value;
+  if (!name) { hwuiToast('Pick a preset first.', 'info'); return; }
+  const colours = collectThemeUpdates();
+  try {
+    const res = await fetch('/theme_presets/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, colours })
+    });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      themePresets[name] = colours;
+      // Also write to style.css
+      await fetch('/save_theme', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(colours)
+      });
+      const btn = document.querySelector('button[onclick="updatePreset()"]');
+      if (btn) { btn.textContent = '✓ Saved'; setTimeout(() => btn.textContent = 'Update', 1500); }
+    } else {
+      hwuiToast('Failed: ' + (data.error || 'Unknown error'), 'error');
+    }
+  } catch(e) { hwuiToast('Failed: ' + e, 'error'); }
 }
 
 async function saveAsPreset() {
-  showHwuiProModal('Theme Editor', 'Custom colour presets are a Pro feature.');
+  showHwuiProModal('Theme Editor', 'Theme editing is available in HWUI Pro.');
+  return;
+  const name = await hwuiPrompt('Preset name:');
+  if (!name || !name.trim()) return;
+  const colours = collectThemeUpdates();
+  try {
+    const res = await fetch('/theme_presets/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim(), colours })
+    });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      themePresets[name.trim()] = colours;
+      refreshPresetDropdown();
+      document.getElementById('theme-preset-select').value = name.trim();
+      localStorage.setItem('hwui_last_preset', name.trim());
+    } else {
+      hwuiToast('Failed: ' + (data.error || 'Unknown error'), 'error');
+    }
+  } catch(e) { hwuiToast('Failed: ' + e, 'error'); }
 }
 
 async function deletePreset() {
-  showHwuiProModal('Theme Editor', 'Custom colour presets are a Pro feature.');
+  showHwuiProModal('Theme Editor', 'Theme editing is available in HWUI Pro.');
+  return;
+  const name = document.getElementById('theme-preset-select').value;
+  if (!name) { hwuiToast('Pick a preset first.', 'info'); return; }
+  if (!await hwuiConfirm(`Delete preset "${name}"?`)) return;
+  try {
+    await fetch('/theme_presets/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    delete themePresets[name];
+    refreshPresetDropdown();
+  } catch(e) { hwuiToast('Failed: ' + e, 'error'); }
 }
 
 function renderThemeEditor(data) {
@@ -5893,6 +6775,16 @@ function renderThemeEditor(data) {
 function toHex(value) {
   // Already a hex
   if (/^#[0-9a-fA-F]{3,8}$/.test(value)) return value.slice(0,7);
+  // Convert the RGB/RGBA defaults used by avatar borders into the hex format
+  // understood by the custom picker, retaining alpha when it is present.
+  const rgba = String(value || '').match(/^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)$/i);
+  if (rgba) {
+    const channel = component => Math.max(0, Math.min(255, Math.round(Number(component))));
+    const alpha = rgba[4] === undefined ? 1 : Math.max(0, Math.min(1, Number(rgba[4])));
+    const hexChannel = component => channel(component).toString(16).padStart(2, '0');
+    const hex = `#${hexChannel(rgba[1])}${hexChannel(rgba[2])}${hexChannel(rgba[3])}`;
+    return alpha < 1 ? `${hex}${Math.round(alpha * 255).toString(16).padStart(2, '0')}` : hex;
+  }
   // Named color fallback
   const ctx = document.createElement('canvas').getContext('2d');
   ctx.fillStyle = value;
@@ -6022,7 +6914,28 @@ function hwuiPrompt(message, defaultValue = '', opts = {}) {
 }
 
 async function saveTheme() {
-  showHwuiProModal('Theme Editor', 'Saving custom theme colours is a Pro feature.');
+  showHwuiProModal('Theme Editor', 'Theme editing is available in HWUI Pro.');
+  return;
+  // Read from live CSS vars — authoritative source, never stale
+  const updates = collectThemeUpdates();
+  try {
+    const res = await fetch('/save_theme', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates)
+    });
+    const result = await res.json();
+    if (result.status === 'ok') {
+      const link = document.getElementById('active-theme-link');
+      const themeName = (document.getElementById('theme-file-select') || {}).value || _activeThemeName || 'midnight';
+      if (link) link.href = '/theme-files/' + themeName + '.css?v=' + Date.now();
+      hwuiToast('✅ Theme saved! Refresh the chat page to see changes.', 'success');
+    } else {
+      hwuiToast('❌ Save failed: ' + (result.error || 'Unknown error'), 'error');
+    }
+  } catch(e) {
+    hwuiToast('❌ Save failed: ' + e, 'error');
+  }
 }
 
 async function resetTheme() {
@@ -6049,6 +6962,11 @@ async function loadLlamaConfig() {
     document.getElementById('llama-exe').value = data.exe || '';
     document.getElementById('llama-models-dir').value = data.models_dir || '';
     document.getElementById('llama-mmproj-path').value = data.mmproj_path || '';
+    document.getElementById('comfyui-host').value = data.comfyui_host || '127.0.0.1';
+    document.getElementById('comfyui-port').value = data.comfyui_port || 8188;
+    document.getElementById('comfyui-workflow-path').value = data.comfyui_workflow_path || '';
+    document.getElementById('comfyui-prompt-node-id').value = data.comfyui_prompt_node_id || '';
+    document.getElementById('comfyui-output-node-id').value = data.comfyui_output_node_id || '';
     document.getElementById('llama-show-console').checked = data.show_console || false;
     // LoRA path — loaded via its own GET endpoint (independent of llama config save).
     try {
@@ -6059,6 +6977,8 @@ async function loadLlamaConfig() {
     document.getElementById('llama-gpu-layers').value = a.n_gpu_layers ?? 44;
     document.getElementById('llama-ctx-size').value = a.ctx_size ?? 16384;
     document.getElementById('llama-chat-template').value = a.chat_template ?? 'chatml';
+    document.getElementById('llama-ministral-template-mode').value = a.ministral_template_mode ?? 'native';
+    document.getElementById('llama-reasoning-enabled').checked = a.reasoning === 'on';
     populateLlamaPresetDropdown();
   } catch(e) {
     console.error('Failed to load llama config:', e);
@@ -6071,6 +6991,11 @@ async function saveLlamaConfig() {
     exe: document.getElementById('llama-exe').value.trim(),
     models_dir: document.getElementById('llama-models-dir').value.trim(),
     mmproj_path: document.getElementById('llama-mmproj-path').value.trim(),
+    comfyui_host: document.getElementById('comfyui-host').value.trim() || '127.0.0.1',
+    comfyui_port: parseInt(document.getElementById('comfyui-port').value) || 8188,
+    comfyui_workflow_path: document.getElementById('comfyui-workflow-path').value.trim(),
+    comfyui_prompt_node_id: document.getElementById('comfyui-prompt-node-id').value.trim(),
+    comfyui_output_node_id: document.getElementById('comfyui-output-node-id').value.trim(),
     show_console: document.getElementById('llama-show-console').checked,
     args: {
       port: 5000,
@@ -6080,8 +7005,41 @@ async function saveLlamaConfig() {
       cache_type_v: 'q8_0',
       timeout: 0,
       chat_template: document.getElementById('llama-chat-template').value.trim() || 'chatml',
+      ministral_template_mode: document.getElementById('llama-ministral-template-mode').value || 'native',
       parallel: 1,
+      reasoning: document.getElementById('llama-reasoning-enabled').checked ? 'on' : 'off',
     }
+  };
+  try {
+    const res = await fetch('/save_llama_config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    status.style.color = data.status === 'ok' ? '#6dbf8a' : '#e88';
+    status.textContent = data.status === 'ok' ? '✅ Saved' : '❌ ' + data.error;
+    setTimeout(() => status.textContent = '', 3000);
+  } catch(e) {
+    status.style.color = '#e88';
+    status.textContent = '❌ Failed: ' + e;
+  }
+}
+
+// Separate from saveLlamaConfig(): this button used to call saveLlamaConfig()
+// directly, which resubmits the ENTIRE llama form (exe/models_dir/args, incl.
+// n_gpu_layers) sourced from whatever the page loaded at open time. On a page
+// left open across an out-of-band llama_args change, that silently reverted
+// settings the user never touched on this button. Send only the ComfyUI
+// fields — the backend now preserves any field/key missing from the payload.
+async function saveComfyUISettings() {
+  const status = document.getElementById('llama-config-status');
+  const payload = {
+    comfyui_host: document.getElementById('comfyui-host').value.trim() || '127.0.0.1',
+    comfyui_port: parseInt(document.getElementById('comfyui-port').value) || 8188,
+    comfyui_workflow_path: document.getElementById('comfyui-workflow-path').value.trim(),
+    comfyui_prompt_node_id: document.getElementById('comfyui-prompt-node-id').value.trim(),
+    comfyui_output_node_id: document.getElementById('comfyui-output-node-id').value.trim(),
   };
   try {
     const res = await fetch('/save_llama_config', {
@@ -6124,7 +7082,7 @@ async function browseFile(targetId, filter, initialdir) {
 // path, then reload the current model via /load_model — the same route the
 // picker uses — which restarts llama.cpp and picks up the new --lora arg, making
 // the change live without a manual restart.
-async function _reloadModelForLora(savedMsg, activeMsg) {
+async function _reloadModelForRuntimeChange(savedMsg, activeMsg) {
   // Subfolder-relative current-model filename as set by the picker (line ~4611).
   // /get_model only returns a display basename, so this is the reliable source
   // for a /load_model payload. No model known → fall back to manual-restart.
@@ -6132,22 +7090,23 @@ async function _reloadModelForLora(savedMsg, activeMsg) {
   if (!currentModel) { hwuiToast(savedMsg + ' — restart llama.cpp to apply', 'info'); return; }
   hwuiToast('💾 ' + savedMsg + ' — reloading model...', 'info');
   try {
-    const res = await fetch('/load_model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: currentModel }) });
+    const res = await fetch('/load_model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: currentModel, force_reload: true, reason: 'runtime_config_change' }) });
     const data = await res.json();
     if (data.status === 'ok') {
       hwuiToast(activeMsg, 'success');
       if (typeof loadModelDisplay === 'function') loadModelDisplay();
     } else {
-      hwuiToast('⚠️ LoRA saved but reload failed — restart manually', 'error');
+      hwuiToast('⚠️ ' + savedMsg + ' but reload failed: ' + (data.error || 'unknown error'), 'error');
     }
-  } catch(e) { hwuiToast('⚠️ LoRA saved but reload failed — restart manually', 'error'); }
+  } catch(e) { hwuiToast('⚠️ ' + savedMsg + ' but reload failed: ' + e, 'error'); }
 }
+
 async function attachLora() {
   const path = document.getElementById('llama-lora-path').value.trim();
   try {
     const res = await fetch('/save_lora_path', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lora_path: path }) });
     const data = await res.json();
-    if (data.status === 'ok') await _reloadModelForLora('LoRA saved', '✅ LoRA active');
+    if (data.status === 'ok') await _reloadModelForRuntimeChange('LoRA saved', '✅ LoRA active');
     else hwuiToast('❌ ' + (data.error || 'Save failed'), 'error');
   } catch(e) { hwuiToast('Attach failed: ' + e, 'error'); }
 }
@@ -6156,62 +7115,9 @@ async function detachLora() {
   try {
     const res = await fetch('/save_lora_path', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lora_path: '' }) });
     const data = await res.json();
-    if (data.status === 'ok') await _reloadModelForLora('LoRA detached', '✅ LoRA detached');
+    if (data.status === 'ok') await _reloadModelForRuntimeChange('LoRA detached', '✅ LoRA detached');
     else hwuiToast('❌ ' + (data.error || 'Save failed'), 'error');
   } catch(e) { hwuiToast('Detach failed: ' + e, 'error'); }
-}
-
-// ==================================================
-// mmproj ATTACH / DETACH
-// ==================================================
-async function attachMmproj() {
-  const path = document.getElementById('llama-mmproj-path').value.trim();
-  try {
-    const res = await fetch('/save_mmproj_path', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mmproj_path: path }) });
-    const data = await res.json();
-    if (data.status === 'ok') await _reloadModelForLora('mmproj saved', '✅ mmproj active');
-    else hwuiToast('❌ ' + (data.error || 'Save failed'), 'error');
-  } catch(e) { hwuiToast('Attach failed: ' + e, 'error'); }
-}
-async function detachMmproj() {
-  document.getElementById('llama-mmproj-path').value = '';
-  try {
-    const res = await fetch('/save_mmproj_path', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mmproj_path: '' }) });
-    const data = await res.json();
-    if (data.status === 'ok') await _reloadModelForLora('mmproj detached', '✅ mmproj detached');
-    else hwuiToast('❌ ' + (data.error || 'Save failed'), 'error');
-  } catch(e) { hwuiToast('Detach failed: ' + e, 'error'); }
-}
-
-// Scan the configured Models Folder for an mmproj .gguf file via the existing
-// /auto_detect_mmproj endpoint. The endpoint scans the folder containing the
-// path it is given, so a probe path inside the Models Folder is passed.
-async function autoDetectMmproj() {
-  const status = document.getElementById('llama-config-status');
-  const setStatus = (msg, color) => { if (status) { status.style.color = color; status.textContent = msg; } };
-  const modelsDir = document.getElementById('llama-models-dir').value.trim();
-  if (!modelsDir) {
-    setStatus('Set the Models Folder first, then Auto-Detect.', '#c66');
-    return;
-  }
-  setStatus('🔍 Scanning Models Folder and subfolders for an mmproj file…', '#8ab4d4');
-  try {
-    const probe = modelsDir.replace(/[\\/]+$/, '') + '\\probe.gguf';
-    const res = await fetch('/auto_detect_mmproj', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model_path: probe })
-    });
-    const data = await res.json();
-    if (data.mmproj_path) {
-      document.getElementById('llama-mmproj-path').value = data.mmproj_path;
-      setStatus('🖼️ Found mmproj — click Save Llama Config to apply.', '#6a9');
-    } else {
-      setStatus('No mmproj (*mmproj*.gguf) file found in the Models Folder or its subfolders.', '#c66');
-    }
-  } catch(e) {
-    setStatus('Auto-detect failed: ' + e, '#c66');
-  }
 }
 
 async function browseFolder(targetId) {
@@ -6283,6 +7189,10 @@ function buildSamplingPresetFromFields() {
     min_p:             readNum('min_p', 0.05),
     top_k:             readNum('top_k', 40, true),
     repeat_penalty:    readNum('repeat_penalty', 1.1),
+    dry_multiplier:    readNum('dry_multiplier', 0.8),
+    dry_base:          readNum('dry_base', 1.75),
+    dry_allowed_length: readNum('dry_allowed_length', 2, true),
+    dry_penalty_last_n: readNum('dry_penalty_last_n', -1, true),
     frequency_penalty: readNum('frequency_penalty', 0.0),
     presence_penalty:  readNum('presence_penalty', 0.0),
   };
@@ -6444,6 +7354,10 @@ async function loadSamplingPreset() {
   document.getElementById('min_p').value              = p.min_p             ?? 0.05;
   document.getElementById('top_k').value              = p.top_k             ?? 40;
   document.getElementById('repeat_penalty').value     = p.repeat_penalty    ?? 1.1;
+  document.getElementById('dry_multiplier').value     = p.dry_multiplier    ?? 0.8;
+  document.getElementById('dry_base').value           = p.dry_base          ?? 1.75;
+  document.getElementById('dry_allowed_length').value = p.dry_allowed_length ?? 2;
+  document.getElementById('dry_penalty_last_n').value = p.dry_penalty_last_n ?? -1;
   document.getElementById('frequency_penalty').value  = p.frequency_penalty ?? 0.0;
   document.getElementById('presence_penalty').value   = p.presence_penalty  ?? 0.0;
 
@@ -6528,7 +7442,9 @@ function saveLlamaPreset() {
     show_console: document.getElementById('llama-show-console').checked,
     gpu_layers: document.getElementById('llama-gpu-layers').value,
     ctx_size: document.getElementById('llama-ctx-size').value,
-    chat_template: document.getElementById('llama-chat-template').value.trim()
+    chat_template: document.getElementById('llama-chat-template').value.trim(),
+    ministral_template_mode: document.getElementById('llama-ministral-template-mode').value,
+    reasoning: document.getElementById('llama-reasoning-enabled').checked
   };
   const presets = getLlamaPresets();
   presets[name] = preset;
@@ -6555,6 +7471,8 @@ function loadLlamaPreset() {
   document.getElementById('llama-gpu-layers').value = p.gpu_layers || 44;
   document.getElementById('llama-ctx-size').value = p.ctx_size || 16384;
   document.getElementById('llama-chat-template').value = p.chat_template || 'chatml';
+  document.getElementById('llama-ministral-template-mode').value = p.ministral_template_mode || 'native';
+  document.getElementById('llama-reasoning-enabled').checked = p.reasoning === true;
   status.style.color = '#6dbf8a';
   status.textContent = `✅ Loaded "${name}" — hit Save Llama Config to apply`;
   setTimeout(() => status.textContent = '', 3000);
@@ -6831,7 +7749,14 @@ async function saveGlobalPostHistory() {
   window.openColorPicker = function(varName, currentHex, anchorEl) {
     cpVarName = varName;
     const parsed = hexToHsv(currentHex || '#000000');
-    cpH=parsed.h; cpS=parsed.s; cpV=parsed.v; cpA=parsed.a;
+    cpH=parsed.h; cpS=parsed.s; cpV=parsed.v;
+    // Avatar borders are exposed as direct colour controls.  Their historical
+    // defaults were translucent, which made white/black selections render as
+    // grey on the dark chat background.  Keep opacity editing for every other
+    // theme variable, but make these two controls start at full opacity.
+    cpA = (varName === '--user-avatar-border' || varName === '--model-avatar-border')
+      ? 1
+      : parsed.a;
 
     popup.style.display = 'block';
 
@@ -6990,11 +7915,40 @@ async function switchThemeFile(name) {
 }
 
 async function newThemeFile() {
-  showHwuiProModal('Theme Editor', 'Creating custom themes is a Pro feature.');
+  showHwuiProModal('Theme Editor', 'Custom themes are available in HWUI Pro.');
+  return;
+  const name = await hwuiPrompt('New theme name (e.g. "dark-blue"):');
+  if (!name || !name.trim()) return;
+  try {
+    const res = await fetch('/themes/create', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ name: name.trim() })
+    });
+    const data = await res.json();
+    if (data.error) { hwuiToast('Error: ' + data.error, 'error'); return; }
+    await loadThemeFileList();
+    await switchThemeFile(name.trim());
+  } catch(e) { hwuiToast('Failed to create theme: ' + e, 'error'); }
 }
 
 async function deleteThemeFile() {
-  showHwuiProModal('Theme Editor', 'Deleting themes is a Pro feature.');
+  showHwuiProModal('Theme Editor', 'Custom themes are available in HWUI Pro.');
+  return;
+  const name = _activeThemeName;
+  if (!await hwuiConfirm(`Delete theme "${name}"? This cannot be undone.`)) return;
+  try {
+    const res = await fetch('/themes/delete', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ name })
+    });
+    const data = await res.json();
+    if (data.error) { hwuiToast('Error: ' + data.error, 'error'); return; }
+    await loadThemeFileList();
+    // Switch to whatever is now active
+    const listRes = await fetch('/themes/list');
+    const listData = await listRes.json();
+    await switchThemeFile(listData.active);
+  } catch(e) { hwuiToast('Failed to delete theme: ' + e, 'error'); }
 }
 
 function openThemeModal() {
@@ -7142,6 +8096,8 @@ const THEME_SECTIONS = [
       { key: '--user-msg-text',  label: 'Your Message Text' },
       { key: '--model-msg-bg',   label: 'AI Reply BG' },
       { key: '--model-msg-text', label: 'AI Reply Text' },
+      { key: '--user-avatar-border',  label: 'User Avatar Border' },
+      { key: '--model-avatar-border', label: 'AI Avatar Border' },
       { key: '--message-preview-bg', label: 'Preview Panel BG' },
       { key: '--msg-timestamp-text', label: 'Timestamp Text' },
       { key: '--msg-border',     label: 'Message Border' },
@@ -7151,14 +8107,14 @@ const THEME_SECTIONS = [
       el.innerHTML = `
         <div style="display:flex; flex-direction:column; gap:8px; background:var(--message-preview-bg); border-radius:6px; padding:12px; border:1px solid #222;">
           <div style="display:flex; gap:8px; align-items:flex-start;">
-            <div style="width:36px; height:44px; border-radius:5px; background:#223; flex-shrink:0; border:1px solid rgba(100,200,255,0.2); display:flex; align-items:center; justify-content:center; font-size:9px; color:rgba(100,200,255,0.5); text-align:center; line-height:1.2;">user<br>img</div>
+            <div style="width:36px; height:44px; border-radius:5px; background:#223; flex-shrink:0; border:1px solid var(--user-avatar-border); display:flex; align-items:center; justify-content:center; font-size:9px; color:rgba(100,200,255,0.5); text-align:center; line-height:1.2;">user<br>img</div>
             <div style="background:var(--user-msg-bg); color:var(--user-msg-text); border:1px solid var(--msg-border); border-radius:6px; padding:10px 14px; font-size:13px; flex:1;">
               <strong>User:</strong><br>Hey, what's the capital of France?
               <div style="font-size:10px; color:var(--msg-timestamp-text); margin-top:4px;">Today, 12:20</div>
             </div>
           </div>
           <div style="display:flex; gap:8px; align-items:flex-start;">
-            <div style="width:36px; height:44px; border-radius:5px; background:#322; flex-shrink:0; border:1px solid rgba(255,100,200,0.2); display:flex; align-items:center; justify-content:center; font-size:9px; color:rgba(255,100,200,0.5); text-align:center; line-height:1.2;">char<br>img</div>
+            <div style="width:36px; height:44px; border-radius:5px; background:#322; flex-shrink:0; border:1px solid var(--model-avatar-border); display:flex; align-items:center; justify-content:center; font-size:9px; color:rgba(255,100,200,0.5); text-align:center; line-height:1.2;">char<br>img</div>
             <div style="background:var(--model-msg-bg); color:var(--model-msg-text); border:1px solid var(--msg-border); border-radius:6px; padding:10px 14px; font-size:13px; flex:1;">
               <strong>Assistant:</strong><br>Paris is the capital of France.
             </div>
@@ -7926,12 +8882,21 @@ function previewThemeVar(varName, value) {
      routes (/get_model, /list_models, /load_model, /save_model_label,
      /unload_model, /get_openai_settings, /get_anthropic_settings). -->
 <script>
-  async function loadModelDisplay() {
+  async function loadModelDisplay(expectedModel) {
     const el = document.getElementById('model-display');
     if (!el) return;
     try {
-      const res = await fetch('/get_model');
-      const data = await res.json();
+      const expectedStem = expectedModel
+        ? expectedModel.replace(/\\/g, '/').split('/').pop().replace(/\.gguf$/i, '').toLowerCase()
+        : '';
+      let data;
+      for (let attempt = 0; attempt < (expectedStem ? 10 : 1); attempt++) {
+        const res = await fetch('/get_model', { cache: 'no-store' });
+        data = await res.json();
+        const reportedStem = String(data.model || '').replace(/\.gguf$/i, '').toLowerCase();
+        if (!expectedStem || reportedStem === expectedStem || attempt === 9) break;
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
       const name = data.model || 'No model loaded';
       const label = data.label || name;
       const noModel = name === 'No model loaded';
@@ -7997,7 +8962,7 @@ function previewThemeVar(varName, value) {
           const labelSpan = document.createElement('span');
           labelSpan.textContent = label;
           labelSpan.style.cssText = 'flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;';
-          row.onclick = (e) => { if (e.target.closest('.model-edit-btn') || isActive) return; loadModel(fullPath); };
+          row.onclick = (e) => { if (e.target.closest('.model-edit-btn') || isActive) return; loadModel(fullPath, { forceReload: true, reason: 'model_picker' }); };
           row.appendChild(tick); row.appendChild(labelSpan); row.appendChild(editBtn);
           list.appendChild(row);
         });
@@ -8051,25 +9016,58 @@ function previewThemeVar(varName, value) {
     });
   }
 
-  async function loadModel(filename) {
+  async function loadModel(filename, options = {}) {
     const status = document.getElementById('model-picker-status');
     const list = document.getElementById('model-picker-list');
+    const display = document.getElementById('model-display');
+    const progress = document.getElementById('model-load-progress');
+    const progressRun = (window._modelLoadProgressRun || 0) + 1;
+    window._modelLoadProgressRun = progressRun;
+    if (progress) {
+      progress.style.transition = 'none';
+      progress.style.width = '0';
+      // Commit the reset before starting the fill so Chromium cannot collapse
+      // both width changes into one non-animated frame.
+      void progress.offsetWidth;
+      requestAnimationFrame(() => {
+        if (window._modelLoadProgressRun !== progressRun) return;
+        progress.style.transition = 'width 28s cubic-bezier(0.1, 0.55, 0.25, 1)';
+        progress.style.width = '92%';
+      });
+    }
+    if (display) display.setAttribute('aria-busy', 'true');
+    const finishProgress = (loaded) => {
+      if (window._modelLoadProgressRun !== progressRun) return;
+      if (progress) {
+        progress.style.transition = 'width 0.25s ease-out';
+        progress.style.width = loaded ? '100%' : '0';
+        setTimeout(() => {
+          if (window._modelLoadProgressRun !== progressRun) return;
+          progress.style.transition = 'none';
+          progress.style.width = '0';
+        }, loaded ? 450 : 250);
+      }
+      if (display) display.removeAttribute('aria-busy');
+    };
     status.style.display = 'block';
+    status.style.color = '#8ab4d4';
     status.textContent = `⏳ Loading ${filename.replace(/\.gguf$/i,'')}...`;
     list.style.opacity = '0.4';
     list.style.pointerEvents = 'none';
     const nameSpanL = document.getElementById('model-display-name');
     if (nameSpanL) { nameSpanL.textContent = 'Loading...'; nameSpanL.style.color = '#8ab4d4'; }
     try {
-      const res = await fetch('/load_model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: filename }) });
+      const res = await fetch('/load_model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: filename, force_reload: options.forceReload === true, reason: options.reason || 'unspecified' }) });
       const data = await res.json();
       if (data.status === 'ok') {
+        finishProgress(true);
         localStorage.setItem('llama_last_model', filename);
         status.textContent = `✅ Loaded: ${data.model}`;
         list.style.opacity = '1'; list.style.pointerEvents = 'all';
-        await loadModelDisplay();
+        await loadModelDisplay(filename);
         setTimeout(() => closeModelPicker(), 1200);
       } else {
+        finishProgress(false);
         status.style.color = '#e88';
         status.textContent = `❌ ${data.error}`;
         const nameSpanF = document.getElementById('model-display-name');
@@ -8077,6 +9075,7 @@ function previewThemeVar(varName, value) {
         list.style.opacity = '1'; list.style.pointerEvents = 'all';
       }
     } catch(e) {
+      finishProgress(false);
       status.style.color = '#e88';
       status.textContent = `❌ Request failed: ${e}`;
       list.style.opacity = '1'; list.style.pointerEvents = 'all';
@@ -8086,7 +9085,7 @@ function previewThemeVar(varName, value) {
   function reloadModel() {
     const activeRow = document.querySelector('#model-picker-list [data-active-model="true"]');
     const filename = activeRow ? activeRow.dataset.modelPath : localStorage.getItem('llama_last_model');
-    if (filename) loadModel(filename);
+    if (filename) loadModel(filename, { forceReload: true, reason: 'manual_reload_button' });
   }
 
   async function unloadModel() {
@@ -8143,6 +9142,45 @@ function previewThemeVar(varName, value) {
   loadModelDisplay();
   checkOpenAIIndicator();
   checkAnthropicIndicator();
+
+  async function attachMmproj() {
+    const path = document.getElementById('llama-mmproj-path').value.trim();
+    try {
+      const res = await fetch('/save_mmproj_path', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mmproj_path: path })
+      });
+      const data = await res.json();
+      if (data.status === 'ok') {
+        await _reloadModelForRuntimeChange('mmproj attached', '✅ mmproj attached');
+      } else {
+        hwuiToast('❌ ' + (data.error || 'Save failed'), 'error');
+      }
+    } catch(e) {
+      hwuiToast('Attach failed: ' + e, 'error');
+    }
+  }
+
+  async function detachMmproj() {
+    document.getElementById('llama-mmproj-path').value = '';
+    try {
+      const res = await fetch('/save_mmproj_path', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mmproj_path: '' })
+      });
+      const data = await res.json();
+      if (data.status === 'ok') {
+        await _reloadModelForRuntimeChange('mmproj detached', '✅ mmproj detached');
+      } else {
+        hwuiToast('❌ ' + (data.error || 'Save failed'), 'error');
+      }
+    } catch(e) {
+      hwuiToast('Detach failed: ' + e, 'error');
+    }
+  }
+
 </script>
 </body>
 </html>

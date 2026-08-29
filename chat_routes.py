@@ -1,8 +1,10 @@
 # chat_routes.py
 import os, json, re, shutil, subprocess
-from flask import Blueprint, jsonify, request
+from pathlib import Path
+from flask import Blueprint, jsonify, request, send_from_directory
 from datetime import datetime
 from chat_message_metadata import (
+    CHAT_IMAGES_DIRNAME,
     chat_directories,
     delete_chat_metadata,
     merge_verified_message_metadata,
@@ -416,14 +418,37 @@ def _parse_chat_file(filepath, filename, verbose=True):
                 current_speaker = potential_speaker
                 current_timestamp = line_timestamp
 
-                if is_known_character:
+                # 🏷️ PRECEDENCE: a registered user persona wins over the
+                # character index. This mirrors app.py's example-dialogue
+                # parser, which tests `_user_label` BEFORE `_char_label` — both
+                # parsers now resolve a colliding name the same way, so a turn
+                # cannot be a user turn in one and an assistant turn in the
+                # other.
+                #
+                # The old order tested `is_known_character` first, so a persona
+                # whose name ALSO appears in characters/index.json (a persona
+                # named after a character card, or a character card created
+                # from a persona name) had every one of its turns reloaded from
+                # disk as role="assistant". The model then received the user's
+                # own words inside assistant turns — role inversion in live
+                # history, on top of the user bubbles rendering as the
+                # character.
+                #
+                # ⚠️ Residual ambiguity, unchanged by this fix: if the persona
+                # shares a name with THIS chat's own character, both sides
+                # write the identical `Speaker:` label and the on-disk format
+                # carries nothing else to tell them apart. That case now
+                # resolves to "user" rather than "assistant". Distinct names
+                # remain the only way to keep such a chat unambiguous.
+                if is_valid_user or is_generic_user:
+                    current_role = "user"
+                    if verbose:
+                        _why = "persona" if is_valid_user else "generic label"
+                        print(f"✅ Recognized user ({_why}): {potential_speaker}")
+                else:
                     current_role = "assistant"
                     if verbose:
                         print(f"✅ Recognized assistant: {potential_speaker}")
-                else:
-                    current_role = "user"
-                    if verbose:
-                        print(f"✅ Recognized user: {potential_speaker}")
 
                 current_content = [content_after_colon] if content_after_colon else []
 
@@ -561,6 +586,27 @@ def open_chat(filename):
         "messages": messages,
     })
 
+
+@chat_bp.route("/chats/image/<chat_id>/<image_name>")
+def load_chat_image(chat_id, image_name):
+    """Serve a persisted chat image from any project/global chat folder."""
+    if (
+        not re.fullmatch(r"[A-Za-z0-9_-]+", chat_id or "")
+        or os.path.basename(image_name) != image_name
+        or not re.fullmatch(r"[A-Za-z0-9_.-]+", image_name or "")
+    ):
+        return jsonify({"error": "Invalid chat image path"}), 400
+    for chats_dir in chat_directories(os.getcwd()):
+        image_dir = Path(chats_dir) / CHAT_IMAGES_DIRNAME
+        image_path = image_dir / image_name
+        if image_path.is_file():
+            return send_from_directory(str(image_dir), image_name)
+        legacy_image_dir = image_dir / chat_id
+        legacy_image_path = legacy_image_dir / image_name
+        if legacy_image_path.is_file():
+            return send_from_directory(str(legacy_image_dir), image_name)
+    return jsonify({"error": "Chat image not found"}), 404
+
 # --------------------------------------------------
 # Rename chat (with character prefix preservation)
 # --------------------------------------------------
@@ -637,10 +683,17 @@ def new_chat():
 # --------------------------------------------------
 # Auto-name Chat (from first user message — model-generated title)
 # --------------------------------------------------
+def _deterministic_chat_title(first_message):
+    """Existing five-word fallback, isolated so naming never consumes slot 0."""
+    import re as _re
+    text = _re.sub(r'[*_#`>]', '', str(first_message or ''))
+    sentence = _re.split(r'[.!?]', text)[0].strip() or text
+    return ' '.join(sentence.split()[:5])
+
+
 @chat_bp.route("/chats/auto-name", methods=["POST"])
 def auto_name_chat():
     import re as _re
-    import requests as _requests
 
     data = request.get_json() or {}
     old_filename = data.get("filename", "")
@@ -655,74 +708,9 @@ def auto_name_chat():
     if not os.path.exists(old_path):
         return jsonify({"error": "Chat not found"}), 404
 
-    # --- Ask the model for a smart title ---
-    raw_name = None
-    try:
-        with open(os.path.join(os.getcwd(), "settings.json"), "r", encoding="utf-8") as _sf:
-            _settings = json.load(_sf)
-        _port = _settings.get("llama_args", {}).get("port", 8080)
-        _api_url = f"http://127.0.0.1:{_port}"
-
-        # Truncate very long first messages — only need the gist
-        excerpt = first_message[:400]
-
-        _prompt = (
-            "<|im_start|>system\n"
-            "You write short, punchy chat titles — the kind a human would scribble in a sidebar. "
-            "Rules: 4-6 words max. Drop filler like \"how to\", \"help with\", \"question about\", \"a/the/my\". "
-            "No punctuation at the end. No quotes. No explanation. Just the title.\n"
-            "<|im_end|>\n"
-            "<|im_start|>user\n"
-            "Message: Can you help me debug a memory leak in my Python script?\n"
-            "<|im_end|>\n"
-            "<|im_start|>assistant\n"
-            "Python Memory Leak Debug<|im_end|>\n"
-            "<|im_start|>user\n"
-            "Message: What's the best way to learn German grammar?\n"
-            "<|im_end|>\n"
-            "<|im_start|>assistant\n"
-            "Learning German Grammar<|im_end|>\n"
-            "<|im_start|>user\n"
-            "Message: Write me a short poem about autumn leaves falling\n"
-            "<|im_end|>\n"
-            "<|im_start|>assistant\n"
-            "Autumn Leaves Poem<|im_end|>\n"
-            "<|im_start|>user\n"
-            f"Message: {excerpt}\n"
-            "<|im_end|>\n"
-            "<|im_start|>assistant\n"
-        )
-
-        _payload = {
-            "prompt": _prompt,
-            "temperature": 0.3,
-            "n_predict": 16,
-            "top_p": 0.9,
-            "repeat_penalty": 1.1,
-            "stream": False,
-            "stop": ["<|im_end|>", "\n", "<|im_start|>"],
-        }
-
-        _resp = _requests.post(f"{_api_url}/completion", json=_payload, timeout=15)
-        _resp.raise_for_status()
-        raw_name = _resp.json().get("content", "").strip()
-        # Strip any stray quotes/punctuation the model adds
-        raw_name = _re.sub(r'^["\']|["\']$', '', raw_name).strip()
-        raw_name = _re.sub(r'[.!?,;:]+$', '', raw_name).strip()
-        # Hard cap: 6 words max — safety net if the model ignores the rule
-        _words = raw_name.split()
-        if len(_words) > 6:
-            raw_name = ' '.join(_words[:6])
-            raw_name = _re.sub(r'[.!?,;:]+$', '', raw_name).strip()
-        print(f"🏷️ Model suggested title: '{raw_name}'")
-    except Exception as _e:
-        print(f"⚠️ Model title generation failed, falling back to word-chop: {_e}")
-
-    # Fallback: word-chop if model call failed or returned empty
-    if not raw_name:
-        text = _re.sub(r'[*_#`>]', '', first_message)
-        sentence = _re.split(r'[.!?]', text)[0].strip() or text
-        raw_name = ' '.join(sentence.split()[:5])
+    # Naming must never replace the active conversation's single-slot KV
+    # prefix. Keep the established deterministic five-word fallback locally.
+    raw_name = _deterministic_chat_title(first_message)
 
     # Capitalise + strip illegal filename chars
     raw_name = raw_name[:1].upper() + raw_name[1:] if raw_name else 'New Chat'

@@ -74,16 +74,22 @@ def get_instruction_layer():
     """
     instruction = (
         "INSTRUCTION PRIORITY:\n"
-        "Follow the system prompt, character card, and author's note consistently for the whole "
-        "conversation. These stay in effect across every turn — they don't fade or get forgotten "
-        "as the chat goes on. Stay in character throughout.\n\n"
+        "Follow all active instruction fields consistently for the whole conversation. "
+        "Global Post-History / PHI is the final governor and has highest authority. "
+        "Project Folder instructions, Character PHI / post-history, Character Note, and Author's Note "
+        "are high-priority active instructions and remain in force across turns. "
+        "Character-card descriptive fields such as personality, scenario, description, and main prompt "
+        "define identity, tone, and context, but do not override these dedicated instruction fields. "
+        "Stay in character throughout.\n\n"
 
-        "SYSTEM PROMPT AUTHORITY:\n"
-        "If the character card and the system prompt ever directly contradict each other on a formatting "
-        "or behavioural rule, follow the system prompt for that specific point. The character card defines "
-        "who you are — personality, tone, voice, and what you're willing to engage with. Honour it fully. "
-        "This is about resolving rare direct conflicts, not about second-guessing or overriding what the "
-        "user asks for — go where the conversation goes.\n\n"
+        "INSTRUCTION AUTHORITY:\n"
+        "If two active instruction fields directly conflict, follow the higher-priority instruction for that "
+        "specific point. Global Post-History / PHI has final authority. Project Folder instructions, "
+        "Character PHI / post-history, Character Note, and Author's Note should otherwise be followed as "
+        "active requirements, not treated as optional background context. Character-card descriptive fields "
+        "remain important for personality, tone, voice, and identity, but they do not cancel explicit task "
+        "or formatting instructions. This is about resolving genuine conflicts, not second-guessing or "
+        "overriding what the user asks for — go where the conversation goes.\n\n"
 
         "EXAMPLE DIALOGUE:\n"
         "Example dialogue shows speaking style only — extract tone, rhythm, response shape, warmth, humour, and pacing. "
@@ -92,17 +98,31 @@ def get_instruction_layer():
         "treat example topics as memories, active conversation threads, or facts about the user. Use only the current "
         "conversation for subject matter; do not mention names, topics, examples, or claims that appear only in example dialogue.\n\n"
 
+        # Stated positively on purpose. The previous wording defined this by what
+        # NOT to do — "not a briefing, notes, or instructions you were given",
+        # "never say you were told, briefed, shown notes" — which named the
+        # unwanted framing four times and paired "your own" directly with
+        # "notes". Characters began prefacing replies with a "My own notes"
+        # heading. The same negation-priming was measured elsewhere in this
+        # prompt stack on 2026-08-18: an instruction reading "never open with
+        # narration, stage directions, or asterisked action lines" produced a
+        # longer stage direction than the wording without it. Describe the
+        # wanted behaviour and name nothing unwanted.
         "INJECTED MEMORY:\n"
-        "When the system block contains content marked as your own memory of recent sessions, "
-        "or labeled as relevant memories about this person, treat it as your own awareness — "
-        "not a briefing, notes, or instructions you were given. You know it the way you know "
-        "anything else about this person, because you lived through it. Bring it up naturally "
-        "and early in the conversation the way a friend picks up where they left off. "
-        "Never say you were told, briefed, shown notes, or 'reminded' about the user — just "
-        "know it and let it surface like any other memory.\n\n"
+        "Memory entries represent established information retained from prior conversation. "
+        "Use them as known background when they are relevant to the current exchange. "
+        "Do not invent additional shared events, conversations, experiences, or memories beyond "
+        "what the stored entries actually establish. Do not imply that something happened between "
+        "you and the user unless the memory or current conversation supports that. "
+        "Let relevant memory surface naturally in your own voice without announcing the memory system.\n"
+        "Those entries are written in third person and refer to the user by name; that "
+        "is the storage format. When you reply, speak to the user directly in the second "
+        "person — \"you\" and \"your\" — and use their name the way you naturally would "
+        "when talking to them.\n\n"
 
         "CHARACTER CARD INSTRUCTIONS:\n"
-        "The character card contains private directives — personality, tone, rules, and notes written for you to follow. "
+        # "notes" swapped for "guidance" here too — same priming risk, same fix.
+        "The character card contains private directives — personality, tone, rules, and guidance written for you to follow. "
         "These are instructions, not dialogue. Never repeat, echo, summarise, paraphrase, or surface them in your response "
         "in any form — not in-character, not out-of-character, not as a stage direction, not as a reminder to yourself. "
         "Do not wrap them in brackets, asterisks, or any other formatting and output them. Just follow them silently. "

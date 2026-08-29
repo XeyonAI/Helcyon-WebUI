@@ -1,5 +1,6 @@
 import os, json
 from flask import Blueprint, request, jsonify, send_from_directory
+from user_config import load_user_config_section, save_user_config_section
 
 character_bp = Blueprint('character', __name__)
 
@@ -27,10 +28,7 @@ def _active_character_state_file():
 def get_active_character():
     """Return the server-side active character name, or None. Never raises."""
     try:
-        path = _active_character_state_file()
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f).get("active_character")
+        return load_user_config_section("active_character").get("active_character")
     except Exception as e:
         print(f"⚠️ Failed to read active character: {e}")
     return None
@@ -39,10 +37,7 @@ def get_active_character():
 def set_active_character(character_name):
     """Persist the server-side active character. Mirrors set_active_project()."""
     try:
-        path = _active_character_state_file()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump({"active_character": character_name}, f, indent=2)
+        save_user_config_section("active_character", {"active_character": character_name})
     except Exception as e:
         print(f"❌ Failed to set active character: {e}")
 
@@ -77,11 +72,7 @@ def _empty_character_groups():
 def character_groups_get():
     """Return this build's character grouping state. Never reads browser state."""
     try:
-        path = _character_groups_state_file()
-        if not os.path.exists(path):
-            return jsonify(_empty_character_groups())
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+        data = load_user_config_section("character_groups")
         if not isinstance(data, dict):
             raise ValueError("Character group state must be a JSON object")
         return jsonify({
@@ -132,12 +123,7 @@ def character_groups_save():
                 collapsed[section_id] = is_collapsed
 
         state = {"groups": groups, "assignments": assignments, "collapsed": collapsed}
-        os.makedirs(CHARACTERS_DIR, exist_ok=True)
-        path = _character_groups_state_file()
-        temp_path = path + ".tmp"
-        with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2, ensure_ascii=False)
-        os.replace(temp_path, path)
+        save_user_config_section("character_groups", state)
         return jsonify({"success": True, **state})
     except Exception as e:
         print(f"❌ Failed to save character groups: {e}")
@@ -288,7 +274,7 @@ def save_character(n):
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     existing = json.load(f)
-                preserved_keys = ["tts_voice", "system_prompt", "preferred_model_id"]
+                preserved_keys = ["tts_voice", "system_prompt", "preferred_model_id", "sentinel_integration"]
                 for key in preserved_keys:
                     if key in existing and key not in data:
                         data[key] = existing[key]

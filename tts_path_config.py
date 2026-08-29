@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
+from user_config import load_user_config_section
 
 
 LOCAL_CONFIG_NAME = "tts_paths.local.json"
@@ -17,6 +17,9 @@ ALLOWED_KEYS = {
     "HWUI_CHATTERBOX_VOICES_DIR",
     "HWUI_QWEN_MODEL_PATH",
     "HWUI_QWEN_VOICES_DIR",
+    "HWUI_QWENTTS_SERVER_EXE",
+    "HWUI_QWENTTS_MODELS_DIR",
+    "HWUI_QWENTTS_VOICES_DIR",
     "HWUI_XTTS_VOICES_DIR",
 }
 
@@ -24,12 +27,8 @@ ALLOWED_KEYS = {
 def apply_tts_path_overrides(build_dir: str | os.PathLike[str] | None = None) -> dict[str, str]:
     """Apply the ignored local sidecar without overriding real environment variables."""
     root = Path(build_dir).resolve() if build_dir else Path(__file__).resolve().parent
-    config_path = root / LOCAL_CONFIG_NAME
-    if not config_path.is_file():
-        return {}
-
     try:
-        raw = json.loads(config_path.read_text(encoding="utf-8"))
+        raw = load_user_config_section("tts_paths")
         if not isinstance(raw, dict):
             raise ValueError("root value must be an object")
     except Exception as exc:

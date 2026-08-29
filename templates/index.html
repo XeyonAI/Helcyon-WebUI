@@ -2,8 +2,12 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
+  <!-- Build-scoped storage: must load before any script that touches
+       localStorage, so each build gets its own namespace on the shared
+       127.0.0.1 origin. -->
+  <script src="/build_scope.js"></script>
   <title>Helcyon-WebUI</title>
-  <link rel="stylesheet" href="/style.css?v=23">
+  <link rel="stylesheet" href="/style.css?v=24">
   <link rel="stylesheet" href="/theme-files/midnight.css" id="active-theme-link">
   <style>
     /* Cog dropdown menu — converted from the old #settings-link <a>.
@@ -95,7 +99,7 @@
     <div style="display:flex; align-items:center; gap:10px;">
       <span style="font-size:18px;">👋</span>
       <span style="color:#cceedd; font-size:13px;">
-        <strong style="color:#ffffff;">Welcome to Helcyon-WebUI!</strong>
+        <strong style="color:#ffffff;">Welcome to HWUI-Pro!</strong>
         &nbsp;Before you start, set your llama.cpp paths in Config so the AI can load.
       </span>
     </div>
@@ -221,22 +225,25 @@
         </div>
       </div>
       <button id="model-display" onclick="toggleModelPicker()" title="Switch model" style="
-        background: var(--modal-bg, #1a1f2a);
-        border: 1px solid var(--modal-border, #2d394b);
+        background: rgba(210, 130, 20, 0.18);
+        border: 1px solid rgba(255, 175, 55, 0.55);
         border-radius: 20px;
+        position: relative;
+        overflow: hidden;
         padding: 7px 16px 7px 14px;
         font-size: 14px;
-        color: #ccc;
+        color: #fff0cf;
         cursor: pointer;
         display: flex;
         align-items: center;
         gap: 7px;
         white-space: nowrap;
-        max-width: 280px;
+        max-width: 190px;
         transition: border-color 0.15s, background 0.15s;
-      " onmouseover="this.style.borderColor='#4a6a8a'; this.style.background='#202733'" onmouseout="this.style.borderColor='var(--modal-border, #2d394b)'; this.style.background='var(--modal-bg, #1a1f2a)'">
-        <span id="model-display-name" style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Loading...</span>
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="flex-shrink:0; opacity:0.45;"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      " onmouseover="this.style.borderColor='#ffb347'; this.style.background='rgba(220,140,20,0.28)'" onmouseout="this.style.borderColor='rgba(255,175,55,0.55)'; this.style.background='rgba(210,130,20,0.18)'">
+        <span id="model-load-progress" aria-hidden="true" style="position:absolute; inset:0 auto 0 0; width:0; background:rgba(235,145,25,0.42); pointer-events:none;"></span>
+        <span id="model-display-name" style="position:relative; z-index:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Loading...</span>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="position:relative; z-index:1; flex-shrink:0; opacity:0.45;"><polyline points="6 9 12 15 18 9"></polyline></svg>
       </button>
     </div>
     <!-- Hidden badge containers — populated by loadModelDisplay, shown inside picker -->
@@ -650,6 +657,7 @@
               </button>
               <div id="input-menu" class="input-dropup">
                 <button onclick="document.getElementById('chat-image-input').click(); closeInputMenu()" title="Attach Image">📎 Attach Image</button>
+                <button id="comfyui-generate-btn" onclick="generateComfyUIImage(); closeInputMenu()" title="Generate an image with the configured ComfyUI workflow">🎨 Generate Image</button>
                 <button onclick="document.getElementById('chat-document-input').click(); closeInputMenu()" title="Attach a document for the model to read">📄 Attach Document</button>
                 <button onclick="openPasteTranscriptModal(); closeInputMenu()" title="Paste a transcript or text snippet as reference material">📋 Paste Transcript</button>
                 <div class="input-menu-divider"></div>
@@ -1074,6 +1082,9 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
   let currentChatFilename = null;
   let currentChatId = null;
   let currentCharacter = {};
+  // Overlapping card loads can also overlap automatic preferred-model loads.
+  // Only the newest selection may continue into shared history/UI state.
+  let characterLoadGeneration = 0;
   let systemPrompt = '';
   let activeUserName = 'User';
   let userImageCache = {}; // name → image filename
@@ -1282,6 +1293,11 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
   }
 
   function consumePendingBenchPrompt({ notifyMismatch = true } = {}) {
+    if (localStorage.getItem('hwui_helcyon_bench_pending_prompt')) {
+      localStorage.removeItem('hwui_helcyon_bench_pending_prompt');
+      showHwuiProModal('Benchmark Prompt Transfer', 'Sending benchmark prompts into chat is available in HWUI Pro.');
+      return { ok: false, reason: 'pro_required' };
+    }
     const input = document.getElementById('user-input');
     const transfer = HelcyonBenchPromptTransfer.consume(
       localStorage,
@@ -1554,8 +1570,54 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
     }
   }
 
-  async function captureActiveBenchResponse() {
-    showHwuiProModal('Capture Response', 'Capturing the exact assistant reply into a candidate slot is a Pro feature.');
+async function captureActiveBenchResponse() {
+  showHwuiProModal('Benchmark Response Capture', 'Benchmark response capture is available in HWUI Pro.');
+  return;
+    const association = await refreshBenchChatControl();
+    if (!association || !benchAssociationMatchesCurrentChat(association)) return;
+    if (association.status !== 'ready_to_capture' && association.generation_status !== 'ready_to_capture') return;
+
+    const existingState = await loadIntegratedBenchSession();
+    const key = HelcyonBenchPromptTransfer.responseKey(association);
+    if (String(existingState.responses?.[key] || '').trim() && !window.confirm(
+      `Model ${association.candidate_model_slot}'s response field already contains text. Replace it with the exact captured HWUI response?`
+    )) return;
+
+    const button = document.getElementById('bench-chat-capture');
+    button.disabled = true;
+    try {
+      const response = await fetch(
+        `/api/helcyon-bench/capture-associations/${encodeURIComponent(association.association_id)}/capture`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ candidate_model_slot: association.candidate_model_slot })
+        }
+      );
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'The exact benchmark response could not be captured.');
+      const capturedAssociation = { ...association, ...(result.association || {}), status: 'captured' };
+      HelcyonBenchPromptTransfer.updateAssociation(
+        localStorage,
+        association.association_id,
+        capturedAssociation
+      );
+      const state = {
+        ...HelcyonBenchPromptTransfer.applyAssociationToSession(
+          existingState,
+          capturedAssociation,
+          result
+        ),
+        ...(result.session || {})
+      };
+      state.focus_response_on_return = true;
+      localStorage.setItem(HelcyonBenchPromptTransfer.FORM_STATE_KEY, JSON.stringify(state));
+      window.location.href = HelcyonBenchPromptTransfer.returnUrl(capturedAssociation);
+    } catch (error) {
+      button.disabled = false;
+      hwuiToast(error.message, 'error', 5000);
+      await refreshBenchChatControl();
+    }
   }
 
   function getChatInputDraftContext() {
@@ -1632,6 +1694,105 @@ async function handleImageAttach(input) {
   input.value = '';
 }
 
+const VISION_IMAGE_MAX_EDGE = 1536;
+// Base64 adds roughly one third, so this keeps the encoded image near 500 KB.
+const VISION_IMAGE_TARGET_BYTES = Math.floor(500 * 1024 * 3 / 4);
+
+function readImageFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error('Could not read image file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImageFromDataUrl(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('Could not decode image file'));
+    image.src = dataUrl;
+  });
+}
+
+function imageCanvasToBlob(canvas, mimeType) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      blob => blob ? resolve(blob) : reject(new Error('Could not encode image file')),
+      mimeType,
+      mimeType === 'image/jpeg' ? 0.85 : undefined
+    );
+  });
+}
+
+function imageCanvasHasTransparency(canvas) {
+  const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+  for (let i = 3; i < pixels.length; i += 4) {
+    if (pixels[i] < 255) return true;
+  }
+  return false;
+}
+
+function drawImageToCanvas(source, width, height) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  canvas.getContext('2d').drawImage(source, 0, 0, width, height);
+  return canvas;
+}
+
+async function prepareVisionImage(file) {
+  const originalDataUrl = await readImageFileAsDataUrl(file);
+  const image = await loadImageFromDataUrl(originalDataUrl);
+  const originalWidth = image.naturalWidth;
+  const originalHeight = image.naturalHeight;
+  const originalLongEdge = Math.max(originalWidth, originalHeight);
+
+  // Keep genuinely small attachments byte-for-byte unchanged.
+  if (originalLongEdge <= VISION_IMAGE_MAX_EDGE && file.size <= VISION_IMAGE_TARGET_BYTES) {
+    console.info(`[Vision image] ${file.name || 'clipboard image'}: `
+      + `${originalWidth}x${originalHeight}, ${file.size} bytes -> `
+      + `${originalWidth}x${originalHeight}, ${file.size} bytes (unchanged)`);
+    return { dataUrl: originalDataUrl, mimeType: file.type, width: originalWidth, height: originalHeight, bytes: file.size };
+  }
+
+  const initialScale = Math.min(1, VISION_IMAGE_MAX_EDGE / originalLongEdge);
+  let width = Math.max(1, Math.round(originalWidth * initialScale));
+  let height = Math.max(1, Math.round(originalHeight * initialScale));
+  let canvas = drawImageToCanvas(image, width, height);
+  const outputMimeType = imageCanvasHasTransparency(canvas) ? 'image/png' : 'image/jpeg';
+  let blob = await imageCanvasToBlob(canvas, outputMimeType);
+
+  // Keep quality at 0.85; if necessary, reduce dimensions further to approach
+  // the practical request-size target without changing transparent images to JPEG.
+  for (let attempt = 0; blob.size > VISION_IMAGE_TARGET_BYTES && Math.max(width, height) > 512 && attempt < 4; attempt++) {
+    const scale = Math.min(0.9, Math.sqrt(VISION_IMAGE_TARGET_BYTES / blob.size) * 0.95);
+    const nextWidth = Math.max(1, Math.round(width * scale));
+    const nextHeight = Math.max(1, Math.round(height * scale));
+    if (nextWidth === width && nextHeight === height) break;
+    canvas = drawImageToCanvas(canvas, nextWidth, nextHeight);
+    width = nextWidth;
+    height = nextHeight;
+    blob = await imageCanvasToBlob(canvas, outputMimeType);
+  }
+
+  // An optimized source can occasionally be smaller than a same-size canvas
+  // encoding. In that case, retain the original rather than making it larger.
+  if (width === originalWidth && height === originalHeight && blob.size >= file.size) {
+    console.info(`[Vision image] ${file.name || 'clipboard image'}: `
+      + `${originalWidth}x${originalHeight}, ${file.size} bytes -> `
+      + `${originalWidth}x${originalHeight}, ${file.size} bytes (unchanged)`);
+    return { dataUrl: originalDataUrl, mimeType: file.type, width: originalWidth, height: originalHeight, bytes: file.size };
+  }
+
+  const dataUrl = await readImageFileAsDataUrl(blob);
+  console.info(`[Vision image] ${file.name || 'clipboard image'}: `
+    + `${originalWidth}x${originalHeight}, ${file.size} bytes -> `
+    + `${width}x${height}, ${blob.size} bytes (${outputMimeType})`);
+  return { dataUrl, mimeType: outputMimeType, width, height, bytes: blob.size };
+}
+
 // Shared image-attach path used by BOTH the file picker (handleImageAttach) and
 // clipboard paste (the #user-input paste listener). Filters to image files,
 // runs the vision-capability guard, then reads each as a data URL and pushes it
@@ -1661,9 +1822,8 @@ async function attachImageFiles(fileList) {
       if (mres.ok) {
         const mdata = await mres.json();
         if (!mdata.vision_active) {
-          hwuiToast('⚠️ The loaded model has no vision support (no mmproj file).\n\n'
-              + 'Load a vision-capable model before attaching images — otherwise '
-              + 'the image cannot be read.', 'error');
+          hwuiToast('⚠️ The loaded local model has no active vision projector.\n\n'
+              + 'Set a valid mmproj in Settings, reload the model once, and try again.', 'error');
           return;
         }
       }
@@ -1673,17 +1833,16 @@ async function attachImageFiles(fileList) {
     console.warn('Vision-capability check failed, allowing attach:', e);
   }
 
-  files.forEach(file => {
-    const reader = new FileReader();
-    reader.onload = function(e) {
-      const dataUrl = e.target.result; // full data URL
-      const base64 = dataUrl.split(',')[1];
-      const mimeType = file.type;
-
-      window.attachedImages.push({ base64, mimeType, previewUrl: dataUrl });
+  files.forEach(async file => {
+    try {
+      const prepared = await prepareVisionImage(file);
+      const base64 = prepared.dataUrl.slice(prepared.dataUrl.indexOf(',') + 1);
+      window.attachedImages.push({ base64, mimeType: prepared.mimeType, previewUrl: prepared.dataUrl });
       renderImagePreviews();
-    };
-    reader.readAsDataURL(file);
+    } catch (error) {
+      console.error('[Vision image] Attachment processing failed:', error);
+      hwuiToast('Could not process the attached image.', 'error');
+    }
   });
 }
 
@@ -1743,6 +1902,134 @@ function renderImagePreviews() {
     wrapper.appendChild(removeBtn);
     strip.appendChild(wrapper);
   });
+}
+
+const HWUI_IMAGE_ACTION_OPEN = '<hwui_action>';
+const GENERATED_IMAGE_VISION_TURN_PREFIX = 'This is the generated result for the requested scene:';
+
+function messageTextForDisplayMarker(message) {
+  if (!message) return '';
+  if (Array.isArray(message.content)) {
+    return message.content
+      .filter(part => part && part.type === 'text')
+      .map(part => part.text || '')
+      .join(' ')
+      .trim();
+  }
+  return typeof message.content === 'string' ? message.content.trim() : '';
+}
+
+function isGeneratedImageVisionTurn(message) {
+  return Boolean(
+    message &&
+    message.role === 'user' &&
+    message.hasImage &&
+    messageTextForDisplayMarker(message).startsWith(GENERATED_IMAGE_VISION_TURN_PREFIX)
+  );
+}
+
+function makeGeneratedImageDisplay(previewUrls) {
+  if (!Array.isArray(previewUrls) || !previewUrls.length) return null;
+  const imageContainer = document.createElement('div');
+  imageContainer.className = 'generated-image-display';
+  imageContainer.style.cssText = 'margin-bottom:10px;';
+  previewUrls.forEach(url => imageContainer.appendChild(makeChatImageThumbnail(url)));
+  return imageContainer;
+}
+
+function parseHwuiImageAction(text) {
+  const match = String(text || '').trim().match(/^<hwui_action>([\s\S]+)<\/hwui_action>$/i);
+  if (!match) return null;
+  try {
+    const action = JSON.parse(match[1]);
+    if (action && action.type === 'generate_image' && typeof action.prompt === 'string' && action.prompt.trim()) {
+      return { type: action.type, prompt: action.prompt.trim() };
+    }
+  } catch (error) {
+    console.warn('Invalid HWUI image action JSON:', error);
+  }
+  return null;
+}
+
+async function generateComfyUIImage() {
+  const box = document.getElementById('user-input');
+  const requestedScene = (box && box.value.trim()) || 'Create an image inspired by the current scene and conversation.';
+  return runComfyUIImagePipeline({ requestedScene, appendRequestForPrompt: true });
+}
+
+async function runComfyUIImagePipeline({ requestedScene, imagePrompt = '', appendRequestForPrompt = false }) {
+  if (window._comfyImageGenerationInFlight) return;
+  const button = document.getElementById('comfyui-generate-btn');
+  const box = document.getElementById('user-input');
+  requestedScene = String(requestedScene || '').trim() || 'Create an image inspired by the current scene and conversation.';
+
+  try {
+    const modelResponse = await fetch('/get_model', { cache: 'no-store' });
+    const model = await modelResponse.json();
+    if (!model.vision_active) {
+      throw new Error('Helcyon cannot inspect the generated result because no active mmproj is loaded with the local model.');
+    }
+
+    window._comfyImageGenerationInFlight = true;
+    if (button) { button.disabled = true; button.textContent = '🎨 Generating…'; }
+    hwuiToast('Generating with ComfyUI — Helcyon will unload and restore automatically.', 'info', 6000);
+
+    const promptMessages = (window.loadedChat || []).filter(message => !message.hidden).map(message => ({
+      role: message.role,
+      content: Array.isArray(message.content)
+        ? message.content.filter(part => part.type === 'text').map(part => part.text || '').join(' ')
+        : message.content
+    }));
+    if (appendRequestForPrompt) promptMessages.push({ role: 'user', content: requestedScene });
+
+    const comfyPayload = { messages: promptMessages };
+    if (imagePrompt) comfyPayload.image_prompt = imagePrompt;
+
+    const response = await fetch('/generate_comfyui_image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(comfyPayload)
+    });
+    let result = {};
+    try { result = await response.json(); } catch (error) {}
+    if (!response.ok || result.status !== 'ok') {
+      throw new Error(result.error || `ComfyUI generation failed (HTTP ${response.status}).`);
+    }
+    if (!Array.isArray(result.images) || !result.images.length) {
+      throw new Error('ComfyUI returned no images.');
+    }
+
+    // Run the returned pixels through the same resize/encode path as an ordinary
+    // chat attachment. sendPrompt() then routes that real attachment through the
+    // existing Ministral vision path; the diffusion prompt is never substituted
+    // for visual inspection.
+    for (let index = 0; index < result.images.length; index++) {
+      const generated = result.images[index];
+      const encoded = String(generated.data_url || '').split(',', 2)[1] || '';
+      const binary = atob(encoded);
+      const bytes = new Uint8Array(binary.length);
+      for (let byteIndex = 0; byteIndex < binary.length; byteIndex++) bytes[byteIndex] = binary.charCodeAt(byteIndex);
+      const blob = new Blob([bytes], { type: generated.mime_type || 'image/png' });
+      const prepared = await prepareVisionImage(blob);
+      window.attachedImages.push({
+        base64: prepared.dataUrl.slice(prepared.dataUrl.indexOf(',') + 1),
+        mimeType: prepared.mimeType,
+        previewUrl: prepared.dataUrl
+      });
+    }
+    renderImagePreviews();
+    if (box) {
+      box.value = `This is the generated result for the requested scene: "${requestedScene}"\n\nInspect the attached image itself and tell me what you see and think, in character. Do not generate another image.`;
+      resizeChatInput(box);
+    }
+    await sendPrompt();
+  } catch (error) {
+    console.error('ComfyUI image generation failed:', error);
+    hwuiToast(error.message || 'ComfyUI image generation failed.', 'error', 9000);
+  } finally {
+    window._comfyImageGenerationInFlight = false;
+    if (button) { button.disabled = false; button.textContent = '🎨 Generate Image'; }
+  }
 }
 
 function makeChatImageThumbnail(previewUrl) {
@@ -1965,6 +2252,14 @@ function sanitizeMarkdown(text) {
 
   // Fix: no blank line between heading/intro and numbered list item 1
   // Marked.js requires a blank line before a list — insert one before "1. " when preceded by text
+  // Some models emit the entire numbered list on one line ("1. ... 2. ...").
+  // Split only lines that visibly contain the start of a numbered sequence; doing
+  // this for every number would damage ordinary prose such as version numbers.
+  text = text.replace(/[^\r\n]*/g, function(line) {
+    if (!/(?:^|[ \t])1\.\s+\S/.test(line) || !/[ \t]2\.\s+\S/.test(line)) return line;
+    line = line.replace(/^(.+?)[ \t]+(1\.\s+)/, "$1\n\n$2");
+    return line.replace(/[ \t]+(?=\d+\.\s+)/g, "\n");
+  });
   text = text.replace(/([^\n])\n(1\.\s)/g, "$1\n\n$2");
   // Fix: blank lines between numbered list items cause each item to become its own block
   // Collapse blank lines between consecutive numbered items so they stay in one block
@@ -1977,13 +2272,55 @@ function sanitizeMarkdown(text) {
 // Strip ChatML tokens and role-leakage ONLY from text outside fenced code blocks.
 // Content inside ``` fences is preserved verbatim — so shard generation works correctly.
 function stripChatMLOutsideCodeBlocks(text, charName, userName) {
-  // Split on fenced code blocks (``` or ~~~), preserving the delimiters
-  const parts = text.split(/(```[\s\S]*?```|~~~[\s\S]*?~~~)/g);
-  return parts.map(function(part, i) {
-    // Odd indices are code block matches — leave untouched
-    if (i % 2 === 1) return part;
-    // Even indices are plain text — apply all the usual strips
-    return part
+  // Recognise CommonMark fence runs, not only exactly three delimiters. CX/SFT
+  // output legitimately uses an outer four-backtick fence when its Response
+  // contains an inner triple-backtick ChatML block.
+  const parts = [];
+  let plainStart = 0;
+  let cursor = 0;
+  while (cursor < text.length) {
+    const lineEnd = text.indexOf('\n', cursor);
+    const nextLine = lineEnd === -1 ? text.length : lineEnd + 1;
+    const line = text.slice(cursor, lineEnd === -1 ? text.length : lineEnd).replace(/\r$/, '');
+    const opener = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[^\r\n]*$/);
+    if (!opener) {
+      cursor = nextLine;
+      continue;
+    }
+
+    if (cursor > plainStart) parts.push({ fenced: false, value: text.slice(plainStart, cursor) });
+    const fenceChar = opener[1][0];
+    const fenceLength = opener[1].length;
+    let fenceEnd = text.length;
+    let scan = nextLine;
+    while (scan < text.length) {
+      const closeLineEnd = text.indexOf('\n', scan);
+      const closeNext = closeLineEnd === -1 ? text.length : closeLineEnd + 1;
+      const closeLine = text.slice(
+        scan,
+        closeLineEnd === -1 ? text.length : closeLineEnd
+      ).replace(/\r$/, '');
+      const closer = closeLine.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/);
+      if (
+        closer &&
+        closer[1][0] === fenceChar &&
+        closer[1].length >= fenceLength
+      ) {
+        fenceEnd = closeNext;
+        break;
+      }
+      scan = closeNext;
+    }
+    parts.push({ fenced: true, value: text.slice(cursor, fenceEnd) });
+    cursor = fenceEnd;
+    plainStart = fenceEnd;
+  }
+  if (plainStart < text.length) parts.push({ fenced: false, value: text.slice(plainStart) });
+  if (!parts.length) parts.push({ fenced: false, value: text });
+
+  return parts.map(function(part) {
+    if (part.fenced) return part.value;
+    return part.value
       .replace(/<\|im_start\|>assistant/gi, '')
       .replace(/<\|im_start\|>user/gi, '')
       .replace(/<\|im_start\|>system/gi, '')
@@ -2012,15 +2349,25 @@ function stripChatMLOutsideCodeBlocks(text, charName, userName) {
 
 
 // ── Extended-thinking stream demux (Anthropic) ──────────────────────────────
-// The Anthropic backend wraps reasoning deltas in STX sentinels so the shared
-// stream readers can peel them off the answer text and show the reasoning in a
-// collapsible panel. These markers appear ONLY on the Anthropic path with
-// thinking enabled; every other backend never emits them, so splitThinking()
-// returns the text unchanged as the answer and behaviour is identical.
+// Anthropic and local llama.cpp wrap reasoning deltas in STX sentinels so the
+// shared stream reader can peel them off the answer text and show the reasoning
+// in one collapsible panel. With no markers, splitThinking() returns the text
+// unchanged as the answer and behaviour is identical.
 // MUST stay byte-for-byte identical to THINK_OPEN/THINK_CLOSE in app.py.
 const _STX = String.fromCharCode(2);   // STX delimiter (matches app.py THINK sentinels)
 const THINK_OPEN  = _STX + _STX + "THINK" + _STX + _STX;
 const THINK_CLOSE = _STX + _STX + "/THINK" + _STX + _STX;
+// Presentation-only reasoning retained for completed turns in this page
+// session. This deliberately lives outside loadedChat so it is never saved,
+// sent back to the model, spoken, regenerated, or consumed by memory/docs.
+const transientThinkingByMessageId = new Map();
+function retainThinkingPanel(messageId, text) {
+  if (!messageId || !text) return;
+  transientThinkingByMessageId.set(messageId, text);
+}
+function retainedThinkingForMessage(messageId) {
+  return messageId ? (transientThinkingByMessageId.get(messageId) || '') : '';
+}
 function _thinkTrailingPartial(buf, token) {
   // Longest k (0<k<token.length) such that buf ends with token[0:k] — lets the
   // reader hold back a sentinel that was split across two network chunks.
@@ -2034,22 +2381,33 @@ function _thinkTrailingPartial(buf, token) {
 // sentinel split across chunks (a trailing partial is held back from output so
 // stray marker fragments never flash in the UI).
 function splitThinking(raw) {
-  const o = raw.indexOf(THINK_OPEN);
-  if (o === -1) {
-    const hb = _thinkTrailingPartial(raw, THINK_OPEN);
-    return { thinking: "", answer: hb ? raw.slice(0, raw.length - hb) : raw, open: false };
+  let thinking = "", answer = "", pos = 0;
+  const appendThinking = (text) => {
+    if (!text) return;
+    if (thinking) thinking += "\n\n";
+    thinking += text;
+  };
+  while (pos < raw.length) {
+    const o = raw.indexOf(THINK_OPEN, pos);
+    if (o === -1) {
+      const tail = raw.slice(pos);
+      const hb = _thinkTrailingPartial(tail, THINK_OPEN);
+      answer += hb ? tail.slice(0, tail.length - hb) : tail;
+      return { thinking, answer, open: false };
+    }
+    answer += raw.slice(pos, o);
+    const afterOpen = o + THINK_OPEN.length;
+    const c = raw.indexOf(THINK_CLOSE, afterOpen);
+    if (c === -1) {
+      let block = raw.slice(afterOpen);
+      const hb = _thinkTrailingPartial(block, THINK_CLOSE);
+      if (hb) block = block.slice(0, block.length - hb);
+      appendThinking(block);
+      return { thinking, answer, open: true };
+    }
+    appendThinking(raw.slice(afterOpen, c));
+    pos = c + THINK_CLOSE.length;
   }
-  const afterOpen = o + THINK_OPEN.length;
-  const before = raw.slice(0, o);   // normally empty (thinking precedes answer)
-  const c = raw.indexOf(THINK_CLOSE, afterOpen);
-  if (c === -1) {
-    let think = raw.slice(afterOpen);
-    const hb = _thinkTrailingPartial(think, THINK_CLOSE);
-    if (hb) think = think.slice(0, think.length - hb);
-    return { thinking: think, answer: before, open: true };
-  }
-  const thinking = raw.slice(afterOpen, c);
-  const answer = before + raw.slice(c + THINK_CLOSE.length);
   return { thinking, answer, open: false };
 }
 // Lazily build + update a collapsible thinking panel inside a model message,
@@ -2120,11 +2478,47 @@ if (typeof marked === "undefined") {
       txt = txt.replace(/^[ \t]*([-*_]{3,})[ \t]*$/gm, '\n\n$1\n\n');
 
       // Pre-process: extract fenced code blocks BEFORE splitting into paragraphs.
-      // Replace each ```lang\n...\n``` with a unique placeholder, store the rendered HTML.
+      // Fence runs may be longer than three characters so an outer ```` CX/SFT
+      // block can safely contain an inner ``` ChatML block.
       const _codeBlocks = [];
-      txt = txt.replace(/```(\w*)\n?([\s\S]*?)```/g, function(_, lang, code) {
+      let _fencedText = '';
+      let _fenceCursor = 0;
+      const _openerPattern = /^[ \t]{0,3}(`{3,}|~{3,})([^\r\n]*)\r?$/gm;
+      let _openerMatch;
+      while ((_openerMatch = _openerPattern.exec(txt)) !== null) {
+        const _openStart = _openerMatch.index;
+        const _openEnd = _openerPattern.lastIndex;
+        const _fenceRun = _openerMatch[1];
+        const _fenceChar = _fenceRun[0];
+        const _fenceLength = _fenceRun.length;
+        const _lang = (_openerMatch[2] || '').trim().split(/\s+/, 1)[0];
+        let _contentStart = _openEnd;
+        if (txt.slice(_contentStart, _contentStart + 2) === '\r\n') _contentStart += 2;
+        else if (txt[_contentStart] === '\n') _contentStart += 1;
+
+        let _closeStart = txt.length;
+        let _closeEnd = txt.length;
+        let _scan = _contentStart;
+        while (_scan < txt.length) {
+          const _lineEnd = txt.indexOf('\n', _scan);
+          const _nextLine = _lineEnd === -1 ? txt.length : _lineEnd + 1;
+          const _line = txt.slice(_scan, _lineEnd === -1 ? txt.length : _lineEnd).replace(/\r$/, '');
+          const _closer = _line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/);
+          if (
+            _closer &&
+            _closer[1][0] === _fenceChar &&
+            _closer[1].length >= _fenceLength
+          ) {
+            _closeStart = _scan;
+            _closeEnd = _nextLine;
+            break;
+          }
+          _scan = _nextLine;
+        }
+
+        const code = txt.slice(_contentStart, _closeStart);
         const escaped = code.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/^\n|\n$/g,'');
-        const langLabel = lang ? `<span class="code-lang">${lang}</span>` : '';
+        const langLabel = _lang ? `<span class="code-lang">${_lang}</span>` : '';
         const html =
           `<div class="code-block-wrapper">` +
             `<div class="code-block-header">${langLabel}<button class="code-copy-btn" onpointerdown="copyCodeBlock(this, event)" onclick="copyCodeBlock(this, event)">Copy</button></div>` +
@@ -2132,8 +2526,11 @@ if (typeof marked === "undefined") {
           `</div>`;
         const placeholder = `\x00CODE${_codeBlocks.length}\x00`;
         _codeBlocks.push(html);
-        return `\n\n${placeholder}\n\n`;
-      });
+        _fencedText += txt.slice(_fenceCursor, _openStart) + `\n\n${placeholder}\n\n`;
+        _fenceCursor = _closeEnd;
+        _openerPattern.lastIndex = _closeEnd;
+      }
+      txt = _fencedText + txt.slice(_fenceCursor);
 
       // Split into blocks on blank lines
       let blocks = txt.split(/\n\n+/);
@@ -2229,14 +2626,23 @@ if (typeof marked === "undefined") {
   // ==================================================
   // MODEL DISPLAY
   // ==================================================
-  async function loadModelDisplay() {
+  async function loadModelDisplay(expectedModel) {
     const el = document.getElementById('model-display');
     if (!el) return;
     const btn = document.querySelector('button[title="Refresh model"]');
     if (btn) btn.style.transform = 'rotate(360deg)', btn.style.transition = 'transform 0.4s ease';
     try {
-      const res = await fetch('/get_model');
-      const data = await res.json();
+      const expectedStem = expectedModel
+        ? expectedModel.replace(/\\/g, '/').split('/').pop().replace(/\.gguf$/i, '').toLowerCase()
+        : '';
+      let data;
+      for (let attempt = 0; attempt < (expectedStem ? 10 : 1); attempt++) {
+        const res = await fetch('/get_model', { cache: 'no-store' });
+        data = await res.json();
+        const reportedStem = String(data.model || '').replace(/\.gguf$/i, '').toLowerCase();
+        if (!expectedStem || reportedStem === expectedStem || attempt === 9) break;
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
       const name = data.model || 'No model loaded';
       const label = data.label || name;
       const noModel = name === 'No model loaded';
@@ -2341,7 +2747,7 @@ if (typeof marked === "undefined") {
             // Don't load model if clicking the edit button or anything inside it
             if (e.target.closest('.model-edit-btn')) return;
             if (isActive) return;
-            loadModel(fullPath);
+            loadModel(fullPath, { forceReload: true, reason: 'model_picker' });
           };
           row.appendChild(tick);
           row.appendChild(labelSpan);
@@ -2481,10 +2887,36 @@ if (typeof marked === "undefined") {
     });
   }
 
-  async function loadModel(filename) {
+  async function loadModel(filename, options = {}) {
     const status = document.getElementById('model-picker-status');
     const list = document.getElementById('model-picker-list');
     const display = document.getElementById('model-display');
+    const progress = document.getElementById('model-load-progress');
+    const progressRun = (window._modelLoadProgressRun || 0) + 1;
+    window._modelLoadProgressRun = progressRun;
+    if (progress) {
+      progress.style.transition = 'none';
+      progress.style.width = '0';
+      requestAnimationFrame(() => {
+        if (window._modelLoadProgressRun !== progressRun) return;
+        progress.style.transition = 'width 28s cubic-bezier(0.1, 0.55, 0.25, 1)';
+        progress.style.width = '92%';
+      });
+    }
+    if (display) display.setAttribute('aria-busy', 'true');
+    const finishProgress = (loaded) => {
+      if (window._modelLoadProgressRun !== progressRun) return;
+      if (progress) {
+        progress.style.transition = 'width 0.25s ease-out';
+        progress.style.width = loaded ? '100%' : '0';
+        setTimeout(() => {
+          if (window._modelLoadProgressRun !== progressRun) return;
+          progress.style.transition = 'none';
+          progress.style.width = '0';
+        }, loaded ? 450 : 250);
+      }
+      if (display) display.removeAttribute('aria-busy');
+    };
     status.style.display = 'block';
     status.style.color = '#8ab4d4';
     status.textContent = `⏳ Loading ${filename.replace(/\.gguf$/i,'')}...`;
@@ -2496,18 +2928,20 @@ if (typeof marked === "undefined") {
       const res = await fetch('/load_model', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: filename })
+        body: JSON.stringify({ model: filename, force_reload: options.forceReload === true, reason: options.reason || 'unspecified' })
       });
       const data = await res.json();
       if (data.status === 'ok') {
+        finishProgress(true);
         localStorage.setItem('llama_last_model', filename); // remember for preset saving
         status.textContent = `✅ Loaded: ${data.model}`;
         list.style.opacity = '1';
         list.style.pointerEvents = 'all';
-        await loadModelDisplay();
+        await loadModelDisplay(filename);
         setTimeout(() => closeModelPicker(), 1200);
         return true;
       } else {
+        finishProgress(false);
         status.style.color = '#e88';
         status.textContent = `❌ ${data.error}`;
         const nameSpanF = document.getElementById('model-display-name');
@@ -2517,6 +2951,7 @@ if (typeof marked === "undefined") {
         return false;
       }
     } catch(e) {
+      finishProgress(false);
       status.style.color = '#e88';
       status.textContent = `❌ Request failed: ${e}`;
       list.style.opacity = '1';
@@ -2587,7 +3022,7 @@ if (typeof marked === "undefined") {
         overlayShown = true;
       }
       hwuiToast(`Loading ${displayName} for ${characterData.name || 'character'}...`, 'info');
-      const loaded = await loadModel(preferred);
+      const loaded = await loadModel(preferred, { reason: 'character_preferred_model' });
       if (loaded) {
         hwuiToast(`Loaded ${displayName} for ${characterData.name || 'character'}.`, 'success');
         return true;
@@ -2606,7 +3041,7 @@ if (typeof marked === "undefined") {
   function reloadModel() {
     const activeRow = document.querySelector('#model-picker-list [data-active-model="true"]');
     const filename = activeRow ? activeRow.dataset.modelPath : localStorage.getItem('llama_last_model');
-    if (filename) loadModel(filename);
+    if (filename) loadModel(filename, { forceReload: true, reason: 'manual_reload_button' });
   }
 
   async function unloadModel() {
@@ -2719,7 +3154,7 @@ if (typeof marked === "undefined") {
       const loadRes = await fetch('/load_model', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: match })
+        body: JSON.stringify({ model: match, force_reload: true, reason: 'sampling_preset_switch' })
       });
       const loadData = await loadRes.json();
       if (loadData.status !== 'ok') throw new Error(loadData.error || 'Load failed');
@@ -3412,10 +3847,12 @@ if (typeof marked === "undefined") {
   // LOAD CHARACTER DATA
   // ==================================================
 async function loadCharacter(name, skipChatHistory = false) {
+    const loadGeneration = ++characterLoadGeneration;
     try {
       const res = await fetch('/characters/' + name + '.json');
       if (!res.ok) throw new Error('Character file not found');
       const data = await res.json();
+      if (loadGeneration !== characterLoadGeneration) return false;
       window.currentCharacter = data;
       currentCharacter = data;
       // Build image list: prefer data.images array, fallback to single data.image
@@ -3438,6 +3875,7 @@ async function loadCharacter(name, skipChatHistory = false) {
       // the existing model loader; characters without a pairing behave exactly
       // as before, and a failed load does not block the character switch.
       await loadCharacterPreferredModel(data);
+      if (loadGeneration !== characterLoadGeneration) return false;
 
       // Load this character's saved TTS voice — server first (shared with mobile), localStorage fallback
       try {
@@ -3479,12 +3917,15 @@ async function loadCharacter(name, skipChatHistory = false) {
       
       // Only load chat history if not opening from sidebar
       if (!skipChatHistory) {
+        if (loadGeneration !== characterLoadGeneration) return false;
         await loadChatHistory();
       }
+      return true;
     } catch (err) {
       console.error('Error loading character:', err);
+      return false;
     }
-  }
+}
 // ==================================================
 // LOAD CHAT HISTORY  (with duplicate-filter for regen)
 // ==================================================
@@ -3628,7 +4069,17 @@ function persistChatState() {
     closeChatActionsMenu();
     list.innerHTML = '';
     
+    let previousPinnedState = null;
     chats.forEach(chat => {
+      const pinnedState = Boolean(chat.pinned);
+      if (pinnedState !== previousPinnedState) {
+        const sectionLabel = document.createElement('li');
+        sectionLabel.classList.add('chat-list-section-label');
+        sectionLabel.textContent = pinnedState ? 'Pinned' : 'Recents';
+        list.appendChild(sectionLabel);
+        previousPinnedState = pinnedState;
+      }
+
       const li = document.createElement('li');
       li.classList.add('chat-item');
       li.dataset.filename = chat.filename;
@@ -4418,6 +4869,7 @@ function persistChatState() {
   // SWITCH TO CHARACTER (update dropdown + load character data)
   // ==================================================
   async function switchToCharacter(characterName) {
+    const loadGeneration = ++characterLoadGeneration;
     var dropdown = document.getElementById('character-select');
     
     var option = Array.from(dropdown.options).find(function(opt) {
@@ -4438,6 +4890,7 @@ function persistChatState() {
       if (!res.ok) throw new Error('Failed to load character');
       
       var characterData = await res.json();
+      if (loadGeneration !== characterLoadGeneration) return false;
       currentCharacter = characterData;
       
       const imgList2 = (characterData.images && characterData.images.length > 0) ? characterData.images : (characterData.image ? [characterData.image] : []);
@@ -4446,6 +4899,7 @@ function persistChatState() {
       document.getElementById('system-prompt').textContent = characterData.tagline || (characterData.main_prompt ? characterData.main_prompt.split('\n')[0] : '');
 
       await loadCharacterPreferredModel(characterData);
+      if (loadGeneration !== characterLoadGeneration) return false;
 
       // Load this character's saved TTS voice
       const savedVoice = localStorage.getItem(`tts-voice-${option.value}`);
@@ -4524,7 +4978,7 @@ async function openChat(filename) {
     // ✅ FIX: Load conversation history into memory for context
     // ✅ FIX 2: Normalise legacy "User" speaker label to actual active user name
     var _activeUserFix = localStorage.getItem('activeUserName') || activeUserName || 'User';
-    window.loadedChat = data.messages.map(function(msg) {
+    window.loadedChat = await Promise.all(data.messages.map(async function(msg) {
       var spk = msg.speaker || null;
       if (spk && spk.toLowerCase() === 'user' && msg.role === 'user') {
         spk = _activeUserFix;
@@ -4541,8 +4995,30 @@ async function openChat(filename) {
       if (msg.generation_status) mapped.generation_status = msg.generation_status;
       if (msg.generation_started_at) mapped.generation_started_at = msg.generation_started_at;
       if (msg.generation_completed_at) mapped.generation_completed_at = msg.generation_completed_at;
+      if (msg.hasImage) mapped.hasImage = true;
+      if (Array.isArray(msg.previewUrls) && msg.previewUrls.length > 0) {
+        mapped.previewUrls = (await Promise.all(msg.previewUrls.map(async function(url) {
+          if (typeof url !== 'string' || url.startsWith('data:')) return url;
+          try {
+            const imageResponse = await fetch(url);
+            if (!imageResponse.ok) return null;
+            return await readImageFileAsDataUrl(await imageResponse.blob());
+          } catch (error) {
+            console.warn('Could not restore persisted chat image:', error);
+            return null;
+          }
+        }))).filter(Boolean);
+        if (mapped.role === 'user' && typeof mapped.content === 'string' && mapped.content.includes('[image]')) {
+          const imageText = mapped.content.replace('[image]', '').trim();
+          mapped.content = [];
+          if (imageText) mapped.content.push({ type: 'text', text: imageText });
+          mapped.previewUrls.forEach(url => {
+            mapped.content.push({ type: 'image_url', image_url: { url } });
+          });
+        }
+      }
       return mapped;
-    });
+    }));
 
     // Fresh from disk — this tab is clean and disk holds exactly this many
     // messages. (Stale-write guard, June 10 2026.)
@@ -4616,6 +5092,7 @@ async function openChat(filename) {
     var activeUserNameFallback = localStorage.getItem('activeUserName') || activeUserName;
 
     let assistantCount = 0;  // 1-based count of assistant turns, used for branching
+    let pendingGeneratedImageUrls = null;
     messages.forEach(function(msg, index) {
       if (!msg) {
         console.warn('Skipping null message at index ' + index);
@@ -4647,7 +5124,18 @@ async function openChat(filename) {
         console.warn('Unrecognized message type at index ' + index);
         return;
       }
-      
+
+      // Presentation only: the generated-image inspection turn remains an
+      // ordinary user message in history, but its pixels are displayed with
+      // the immediately following vision-informed assistant response.
+      if (isGeneratedImageVisionTurn(msg)) {
+        pendingGeneratedImageUrls = Array.isArray(msg.previewUrls) ? msg.previewUrls.slice() : [];
+        return;
+      }
+      const generatedImageUrlsForAssistant =
+        (role === 'model' || role === 'assistant') ? pendingGeneratedImageUrls : null;
+      pendingGeneratedImageUrls = null;
+
       try {
         // Create wrapper container for avatar + message
         var wrapper = document.createElement("div");
@@ -4804,7 +5292,7 @@ async function openChat(filename) {
             html = html.replace(/\*([^\n*]+?)\*/g, '<em>$1</em>');
             modelSpan._pendingHtml = html;
           }
-          
+
           var modelActionBar = document.createElement("div");
           modelActionBar.className = "msg-action-bar";
 
@@ -4865,7 +5353,14 @@ async function openChat(filename) {
           modelActionBar.appendChild(modelBranchBtn);
           if (modelShardExportBtn) modelActionBar.appendChild(modelShardExportBtn);
 
+          var generatedImageDisplay = makeGeneratedImageDisplay(generatedImageUrlsForAssistant);
+          if (generatedImageDisplay) div.appendChild(generatedImageDisplay);
           div.appendChild(modelSpan);
+          const retainedThinking = retainedThinkingForMessage(msg.message_id);
+          if (retainedThinking) {
+            renderThinkingPanel(div, modelSpan, retainedThinking, null);
+            div._thinkPanel.open = false;
+          }
           div.appendChild(makeTimestampEl(msg.timestamp));
           // Span is now in DOM — render HTML with code blocks as proper siblings
           if (modelSpan._pendingHtml !== undefined) {
@@ -4873,7 +5368,7 @@ async function openChat(filename) {
             addCodeCopyButtons(div);
             delete modelSpan._pendingHtml;
           }
-                    
+
           var modelMessageStack = document.createElement("div");
           modelMessageStack.className = "message-stack";
           modelMessageStack.appendChild(div);
@@ -5039,6 +5534,11 @@ async function openChat(filename) {
     const chat = document.getElementById('chat');
     const hasImages = window.attachedImages && window.attachedImages.length > 0;
     const hasDocs = window.attachedDocuments && window.attachedDocuments.length > 0;
+    const isGeneratedVisionDisplayTurn = isGeneratedImageVisionTurn({
+      role: 'user',
+      hasImage: hasImages,
+      content: input
+    });
 
     if (!input && !hasImages && !hasDocs) return;
     hideOpeningQuestions();
@@ -5104,10 +5604,12 @@ async function openChat(filename) {
       chat.appendChild(makeDocumentCardRow(window.attachedDocuments));
     }
 
-    chat.appendChild(userWrapper);
     userWrapper.dataset.messageId = sourceUserMessageId;
-    void userWrapper.offsetHeight;
-    void userDiv.offsetHeight;   
+    if (!isGeneratedVisionDisplayTurn) {
+      chat.appendChild(userWrapper);
+      void userWrapper.offsetHeight;
+      void userDiv.offsetHeight;
+    }
     chat.scrollTop = chat.scrollHeight;
     
     // Update window.loadedChat
@@ -5416,11 +5918,18 @@ async function openChat(filename) {
 // ==================================================
 // FETCH AND DISPLAY RESPONSE (WITH DEBUG LOGS)
 // ==================================================
+  function freezeCancelledGenerationText(text, revealedCount) {
+    const safeText = typeof text === 'string' ? text : '';
+    const safeCount = Math.max(0, Math.min(Number(revealedCount) || 0, safeText.length));
+    return safeText.slice(0, safeCount);
+  }
+
   async function fetchAndDisplayResponse(input, chat, isRegenerate = false, modelTextForSend = null, sourceUserMessageId = null) {
     console.log('🚀🚀🚀 fetchAndDisplayResponse CALLED', new Date().getTime(), 'isRegenerate:', isRegenerate);
     console.trace();
     let replySourceUserMessageId = sourceUserMessageId;
     let generationStartedAt = null;
+    let responseReader = null;
     
     try {
       if (window.isSending) {
@@ -5432,6 +5941,14 @@ async function openChat(filename) {
       const sourceMessage = [...(window.loadedChat || [])].reverse().find(message =>
         message.role === 'user' && !message.hidden &&
         (!sourceUserMessageId || message.message_id === sourceUserMessageId)
+      );
+      const generatedVisionPreviewUrls = isGeneratedImageVisionTurn(sourceMessage) && Array.isArray(sourceMessage.previewUrls)
+        ? sourceMessage.previewUrls
+        : [];
+      const currentTurnHasImage = Boolean(
+        sourceMessage?.hasImage &&
+        Array.isArray(sourceMessage.content) &&
+        sourceMessage.content.some(part => part && part.type === 'image_url')
       );
       replySourceUserMessageId = sourceUserMessageId || sourceMessage?.message_id || null;
       generationStartedAt = new Date().toISOString();
@@ -5522,6 +6039,33 @@ async function openChat(filename) {
         }
         return msg;
       });
+
+      // Natural image requests take a schema-constrained internal action pass
+      // before the visible /chat response. The active model decides and writes
+      // the SDXL prompt into JSON; HWUI never renders that internal prompt.
+      if (!currentTurnHasImage && !isRegenerate) {
+        try {
+          const actionResponse = await fetch('/image_generation_action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              messages: chatToSend,
+              user_text: modelTextForSend || input,
+              current_turn_has_image: false
+            })
+          });
+          const actionResult = await actionResponse.json();
+          if (actionResponse.ok && actionResult.action?.type === 'generate_image' && actionResult.action.prompt) {
+            setTimeout(() => runComfyUIImagePipeline({
+              requestedScene: input,
+              imagePrompt: actionResult.action.prompt
+            }), 0);
+            return;
+          }
+        } catch (actionError) {
+          console.warn('Image action decision unavailable; continuing normal chat:', actionError);
+        }
+      }
       
       const response = await fetch("/chat", {
         method: "POST",
@@ -5531,6 +6075,7 @@ async function openChat(filename) {
           user_name: activeUserName,
           current_chat_filename: currentChatFilename,
           conversation_history: chatToSend,
+          current_turn_has_image: currentTurnHasImage,
           author_note: (window._memoryConfirmNote ? (window._memoryConfirmNote = false, '[SYSTEM OVERRIDE: The user just confirmed a memory save. Write ONE short sentence confirming it is saved. Do NOT write any MEMORY ADD tags. Do NOT summarize. Do NOT ask questions.]') : localStorage.getItem(`author-note-${currentChatFilename}`) || ''),
           // Sampling (temperature/max_tokens/top_p/etc.) is sourced server-side
           // from settings.json via load_sampling_settings() — client values were
@@ -5571,6 +6116,15 @@ async function openChat(filename) {
       ) {
         console.log('📍 Taking NON-STREAMING path');
         const data = await response.json();
+        const imageAction = parseHwuiImageAction(data.text || '');
+        if (imageAction) {
+          window._streamingPartial = "";
+          setTimeout(() => runComfyUIImagePipeline({
+            requestedScene: input,
+            imagePrompt: imageAction.prompt
+          }), 0);
+          return;
+        }
         const message = data.text || "⚠️ Unknown response";
         const assistantMessageId = createHwuiMessageId();
         const assistantCompleted = typeof data.text === 'string' && data.text.trim().length > 0;
@@ -5605,6 +6159,8 @@ async function openChat(filename) {
         modelActionBar.className = "msg-action-bar";
         modelActionBar.appendChild(copyBtn);
 
+        const generatedImageDisplay = makeGeneratedImageDisplay(generatedVisionPreviewUrls);
+        if (generatedImageDisplay) msgDiv.appendChild(generatedImageDisplay);
         msgDiv.appendChild(spanText);
         msgDiv.appendChild(makeTimestampEl(new Date().toISOString()));
 
@@ -5703,6 +6259,8 @@ async function openChat(filename) {
       modelActionBar.className = "msg-action-bar";
       modelActionBar.appendChild(copyBtn);
 
+      const generatedImageDisplay = makeGeneratedImageDisplay(generatedVisionPreviewUrls);
+      if (generatedImageDisplay) msgDiv.appendChild(generatedImageDisplay);
       msgDiv.appendChild(spanText);
       msgDiv.appendChild(makeTimestampEl(new Date().toISOString()));
 
@@ -5716,6 +6274,7 @@ async function openChat(filename) {
       
       console.log('📍 STREAMING: Appending wrapper to DOM');
       chat.appendChild(modelWrapper);
+      modelWrapper.style.display = 'none'; // reveal only after ruling out an internal action prefix
       chat.scrollTop = chat.scrollHeight;
 
       const streamEl = spanText;
@@ -5725,6 +6284,7 @@ async function openChat(filename) {
 
       // Store reader globally so stopGeneration() can cancel it cleanly
       const reader = response.body.getReader();
+      responseReader = reader;
       window._activeReader = reader;
       const decoder = new TextDecoder("utf-8");
       let fullMessage = "";       // ANSWER text only (thinking peeled off) — used by
@@ -5733,6 +6293,7 @@ async function openChat(filename) {
       let rawAll = "";            // raw stream incl. thinking sentinels (pre-demux)
       let prevAnswerLen = 0;      // answer chars already routed to TTS
       let streamReadFailed = false;
+      let hwuiActionState = 'pending'; // forming action prefixes stay out of display/TTS
 
       // Get user/char names for cleanup
       const userName = activeUserName || "User";
@@ -5778,6 +6339,13 @@ async function openChat(filename) {
           const dt = Math.min((ts - lastTs) / 1000, 0.1);  // clamp dt after a tab stall
           lastTs = ts;
 
+          if (window._generationCancelled && !streamDone) {
+            // Stop exactly where the user saw the response. Text already received
+            // into the producer buffer must not resume dripping after cancellation.
+            cleanedFull = freezeCancelledGenerationText(cleanedFull, revealedCount);
+            streamDone = true;
+          }
+
           if (!streamDone) {
             // Adaptive: aim to drain the current backlog in ~DRAIN_SEC, clamped to
             // [MIN,MAX] cps. A big Anthropic backlog → fast catch-up; nearly caught
@@ -5817,10 +6385,36 @@ async function openChat(filename) {
         // no-op (answer === rawAll), so fullMessage/TTS/cleanedFull behave exactly
         // as before. answerDelta is the NEW answer text this chunk contributed.
         const _parts = splitThinking(rawAll);
-        if (_parts.thinking) renderThinkingPanel(msgDiv, streamEl, _parts.thinking, chat);
         const answerDelta = _parts.answer.slice(prevAnswerLen);
-        prevAnswerLen = _parts.answer.length;
         fullMessage = _parts.answer;
+
+        // Reasoning can arrive before the first answer token. Render it before
+        // the image-action prefix guard (which deliberately waits while the
+        // answer is empty) so the shared panel updates live during thinking.
+        if (_parts.thinking) {
+          modelWrapper.style.display = '';
+          renderThinkingPanel(msgDiv, streamEl, _parts.thinking, chat);
+        }
+
+        const actionCandidate = fullMessage.trimStart();
+        const actionCandidateLower = actionCandidate.toLowerCase();
+        if (hwuiActionState === 'pending') {
+          if (HWUI_IMAGE_ACTION_OPEN.startsWith(actionCandidateLower)) {
+            cleanedFull = '';
+            window._streamingPartial = '';
+            return;
+          }
+          hwuiActionState = actionCandidateLower.startsWith(HWUI_IMAGE_ACTION_OPEN)
+            ? 'action'
+            : 'normal';
+        }
+        if (hwuiActionState === 'action') {
+          cleanedFull = '';
+          window._streamingPartial = '';
+          return;
+        }
+        modelWrapper.style.display = '';
+        prevAnswerLen = _parts.answer.length;
 
         // Buffer text for TTS on RECEIPT (not on the drip) so audio isn't delayed
         // by the typewriter. Only the answer delta is spoken (never the reasoning).
@@ -5863,9 +6457,38 @@ async function openChat(filename) {
       // the final transport boundary is buffered until this no-argument drain.
       consumeDecodedChunk(decoder.decode());
 
-      // Signal the drip we're done; it flushes the remainder on its next tick.
+      // A cancelled reader can resolve before the next animation frame gets to
+      // observe the flag, so freeze here too before marking the stream complete.
+      if (window._generationCancelled) {
+        cleanedFull = freezeCancelledGenerationText(cleanedFull, revealedCount);
+      }
+
+      // Signal the drip we're done; normal completion flushes the remainder.
       streamDone = true;
       await dripDone;
+
+      if (window._generationCancelled) {
+        // Keep save/re-render and post-stream parsing on the same visible partial.
+        // Otherwise fullMessage/rawAll can restore text hidden by the cancelled drip.
+        fullMessage = cleanedMessage;
+        rawAll = cleanedMessage;
+      }
+
+      const capturedImageAction = parseHwuiImageAction(fullMessage);
+      if (capturedImageAction || hwuiActionState === 'action') {
+        window._streamingPartial = "";
+        if (modelWrapper && modelWrapper.parentNode) modelWrapper.remove();
+        if (!capturedImageAction) {
+          hwuiToast('Helcyon returned an invalid internal image-generation action.', 'error', 8000);
+          return;
+        }
+        setTimeout(() => runComfyUIImagePipeline({
+          requestedScene: input,
+          imagePrompt: capturedImageAction.prompt
+        }), 0);
+        return;
+      }
+      modelWrapper.style.display = '';
 
       // Collapse the thinking panel once the answer is complete (claude.ai-style:
       // reasoning stays available behind the disclosure, out of the way).
@@ -5895,7 +6518,7 @@ async function openChat(filename) {
         }
         return;
       }
-      if (!cleanedMessage || cleanedMessage.trim().length < 2) {
+      if (!window._generationCancelled && (!cleanedMessage || cleanedMessage.trim().length < 2)) {
         console.warn('⚠️ cleanedMessage empty after stripping — raw fallback');
         cleanedMessage = fullMessage.replace(/<\|im_start\|>\w*/gi, '').replace(/<\|im_end\|>/gi, '').trim();
       }
@@ -5911,6 +6534,7 @@ async function openChat(filename) {
 
       // 🔥 NO RE-RENDER NEEDED - TEXT IS ALREADY CLEANED!
       const finalText = cleanedMessage;
+      const completedThinking = splitThinking(rawAll).thinking;
       const assistantMessageId = createHwuiMessageId();
       const generationCompletedAt = new Date().toISOString();
       const assistantStatus = window._generationCancelled
@@ -5949,6 +6573,14 @@ async function openChat(filename) {
         modelWrapper.remove();
         console.log('🗑️ Removed duplicate DOM wrapper');
       }
+
+      // The full renderer below replaces the live DOM bubble. Retain only a
+      // presentation copy keyed to the finished assistant message so it can
+      // rebuild the collapsed disclosure without putting reasoning in history.
+      const thinkingMessageId = isDuplicate
+        ? lastLoadedMessage?.message_id
+        : assistantMessageId;
+      retainThinkingPanel(thinkingMessageId, completedThinking);
 
       // The assistant turn is in loadedChat now (or was a duplicate), so the
       // partial mirror is stale THIS instant — drop it here, not only in
@@ -6020,6 +6652,7 @@ async function openChat(filename) {
       // Hide stop button when done
       const stopBtn = document.getElementById('stop-btn');
       if (stopBtn) stopBtn.style.display = 'none';
+      if (window._activeReader === responseReader) window._activeReader = null;
       window.isSending = false;
       // Stream is over (completed, errored, or aborted) — the assistant turn is
       // now in window.loadedChat (or was empty), so drop the partial mirror so a
@@ -6185,7 +6818,8 @@ async function openChat(filename) {
       
       const messages = dedupedChat.filter(msg => !msg.hidden).map(msg => ({
         role: msg.role,
-        // Strip images when saving to file — store text only
+        // Keep model-facing chat text compact; the complete prepared image used
+        // by the thumbnail/lightbox lives only in verified message metadata.
         content: Array.isArray(msg.content)
           ? (msg.content.filter(p => p.type === 'text').map(p => p.text).join(' ').trim() + ' [image]').trim()
           : msg.content,
@@ -6199,7 +6833,9 @@ async function openChat(filename) {
         ...(msg.reply_to_message_id ? { reply_to_message_id: msg.reply_to_message_id } : {}),
         ...(msg.generation_status ? { generation_status: msg.generation_status } : {}),
         ...(msg.generation_started_at ? { generation_started_at: msg.generation_started_at } : {}),
-        ...(msg.generation_completed_at ? { generation_completed_at: msg.generation_completed_at } : {})
+        ...(msg.generation_completed_at ? { generation_completed_at: msg.generation_completed_at } : {}),
+        ...(msg.hasImage ? { hasImage: true } : {}),
+        ...(Array.isArray(msg.previewUrls) && msg.previewUrls.length > 0 ? { previewUrls: msg.previewUrls } : {})
       }));
       
       const res = await fetch('/chats/save', {
@@ -6553,10 +7189,21 @@ async function stopGeneration() {
   console.log('🛑 Stop button clicked');
   
   try {
-    const response = await fetch('/abort_generation', {
+    // Start the server-side abort immediately, then cancel the browser reader so
+    // the producer loop cannot accept any more response data while it arrives.
+    const abortRequest = fetch('/abort_generation', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     });
+    const activeReader = window._activeReader;
+    if (activeReader && typeof activeReader.cancel === 'function') {
+      try {
+        await activeReader.cancel();
+      } catch (readerError) {
+        console.warn('⚠️ Failed to cancel active response reader:', readerError);
+      }
+    }
+    const response = await abortRequest;
     
     if (response.ok) {
       if (cancelledSource?.message_id) {
@@ -6567,9 +7214,6 @@ async function stopGeneration() {
       // Hide stop button
       const stopBtn = document.getElementById('stop-btn');
       if (stopBtn) stopBtn.style.display = 'none';
-      
-      // Reset sending flag
-      window.isSending = false;
     }
   } catch (error) {
     console.error('❌ Failed to stop generation:', error);
@@ -8474,7 +9118,9 @@ function showAutoMemoryToast(character, title, undoToken) {
             ...(m.reply_to_message_id ? { reply_to_message_id: m.reply_to_message_id } : {}),
             ...(m.generation_status ? { generation_status: m.generation_status } : {}),
             ...(m.generation_started_at ? { generation_started_at: m.generation_started_at } : {}),
-            ...(m.generation_completed_at ? { generation_completed_at: m.generation_completed_at } : {})
+            ...(m.generation_completed_at ? { generation_completed_at: m.generation_completed_at } : {}),
+            ...(m.hasImage ? { hasImage: true } : {}),
+            ...(Array.isArray(m.previewUrls) && m.previewUrls.length > 0 ? { previewUrls: m.previewUrls } : {})
           };
         });
 
