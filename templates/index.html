@@ -7,8 +7,9 @@
        127.0.0.1 origin. -->
   <script src="/build_scope.js"></script>
   <title>Helcyon-WebUI</title>
-  <link rel="stylesheet" href="/style.css?v=24">
+  <link rel="stylesheet" href="/style.css?v=25">
   <link rel="stylesheet" href="/theme-files/midnight.css" id="active-theme-link">
+  <script src="/static/text_scale.js" defer></script>
   <style>
     /* Cog dropdown menu — converted from the old #settings-link <a>.
        Declared after style.css so #cog-menu svg overrides #settings-link svg. */
@@ -623,10 +624,10 @@
         <div id="input-area" style="position:fixed;bottom:20px;left:250px;right:0;z-index:9999;display:flex;flex-direction:column;align-items:center;pointer-events:none;background:transparent;padding:0;border:none;">
 
           <!-- Image Preview Strip -->
-          <div id="image-preview-strip" style="display:none;padding:6px 0;gap:8px;flex-wrap:wrap;max-width:760px;width:100%;pointer-events:all;"></div>
+          <div id="image-preview-strip" style="display:none;padding:6px 0;gap:8px;flex-wrap:wrap;max-width:calc(var(--chat-width) - 100px);width:100%;pointer-events:all;"></div>
 
           <!-- Document Preview Strip -->
-          <div id="document-preview-strip" style="display:none;padding:6px 0;gap:8px;flex-wrap:wrap;max-width:760px;width:100%;pointer-events:all;"></div>
+          <div id="document-preview-strip" style="display:none;padding:6px 0;gap:8px;flex-wrap:wrap;max-width:calc(var(--chat-width) - 100px);width:100%;pointer-events:all;"></div>
 
           <!-- Hidden file input -->
           <input type="file" id="chat-image-input" accept="image/*" multiple style="display:none;" onchange="handleImageAttach(this)" />
@@ -645,7 +646,7 @@
           </div>
 
           <!-- Floating pill -->
-          <div id="input-row" style="pointer-events:all;display:flex;flex-direction:row;align-items:center;gap:6px;background:var(--container-bg,#131922);border:1px solid var(--sidebar-border,#2a2a2a);border-radius:16px;padding:5px 10px;box-shadow:0 4px 24px rgba(0,0,0,0.5);width:100%;max-width:760px !important;box-sizing:border-box;overflow:visible;">
+          <div id="input-row" style="pointer-events:all;display:flex;flex-direction:row;align-items:center;gap:6px;background:var(--container-bg,#131922);border:1px solid var(--sidebar-border,#2a2a2a);border-radius:16px;padding:5px 10px;box-shadow:0 4px 24px rgba(0,0,0,0.5);width:100%;max-width:calc(var(--chat-width) - 100px) !important;box-sizing:border-box;overflow:visible;">
 
             <!-- + menu button -->
             <div id="input-menu-wrap" style="position:relative;flex-shrink:0;line-height:0;">
@@ -1091,6 +1092,8 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
   let currentCharName = '';  
   let lastPrompt = localStorage.getItem('lastPrompt') || '';
   let isCreatingNewChat = false;
+  let chatLoadGeneration = 0;
+  let chatLoadPromise = null;
   const CHAT_INPUT_DRAFT_KEY = 'hwui_chat_input_draft';
 
   function createHwuiMessageId() {
@@ -2252,12 +2255,15 @@ function sanitizeMarkdown(text) {
 
   // Fix: no blank line between heading/intro and numbered list item 1
   // Marked.js requires a blank line before a list — insert one before "1. " when preceded by text
-  // Some models emit the entire numbered list on one line ("1. ... 2. ...").
-  // Split only lines that visibly contain the start of a numbered sequence; doing
-  // this for every number would damage ordinary prose such as version numbers.
+  // Some models emit the intro and item 1 on one line, or emit later numbered
+  // items inline ("2. ... 3. ...") even when item 1 starts on the preceding
+  // physical line. Handle only those list-shaped lines; ordinary prose such
+  // as version numbers and sentences containing numbers is left untouched.
   text = text.replace(/[^\r\n]*/g, function(line) {
-    if (!/(?:^|[ \t])1\.\s+\S/.test(line) || !/[ \t]2\.\s+\S/.test(line)) return line;
-    line = line.replace(/^(.+?)[ \t]+(1\.\s+)/, "$1\n\n$2");
+    const startsList = /^\s*\d+\.\s+\S/.test(line);
+    const hasInlineFirstPair = /(?:^|[ \t])1\.\s+\S/.test(line) && /[ \t]+2\.\s+\S/.test(line);
+    if ((!startsList && !hasInlineFirstPair) || !/[ \t]+\d+\.\s+\S/.test(line)) return line;
+    if (!startsList) line = line.replace(/^(.+?)[ \t]+(1\.\s+)/, "$1\n\n$2");
     return line.replace(/[ \t]+(?=\d+\.\s+)/g, "\n");
   });
   text = text.replace(/([^\n])\n(1\.\s)/g, "$1\n\n$2");
@@ -2591,12 +2597,28 @@ if (typeof marked === "undefined") {
           return;
         }
 
-        // Ordered list block (1. 2. 3. etc)
-        // Also handles intro line followed by list items e.g. "Heading:\n1. Foo\n2. Bar"
+        // Ordered list block (1. 2. 3. etc). Continuation lines are allowed
+        // when they are indented, as in the chat-file form produced by the
+        // backend. They belong to the preceding list item, not a paragraph.
+        // Also handles intro line followed by list items e.g. "Heading:\n1. Foo\n2. Bar".
         const olStart = lines.findIndex(l => /^\d+\.\s/.test(l));
-        if (olStart !== -1 && lines.slice(olStart).every(l => /^\d+\.\s/.test(l))) {
+        const olTail = olStart === -1 ? [] : lines.slice(olStart);
+        const olHasItems = olTail.some(l => /^\d+\.\s/.test(l));
+        // _parse_chat_file trims continuation-line indentation before the
+        // frontend receives the message, so a valid item continuation may be
+        // indented or plain text. It is still scoped inside a block that has
+        // already started with a numbered marker; later paragraph blocks are
+        // not merged here.
+        const olShapeIsValid = olHasItems;
+        if (olStart !== -1 && olShapeIsValid) {
           if (olStart > 0) html += `<p>${parseInline(lines.slice(0, olStart).join(' '))}</p>`;
-          html += '<ol>' + lines.slice(olStart).map(l => `<li>${parseInline(l.replace(/^\d+\.\s/, ''))}</li>`).join('') + '</ol>';
+          const orderedItems = [];
+          olTail.forEach(line => {
+            const marker = line.match(/^\d+\.\s+(.*)$/);
+            if (marker) orderedItems.push(marker[1]);
+            else if (orderedItems.length) orderedItems[orderedItems.length - 1] += ' ' + line.trim();
+          });
+          html += '<ol>' + orderedItems.map(item => `<li>${parseInline(item)}</li>`).join('') + '</ol>';
           return;
         }
 
@@ -4928,14 +4950,23 @@ function persistChatState() {
 // OPEN CHAT
 // ==================================================
 async function openChat(filename) {
+  const loadGeneration = ++chatLoadGeneration;
+  const loadTask = _openChatInternal(filename, loadGeneration);
+  chatLoadPromise = loadTask;
+  try {
+    return await loadTask;
+  } finally {
+    if (chatLoadPromise === loadTask) chatLoadPromise = null;
+  }
+}
+
+async function _openChatInternal(filename, loadGeneration) {
   if (window._preferredModelLoading) return;
   // 🔒 BLOCK if we're creating a new chat AND this isn't the new chat file
   if (isCreatingNewChat && filename !== currentChatFilename) {
     console.log('⛔ Blocked openChat - new chat creation in progress');
-    return;
+    return false;
   }
-  
-  window.loadedChat = []; // 👈 CLEAR MEMORY FIRST
   
   try {
     console.log('📂 Opening chat:', filename);
@@ -4945,7 +4976,7 @@ async function openChat(filename) {
     if (!characterName) {
       console.warn('⚠️ No character name detected in filename:', filename);
       hwuiToast('Invalid chat filename format. Expected: "Character - Title.txt"', 'error');
-      return;
+      return false;
     }
     
     console.log('🔄 Switching to character:', characterName);
@@ -4954,7 +4985,7 @@ async function openChat(filename) {
     
     if (!switchSuccess) {
       console.error('❌ Cannot open chat - character does not exist');
-      return;
+      return false;
     }
     
     var res = await fetch('/chats/open/' + filename);
@@ -4962,7 +4993,7 @@ async function openChat(filename) {
     
     if (data.error) {
       hwuiToast("Chat not found.", 'info');
-      return;
+      return false;
     }
     
     currentChatFilename = filename;
@@ -4978,7 +5009,7 @@ async function openChat(filename) {
     // ✅ FIX: Load conversation history into memory for context
     // ✅ FIX 2: Normalise legacy "User" speaker label to actual active user name
     var _activeUserFix = localStorage.getItem('activeUserName') || activeUserName || 'User';
-    window.loadedChat = await Promise.all(data.messages.map(async function(msg) {
+    const loadedMessages = await Promise.all(data.messages.map(async function(msg) {
       var spk = msg.speaker || null;
       if (spk && spk.toLowerCase() === 'user' && msg.role === 'user') {
         spk = _activeUserFix;
@@ -4995,6 +5026,7 @@ async function openChat(filename) {
       if (msg.generation_status) mapped.generation_status = msg.generation_status;
       if (msg.generation_started_at) mapped.generation_started_at = msg.generation_started_at;
       if (msg.generation_completed_at) mapped.generation_completed_at = msg.generation_completed_at;
+      if (msg.thinking) mapped.thinking = msg.thinking;
       if (msg.hasImage) mapped.hasImage = true;
       if (Array.isArray(msg.previewUrls) && msg.previewUrls.length > 0) {
         mapped.previewUrls = (await Promise.all(msg.previewUrls.map(async function(url) {
@@ -5019,6 +5051,15 @@ async function openChat(filename) {
       }
       return mapped;
     }));
+
+    if (loadGeneration !== chatLoadGeneration) {
+      console.warn('⚠️ Ignoring stale chat load:', filename);
+      return false;
+    }
+
+    // Swap only after the complete disk result has been reconstructed. This
+    // keeps sendPrompt() from ever seeing a cleared or partially loaded chat.
+    window.loadedChat = loadedMessages;
 
     // Fresh from disk — this tab is clean and disk holds exactly this many
     // messages. (Stale-write guard, June 10 2026.)
@@ -5060,6 +5101,7 @@ async function openChat(filename) {
   } catch (err) {
     console.error("❌ Error opening chat:", err);
     hwuiToast('Failed to open chat: ' + err.message, 'error');
+    return false;
   }
 }
   // ==================================================
@@ -5356,7 +5398,7 @@ async function openChat(filename) {
           var generatedImageDisplay = makeGeneratedImageDisplay(generatedImageUrlsForAssistant);
           if (generatedImageDisplay) div.appendChild(generatedImageDisplay);
           div.appendChild(modelSpan);
-          const retainedThinking = retainedThinkingForMessage(msg.message_id);
+          const retainedThinking = msg.thinking || retainedThinkingForMessage(msg.message_id);
           if (retainedThinking) {
             renderThinkingPanel(div, modelSpan, retainedThinking, null);
             div._thinkPanel.open = false;
@@ -5455,7 +5497,7 @@ async function openChat(filename) {
     // ==================================================
   // SEND PROMPT (with auto-create chat)
   // ==================================================
-  async function sendPrompt() {
+async function sendPrompt() {
     console.log('🔴 sendPrompt() called', new Date().getTime());
     console.trace();
     // Guard against double-fire (e.g. Enter key + button click race)
@@ -5465,6 +5507,35 @@ async function openChat(filename) {
     }
     window._sendPromptInFlight = true;
     try {
+
+    if (chatLoadPromise) {
+      console.warn('⏳ Chat history is still loading; waiting before submit');
+      let chatLoadSucceeded = true;
+      try { chatLoadSucceeded = (await chatLoadPromise) !== false; } catch (err) {
+        console.error('❌ Chat history load failed; cancelling submit:', err);
+        return;
+      }
+      if (!chatLoadSucceeded) {
+        console.error('❌ Chat history did not load; cancelling submit');
+        return;
+      }
+      if (chatLoadPromise) {
+        console.warn('⚠️ Chat history changed during submit preparation; cancelling submit');
+        return;
+      }
+    }
+
+    const hasRealAssistantHistory = (window.loadedChat || []).some(message =>
+      message && message.role === 'assistant' && !message.is_opening_line
+    );
+    if (currentChatFilename && window._chatBaseCount > 0 && !hasRealAssistantHistory) {
+      console.warn(
+        '⚠️ Existing chat has no real assistant history before submit:',
+        currentChatFilename,
+        'messages=', (window.loadedChat || []).length,
+        'base_count=', window._chatBaseCount
+      );
+    }
 
     const box = document.getElementById('user-input');
     const input = box.value.trim();
@@ -6564,7 +6635,8 @@ async function openChat(filename) {
           reply_to_message_id: replySourceUserMessageId,
           generation_status: assistantStatus,
           generation_started_at: generationStartedAt,
-          generation_completed_at: generationCompletedAt
+          generation_completed_at: generationCompletedAt,
+          ...(completedThinking ? { thinking: completedThinking } : {})
         });
         window._chatDirty = true;  // stale-write guard
         console.log('✅ Added assistant response to loadedChat. Total messages:', window.loadedChat.length);
@@ -6574,9 +6646,8 @@ async function openChat(filename) {
         console.log('🗑️ Removed duplicate DOM wrapper');
       }
 
-      // The full renderer below replaces the live DOM bubble. Retain only a
-      // presentation copy keyed to the finished assistant message so it can
-      // rebuild the collapsed disclosure without putting reasoning in history.
+      // Retain a transient fallback for the live DOM while the persisted
+      // assistant metadata is being written. Reopened chats use msg.thinking.
       const thinkingMessageId = isDuplicate
         ? lastLoadedMessage?.message_id
         : assistantMessageId;
@@ -6834,6 +6905,7 @@ async function openChat(filename) {
         ...(msg.generation_status ? { generation_status: msg.generation_status } : {}),
         ...(msg.generation_started_at ? { generation_started_at: msg.generation_started_at } : {}),
         ...(msg.generation_completed_at ? { generation_completed_at: msg.generation_completed_at } : {}),
+        ...(msg.thinking ? { thinking: msg.thinking } : {}),
         ...(msg.hasImage ? { hasImage: true } : {}),
         ...(Array.isArray(msg.previewUrls) && msg.previewUrls.length > 0 ? { previewUrls: msg.previewUrls } : {})
       }));

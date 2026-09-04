@@ -156,14 +156,29 @@ def save_system_prompt_example(filename):
     os.makedirs(folder, exist_ok=True)
     data = request.get_data(as_text=True).strip()
     path = os.path.join(folder, example_filename)
+    # A UI save explicitly selects this template's paired file as its global
+    # example source. Old paired files alone must not opt into native delivery.
+    settings_path = os.path.join(os.path.dirname(__file__), 'settings.json')
+    with open(settings_path, 'r', encoding='utf-8') as f:
+        settings = json.load(f)
+    configured = settings.get('ui_global_example_templates', [])
+    configured = list(configured) if isinstance(configured, list) else []
+    configured = [name for name in configured if name != filename]
+    if data:
+        configured.append(filename)
+    settings['ui_global_example_templates'] = configured
     if not data:
         # Empty content — delete the file if it exists, don't create a blank one
         if os.path.exists(path):
             os.remove(path)
             print(f'🗑️ Deleted empty example dialog: {example_filename}')
+        with open(settings_path, 'w', encoding='utf-8') as f:
+            json.dump(settings, f, indent=2, ensure_ascii=False)
         return jsonify({'status': 'saved', 'filename': example_filename})
     with open(path, 'w', encoding='utf-8') as f:
         f.write(data)
+    with open(settings_path, 'w', encoding='utf-8') as f:
+        json.dump(settings, f, indent=2, ensure_ascii=False)
     print(f'✅ Saved example dialog: {example_filename}')
     return jsonify({'status': 'saved', 'filename': example_filename})
 

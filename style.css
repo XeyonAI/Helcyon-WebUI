@@ -53,6 +53,8 @@
   --field-border: #1d3349;
   --field-border-focus: #2a3f50;
   --app-font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  /* Font-only scale; 1 = 100%. */
+  --app-text-scale: 1;
   --text-muted: #aaaaaa;
   --text-dim: #666666;
   --theme-editor-heading-text: #666666;
@@ -66,7 +68,7 @@
      Change this ONE value to resize the chat column on every theme.
      The chat #container, all theme files, midnight/evening, and the
      config page (via calc) all reference this. Nothing else to touch. */
-  --chat-width: 860px;
+  --chat-width: 820px;
 }
 
 body {
@@ -4650,6 +4652,14 @@ button#stop-btn {
   max-width: 760px !important;
   box-sizing: border-box;
   overflow: visible;
+}
+
+/* Keep the bottom composer and its preview strips aligned with the narrower
+   centre column while leaving a little breathing room at either side. */
+#input-row,
+#image-preview-strip,
+#document-preview-strip {
+  max-width: calc(var(--chat-width) - 100px) !important;
 }
 
 /* Textarea — override global width:100% that breaks flex layout */

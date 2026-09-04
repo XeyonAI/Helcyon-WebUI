@@ -29,6 +29,7 @@ _COPIED_FIELDS = (
     "generation_status",
     "generation_started_at",
     "generation_completed_at",
+    "thinking",
     "is_opening_line",
     "hasImage",
     "previewUrls",

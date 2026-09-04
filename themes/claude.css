@@ -7,6 +7,7 @@
 
 :root {
   --app-font-family: "Inter", "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  --app-text-scale: 1;
   --text-muted: #aaaaaa;
   --text-dim: #666666;
   --theme-editor-heading-text: #666666;
@@ -28,9 +29,11 @@
   --sidebar-footer-btn-bg: #111111;
   --sidebar-footer-btn-border: #232323;
   --user-msg-bg: #212121;
-  --user-msg-text: #dadada;
+  --user-msg-text: #f8f4f4;
   --model-msg-bg: #212121;
-  --model-msg-text: #dadada;
+  --model-msg-text: #faf5f5;
+  --user-avatar-border: rgba(100, 200, 255, 0.2);
+  --model-avatar-border: #2a4461;
   --message-preview-bg: #0a0d10;
   --msg-timestamp-text: #666666;
   --msg-border: #383838;

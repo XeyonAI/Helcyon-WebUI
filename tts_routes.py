@@ -8,6 +8,9 @@ import json
 import os
 import base64
 import struct
+import re
+import threading
+import uuid
 from pathlib import Path
 from user_config import load_user_config_section, save_user_config_section
 from urllib.parse import quote
@@ -29,6 +32,7 @@ OMNIVOICE_SERVER_URL    = 'http://127.0.0.1:8001'
 DEFAULT_VOICE = 'Sol'
 def _voice_forge_pro_only():
     return jsonify({'error': 'Voice Forge is available in HWUI Pro.', 'pro_required': True}), 403
+VOICE_FORGE_DEFAULT_TEXT = 'Hello. This is a test of a newly blended voice.'
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.json')
 VOICE_GROUPS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'voice_groups.json')  # legacy path
 QWENTTS_VOICES_DIR = Path(os.getenv(
@@ -45,6 +49,8 @@ QWEN_FAST_TALKER_QUANTIZATIONS = {'Q8_0', 'Q4_K_M'}
 _omnivoice_client = None
 _omnivoice_client_lock = None
 _omnivoice_generate_lock = None
+_voice_forge_results = {}
+_voice_forge_results_lock = threading.Lock()
 
 
 def get_settings():
@@ -163,6 +169,50 @@ def _f5_local_voices():
     except OSError as exc:
         logging.error(f'F5 voice scan failed in {F5_VOICES_DIR}: {exc}')
         return []
+
+
+def _voice_forge_upload_as_wav(upload):
+    """Return a requests-compatible WAV upload, decoding MP3 in HWUI when needed."""
+    raw = upload.read()
+    filename = Path(upload.filename or 'voice.wav').name
+    if raw[:4] == b'RIFF':
+        return filename, raw, 'audio/wav'
+    try:
+        import numpy as np
+        import soundfile as sf
+        import librosa
+
+        audio, sample_rate = sf.read(BytesIO(raw), dtype='float32', always_2d=False)
+        audio = np.asarray(audio, dtype=np.float32)
+        if audio.ndim == 2:
+            audio = audio.mean(axis=1)
+        if sample_rate != 24000:
+            audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=24000)
+        encoded = BytesIO()
+        sf.write(encoded, audio, 24000, format='WAV', subtype='PCM_16')
+        return f'{Path(filename).stem}.wav', encoded.getvalue(), 'audio/wav'
+    except Exception as exc:
+        raise ValueError(f'Could not decode Voice Forge upload {filename!r}: {exc}') from exc
+
+
+def _voice_forge_apply_speed(wav_bytes, speed):
+    if abs(speed - 1.0) < 1e-6:
+        return wav_bytes
+    try:
+        import numpy as np
+        import soundfile as sf
+        import librosa
+
+        audio, sample_rate = sf.read(BytesIO(wav_bytes), dtype='float32', always_2d=False)
+        audio = np.asarray(audio, dtype=np.float32)
+        if audio.ndim == 2:
+            audio = audio.mean(axis=1)
+        stretched = librosa.effects.time_stretch(audio, rate=speed)
+        encoded = BytesIO()
+        sf.write(encoded, stretched, sample_rate, format='WAV', subtype='PCM_16')
+        return encoded.getvalue()
+    except Exception as exc:
+        raise RuntimeError(f'Voice Forge speed adjustment failed: {exc}') from exc
 
 
 def _generate_omnivoice(text, voice, language='English'):
@@ -555,29 +605,8 @@ def get_voices():
 @tts_bp.route('/voice-forge/settings', methods=['GET'])
 def get_voice_forge_settings():
     return _voice_forge_pro_only()
-    try:
-        response = requests.get(f'{QWEN_FAST_SERVER_URL}/blend-voices/test-text', timeout=5)
-        payload = response.json()
-        if response.status_code != 200:
-            return jsonify({'error': payload.get('detail') or 'Could not load Voice Forge test text'}), response.status_code
-
-        legacy_text = get_settings().get('voice_forge_test_text')
-        if payload.get('saved') is False and isinstance(legacy_text, str) and legacy_text.strip():
-            migration = requests.post(
-                f'{QWEN_FAST_SERVER_URL}/blend-voices/test-text',
-                json={'test_text': legacy_text.strip()},
-                timeout=10,
-            )
-            if migration.status_code == 200:
-                payload = migration.json()
-        return jsonify({'test_text': payload.get('test_text') or 'Voice Forge is available in HWUI Pro.'})
-    except requests.exceptions.ConnectionError:
-        return jsonify({'error': 'Cannot connect to Qwen3-TTS Fast on port 8767'}), 503
-    except requests.exceptions.Timeout:
-        return jsonify({'error': 'Loading Voice Forge test text timed out'}), 504
-    except Exception as e:
-        logging.error(f'Voice Forge test text load failed: {e}')
-        return jsonify({'error': 'Could not load Voice Forge test text'}), 502
+    text = get_settings().get('voice_forge_test_text')
+    return jsonify({'test_text': text.strip() if isinstance(text, str) and text.strip() else VOICE_FORGE_DEFAULT_TEXT})
 
 
 @tts_bp.route('/voice-forge/settings', methods=['POST'])
@@ -590,37 +619,22 @@ def save_voice_forge_settings():
     text = text.strip()
     if len(text) > 10000:
         return jsonify({'error': 'Test text is too long'}), 400
-    try:
-        response = requests.post(
-            f'{QWEN_FAST_SERVER_URL}/blend-voices/test-text',
-            json={'test_text': text},
-            timeout=10,
-        )
-        try:
-            payload = response.json()
-        except ValueError:
-            payload = {'error': response.text[:500] or 'Invalid response from Qwen3-TTS Fast'}
-        if response.status_code != 200:
-            return jsonify({'error': payload.get('detail') or payload.get('error') or 'Could not save Voice Forge test text'}), response.status_code
-        return jsonify({'status': 'ok', 'test_text': payload.get('test_text') or text})
-    except requests.exceptions.ConnectionError:
-        return jsonify({'error': 'Cannot connect to Qwen3-TTS Fast on port 8767'}), 503
-    except requests.exceptions.Timeout:
-        return jsonify({'error': 'Saving Voice Forge test text timed out'}), 504
-    except Exception as e:
-        logging.error(f'Voice Forge test text save failed: {e}')
-        return jsonify({'error': 'Could not save Voice Forge test text'}), 502
+    if not save_settings({'voice_forge_test_text': text}):
+        return jsonify({'error': 'Could not save Voice Forge test text'}), 500
+    return jsonify({'status': 'ok', 'test_text': text})
 
 
 @tts_bp.route('/voice-forge/voices', methods=['GET'])
 def get_voice_forge_voices():
     return _voice_forge_pro_only()
     try:
-        response = requests.get(f'{QWEN_FAST_SERVER_URL}/voices', timeout=5)
-        if response.status_code != 200:
-            return jsonify({'error': 'Qwen3-TTS Fast is unavailable'}), response.status_code
-        voices = [{'name': name, 'label': name} for name in response.json().get('voices', [])]
-        return jsonify({'voices': voices, 'backend_online': True})
+        voices = [
+            {'name': name, 'label': name}
+            for name in _qwentts_local_voices()
+            if (QWENTTS_VOICES_DIR / f'{name}.txt').is_file()
+        ]
+        backend_online = requests.get(f'{QWEN_FAST_SERVER_URL}/health', timeout=5).status_code == 200
+        return jsonify({'voices': voices, 'backend_online': backend_online})
     except requests.exceptions.ConnectionError:
         return jsonify({'error': 'Cannot connect to Qwen3-TTS Fast on port 8767'}), 503
     except requests.exceptions.Timeout:
@@ -636,26 +650,11 @@ def get_voice_forge_reference():
     voice = str(request.args.get('voice') or '').strip()
     if not voice:
         return jsonify({'error': 'Voice name is required'}), 400
-    try:
-        response = requests.get(
-            f'{QWEN_FAST_SERVER_URL}/blend-voices/reference',
-            params={'voice': voice},
-            timeout=(5, 60),
-        )
-        if response.status_code != 200:
-            try:
-                message = response.json().get('detail')
-            except ValueError:
-                message = None
-            return jsonify({'error': message or 'Voice reference is unavailable'}), response.status_code
-        return Response(response.content, mimetype='audio/wav')
-    except requests.exceptions.ConnectionError:
-        return jsonify({'error': 'Cannot connect to Qwen3-TTS Fast on port 8767'}), 503
-    except requests.exceptions.Timeout:
-        return jsonify({'error': 'Voice reference preview timed out'}), 504
-    except Exception as e:
-        logging.error(f'Voice Forge reference proxy failed: {e}')
-        return jsonify({'error': 'Voice reference is unavailable'}), 502
+    wav_path = _qwentts_voice_files(voice)
+    transcript_path = wav_path.with_suffix('.txt') if wav_path else None
+    if wav_path is None or transcript_path is None or not transcript_path.is_file():
+        return jsonify({'error': 'Voice reference is unavailable'}), 404
+    return send_file(wav_path, mimetype='audio/wav', as_attachment=False)
 
 
 @tts_bp.route('/voice-forge/voice', methods=['DELETE'])
@@ -664,27 +663,31 @@ def delete_voice_forge_voice():
     voice = str(request.args.get('voice') or '').strip()
     if not voice:
         return jsonify({'error': 'Voice name is required'}), 400
+    wav_path = _qwentts_voice_files(voice)
+    transcript_path = wav_path.with_suffix('.txt') if wav_path else None
+    if wav_path is None or transcript_path is None or not transcript_path.is_file():
+        return jsonify({'error': f"Voice '{voice}' was not found"}), 404
+    token = uuid.uuid4().hex
+    staged = [(wav_path, wav_path.with_name(f'.{wav_path.name}.{token}.delete')),
+              (transcript_path, transcript_path.with_name(f'.{transcript_path.name}.{token}.delete'))]
     try:
-        response = requests.delete(
-            f'{QWEN_FAST_SERVER_URL}/blend-voices/voice',
-            params={'voice': voice},
-            timeout=(5, 30),
-        )
+        for source, temporary in staged:
+            os.replace(source, temporary)
         try:
-            payload = response.json()
-        except ValueError:
-            payload = {'error': response.text[:500] or 'Invalid response from Qwen3-TTS Fast'}
-        if response.status_code != 200:
-            message = payload.get('detail') or payload.get('error') or 'Could not delete the voice'
-            return jsonify({'error': message}), response.status_code
-        return jsonify(payload)
-    except requests.exceptions.ConnectionError:
-        return jsonify({'error': 'Cannot connect to Qwen3-TTS Fast on port 8767'}), 503
-    except requests.exceptions.Timeout:
-        return jsonify({'error': 'Deleting the voice timed out'}), 504
-    except Exception as e:
-        logging.error(f'Voice Forge delete proxy failed: {e}')
-        return jsonify({'error': 'Could not delete the voice'}), 502
+            requests.delete(f'{QWEN_FAST_SERVER_URL}/v1/audio/voices/{quote(voice, safe="")}', timeout=(5, 30))
+        except requests.RequestException:
+            pass
+        for _source, temporary in staged:
+            temporary.unlink(missing_ok=True)
+        return jsonify({'status': 'ok', 'voice': voice, 'deleted': [wav_path.name, transcript_path.name]})
+    except OSError as exc:
+        for source, temporary in reversed(staged):
+            if temporary.exists() and not source.exists():
+                try:
+                    os.replace(temporary, source)
+                except OSError:
+                    pass
+        return jsonify({'error': f"Could not delete voice '{voice}': {exc}"}), 500
 
 
 @tts_bp.route('/voice-forge/blend', methods=['POST'])
@@ -695,14 +698,23 @@ def blend_voice_forge_sources():
         if key in {'text', 'blend_ratio', 'expression', 'speed', 'language', 'seed', 'voice_a', 'voice_b'} and value != ''
     }
     files = {}
-    for key in ('voice_a_audio', 'voice_b_audio'):
-        upload = request.files.get(key)
-        if upload and upload.filename:
-            files[key] = (Path(upload.filename).name, upload.stream, upload.mimetype)
     try:
+        for key in ('voice_a_audio', 'voice_b_audio'):
+            upload = request.files.get(key)
+            if upload and upload.filename:
+                files[key] = _voice_forge_upload_as_wav(upload)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    try:
+        for key in ('voice_a', 'voice_b'):
+            if fields.get(key):
+                _ensure_qwentts_voice_registered(fields[key], QWEN_FAST_SERVER_URL)
+        native_fields = dict(fields)
+        requested_speed = float(native_fields.get('speed', 1.0))
+        native_fields['speed'] = '1.0'
         response = requests.post(
             f'{QWEN_FAST_SERVER_URL}/blend-voices',
-            data=fields,
+            data=native_fields,
             files=files,
             timeout=(10, 180),
         )
@@ -716,6 +728,21 @@ def blend_voice_forge_sources():
         filename = Path(str(payload.get('audio_url') or '')).name
         if not filename.lower().endswith('.wav'):
             return jsonify({'error': 'Qwen3-TTS Fast did not return Voice Forge audio'}), 502
+        result_id = str(payload.get('result_id') or '')
+        if not result_id:
+            return jsonify({'error': 'Qwen3-TTS Fast did not return a Voice Forge result ID'}), 502
+        audio_response = requests.get(
+            f'{QWEN_FAST_SERVER_URL}/blend-voices/audio/{quote(filename)}',
+            timeout=(5, 60),
+        )
+        if audio_response.status_code != 200:
+            return jsonify({'error': 'Generated Voice Forge audio is unavailable'}), 502
+        audio_bytes = _voice_forge_apply_speed(audio_response.content, requested_speed)
+        with _voice_forge_results_lock:
+            if len(_voice_forge_results) >= 8:
+                _voice_forge_results.pop(next(iter(_voice_forge_results)))
+            _voice_forge_results[result_id] = {'filename': filename, 'audio': audio_bytes}
+        payload['speed'] = requested_speed
         payload['audio_url'] = f'/api/tts/voice-forge/audio/{quote(filename)}'
         return jsonify(payload)
     except requests.exceptions.ConnectionError:
@@ -733,21 +760,11 @@ def get_voice_forge_audio(filename):
     safe_name = Path(filename).name
     if safe_name != filename or not safe_name.lower().endswith('.wav'):
         return jsonify({'error': 'Invalid Voice Forge audio name'}), 400
-    try:
-        response = requests.get(
-            f'{QWEN_FAST_SERVER_URL}/blend-voices/audio/{quote(safe_name)}',
-            timeout=(5, 60),
-        )
-        if response.status_code != 200:
-            return jsonify({'error': 'Voice Forge audio is unavailable'}), response.status_code
-        return Response(response.content, mimetype='audio/wav')
-    except requests.exceptions.ConnectionError:
-        return jsonify({'error': 'Cannot connect to Qwen3-TTS Fast on port 8767'}), 503
-    except requests.exceptions.Timeout:
-        return jsonify({'error': 'Voice Forge audio timed out'}), 504
-    except Exception as e:
-        logging.error(f'Voice Forge audio proxy failed: {e}')
-        return jsonify({'error': 'Voice Forge audio is unavailable'}), 502
+    with _voice_forge_results_lock:
+        result = next((item for item in _voice_forge_results.values() if item['filename'] == safe_name), None)
+    if not result:
+        return jsonify({'error': 'Voice Forge audio is unavailable'}), 404
+    return Response(result['audio'], mimetype='audio/wav')
 
 
 @tts_bp.route('/voice-forge/save', methods=['POST'])
@@ -758,25 +775,50 @@ def save_voice_forge_result():
         'voice_name': str(request.form.get('voice_name') or ''),
         'transcript': str(request.form.get('transcript') or ''),
     }
+    safe_name = Path(fields['voice_name'].strip().removesuffix('.wav')).name
+    if not safe_name or safe_name != fields['voice_name'].strip().removesuffix('.wav'):
+        return jsonify({'error': 'Enter a valid voice name'}), 400
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9 _.-]{0,79}', safe_name):
+        return jsonify({'error': 'Voice name may contain letters, numbers, spaces, dots, dashes, and underscores'}), 400
+    transcript = fields['transcript'].strip()
+    if not transcript:
+        return jsonify({'error': 'A transcript is required'}), 400
+    with _voice_forge_results_lock:
+        result = _voice_forge_results.get(fields['result_id'])
+    if not result:
+        return jsonify({'error': 'Voice Forge result is no longer available; generate it again'}), 404
+    target_wav = QWENTTS_VOICES_DIR / f'{safe_name}.wav'
+    target_txt = QWENTTS_VOICES_DIR / f'{safe_name}.txt'
+    if target_wav.exists() or target_txt.exists():
+        return jsonify({'error': f"Voice '{safe_name}' already exists"}), 409
+    temp_wav = None
+    temp_txt = None
     try:
-        response = requests.post(
-            f'{QWEN_FAST_SERVER_URL}/blend-voices/save',
-            data=fields,
-            timeout=(5, 30),
-        )
-        try:
-            payload = response.json()
-        except ValueError:
-            payload = {'error': response.text[:500] or 'Invalid response from Qwen3-TTS Fast'}
-        if response.status_code != 200:
-            message = payload.get('detail') or payload.get('error') or 'Could not save HWUI voice'
-            return jsonify({'error': message}), response.status_code
-        return jsonify(payload)
+        QWENTTS_VOICES_DIR.mkdir(parents=True, exist_ok=True)
+        token = uuid.uuid4().hex
+        temp_wav = QWENTTS_VOICES_DIR / f'.{safe_name}.{token}.tmp.wav'
+        temp_txt = QWENTTS_VOICES_DIR / f'.{safe_name}.{token}.tmp.txt'
+        temp_wav.write_bytes(result['audio'])
+        temp_txt.write_text(transcript + '\n', encoding='utf-8')
+        os.replace(temp_wav, target_wav)
+        os.replace(temp_txt, target_txt)
+        return jsonify({'status': 'ok', 'voice': safe_name})
     except requests.exceptions.ConnectionError:
         return jsonify({'error': 'Cannot connect to Qwen3-TTS Fast on port 8767'}), 503
     except requests.exceptions.Timeout:
         return jsonify({'error': 'Saving the HWUI voice timed out'}), 504
     except Exception as e:
+        for temporary in (temp_wav, temp_txt):
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        if target_wav.exists() and not target_txt.exists():
+            try:
+                target_wav.unlink()
+            except OSError:
+                pass
         logging.error(f'Voice Forge save proxy failed: {e}')
         return jsonify({'error': 'Could not save the HWUI voice'}), 502
 

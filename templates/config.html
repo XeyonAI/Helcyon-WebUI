@@ -7,7 +7,8 @@
        127.0.0.1 origin. -->
   <script src="/build_scope.js"></script>
   <title>Helcyon Config</title>
-  <link rel="stylesheet" href="/style.css?v=41" />
+  <link rel="stylesheet" href="/style.css?v=42" />
+  <script src="/static/text_scale.js" defer></script>
   <style>
     /* ---- Config Tab System (self-contained — do not rely on style.css for this) ---- */
     #config-tab-bar {
@@ -6442,6 +6443,7 @@ function setBgMode(mode) {
 const THEME_VARS = [
   { group: 'Typography', vars: [
     { key: '--app-font-family', label: 'App Font', type: 'font' },
+    { key: '--app-text-scale', label: 'Global Text Size', type: 'scale' },
   ]},
   { group: 'Secondary Text', vars: [
     { key: '--text-muted',                 label: 'Muted Text' },
@@ -6671,6 +6673,8 @@ function refreshPresetDropdown() {
 }
 
 async function loadPreset() {
+  showHwuiProModal('Theme Editor', 'Theme editing is available in HWUI Pro.');
+  return;
   const name = document.getElementById('theme-preset-select').value;
   if (!name || !themePresets[name]) { hwuiToast('Pick a preset first.', 'info'); return; }
   const colours = themePresets[name];
@@ -7974,6 +7978,7 @@ const THEME_SECTIONS = [
     title: 'Typography',
     vars: [
       { key: '--app-font-family', label: 'App Font', type: 'font' },
+      { key: '--app-text-scale', label: 'Global Text Size', type: 'scale' },
     ],
     preview: (el) => {
       el.innerHTML = `
@@ -8311,6 +8316,38 @@ function renderThemeModal(data) {
         fontRow.appendChild(select);
         fontRow.appendChild(favBtn);
         row.appendChild(fontRow);
+        grid.appendChild(row);
+        continue;
+      }
+      if (v.type === 'scale') {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex; flex-direction:column; gap:5px;';
+        const labelRow = document.createElement('div');
+        labelRow.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px;';
+        const label = document.createElement('label');
+        label.style.cssText = 'font-size:12px; color:#ccc; margin:0;';
+        label.textContent = v.label;
+        const valueLabel = document.createElement('span');
+        valueLabel.style.cssText = 'font-size:12px; color:var(--text-muted); min-width:42px; text-align:right;';
+        const scale = Math.max(0.9, Math.min(1.25, Number(raw) || 1));
+        valueLabel.textContent = Math.round(scale * 100) + '%';
+        const input = document.createElement('input');
+        input.type = 'range';
+        input.min = '0.90';
+        input.max = '1.25';
+        input.step = '0.01';
+        input.value = scale.toFixed(2);
+        input.title = 'Scale HWUI text only; layout, controls and spacing stay the same';
+        input.style.cssText = 'width:100%; accent-color:#2a8a5a; cursor:pointer;';
+        input.oninput = function() {
+          const value = Number(this.value).toFixed(2);
+          _applyThemeVar(v.key, value);
+          valueLabel.textContent = Math.round(Number(value) * 100) + '%';
+        };
+        labelRow.appendChild(label);
+        labelRow.appendChild(valueLabel);
+        row.appendChild(labelRow);
+        row.appendChild(input);
         grid.appendChild(row);
         continue;
       }
