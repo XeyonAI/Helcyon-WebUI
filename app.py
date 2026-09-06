@@ -1955,7 +1955,7 @@ def _ministral_reasoning_requested_for_turn(user_text, messages=None):
         return False
 
 
-def _configure_local_reasoning_payload(payload, enabled, ministral_native=False):
+def _configure_local_reasoning_payload(payload, enabled, ministral_native=False, native_guidance_tail=""):
     """Apply request-only reasoning controls without changing saved history."""
     configured = dict(payload)
     template_kwargs = dict(configured.get("chat_template_kwargs") or {})
@@ -2022,7 +2022,16 @@ def _configure_local_reasoning_payload(payload, enabled, ministral_native=False)
     packet = _MINISTRAL_REASONING_CONTRACT
     turn_packet = _MINISTRAL_REASONING_TURN_PACKET
     if system_message is not None:
-        append_text(system_message, packet)
+        content = system_message.get("content")
+        if native_guidance_tail and isinstance(content, str) and content.endswith(native_guidance_tail):
+            # Keep C unchanged: Character Note -> Global PHI remains the system
+            # tail. Insert only the reasoning contract before that exact packet.
+            prefix = content[:-len(native_guidance_tail)].rstrip()
+            system_message["content"] = "\n\n".join(
+                part for part in (prefix, packet, native_guidance_tail) if part
+            )
+        else:
+            append_text(system_message, packet)
     elif latest_user_message is not None:
         # Direct multimodal paths may have folded system text into the user turn.
         append_text(latest_user_message, packet, prefix=True)
@@ -3002,6 +3011,122 @@ _WEB_SEARCH_EXPLICIT_RE = (
 )
 
 
+# ── Subject recovery for opt-in searches (2026-09-05 petrol-search fix) ──
+# The query is sliced from the text AFTER the opt-in phrase, so a message that
+# states its topic first and asks second — "petrol prices are bad … can you
+# search online and find out if theyre ever coming back down?" — produced the
+# subject-less tail "and find out if theyre ever coming back down". The search
+# then matched the trailing phrase and returned relationship listicles ("9
+# signs your ex will come back"). These two helpers detect a tail that leans on
+# a pronoun instead of naming its subject, and pull the subject back out of the
+# text that preceded the opt-in phrase.
+
+# Third-person anaphora: a tail built on these has no subject of its own.
+_QUERY_ANAPHORA = frozenset({
+    "it", "its", "it's", "they", "them", "their", "theirs", "theyre",
+    "they're", "that", "those", "these", "this", "he", "him", "his",
+    "she", "her", "hers", "one", "ones",
+})
+
+# Words that never carry the topic of a search. Used only to find the
+# strongest noun run in the pre-trigger text — never to filter results.
+_QUERY_NOISE_WORDS = _QUERY_ANAPHORA | frozenset({
+    "a", "an", "the", "and", "or", "but", "so", "then", "also", "plus",
+    "if", "whether", "of", "to", "for", "on", "in", "at", "by", "with",
+    "from", "about", "as", "than", "like", "up", "down", "out", "back",
+    "over", "again", "still", "yet", "ever", "never", "always", "just",
+    "even", "well", "here", "there", "now", "soon", "any", "some", "all",
+    "much", "many", "more", "less",
+    "i", "im", "i'm", "me", "my", "mine", "you", "your", "yours", "we",
+    "us", "our", "ours", "who", "what", "when", "where", "why", "how",
+    "which",
+    "is", "are", "was", "were", "be", "been", "being", "am", "do", "does",
+    "did", "done", "have", "has", "had", "will", "would", "can", "could",
+    "shall", "should", "may", "might", "must", "get", "got", "go", "going",
+    "come", "coming", "came", "gonna", "wanna", "let", "lets", "let's",
+    "know", "think", "say", "said", "tell", "find", "found", "figure",
+    "check", "see", "look", "please", "thanks", "thank",
+    # the opt-in vocabulary itself, so it can never become the topic
+    "search", "searching", "online", "web", "internet", "google", "lookup",
+    "hey", "hi", "hello", "yeah", "yes", "no", "ok", "okay", "oh", "ah",
+    "um", "erm", "anyway", "though", "really", "very", "quite",
+    "bloody", "fucking", "fuckin", "damn", "shit", "bad", "good", "mad",
+})
+
+# Connective + lookup-verb + complementizer run at the head of a subject-less
+# tail ("and find out if …"). Stripped only when a subject is being restored,
+# so self-contained tails keep their exact wording.
+_QUERY_LEADIN_RE = re.compile(
+    r"^(?:\s*(?:and|then|also|so|but|plus|just|please|maybe)\b)*"
+    r"(?:\s*\b(?:why|what|when|where|how|which|who)\b)?"
+    r"(?:\s*\b(?:is|are|was|were|will|would|do|does|did|can|could|should)\b)?"
+    r"\s*(?:find\s+out|found\s+out|figure\s+out|let\s+me\s+know|tell\s+me|"
+    r"have\s+a\s+look|take\s+a\s+look|check|see|look)?"
+    r"(?:\s*\b(?:if|whether|about|for|out|on)\b)*\s*",
+    re.IGNORECASE,
+)
+
+_QUERY_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'’-]*")
+
+
+def _query_topic_phrase(text, max_words=4):
+    """Longest contiguous run of topical words in `text`.
+
+    Deliberately shallow — no POS tagging, no model call. Noise words break a
+    run, so "Fucking petrol prices are bad as well" yields "petrol prices".
+    Returns "" when nothing topical is present.
+    """
+    best = []
+    for sentence in re.split(r"[.!?\n;]+", str(text or "")):
+        run = []
+        for raw in _QUERY_WORD_RE.findall(sentence):
+            word = raw.lower().replace("’", "'").strip("'-")
+            if word in _QUERY_NOISE_WORDS or not word:
+                if len(run) > len(best):
+                    best = run
+                run = []
+            else:
+                run.append(raw)
+        if len(run) > len(best):
+            best = run
+    return " ".join(best[:max_words])
+
+
+def _restore_query_subject(query, context):
+    """Re-centre a subject-less search query on the topic stated in `context`.
+
+    Returns `query` untouched unless it is empty or anaphoric — i.e. it leans
+    on "they"/"it"/"that" for its subject — AND `context` actually names one.
+    """
+    tail = str(query or "").strip()
+    tokens = [
+        w.lower().replace("’", "'").strip("'-")
+        for w in _QUERY_WORD_RE.findall(tail)
+    ]
+    if tail and not any(t in _QUERY_ANAPHORA for t in tokens):
+        return tail
+
+    subject = _query_topic_phrase(context)
+    if not subject:
+        return tail
+    if all(w.lower() in tokens for w in subject.split()):
+        return tail
+
+    tail = _QUERY_LEADIN_RE.sub("", tail, count=1)
+    # Drop the now-redundant pronoun, and any word the restored subject
+    # already supplies, so "fuel prices likely" + "are likely to fall" does
+    # not come back as "fuel prices likely are likely to fall".
+    subject_words = {w.lower() for w in subject.split()}
+    kept = []
+    for word in tail.split():
+        norm = word.lower().replace("’", "'").strip("'-.,?!")
+        if norm in _QUERY_ANAPHORA or norm in subject_words:
+            continue
+        kept.append(word)
+    tail = " ".join(kept)
+    return f"{subject} {tail}".strip() if tail else subject
+
+
 def _ministral_runtime_search_query(user_msg):
     """Return a search query for clear native-Ministral web intent, else None.
 
@@ -3021,6 +3146,8 @@ def _ministral_runtime_search_query(user_msg):
         query = re.sub(r"^[\s:,-]*(?:for|on|about)\s+", "", query, flags=re.IGNORECASE)
         query = re.sub(r"[\s,]*(?:please|for me)[?.!]*$", "", query, flags=re.IGNORECASE)
         query = query.strip().rstrip("?.!,")
+        # The topic may live BEFORE the opt-in phrase; the slice above drops it.
+        query = _restore_query_subject(query, text[:explicit.start()])
         return query[:200].rsplit(" ", 1)[0] if len(query) > 200 else (query or None)
 
     return None
@@ -7281,8 +7408,7 @@ def _ministral_style_signature(fake_turns):
 
 
 _PHI_IMAGE_GUIDANCE_RE = re.compile(
-    r"\b(sdxl|comfyui|image|picture|photo|portrait|selfie|artwork|illustration|"
-    r"weighted syntax|visual descriptor)\b",
+    r"^[ \t]*(?:#{1,6}[ \t]+)?(?:images?|image guidance|image generation|sdxl)[:]?[ \t]*$",
     re.IGNORECASE,
 )
 
@@ -7357,31 +7483,22 @@ def _resolve_global_post_history_filename(char_data=None):
 
 
 def _split_post_history_image_guidance(text):
-    """Separate image/SDXL guidance blocks from a post-history directive.
+    """Gate explicitly headed image sections, never infer scope from vocabulary.
 
-    The image half of a `.posthistory.txt` only has a job on image turns, but
-    the whole directive is delivered in the final-user governor slot — the
-    highest-attention text in the prompt, immediately before generation. On
-    2026-08-18 that made a Ministral turn answer the plain greeting "Hey Nev,
-    hows it going?" with a verbatim SDXL prompt lifted straight out of this
-    guidance, because the example sat in the last few hundred characters of the
-    prompt.
-
-    Splitting on blank-line blocks lets ordinary text turns carry only the
-    conversational rules, while an image turn still receives the image guidance
-    unchanged, word for word. Nothing is rewritten or summarised — a block is
-    either delivered verbatim or withheld for this turn.
-
-    Returns (text_without_image_guidance, image_guidance_text).
+    Unheaded or mixed prose stays active: mentioning a picture cannot remove
+    a neighbouring brevity/persona rule. An Images: section retains its scope
+    across paragraphs until the next heading. Image turns use the original
+    directive, so neither source wording nor source order is reconstructed.
     """
-    blocks = re.split(r"\n\s*\n", str(text or ""))
     conversational, image = [], []
-    for block in blocks:
-        if block.strip() and _PHI_IMAGE_GUIDANCE_RE.search(block):
-            image.append(block.strip())
-        else:
-            conversational.append(block)
-    return "\n\n".join(conversational).strip(), "\n\n".join(image).strip()
+    image_section = False
+    for line in str(text or "").splitlines():
+        if _PHI_IMAGE_GUIDANCE_RE.fullmatch(line):
+            image_section = True
+        elif re.fullmatch(r"[ \t]*(?:#{1,6}[ \t]+\S.*|[^:\n]{1,80}:[ \t]*)", line):
+            image_section = False
+        (image if image_section else conversational).append(line)
+    return "\n".join(conversational).strip(), "\n".join(image).strip()
 
 
 def _ministral_native_governor(raw_directive):
@@ -7488,59 +7605,15 @@ _MINISTRAL_PROJECT_SECTION_RE = re.compile(r"(?m)^[ \t]*([^\n:]{1,60}):[ \t]*$")
 
 
 def _ministral_split_project_text(project_instructions):
-    """Split project text into (directives, reference material).
+    """Preserve the authority of the authored project instructions field.
 
-    ⚠️ REC 4. A project's `instructions` field routinely holds two different
-    kinds of content: things the model must DO ("always use code execution",
-    "check CHANGES.md") and things it merely needs to KNOW (on the live Dev
-    project, ~458 tokens of facts about Runpod, A100s, training sets, LoRA merge
-    layers and R2). Both were rendered under "For this project:" as peer
-    behavioural imperatives, so reference facts competed with Global PHI, the
-    character card and the real directives for instruction-following budget.
-
-    The split is deliberately conservative and marker-driven, never semantic:
-    it triggers ONLY at a bare section-label line — a short line that is nothing
-    but a label followed by a colon, e.g. "Helcyon training:" — and everything
-    from that label onward becomes reference. With no such label the entire text
-    stays directives and nothing changes at all.
-
-    NO PROJECT CONTENT IS EVER DROPPED. The two halves are re-joined by the
-    caller: directives under "For this project:", reference inside a
-    <PROJECT_REFERENCE> tag governed by _MINISTRAL_TAGGED_CONTEXT_RULE.
+    A heading cannot prove its following text is passive: even Background:
+    can contain active rules. Keep the existing two-part caller contract, but
+    do not demote instructions by guessing from their headings. Actual project
+    documents still use the separate passive reference path.
     """
     text = str(project_instructions or "").strip()
-    if not text:
-        return "", ""
-    match = None
-    for candidate in _MINISTRAL_PROJECT_SECTION_RE.finditer(text):
-        label = candidate.group(1).strip()
-        # A label, not a sentence that happens to end in a colon.
-        if not label or len(label.split()) > 6 or label.endswith((".", "?", "!")):
-            continue
-        # ⚠️ Never demote a section the user labelled as directives. "Rules:",
-        # "Instructions:", "Guidelines:" and friends introduce things the model
-        # must DO; treating them as passive reference would silently strip a
-        # project of its actual authority. On any such label the split simply
-        # does not fire and the whole project text stays as directives.
-        if any(word in label.lower() for word in _MINISTRAL_PROJECT_DIRECTIVE_LABELS):
-            continue
-        match = candidate
-        break
-    if match is None:
-        return text, ""
-    # A later explicitly directive-labelled section must never be swept into
-    # passive reference merely because a Background/Overview section preceded
-    # it. In that mixed shape, retain the whole project as instructions; this is
-    # the conservative fallback and preserves both authority and source order.
-    for later in _MINISTRAL_PROJECT_SECTION_RE.finditer(text, match.end()):
-        later_label = later.group(1).strip().lower()
-        if any(word in later_label for word in _MINISTRAL_PROJECT_DIRECTIVE_LABELS):
-            return text, ""
-    directives = text[:match.start()].strip()
-    reference = text[match.start():].strip()
-    if not directives:
-        return text, ""
-    return directives, reference
+    return text, ""
 
 
 def _ministral_native_instruction_layer(instruction):
@@ -7784,6 +7857,7 @@ def _build_ministral_native_messages(
     character_name="",
     character_aliases=None,
     user_document_context="",
+    current_image_parts=None,
 ):
     """Build a Tekken-native role array with optional reference-only few-shots."""
     cleaned = []
@@ -7851,7 +7925,16 @@ def _build_ministral_native_messages(
                 character_aliases,
                 include_generic_vocatives=True,
             )
-        if content.strip():
+        if content.strip() or (idx == final_user_index and current_image_parts):
+            if idx == final_user_index and current_image_parts:
+                # Native Mistral supports typed image_url content under [INST].
+                # Only this request's current images survive, never old images.
+                content = [{"type": "text", "text": content}] + [
+                    {**part, "image_url": dict(part["image_url"])}
+                    for part in current_image_parts
+                    if isinstance(part, dict) and part.get("type") == "image_url"
+                    and isinstance(part.get("image_url"), dict)
+                ]
             cleaned.append({"role": role, "content": content})
 
     system_parts = [str(system_content or "").strip()]
@@ -7868,6 +7951,11 @@ def _build_ministral_native_messages(
         guidance.append(_ATTACHED_DOCUMENT_TASK_GUIDANCE)
     if character_note_packet:
         guidance.append(str(character_note_packet).strip())
+    governor = str(final_governor or "").strip()
+    if governor:
+        # Native Ministral has a real system-message boundary. Keep Global PHI
+        # as non-conversational guidance immediately after Character Note.
+        guidance.append(governor)
     if guidance:
         system_parts.append(
             "For the current response:\n"
@@ -7887,36 +7975,6 @@ def _build_ministral_native_messages(
             result.append({"role": message["role"], "content": content})
     result.extend(cleaned)
 
-    # ── Global Post-History governor: last block of the FINAL USER TURN ──────
-    # Restored 2026-09-02. This is the placement four separate comments in this
-    # file already document ("folded after the exact current-user text inside
-    # the final native user turn", "immediately before generation", "the last
-    # block of the final user turn") and the one
-    # test_named_greeting_role_stability::test_governor_is_present_and_last_in_both
-    # asserts. The implementation had drifted to appending it to `system_parts`
-    # instead, which buries it at the tail of a ~4,000-token leading system
-    # message — measured on 2026-09-02 as the WORST of every slot available in
-    # the Tekken template (0/16 on an explicit, machine-checkable governor rule,
-    # against 4-5/16 for this slot at the same instruction load).
-    #
-    # Placed after the user's own words, not before them, so the typed message
-    # still reads as the thing being answered. A trailing system-role message
-    # renders correctly in this template too (verified via /apply-template) but
-    # is NOT used: the Tekken role validator raises on a system message that
-    # follows an assistant turn, which would be a new hard-failure mode for no
-    # measurable gain.
-    governor = str(final_governor or "").strip()
-    if governor:
-        for message in reversed(result):
-            if message.get("role") == "user":
-                message["content"] = (message.get("content", "").rstrip()
-                                      + "\n\n" + governor).strip()
-                break
-        else:
-            # No user turn to carry it (rebuild/regeneration edge case) — fall
-            # back to the instruction role rather than dropping the governor.
-            result[0]["content"] = (result[0]["content"].rstrip()
-                                    + "\n\n" + governor).strip()
     return result
 
 
@@ -9695,9 +9753,7 @@ def chat():
             _phi_image_turn = bool(data.get("current_turn_has_image")) or \
                 _may_request_image_generation(user_input)
             if _phi_image_turn:
-                _gph_val = "\n\n".join(
-                    part for part in (_gph_conversational, _gph_image_guidance) if part
-                )
+                # Preserve the full authored directive and its original order.
                 print(f"🖼️ Post-history image guidance INCLUDED "
                       f"({len(_gph_image_guidance)} chars — image turn detected)")
             else:
@@ -10061,6 +10117,10 @@ def chat():
                 "in Settings, reload the model once, and resend the image."
             ), 400
 
+    _native_ministral_image_turn = bool(
+        has_images and _backend_mode_for_vision == 'local' and _is_ministral_for_examples
+    )
+    if has_images and _backend_mode_for_vision == 'local' and not _native_ministral_image_turn:
         # --------------------------------------------------------
         # VISION PATH: Use /v1/chat/completions with messages array
         # Pixtral / LLaVA / multimodal models
@@ -10831,9 +10891,17 @@ def chat():
                 # scaffolding has any work to do on THIS turn. Nothing user-authored
                 # is gated: system prompts, character cards, example dialogue,
                 # memory/RAG and project text always go through.
+                # AST-isolated callers and older test harnesses may enter this
+                # branch without the outer vision setup; default only when the
+                # request-local flag has not already been computed.
+                if "_native_ministral_image_turn" not in locals():
+                    _native_ministral_image_turn = False
                 _ministral_search_contract = use_web_search and _ministral_web_search_contract_needed(
                     user_input,
                 )
+                if _native_ministral_image_turn:
+                    # Retain the existing direct-image route's no-search dispatch.
+                    _ministral_search_contract = False
                 if use_web_search and not _ministral_search_contract:
                     print("🔎 Web-search contract withheld — no opt-in phrase and no "
                           "results block this turn", flush=True)
@@ -10861,8 +10929,8 @@ def chat():
                     or char_data.get("personality", "").strip()
                 )
 
-                # REC 4: preserve every character of project text, but stop the
-                # factual half competing as a peer behavioural imperative.
+                # The authored project instruction field stays active; headings
+                # cannot establish that a later instruction is passive data.
                 _ministral_project_directives, _ministral_project_reference = (
                     _ministral_split_project_text(_nuke_chatml(project_instructions))
                 )
@@ -10905,7 +10973,7 @@ def chat():
                         *[content for _, content in _ministral_context_guidance],
                         # Character post-history remains ordinary current-response
                         # guidance. The paired Global Post-History is folded separately
-                        # after the exact current-user text in the final native user turn.
+                        # immediately after Character Note in the native system block.
                         *([_nuke_chatml(_character_post_packet)] if _character_post_packet else []),
                     ],
                     web_search_enabled=_ministral_search_contract,
@@ -10930,6 +10998,7 @@ def chat():
                     character_note_packet=_character_note_packet,
                     final_governor=_active_native_governor,
                     user_document_context=_user_document_context,
+                    current_image_parts=_current_image_parts if _native_ministral_image_turn else None,
                     # Examples are delivered ONCE, as isolated demonstrations in
                     # the native system message. They must not also be appended as
                     # bare user/assistant turns: role-shaped copies are
@@ -11003,8 +11072,15 @@ def chat():
             # sampler settings as the raw /completion path. Without this update the
             # Gemma branch silently omitted min_p/top_k/repetition/DRY controls and
             # llama.cpp applied its own provider defaults.
-            payload.update(_ministral_sampling_payload_fields(sampling))
-            if _is_ministral_model:
+            if _native_ministral_image_turn:
+                # Preserve the existing image sampler contract. This change is
+                # instruction parity only, not a change to image decoding.
+                payload = {key: payload[key] for key in (
+                    "model", "messages", "temperature", "max_tokens", "stream"
+                )}
+            else:
+                payload.update(_ministral_sampling_payload_fields(sampling))
+            if _is_ministral_model and not _native_ministral_image_turn:
                 # No `payload["grammar"]` here. See the removal note on
                 # _ministral_global_phi_grammar — a decode-time constraint built
                 # from Global PHI corrupts the reply and covered one phrasing.
@@ -11053,8 +11129,11 @@ def chat():
                 payload,
                 _reasoning_for_turn,
                 ministral_native=_is_ministral_model,
+                native_guidance_tail="\n\n".join(
+                    part for part in (_character_note_packet, _active_native_governor) if part
+                ) if _is_ministral_model else "",
             )
-            if _is_ministral_model:
+            if _is_ministral_model and not _native_ministral_image_turn:
                 _native_prompt_tokens = _native_messages_prompt_token_count(payload)
                 payload = _cap_native_messages_max_tokens(
                     payload,
@@ -11112,7 +11191,7 @@ def chat():
                     if _is_ministral_model and _diag_verbose
                     else None
                 )
-                if _is_ministral_model and use_web_search:
+                if _is_ministral_model and use_web_search and not _native_ministral_image_turn:
                     _messages_stream = (
                         stream_ministral_web_search_response(
                             payload,

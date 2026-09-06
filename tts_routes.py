@@ -712,10 +712,17 @@ def blend_voice_forge_sources():
         native_fields = dict(fields)
         requested_speed = float(native_fields.get('speed', 1.0))
         native_fields['speed'] = '1.0'
+        # Qwen3-TTS Fast's /blend-voices declares UploadFile params, so Starlette only
+        # parses the body as multipart/form-data. requests only sends multipart when
+        # `files` is non-empty, so when no audio was uploaded it fell back to
+        # urlencoded and the backend silently saw an empty form (e.g. "Test text is
+        # required" even though the field was filled in). Always send multipart by
+        # encoding the plain fields as (None, value) file parts.
+        multipart_fields = {key: (None, value) for key, value in native_fields.items()}
+        multipart_fields.update(files)
         response = requests.post(
             f'{QWEN_FAST_SERVER_URL}/blend-voices',
-            data=native_fields,
-            files=files,
+            files=multipart_fields,
             timeout=(10, 180),
         )
         try:
