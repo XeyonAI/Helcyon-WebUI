@@ -30,8 +30,6 @@ QWEN_FAST_SERVER_URL   = 'http://127.0.0.1:8767'
 QWENTTS_CPP_SERVER_URL = 'http://127.0.0.1:8768'
 OMNIVOICE_SERVER_URL    = 'http://127.0.0.1:8001'
 DEFAULT_VOICE = 'Sol'
-def _voice_forge_pro_only():
-    return jsonify({'error': 'Voice Forge is available in HWUI Pro.', 'pro_required': True}), 403
 VOICE_FORGE_DEFAULT_TEXT = 'Hello. This is a test of a newly blended voice.'
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.json')
 VOICE_GROUPS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'voice_groups.json')  # legacy path
@@ -604,14 +602,12 @@ def get_voices():
 # --------------------------------------------------
 @tts_bp.route('/voice-forge/settings', methods=['GET'])
 def get_voice_forge_settings():
-    return _voice_forge_pro_only()
     text = get_settings().get('voice_forge_test_text')
     return jsonify({'test_text': text.strip() if isinstance(text, str) and text.strip() else VOICE_FORGE_DEFAULT_TEXT})
 
 
 @tts_bp.route('/voice-forge/settings', methods=['POST'])
 def save_voice_forge_settings():
-    return _voice_forge_pro_only()
     data = request.get_json(silent=True) or {}
     text = data.get('test_text')
     if not isinstance(text, str) or not text.strip():
@@ -626,7 +622,6 @@ def save_voice_forge_settings():
 
 @tts_bp.route('/voice-forge/voices', methods=['GET'])
 def get_voice_forge_voices():
-    return _voice_forge_pro_only()
     try:
         voices = [
             {'name': name, 'label': name}
@@ -646,7 +641,6 @@ def get_voice_forge_voices():
 
 @tts_bp.route('/voice-forge/reference', methods=['GET'])
 def get_voice_forge_reference():
-    return _voice_forge_pro_only()
     voice = str(request.args.get('voice') or '').strip()
     if not voice:
         return jsonify({'error': 'Voice name is required'}), 400
@@ -659,7 +653,6 @@ def get_voice_forge_reference():
 
 @tts_bp.route('/voice-forge/voice', methods=['DELETE'])
 def delete_voice_forge_voice():
-    return _voice_forge_pro_only()
     voice = str(request.args.get('voice') or '').strip()
     if not voice:
         return jsonify({'error': 'Voice name is required'}), 400
@@ -692,7 +685,6 @@ def delete_voice_forge_voice():
 
 @tts_bp.route('/voice-forge/blend', methods=['POST'])
 def blend_voice_forge_sources():
-    return _voice_forge_pro_only()
     fields = {
         key: value for key, value in request.form.items()
         if key in {'text', 'blend_ratio', 'expression', 'speed', 'language', 'seed', 'voice_a', 'voice_b'} and value != ''
@@ -763,7 +755,6 @@ def blend_voice_forge_sources():
 
 @tts_bp.route('/voice-forge/audio/<path:filename>', methods=['GET'])
 def get_voice_forge_audio(filename):
-    return _voice_forge_pro_only()
     safe_name = Path(filename).name
     if safe_name != filename or not safe_name.lower().endswith('.wav'):
         return jsonify({'error': 'Invalid Voice Forge audio name'}), 400
@@ -776,7 +767,6 @@ def get_voice_forge_audio(filename):
 
 @tts_bp.route('/voice-forge/save', methods=['POST'])
 def save_voice_forge_result():
-    return _voice_forge_pro_only()
     fields = {
         'result_id': str(request.form.get('result_id') or ''),
         'voice_name': str(request.form.get('voice_name') or ''),

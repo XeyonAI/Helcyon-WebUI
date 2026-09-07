@@ -735,7 +735,7 @@
         <button class="config-tab" onclick="switchConfigTab('create-char', this)">✨ New Character</button>
         <button class="config-tab" onclick="switchConfigTab('user-persona', this)">👤 User Persona</button>
         <button class="config-tab" onclick="switchConfigTab('appearance', this)">🎨 Appearance</button>
-        <button class="config-tab" onclick="showHwuiProModal('Voice Forge', 'Voice cloning and blending is available in HWUI Pro.')">🎙 Voice Forge</button>
+        <button class="config-tab" onclick="switchConfigTab('voice-forge', this)">🎙 Voice Forge</button>
         <button class="config-tab" onclick="switchConfigTab('helcyon-bench', this)">Helcyon-Bench</button>
       </div>
 
@@ -1076,7 +1076,7 @@
       </div><!-- end tab-appearance -->
 
       <!-- ===== TAB: VOICE FORGE ===== -->
-      <div id="tab-voice-forge" class="config-tab-panel" style="display:none;">
+      <div id="tab-voice-forge" class="config-tab-panel">
         <h3>🎙 Voice Forge</h3>
         <div class="voice-forge-note">
           Experimental Qwen3-TTS feature. Voice Forge blends speaker embeddings only; it does not mix reference audio or codec data.
@@ -1487,7 +1487,7 @@
     const container = document.getElementById('container');
     if (container) container.scrollTop = 0;
     if (tabId === 'helcyon-bench') initialiseHelcyonBench();
-    // Voice Forge is Pro-only in the Free build.
+    if (tabId === 'voice-forge') initialiseVoiceForge();
   }
 
   let voiceForgeInitialised = false;
@@ -2530,8 +2530,6 @@
   }
 
   async function captureBenchResponse(pack, item, slot, area, button, statusElement) {
-    showHwuiProModal('Benchmark Response Capture', 'Benchmark response capture is available in HWUI Pro.');
-    return;
     const runId = currentBenchRunId(pack.id);
     const association = HelcyonBenchPromptTransfer.getAssociation(
       localStorage,
@@ -3872,8 +3870,6 @@
   }
 
   async function sendBenchPrompt(pack, item, slot) {
-    showHwuiProModal('Benchmark Prompt Transfer', 'Sending benchmark prompts into chat is available in HWUI Pro.');
-    return;
     let target = await refreshHelcyonBenchTarget();
     if (!target.chat) {
       setBenchStatus('No active chat is selected. Open Chat, choose or create a chat, then return here.', 'error');
@@ -6673,8 +6669,6 @@ function refreshPresetDropdown() {
 }
 
 async function loadPreset() {
-  showHwuiProModal('Theme Editor', 'Theme editing is available in HWUI Pro.');
-  return;
   const name = document.getElementById('theme-preset-select').value;
   if (!name || !themePresets[name]) { hwuiToast('Pick a preset first.', 'info'); return; }
   const colours = themePresets[name];
@@ -6703,8 +6697,6 @@ async function loadPreset() {
 }
 
 async function updatePreset() {
-  showHwuiProModal('Theme Editor', 'Theme editing is available in HWUI Pro.');
-  return;
   const name = document.getElementById('theme-preset-select').value;
   if (!name) { hwuiToast('Pick a preset first.', 'info'); return; }
   const colours = collectThemeUpdates();
@@ -6732,8 +6724,6 @@ async function updatePreset() {
 }
 
 async function saveAsPreset() {
-  showHwuiProModal('Theme Editor', 'Theme editing is available in HWUI Pro.');
-  return;
   const name = await hwuiPrompt('Preset name:');
   if (!name || !name.trim()) return;
   const colours = collectThemeUpdates();
@@ -6756,8 +6746,6 @@ async function saveAsPreset() {
 }
 
 async function deletePreset() {
-  showHwuiProModal('Theme Editor', 'Theme editing is available in HWUI Pro.');
-  return;
   const name = document.getElementById('theme-preset-select').value;
   if (!name) { hwuiToast('Pick a preset first.', 'info'); return; }
   if (!await hwuiConfirm(`Delete preset "${name}"?`)) return;
@@ -6918,8 +6906,6 @@ function hwuiPrompt(message, defaultValue = '', opts = {}) {
 }
 
 async function saveTheme() {
-  showHwuiProModal('Theme Editor', 'Theme editing is available in HWUI Pro.');
-  return;
   // Read from live CSS vars — authoritative source, never stale
   const updates = collectThemeUpdates();
   try {
@@ -7919,8 +7905,6 @@ async function switchThemeFile(name) {
 }
 
 async function newThemeFile() {
-  showHwuiProModal('Theme Editor', 'Custom themes are available in HWUI Pro.');
-  return;
   const name = await hwuiPrompt('New theme name (e.g. "dark-blue"):');
   if (!name || !name.trim()) return;
   try {
@@ -7936,8 +7920,6 @@ async function newThemeFile() {
 }
 
 async function deleteThemeFile() {
-  showHwuiProModal('Theme Editor', 'Custom themes are available in HWUI Pro.');
-  return;
   const name = _activeThemeName;
   if (!await hwuiConfirm(`Delete theme "${name}"? This cannot be undone.`)) return;
   try {

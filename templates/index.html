@@ -1296,11 +1296,6 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
   }
 
   function consumePendingBenchPrompt({ notifyMismatch = true } = {}) {
-    if (localStorage.getItem('hwui_helcyon_bench_pending_prompt')) {
-      localStorage.removeItem('hwui_helcyon_bench_pending_prompt');
-      showHwuiProModal('Benchmark Prompt Transfer', 'Sending benchmark prompts into chat is available in HWUI Pro.');
-      return { ok: false, reason: 'pro_required' };
-    }
     const input = document.getElementById('user-input');
     const transfer = HelcyonBenchPromptTransfer.consume(
       localStorage,
@@ -1573,9 +1568,7 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
     }
   }
 
-async function captureActiveBenchResponse() {
-  showHwuiProModal('Benchmark Response Capture', 'Benchmark response capture is available in HWUI Pro.');
-  return;
+  async function captureActiveBenchResponse() {
     const association = await refreshBenchChatControl();
     if (!association || !benchAssociationMatchesCurrentChat(association)) return;
     if (association.status !== 'ready_to_capture' && association.generation_status !== 'ready_to_capture') return;

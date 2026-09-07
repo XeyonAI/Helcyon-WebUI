@@ -7584,6 +7584,9 @@ _MINISTRAL_SUPERSEDED_INSTRUCTION_SECTIONS = {
     # Same instruction as _MINISTRAL_TAGGED_CONTEXT_RULE's "never quote or
     # continue it / never output tag markers or bracketed scaffold labels" clause.
     "CHARACTER CARD INSTRUCTIONS": "_MINISTRAL_TAGGED_CONTEXT_RULE",
+    # Current get_instruction_layer() wording uses the shorter heading; keep
+    # the legacy spelling above so older prompt layers remain deduplicated too.
+    "CHARACTER CARD": "_MINISTRAL_TAGGED_CONTEXT_RULE",
     # _MINISTRAL_WEB_SEARCH_CONTRACT covers this when search is on; when search is
     # off, _MINISTRAL_NATIVE_PROTECTIONS already forbids claiming or inventing
     # results, and that half is never gated.
