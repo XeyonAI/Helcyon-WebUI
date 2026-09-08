@@ -534,7 +534,36 @@ def _normalise_ministral_named_greeting(
     )
     match = pattern.match(value)
     if not match:
-        return value
+        # A one-letter typo in the opening vocative has the same provider-side
+        # effect as the exact card name (live Solara reproduction: "Salara").
+        # Accept only one substituted character, only for the active card's
+        # single-word conversational name, and only in this already-constrained
+        # opening-greeting position. Insertions, deletions, arbitrary words and
+        # name mentions later in the message remain untouched.
+        fuzzy_names = []
+        for candidate in (name, re.split(r"\s+", name, maxsplit=1)[0]):
+            candidate = candidate.strip(" ,.!?—-")
+            if len(candidate) >= 5 and not re.search(r"\s", candidate):
+                fuzzy_names.append(candidate)
+        fuzzy_pattern = re.compile(
+            r"^(?P<greeting>\s*(?:hey|hi|hello|good\s+morning|good\s+afternoon|good\s+evening))"
+            r"\s*,?\s*(?P<vocative>[^\W\d_][\w'-]*)"
+            r"(?P<separator>\s*(?:[,!.?]|—|-)\s*|\s*$|"
+            r"\s+(?=(?:how(?:'s|s|\s)|what(?:'s|s|\s)|where(?:'s|s|\s)|"
+            r"are\b|can\b|could\b|would\b|will\b|do\b|did\b|have\b|has\b)))",
+            re.IGNORECASE,
+        )
+        fuzzy_match = fuzzy_pattern.match(value)
+        if not fuzzy_match:
+            return value
+        vocative = fuzzy_match.group("vocative").casefold()
+        if not any(
+            len(vocative) == len(candidate.casefold())
+            and sum(left != right for left, right in zip(vocative, candidate.casefold())) == 1
+            for candidate in fuzzy_names
+        ):
+            return value
+        match = fuzzy_match
     return match.group("greeting") + match.group("separator") + value[match.end():]
 
 
@@ -6869,15 +6898,147 @@ _MINISTRAL_TAGGED_CONTEXT_RULE = (
     "of any kind in your reply."
 )
 
-# The one memory-specific rule the global sentence cannot carry, because it is
-# not a framing statement but a grammar correction. Stored entries are
-# third-person by design (the auto-memory classifier requires it); without this
-# the grammar carries into replies and the character starts referring to the
-# person it is talking to by name in the third person.
+# Memory has two independent hazards: its storage grammar can leak into the
+# reply, and an otherwise relevant entry can be mistaken for a response agenda.
+# The native renderer below supplies owner/use metadata; this rule defines the
+# meaning of that metadata immediately beside the rendered entries.
 _MINISTRAL_PASSIVE_MEMORY_GUIDANCE = (
-    "Stored entries are written in third person and name the user; that is the storage "
-    "format only. Speak to the user directly in the second person."
+    "Treat memory as passive knowledge and private background, relevant to the user's current "
+    "turn but never a response agenda. "
+    "Respect each entry's owner "
+    "and use attributes. Facts owned by current_user belong to the person you are talking "
+    "to: address them directly in the second person as you/your and never adopt them as "
+    "your own life. Facts owned by "
+    "assistant belong to you; shared facts belong to both. A background_only entry signals "
+    "familiarity with its subject but supplies no details to recap. A relevant_detail entry "
+    "may inform only the included detail. A requested entry may be summarized because the "
+    "user explicitly asked for recall. Stored wording may be third person; that is the storage "
+    "format only. Do not turn ordinary chat into third-person narration or roleplay because "
+    "memory is present."
 )
+
+_MINISTRAL_MEMORY_RECALL_RE = re.compile(
+    r"\b(?:what do you (?:remember|know)|do you remember|tell me (?:about|what you remember)|"
+    r"remind me|recap|summari[sz]e|who is|what happened)\b",
+    re.IGNORECASE,
+)
+
+_MINISTRAL_MEMORY_QUERY_STOPWORDS = frozenset({
+    "a", "about", "am", "an", "and", "are", "at", "be", "been", "being", "but",
+    "by", "chat", "checking", "come", "coming", "did", "do", "does", "for", "from",
+    "going", "had", "has", "have", "he", "hello", "her", "hey", "hi", "him", "his",
+    "how", "i", "im", "in", "is", "it", "its", "just", "me", "mention", "mentioned",
+    "mind", "moment", "my", "of", "on", "or", "our", "out", "right", "said", "says",
+    "she", "so", "some", "talk", "that", "the", "their", "them", "there", "they",
+    "think", "this", "thought", "to", "today", "up", "us", "was", "we", "were", "what",
+    "whats", "when", "where", "who", "why", "with", "you", "your"
+})
+
+
+def _ministral_native_retrieved_memory(memory, user_turn, user_name, character_name):
+    """Render selected memories with explicit ownership and request-local scope.
+
+    Retrieval and stored files remain untouched. Generic subject mentions expose
+    only topic familiarity; a detail-bearing turn exposes at most the matching
+    sentences, while an explicit recall request may expose the complete entry.
+    """
+    value = str(memory or "").strip()
+    if not value:
+        return ""
+    value = re.sub(r"^Relevant memories:\s*", "", value, count=1, flags=re.IGNORECASE)
+    raw_entries = [part.strip() for part in re.split(r"\n\s*\n---\n\s*\n", value) if part.strip()]
+
+    def _tokens(text):
+        return {
+            token.casefold().replace("’", "'")
+            for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9'’\-]*", str(text or ""))
+        }
+
+    def _has_name(text, name):
+        clean = str(name or "").strip()
+        return bool(clean and re.search(r"(?<![A-Za-z0-9])" + re.escape(clean)
+                                        + r"(?![A-Za-z0-9])", text, re.IGNORECASE))
+
+    query_tokens = _tokens(user_turn)
+    query_tokens -= _MINISTRAL_MEMORY_QUERY_STOPWORDS
+    query_tokens -= _tokens(user_name)
+    query_tokens -= _tokens(character_name)
+    recall_requested = bool(_MINISTRAL_MEMORY_RECALL_RE.search(str(user_turn or "")))
+    rendered = []
+
+    for raw in raw_entries:
+        lines = raw.splitlines()
+        if len(lines) > 1 and lines[0].strip().endswith(":"):
+            subject = lines[0].strip()[:-1].strip()
+            body = "\n".join(lines[1:]).strip()
+        else:
+            subject = "Stored memory"
+            body = raw
+
+        user_owned = _has_name(body, user_name)
+        assistant_owned = _has_name(body, character_name)
+        if user_owned and assistant_owned:
+            owner = "shared"
+            binding = "These facts concern both the current user and the assistant."
+        elif user_owned:
+            owner = "current_user"
+            binding = ("These facts belong to the current user %s, not the assistant %s. "
+                       "Refer to the user as you/your in a reply." %
+                       (str(user_name or "the user"), str(character_name or "the assistant")))
+        elif assistant_owned:
+            owner = "assistant"
+            binding = ("These facts belong to the assistant %s, not the current user %s. "
+                       "Refer to them as I/my when speaking as the assistant." %
+                       (str(character_name or "the assistant"), str(user_name or "the user")))
+        else:
+            owner = "unspecified"
+            binding = "No personal owner is established; do not assign these facts to either speaker."
+
+        use = "background_only"
+        facts = "Known topic only. No stored details are supplied for this turn."
+        if recall_requested:
+            use = "requested"
+            facts = body
+        else:
+            subject_tokens = _tokens(subject)
+            body_tokens = _tokens(body)
+            detail_terms = {
+                term for term in (query_tokens - subject_tokens)
+                if len(term) >= 4 and any(
+                    term == candidate
+                    or (min(len(term), len(candidate)) >= 4
+                        and (term.startswith(candidate) or candidate.startswith(term))
+                        and abs(len(term) - len(candidate)) <= 3)
+                    for candidate in body_tokens
+                )
+            }
+            if detail_terms:
+                sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", body)
+                             if part.strip()]
+                matching = []
+                for sentence in sentences:
+                    sentence_tokens = _tokens(sentence)
+                    if any(
+                        term == candidate
+                        or (min(len(term), len(candidate)) >= 4
+                            and (term.startswith(candidate) or candidate.startswith(term))
+                            and abs(len(term) - len(candidate)) <= 3)
+                        for term in detail_terms for candidate in sentence_tokens
+                    ):
+                        matching.append(sentence)
+                    if len(matching) == 2:
+                        break
+                if matching:
+                    use = "relevant_detail"
+                    facts = " ".join(matching)
+
+        rendered.append(
+            '<MEMORY_ENTRY owner="%s" use="%s" subject="%s">\n'
+            '<OWNER_BINDING>%s</OWNER_BINDING>\n'
+            '<STORED_FACTS>%s</STORED_FACTS>\n'
+            '</MEMORY_ENTRY>' % (owner, use, subject, binding, facts)
+        )
+    return "\n\n".join(rendered)
 
 _ATTACHED_DOCUMENT_TASK_GUIDANCE = (
     "The user has already supplied the complete document as reference material. "
@@ -7677,6 +7838,28 @@ def _ministral_plain_guidance(text):
     return value
 
 
+def _ministral_user_profile_without_character_identity(user_context, character_name, user_name):
+    """Keep native user-profile context passive by removing assistant identity lines."""
+    value = str(user_context or "")
+    character = str(character_name or "the assistant")
+    user = str(user_name or "")
+    if not value or not user:
+        return value
+
+    value = value.replace(
+        f"You are {character}.\n"
+        f"You are talking to {user}.\n\n",
+        f"You are talking to {user}.\n\n",
+        1,
+    )
+    value = value.replace(
+        f"\nYou are {character}. {user} is the person you're talking to.\n\n",
+        f"\n{user} is the person you're talking to.\n\n",
+        1,
+    )
+    return value
+
+
 def _build_ministral_native_system(
     character_identity,
     core_instructions=None,
@@ -7764,12 +7947,21 @@ def _build_ministral_native_system(
     # imperative to passive context. Content is preserved verbatim.
     _tag("PROJECT_REFERENCE", _strip_rule_lines(project_reference))
 
-    memories = [_strip_rule_lines(v) for v in _values(memory_context)]
-    memories = [v for v in memories if v]
+    memories = []
+    for label, content in (memory_context or []):
+        value = _strip_rule_lines(content)
+        if not value:
+            continue
+        source = re.sub(r"[^A-Z0-9]+", "_", str(label or "MEMORY").upper()).strip("_")
+        source = source or "MEMORY"
+        memories.append("<%s>\n%s\n</%s>" % (source, value, source))
     if memories:
+        # Put the ownership/use contract before the data it governs. Source
+        # wrappers keep character background, retrieved facts and transient
+        # session context from collapsing into one anonymous memory voice.
         _tag("MEMORY",
-             "\n\n---\n\n".join(memories)
-             + "\n\n" + _MINISTRAL_PASSIVE_MEMORY_GUIDANCE)
+             _MINISTRAL_PASSIVE_MEMORY_GUIDANCE
+             + "\n\n" + "\n\n---\n\n".join(memories))
 
     references = [_strip_rule_lines(v) for v in _values(reference_context)]
     references = [v for v in references if v]
@@ -10942,6 +11134,11 @@ def chat():
                           f"of directives, {len(_ministral_project_reference)} chars re-framed "
                           f"as <PROJECT_REFERENCE> passive context", flush=True)
 
+                _native_user_context = _ministral_user_profile_without_character_identity(
+                    user_context,
+                    char_data.get("name", "the assistant"),
+                    user_display_name,
+                )
                 _ministral_native_system = _build_ministral_native_system(
                     character_identity=_ministral_identity_parts,
                     core_instructions=[
@@ -10957,10 +11154,15 @@ def chat():
                     character_context=[
                         ("AUTHOR NOTE", _nuke_chatml(_author_note_value)),
                     ],
-                    user_context=_nuke_chatml(user_context),
+                    user_context=_nuke_chatml(_native_user_context),
                     memory_context=[
                         ("CHARACTER BACKGROUND", _character_context_remainder),
-                        ("RETRIEVED MEMORY", _nuke_chatml(memory)),
+                        ("RETRIEVED MEMORY", _ministral_native_retrieved_memory(
+                            _nuke_chatml(memory),
+                            user_input,
+                            user_display_name,
+                            char_data.get("name", "the assistant"),
+                        )),
                         ("SESSION CONTEXT", _assembled_context_remainder),
                     ],
                     reference_context=[
