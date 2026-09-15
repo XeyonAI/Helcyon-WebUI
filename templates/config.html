@@ -7,8 +7,8 @@
        127.0.0.1 origin. -->
   <script src="/build_scope.js"></script>
   <title>Helcyon Config</title>
-  <link rel="stylesheet" href="/style.css?v=42" />
-  <script src="/static/text_scale.js" defer></script>
+  <link rel="stylesheet" href="/style.css?v=44" />
+  <script src="/static/text_scale.js?v=3" defer></script>
   <style>
     /* ---- Config Tab System (self-contained — do not rely on style.css for this) ---- */
     #config-tab-bar {
@@ -20,8 +20,8 @@
       margin-bottom: 20px;
     }
     .config-tab {
-      background: transparent;
-      border: 1px solid #2a2a2a;
+      background: var(--config-box-bg, var(--bench-bg, #141414));
+      border: 1px solid var(--config-box-border, #2a2a2a);
       color: #888;
       border-radius: 6px;
       padding: 6px 14px;
@@ -31,7 +31,7 @@
       white-space: nowrap;
     }
     .config-tab:hover {
-      background: rgba(255,255,255,0.05);
+      background: var(--config-box-bg, var(--bench-box, #242424));
       color: #ccc;
       border-color: #444;
     }
@@ -47,6 +47,126 @@
     .config-tab-panel.active {
       display: block;
     }
+    /* Shared Config section surface, matching Random Check-ins panels. */
+    .config-box-surface {
+      border: 1px solid var(--config-box-border, var(--field-border, #293238));
+      border-radius: 10px;
+      background: var(--config-box-bg, var(--bench-box, #242424));
+      box-shadow: inset 0 1px rgba(255,255,255,0.025);
+      box-sizing: border-box;
+      padding: 16px 18px;
+      margin-bottom: 14px;
+    }
+    /* Prompt editors receive copied inline metrics from text_scale.js. Keep
+       their Config field surface tied to the live theme picker instead of
+       freezing the initial background colour. Benchmark editors retain their
+       separate styling. */
+    #config-page #container .config-tab-panel:not(#tab-helcyon-bench) .hwui-prompt-editor-editor {
+      background-color: var(--field-bg, #111) !important;
+      border-color: var(--field-border, #333) !important;
+    }
+    .config-box-surface > h3:first-child,
+    .config-box-surface > h4:first-child {
+      margin-top: 0 !important;
+    }
+    /* Random Check-ins — scoped presentation only; IDs and handlers stay intact. */
+    #tab-random-checkins { max-width: 1180px; background: var(--container-bg, #171717); }
+#tab-random-checkins .random-checkin-intro {
+  max-width: 980px; margin: 0 0 24px; color: var(--text-muted, #aeb8c5); line-height: 1.5;
+}
+    #tab-random-checkins .random-checkin-top-grid {
+      display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; margin-bottom: 24px;
+    }
+#tab-random-checkins .random-checkin-panel,
+#tab-random-checkins .random-checkin-quiet-panel {
+  border: 1px solid var(--config-box-border, var(--field-border, #293238)); border-radius: 10px; background: var(--config-box-bg, var(--bench-box, #242424));
+      box-shadow: inset 0 1px rgba(255,255,255,0.025); box-sizing: border-box;
+    }
+    #tab-random-checkins .random-checkin-panel { min-height: 116px; padding: 18px 20px; }
+#tab-random-checkins .random-checkin-panel h4,
+#tab-random-checkins .random-checkin-quiet-panel h4 {
+  margin: 0 0 5px; color: var(--model-msg-text, #eef2f5); font-size: 18px; font-weight: 650;
+}
+    #tab-random-checkins .random-checkin-panel small,
+    #tab-random-checkins .random-checkin-quiet-panel small,
+    #tab-random-checkins .random-checkin-field small {
+  display: block; color: var(--text-muted, #9da9b7); font-size: 14px; line-height: 1.35; font-weight: 400;
+    }
+    #tab-random-checkins .random-checkin-enabled-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 20px; height: 100%;
+    }
+    #tab-random-checkins .random-checkin-field { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+    #tab-random-checkins .random-checkin-field > span { color: var(--model-msg-text, #eef2f5); font-size: 17px; font-weight: 600; }
+    #tab-random-checkins .random-checkin-info {
+      position: relative; display: inline-flex; align-items: center; justify-content: center;
+      width: 15px; height: 15px; margin-left: 4px; vertical-align: 1px;
+      color: var(--text-muted, #9da9b7); font-size: 13px; line-height: 1; font-style: normal;
+      font-weight: 400; cursor: help; opacity: .72; transition: opacity .15s ease;
+    }
+    #tab-random-checkins .random-checkin-info:hover,
+    #tab-random-checkins .random-checkin-info:focus,
+    #tab-random-checkins .random-checkin-info:focus-visible { opacity: 1; outline: none; }
+    #tab-random-checkins .random-checkin-info-tip {
+      position: absolute; top: calc(100% + 8px); left: 50%; z-index: 80;
+      width: min(310px, calc(100vw - 32px)); box-sizing: border-box; padding: 9px 11px;
+      color: var(--model-msg-text, #cdd6e0); background: var(--config-box-bg, var(--bench-box, #242424));
+      border: 1px solid var(--config-box-border, var(--field-border, #3a4650)); border-radius: 6px;
+      box-shadow: 0 6px 22px rgba(0,0,0,.55); font-size: 12px; line-height: 1.45;
+      font-weight: 400; letter-spacing: 0; text-align: left; white-space: normal;
+      opacity: 0; visibility: hidden; pointer-events: none; transform: translate(-50%, -4px);
+      transition: opacity .15s ease, transform .15s ease, visibility .15s;
+    }
+    #tab-random-checkins .random-checkin-info:hover .random-checkin-info-tip,
+    #tab-random-checkins .random-checkin-info:focus .random-checkin-info-tip,
+    #tab-random-checkins .random-checkin-info:focus-within .random-checkin-info-tip {
+      opacity: 1; visibility: visible; transform: translate(-50%, 0); pointer-events: auto;
+    }
+    #tab-random-checkins .random-checkin-form-grid {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 26px 28px; margin-bottom: 24px;
+    }
+    #tab-random-checkins .random-checkin-form-grid > label { margin: 0; }
+    #tab-random-checkins .random-checkin-full { grid-column: 1 / -1; }
+    #tab-random-checkins .random-checkin-quiet-panel {
+      display: grid; grid-template-columns: minmax(220px, 1fr) 1px minmax(0, 2.15fr); gap: 28px; align-items: center; padding: 18px 24px; margin-bottom: 26px;
+    }
+    #tab-random-checkins .random-checkin-quiet-copy { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+#tab-random-checkins .random-checkin-quiet-divider { width: 1px; height: 64px; background: var(--field-border, #293238); }
+    #tab-random-checkins .random-checkin-time-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+    #tab-random-checkins input:not([type="checkbox"]),
+    #tab-random-checkins select,
+    #tab-random-checkins textarea { width: 100%; box-sizing: border-box; }
+    #tab-random-checkins textarea { min-height: 112px; resize: vertical; }
+#tab-random-checkins .random-checkin-toggle { position: relative; display: inline-flex; flex: 0 0 auto; width: 68px; height: 36px; cursor: pointer; }
+    #tab-random-checkins .random-checkin-toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+#tab-random-checkins .random-checkin-toggle-track { position: absolute; inset: 0; border-radius: 999px; background: var(--sidebar-button-hover, #303b45); transition: background .18s ease, box-shadow .18s ease; }
+#tab-random-checkins .random-checkin-toggle-track::after { content: ""; position: absolute; width: 28px; height: 28px; left: 4px; top: 4px; border-radius: 50%; background: var(--modal-text, #f6f7f8); box-shadow: 0 2px 6px rgba(0,0,0,.35); transition: transform .18s ease; }
+#tab-random-checkins .random-checkin-toggle input:checked + .random-checkin-toggle-track { background: var(--memory-tab-active-bg, #20b968); box-shadow: 0 0 0 2px color-mix(in srgb, var(--memory-tab-active-bg, #20b968) 20%, transparent); }
+#tab-random-checkins .random-checkin-toggle input:checked + .random-checkin-toggle-track::after { transform: translateX(32px); }
+#tab-random-checkins .random-checkin-toggle input:focus-visible + .random-checkin-toggle-track { outline: 2px solid var(--field-border-focus, #8fd9ad); outline-offset: 3px; }
+    #tab-random-checkins .random-checkin-notify-panel { min-height: 0; margin-bottom: 26px; }
+    #tab-random-checkins .random-checkin-mobile-devices { display: block; margin-top: 6px; }
+    #tab-random-checkins .random-checkin-mobile-actions { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+    #tab-random-checkins .random-checkin-profile-bar {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 18px; padding: 12px 16px;
+      border: 1px solid var(--field-border, #293238); border-radius: 10px; box-sizing: border-box;
+      background: linear-gradient(145deg, var(--sidebar-bg, #171d20), var(--container-bg, #13181b));
+    }
+    #tab-random-checkins .random-checkin-profile-bar label { color: var(--model-msg-text, #eef2f5); font-size: 15px; font-weight: 600; }
+    #tab-random-checkins .random-checkin-profile-bar select { flex: 1 1 200px; width: auto; min-width: 0; }
+    #tab-random-checkins .random-checkin-profile-btn { padding: 7px 14px; border-radius: 7px; font-size: 14px; font-weight: 600; cursor: pointer; }
+    #tab-random-checkins .random-checkin-profile-save { background: var(--memory-tab-active-bg, #20a85f); border-color: var(--field-border-focus, #31c977); color: var(--new-chat-btn-text, #fff); }
+    #tab-random-checkins .random-checkin-profile-delete { background: #5a1f1f; border-color: #8a2424; color: #fff; }
+    #tab-random-checkins .random-checkin-profile-btn:disabled { opacity: .45; cursor: not-allowed; }
+    #tab-random-checkins .random-checkin-actions { display: flex; align-items: center; gap: 12px; }
+#tab-random-checkins .random-checkin-save { padding: 10px 18px; border-radius: 7px; background: var(--memory-tab-active-bg, #20a85f); border-color: var(--field-border-focus, #31c977); color: var(--new-chat-btn-text, #fff); font-size: 15px; font-weight: 600; }
+#tab-random-checkins .random-checkin-save:hover { background: var(--memory-tab-active-bg, #26bd6d); }
+    @media (max-width: 760px) {
+      #tab-random-checkins .random-checkin-top-grid,
+      #tab-random-checkins .random-checkin-form-grid { grid-template-columns: 1fr; }
+      #tab-random-checkins .random-checkin-full { grid-column: auto; }
+      #tab-random-checkins .random-checkin-quiet-panel { grid-template-columns: 1fr; gap: 14px; }
+      #tab-random-checkins .random-checkin-quiet-divider { width: 100%; height: 1px; }
+    }
     .voice-forge-note {
       padding: 10px 12px;
       margin-bottom: 16px;
@@ -61,12 +181,16 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 14px;
     }
-    .voice-forge-card {
-      padding: 14px;
-      border: 1px solid #333;
-      border-radius: 8px;
-      background: #171717;
+    .voice-forge-card,
+    .voice-forge-tuning-control,
+    .voice-forge-result {
+      border: 1px solid var(--config-box-border, var(--field-border, #293238));
+      border-radius: 10px;
+      background: var(--config-box-bg, var(--bench-box, #242424));
+      box-shadow: inset 0 1px rgba(255,255,255,0.025);
+      box-sizing: border-box;
     }
+    .voice-forge-card { padding: 16px 18px; }
     .voice-forge-card h4 { margin: 0 0 10px; color: #ddd; }
     .voice-forge-card label { margin-top: 8px; }
     .voice-forge-existing-row { display: flex; align-items: center; gap: 8px; }
@@ -80,6 +204,12 @@
     .voice-forge-file-name.has-file { color: #ccc; border-color: #465668; }
     .voice-forge-source-actions { display: flex; gap: 8px; margin-top: 10px; }
     .voice-forge-source-actions button { padding: 5px 10px; font-size: 12px; }
+    #tab-voice-forge #voice-forge-a-preview,
+    #tab-voice-forge #voice-forge-b-preview {
+      background: #1f5a3a;
+      border-color: #248050;
+      color: #fff;
+    }
     .voice-forge-or { margin: 8px 0 2px; text-align: center; color: #666; font-size: 11px; }
     .voice-forge-ratio-row { display: flex; align-items: center; gap: 12px; margin: 18px 0 8px; }
     .voice-forge-ratio-row input[type="range"] { flex: 1; }
@@ -87,19 +217,38 @@
     .voice-forge-presets { display: flex; justify-content: center; gap: 8px; margin-bottom: 16px; }
     .voice-forge-presets button { padding: 5px 12px; font-size: 12px; }
     .voice-forge-tuning-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 16px; }
-    .voice-forge-tuning-control { padding: 12px; border: 1px solid #333; border-radius: 7px; background: #171717; }
+    .voice-forge-tuning-control { padding: 12px 14px; }
     .voice-forge-tuning-control label { display: flex; justify-content: space-between; margin: 0 0 8px; }
     .voice-forge-tuning-control input[type="range"] { width: 100%; }
     .voice-forge-tuning-control small { display: block; margin-top: 6px; color: #777; font-size: 11px; }
-    .voice-forge-result { margin-top: 16px; padding: 14px; border: 1px solid #333; border-radius: 8px; background: #141414; }
+    .voice-forge-result { margin-top: 16px; padding: 14px; }
     .voice-forge-result audio { width: 100%; margin: 4px 0 12px; }
     .voice-forge-save-row { display: flex; gap: 8px; }
     .voice-forge-save-row input { flex: 1; }
+    #tab-voice-forge .voice-forge-seed-row {
+      display: grid;
+      grid-template-columns: auto minmax(180px, 1fr) minmax(180px, 1fr);
+      align-items: end;
+      gap: 12px;
+    }
+    #tab-voice-forge .voice-forge-seed-row > label,
+    #tab-voice-forge .voice-forge-seed-row > input,
+    #tab-voice-forge .voice-forge-seed-row > button {
+      align-self: end;
+      margin-top: 0 !important;
+      margin-bottom: 0;
+    }
+    #tab-voice-forge .voice-forge-seed-row > input,
+    #tab-voice-forge .voice-forge-seed-row > button {
+      width: 100%;
+      max-width: none;
+    }
     #voice-forge-status[data-kind="error"] { color: #e88; }
     #voice-forge-status[data-kind="success"] { color: #7dce91; }
     @media (max-width: 800px) {
       .voice-forge-sources { grid-template-columns: 1fr; }
       .voice-forge-tuning-grid { grid-template-columns: 1fr; }
+      #tab-voice-forge .voice-forge-seed-row { grid-template-columns: 1fr; gap: 6px; }
     }
     #advanced-settings-overlay {
       position: fixed;
@@ -238,6 +387,294 @@
         grid-template-columns: 1fr;
       }
     }
+
+    /* ---- Config density refinement ----
+       Keep long-form editors wide, but let short metadata and related controls
+       share the available row. These classes are layout-only: IDs, handlers,
+       tab order, and existing theme values remain unchanged. */
+    #config-page .config-field-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0 18px;
+      align-items: start;
+    }
+    #config-page .config-field-grid > .config-field {
+      min-width: 0;
+    }
+    #config-page .config-field-grid > .config-field > label {
+      margin-top: 0.75rem;
+    }
+    #config-page .config-field-grid > .config-field > input,
+    #config-page .config-field-grid > .config-field > select {
+      width: 100%;
+      max-width: none;
+    }
+    #config-page .config-control-short {
+      width: min(100%, 360px) !important;
+      max-width: 360px !important;
+    }
+    #config-page .config-control-medium {
+      width: min(100%, 560px) !important;
+      max-width: 560px !important;
+    }
+    #config-page .config-inline-field {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+    #config-page .config-inline-field > label {
+      margin: 0 !important;
+    }
+    #config-page .config-inline-field > select {
+      flex: 0 1 420px;
+      width: auto;
+      max-width: 420px;
+    }
+    #config-page .config-inline-field > button {
+      margin: 0;
+    }
+    #config-page .config-template-row {
+      flex-wrap: wrap;
+    }
+    #config-page .config-template-row > select {
+      min-width: 220px;
+    }
+    #config-page .config-option-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0 18px;
+      margin: 8px 0 12px;
+    }
+    #config-page .config-option-grid > div {
+      min-width: 0;
+      margin: 0 !important;
+    }
+    #config-page .config-choice-row,
+    #config-page .config-action-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+    #config-page .config-choice-row > button,
+    #config-page .config-action-button {
+      flex: 0 1 280px !important;
+      width: auto !important;
+      margin: 0;
+    }
+    #config-page .config-action-row > button {
+      margin: 0;
+    }
+    #tab-appearance .config-appearance-card {
+      padding: 16px 18px;
+    }
+    #tab-appearance .config-appearance-choice-row {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin: 0;
+    }
+    #tab-appearance .config-appearance-choice-row > button {
+      width: 100% !important;
+      min-width: 0;
+      flex: none !important;
+      margin: 0 !important;
+    }
+    #tab-appearance #bg-image-section .config-action-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    #tab-appearance #bg-image-section .config-action-row > button {
+      flex: 0 0 auto !important;
+      width: auto !important;
+      min-width: 0;
+      margin: 0 !important;
+    }
+    #config-page .config-field-grid input[type="file"] {
+      min-width: 0;
+      max-width: 100%;
+    }
+    /* Match native file-picker controls to the existing Config buttons. */
+    #config-page input[type="file"]::-webkit-file-upload-button,
+    #config-page input[type="file"]::file-selector-button {
+      margin-right: 8px;
+      padding: 5px 10px;
+      border: 1px solid #245080;
+      border-radius: 5px;
+      background: #1f3a5a;
+      color: #eaf3ff;
+      font: inherit;
+      cursor: pointer;
+    }
+    #config-page input[type="file"]::-webkit-file-upload-button:hover,
+    #config-page input[type="file"]::file-selector-button:hover {
+      background: #274967;
+      border-color: #3d6d94;
+      color: #fff;
+    }
+    #config-page #tab-random-checkins .random-checkin-profile-bar select {
+      flex: 0 1 420px;
+      max-width: 420px;
+    }
+    #config-page #tab-random-checkins .random-checkin-field > input[type="number"],
+    #config-page #tab-random-checkins .random-checkin-field > select {
+      max-width: 360px;
+    }
+    #config-page #tab-voice-forge #voice-forge-seed {
+      max-width: 180px;
+    }
+    /* Keep the compact layout's vertical rhythm deliberate and consistent. */
+    #config-page #container .config-tab-panel h3 {
+      margin-top: 14px;
+      margin-bottom: 7px;
+    }
+    #config-page #container .config-tab-panel > h3:first-child,
+    #config-page #tab-character #character-select-bar > h3,
+    #config-page #tab-user-persona #user-editor > h3,
+    #config-page #tab-user-persona #create-user-section > h3,
+    #config-page #tab-user-persona #delete-user-section > h3 {
+      margin-top: 0;
+    }
+    #config-page #container .config-tab-panel > hr {
+      margin: 14px 0;
+    }
+    #config-page #container .config-tab-panel label {
+      margin-top: 8px;
+      margin-bottom: 3px;
+    }
+    #config-page .config-field-grid > .config-field > label {
+      margin-top: 8px;
+      margin-bottom: 3px;
+    }
+    #config-page .config-option-grid {
+      margin-top: 6px;
+      margin-bottom: 8px;
+    }
+    #config-page .config-preview-action-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin-top: 6px;
+    }
+    #config-page .config-preview-action-row img {
+      margin: 0 !important;
+    }
+    #config-page .config-preview-action-row > button {
+      margin: 0 !important;
+    }
+    /* ---- Config control sizing ----
+       Single-line tab controls and action buttons share the compact sidebar
+       height; textareas keep their content-appropriate heights. */
+    #config-page #container .config-tab-panel:not(#tab-helcyon-bench) input:not([type="checkbox"]):not([type="range"]):not([type="hidden"]),
+    #config-page #container .config-tab-panel:not(#tab-helcyon-bench) select {
+      box-sizing: border-box;
+      height: 34px;
+      min-height: 34px;
+      padding-left: 8px;
+      padding-right: 8px;
+      padding-top: 0;
+      padding-bottom: 0;
+      line-height: 1.2;
+    }
+    #config-page #container .config-tab-panel:not(#tab-helcyon-bench) button:not(.config-tab) {
+      box-sizing: border-box;
+      height: 30px;
+      min-height: 30px;
+      padding-left: 8px !important;
+      padding-right: 8px !important;
+      padding-top: 0 !important;
+      padding-bottom: 0 !important;
+      border-radius: 3px !important;
+      font-size: 12px !important;
+      line-height: 1.2;
+    }
+    #config-page #character-select-bar button:not(.config-tab) {
+      height: 30px !important;
+      min-height: 30px !important;
+      padding: 0 8px !important;
+      border-radius: 3px !important;
+      font-size: 12px !important;
+      line-height: 1.2 !important;
+    }
+    #config-page #container .config-tab-panel:not(#tab-helcyon-bench) input[type="file"] {
+      padding-left: 8px;
+      padding-right: 8px;
+      font-size: 14px;
+    }
+    #config-page #advanced-settings-modal input:not([type="checkbox"]):not([type="range"]):not([type="hidden"]),
+    #config-page #advanced-settings-modal select,
+    #config-page #advanced-settings-modal button:not(.advanced-settings-close) {
+      box-sizing: border-box;
+      height: 34px !important;
+      min-height: 34px !important;
+      padding-left: 8px !important;
+      padding-right: 8px !important;
+      padding-top: 0 !important;
+      padding-bottom: 0 !important;
+      border-radius: 3px !important;
+      font-size: 12px !important;
+      line-height: 1.2 !important;
+    }
+    #config-page #advanced-settings-modal button[title^="Browse"] {
+      padding-left: 0 !important;
+      padding-right: 0 !important;
+    }
+    #config-page #advanced-settings-modal button:not(.advanced-settings-close) {
+      height: 30px !important;
+      min-height: 30px !important;
+    }
+    #config-page #advanced-settings-modal .advanced-settings-close {
+      height: 32px;
+      min-height: 32px;
+    }
+    #config-page #saveUserBtn,
+    #config-page #saveUserDetailsBtn {
+      height: 30px !important;
+      min-height: 30px !important;
+      padding-top: 0 !important;
+      padding-bottom: 0 !important;
+      line-height: 1.2 !important;
+    }
+    #config-page input[type="file"]::-webkit-file-upload-button,
+    #config-page input[type="file"]::file-selector-button {
+      height: 30px;
+      min-height: 30px;
+      margin-top: 0;
+      margin-bottom: 0;
+      padding: 0 10px;
+      line-height: 28px;
+      vertical-align: middle;
+    }
+    @media (max-width: 760px) {
+      #config-page .config-field-grid,
+      #config-page .config-option-grid {
+        grid-template-columns: 1fr;
+      }
+      #config-page .config-inline-field {
+        align-items: flex-start;
+      }
+      #config-page .config-inline-field > label,
+      #config-page .config-inline-field > select,
+      #config-page .config-inline-field > button {
+        flex-basis: 100%;
+        max-width: none;
+      }
+      #config-page .config-template-row > select {
+        flex-basis: 100% !important;
+        width: 100% !important;
+        max-width: none !important;
+      }
+      #config-page .config-choice-row > button,
+      #config-page .config-action-button {
+        flex-basis: auto !important;
+      }
+    }
   </style>
   <link rel="stylesheet" href="/theme-files/midnight.css" id="active-theme-link" />
   <script>
@@ -269,6 +706,19 @@
            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <polyline points="23 4 23 10 17 10"></polyline>
         <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+      </svg>
+    </button>
+
+    <button id="advanced-settings-shortcut" type="button" onclick="openAdvancedSettings()"
+      title="Advanced Settings" aria-label="Open Advanced Settings"
+      style="position:fixed; top:211px; right:12px; z-index:1001;
+             width:26px; height:26px; display:flex; align-items:center; justify-content:center;
+             border-radius:6px; border:1px solid var(--modal-border,#2d394b);
+             background:rgba(255,255,255,0.06); color:#e8e8e8; cursor:pointer;
+             -webkit-app-region:no-drag; padding:0; line-height:0;">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M14.7 6.3a4 4 0 0 0-5-5L7.4 3.6l3 3L8.6 8.4l-3-3-2.3 2.3a4 4 0 0 0 5 5l8.9 8.9a2.1 2.1 0 0 0 3-3z"></path>
       </svg>
     </button>
     <script>
@@ -450,11 +900,12 @@
         </div>
         <input id="sampling-preset-name" type="text" placeholder="Preset name..." style="background:#111; border:1px solid #333; color:#ccc; border-radius:3px; font-size:12px; padding:3px 6px; width:100%; box-sizing:border-box; margin-bottom:4px;">
         <button id="update-sampling-preset-btn" onclick="updateSamplingPreset()" style="display:none; background:#2a3a1a; border:1px solid #4a6a2a; color:#afa; border-radius:3px; padding:4px 7px; font-size:12px; cursor:pointer; width:100%; margin-bottom:4px;">🔄 Update Preset</button>
-        <button onclick="saveSamplingPreset()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; border-radius:3px; padding:4px 7px; font-size:12px; cursor:pointer; width:100%; margin-bottom:4px;">💾 Save Preset</button>
+        <div class="sampling-preset-actions">
+          <button onclick="saveSamplingPreset()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; border-radius:3px; padding:4px 7px; font-size:12px; cursor:pointer; width:100%;">💾 Save Preset</button>
+          <button id="saveSettingsBtn" style="background-color: #1f5a3a; border-color: #248050; color: white;">💾 Save &amp; Apply</button>
+        </div>
         <div id="sampling-preset-status" style="font-size:11px; color:#aaa; min-height:14px;"></div>
       </div>
-
-      <button id="saveSettingsBtn" style="background-color: #1f5a3a; border-color: #248050; color: white;">💾 Save & Apply</button>
 
       <button id="advanced-settings-btn" type="button" onclick="openAdvancedSettings()">Advanced Settings</button>
     </div>
@@ -737,15 +1188,17 @@
         <button class="config-tab" onclick="switchConfigTab('appearance', this)">🎨 Appearance</button>
         <button class="config-tab" onclick="switchConfigTab('voice-forge', this)">🎙 Voice Forge</button>
         <button class="config-tab" onclick="switchConfigTab('helcyon-bench', this)">Helcyon-Bench</button>
+        <button class="config-tab" onclick="switchConfigTab('random-checkins', this)">Random Check-ins</button>
       </div>
 
       <!-- ===== TAB: SYSTEM PROMPT ===== -->
       <div id="tab-system-prompt" class="config-tab-panel active">
       <h3>Global System Prompt</h3>
 
+      <div class="config-box-surface config-system-template-card">
       <!-- Template selector row -->
-      <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
-        <select id="system-prompt-file-select" style="flex:1;">
+      <div class="config-template-row" style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+        <select id="system-prompt-file-select" style="flex:0 1 520px; width:auto; max-width:520px;">
           <option value="">-- Select Template --</option>
         </select>
         <button onclick="saveGlobalSystemPrompt()" title="Save changes to the currently selected template" style="background-color:#2a4a2a; border-color:#3a6a3a; color:white; white-space:nowrap;">💾 Update</button>
@@ -757,9 +1210,9 @@
       <div id="active-prompt-indicator" style="font-size:12px; color:#6a9; margin-bottom:10px;"></div>
 
       <!-- Bind selected template to a specific character — explicit choice, no silent default -->
-      <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
+      <div class="config-template-row" style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
         <span style="font-size:13px; color:#bbb; white-space:nowrap;">Bind to character:</span>
-        <select id="sp-bind-character-select" onchange="updateBindButtonState()" style="flex:1;">
+        <select id="sp-bind-character-select" onchange="updateBindButtonState()" style="flex:0 1 420px; width:auto; max-width:420px;">
           <option value="">-- Select character --</option>
         </select>
         <button id="sp-bind-character-btn" onclick="bindSystemPromptToCharacter()" disabled
@@ -772,13 +1225,17 @@
       <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
         <button onclick="saveSystemPromptAs()" style="background-color:#1f3a5a; border-color:#245080; color:white; white-space:nowrap;">💾 Save As New Template</button>
       </div>
+      </div>
 
+      <div class="config-box-surface config-system-editor-card">
       <label>System Prompt:</label>
       <textarea id="global-system-prompt"
+                data-hwui-prompt-editor
                 placeholder="Type a system prompt, then Save As a new template..."></textarea>
 
       <label style="margin-top:14px; display:block;">Global Example Dialog: <span style="font-size:11px; color:#888; font-weight:normal;">Used when a character has no example dialogue of its own.</span></label>
       <textarea id="global-example-dialog"
+                data-hwui-prompt-editor
                 placeholder="User: Hey, how are you?&#10;Assistant: I'm doing great, thanks for asking!&#10;&#10;User: Tell me something interesting.&#10;Assistant: Sure — did you know..."
                 style="min-height:120px;"></textarea>
       <button onclick="saveGlobalExampleDialog()" style="background-color:#1f3a5a; border-color:#245080; color:white; margin-top:6px; margin-bottom:4px;">💾 Save Global Example Dialog</button>
@@ -786,24 +1243,28 @@
 
       <label style="margin-top:14px; display:block;">Global Post-History Instructions: <span style="font-size:11px; color:#888; font-weight:normal;">Saved with this template — loads/switches with it. Injected at the bottom of the stack (right before the model replies) and overrides character/project text. Separate from the character card's own post-history field — both are used if set. Use for hard system rules.</span></label>
       <textarea id="global-post-history"
+                data-hwui-prompt-editor
                 placeholder="e.g. When the user is venting, mirror their emotion first — do not pivot to solutions until they signal they want them. Never use bullet points, numbered lists, or headers in emotional replies."
                 style="min-height:120px;"></textarea>
       <button onclick="saveGlobalPostHistory()" style="background-color:#1f3a5a; border-color:#245080; color:white; margin-top:6px; margin-bottom:4px;">💾 Save Post-History</button>
       <div id="global-post-history-status" style="font-size:12px; color:#6a9; margin-bottom:6px; min-height:16px;"></div>
+      </div>
       <hr />
 
       <!-- 📍 CURRENT SITUATION (semi-global) -->
+      <div class="config-box-surface config-current-situation-card">
       <h3>📍 Current Situation</h3>
       <p style="font-size:12px; color:#888; margin-top:-8px; margin-bottom:10px;">
         A shared context injected into any character that has "Use Current Situation" enabled. Update this whenever your real-world situation changes.
       </p>
-      <textarea id="global-current-situation" placeholder="e.g. Bob is staying at his parents' house for a few days." style="min-height:80px;"></textarea>
+      <textarea id="global-current-situation" data-hwui-prompt-editor placeholder="e.g. Bob is staying at his parents' house for a few days." style="min-height:80px;"></textarea>
       <button onclick="saveCurrentSituation()" style="background-color:#1f5a3a; border-color:#248050; color:white; margin-top:6px;">💾 Save Situation</button>
+      </div>
       </div><!-- end tab-system-prompt -->
 
       <!-- ===== TAB: CHARACTER ===== -->
       <div id="tab-character" class="config-tab-panel">
-	  <div id="character-select-bar">
+      <div id="character-select-bar" class="config-box-surface">
 		<h3>Select Character <span id="char-bind-indicator" style="display:none; font-size:13px; color:#6a9; margin-left:6px;" title="System prompt bound">🔗 Bound</span></h3>
         <div style="display:flex; align-items:center; gap:12px;">
           <select id="character-select" style="width:244px; height:36px; flex:0 0 244px;"></select>
@@ -815,57 +1276,66 @@
         </div>
 	  </div>
 
-      <label>Name:</label>
-      <input type="text" id="character-name" />
+      <div class="config-field-grid config-box-surface">
+        <div class="config-field">
+          <label>Name:</label>
+          <input type="text" id="character-name" class="config-control-short" />
+        </div>
+        <div class="config-field">
+          <label>Tagline:</label>
+          <input type="text" id="tagline" class="config-control-medium" />
+        </div>
+      </div>
 
+      <div class="config-box-surface config-character-editor-card">
       <label>Main Prompt:</label>
-      <textarea id="main-prompt"></textarea>
+      <textarea id="main-prompt" data-hwui-prompt-editor></textarea>
 
       <label>Description:</label>
-      <textarea id="description"></textarea>
-
-      <label>Tagline:</label>
-      <input type="text" id="tagline" />
+      <textarea id="description" data-hwui-prompt-editor></textarea>
 
       <label>Scenario:</label>
-      <textarea id="scenario"></textarea>
+      <textarea id="scenario" data-hwui-prompt-editor></textarea>
 
-      <div style="margin: 8px 0 12px 0; display:flex; align-items:center; gap:8px;">
+      <div class="config-option-grid">
+      <div style="display:flex; align-items:center; gap:8px;">
         <input type="checkbox" id="use-current-situation" style="width:16px; height:16px; cursor:pointer;" />
         <label for="use-current-situation" style="margin:0; cursor:pointer; font-size:13px; color:#ccc;">
           📍 Include Current Situation <span style="color:#888; font-size:11px;">(inject global situation into this character's context)</span>
         </label>
       </div>
 
-      <div style="margin: 8px 0 4px 0; display:flex; align-items:center; gap:8px;">
+      <div style="display:flex; align-items:center; gap:8px;">
         <input type="checkbox" id="use-personal-memory" style="width:16px; height:16px; cursor:pointer;" />
         <label for="use-personal-memory" style="margin:0; cursor:pointer; font-size:13px; color:#ccc;">
           👤 Use personal memory <span style="color:#888; font-size:11px;">(character's own memory file)</span>
         </label>
       </div>
 
-      <div style="margin: 4px 0 12px 0; display:flex; align-items:center; gap:8px;">
+      <div style="display:flex; align-items:center; gap:8px;">
         <input type="checkbox" id="use-global-memory" style="width:16px; height:16px; cursor:pointer;" />
         <label for="use-global-memory" style="margin:0; cursor:pointer; font-size:13px; color:#ccc;">
           🌐 Use global memory <span style="color:#888; font-size:11px;">(shared memory file for all opted-in characters)</span>
         </label>
       </div>
 
-      <div style="margin: 4px 0 12px 0; display:flex; align-items:center; gap:8px;">
+      <div style="display:flex; align-items:center; gap:8px;">
         <input type="checkbox" id="use-web-search" style="width:16px; height:16px; cursor:pointer;" />
         <label for="use-web-search" style="margin:0; cursor:pointer; font-size:13px; color:#ccc;">
           🔍 Enable web search <span style="color:#888; font-size:11px;">(character can search the web when needed)</span>
         </label>
       </div>
+      </div>
 
       <label>Post History Instructions:</label>
-      <textarea id="post-history"></textarea>
+      <textarea id="post-history" data-hwui-prompt-editor></textarea>
 
       <label>Character Note:</label>
-      <textarea id="character-note"></textarea>
+      <textarea id="character-note" data-hwui-prompt-editor></textarea>
 
       <label>Example Dialogue:</label>
-      <textarea id="example-dialog"></textarea>
+      <textarea id="example-dialog" data-hwui-prompt-editor></textarea>
+      </div>
 
       <!-- 🔥 TOKEN COUNTER PANEL - INSERTED HERE -->
       <div id="token-counter-panel" style="
@@ -920,7 +1390,7 @@
       <!-- 🔥 END TOKEN COUNTER -->
 
       <label>Image Filename (in /static/images):</label>
-      <input type="text" id="image" oninput="updateImagePreview()" />
+      <input type="text" id="image" class="config-control-medium" oninput="updateImagePreview()" />
       <br />
       <img id="preview-img" src="" alt="Preview"
         style="width:64px;height:64px;border-radius:8px;display:none;margin-top:0.5rem;" />
@@ -944,7 +1414,7 @@
 
       <!-- CHARACTER EXPORT/IMPORT SECTION -->
       <h3>📦 Import/Export Characters</h3>
-      <div class="export-import-section">
+      <div class="export-import-section config-box-surface">
         <!-- Export Button -->
         <div class="export-group">
           <label>Export Current Character as PNG Card</label>
@@ -968,18 +1438,24 @@
       <!-- ===== TAB: CREATE CHARACTER ===== -->
       <div id="tab-create-char" class="config-tab-panel">
         <h3>Create New Character</h3>
-        <div id="create-character">
-          <label>Character Name:</label>
-          <input type="text" id="new-char-name" placeholder="e.g. Luna" />
+        <div id="create-character" class="config-box-surface">
+          <div class="config-field-grid">
+            <div class="config-field">
+              <label>Character Name:</label>
+              <input type="text" id="new-char-name" class="config-control-short" placeholder="e.g. Luna" />
+            </div>
+            <div class="config-field">
+              <label>Character Image:</label>
+              <input type="file" id="new-char-image-upload" accept="image/*" />
+            </div>
+          </div>
 
           <label>Description:</label>
-          <textarea id="new-char-description" placeholder="Short bio or purpose"></textarea>
+        <textarea id="new-char-description" data-hwui-prompt-editor placeholder="Short bio or purpose"></textarea>
 
           <label>Main Prompt:</label>
-          <textarea id="new-char-mainprompt" placeholder="Core personality or style instructions"></textarea>
+        <textarea id="new-char-mainprompt" data-hwui-prompt-editor placeholder="Core personality or style instructions"></textarea>
 
-          <label>Character Image:</label>
-          <input type="file" id="new-char-image-upload" accept="image/*" />
           <img id="new-char-preview" src="" alt="Preview"
             style="width:64px;height:64px;border-radius:8px;display:none;margin-top:0.5rem;" />
 
@@ -990,57 +1466,74 @@
       <!-- ===== TAB: USER PERSONA ===== -->
       <div id="tab-user-persona" class="config-tab-panel">
 <!-- User Persona Section -->
-      <label for="userSelect" style="font-size: 20px; font-weight: bold; color: #fff; display: block; margin-bottom: 0.5rem;">User Persona:</label>
-      <select id="userSelect"></select>
-      <button id="saveUserBtn" style="background-color: #1f3a5a; border-color: #245080; color: white;">Set Active User</button>
+      <div class="config-inline-field config-box-surface">
+        <label for="userSelect" style="font-size: 20px; font-weight: bold; color: #fff; display: block; margin-bottom: 0.5rem;">User Persona:</label>
+        <select id="userSelect" class="config-control-short"></select>
+        <button id="saveUserBtn" style="background-color: #1f3a5a; border-color: #245080; color: white;">Set Active User</button>
+      </div>
 
       <hr />
 
       <!-- User Persona Editor -->
-      <div id="user-editor">
+      <div id="user-editor" class="config-box-surface">
         <h3>User Persona Details</h3>
 
-        <label for="user-display">Display Name:</label>
-        <input type="text" id="user-display" placeholder="Your name here" />
+        <div class="config-field-grid">
+          <div class="config-field">
+            <label for="user-display">Display Name:</label>
+            <input type="text" id="user-display" class="config-control-short" placeholder="Your name here" />
+          </div>
+          <div class="config-field">
+            <label for="user-image-upload">Profile Image:</label>
+            <input type="file" id="user-image-upload" accept="image/*" onchange="previewUserImage(this)" />
+          </div>
+        </div>
 
         <label for="user-bio">Bio / Description:</label>
-        <textarea id="user-bio" placeholder="Write something about yourself..."></textarea>
+        <textarea id="user-bio" data-hwui-prompt-editor placeholder="Write something about yourself..."></textarea>
 
-        <label for="user-image-upload">Profile Image:</label>
-        <input type="file" id="user-image-upload" accept="image/*" onchange="previewUserImage(this)" />
-        <img id="user-image-preview" src="" alt="Preview"
-          style="width:64px;height:64px;border-radius:50%;display:none;margin-top:0.5rem;" />
-
-        <button id="saveUserDetailsBtn" style="background-color: #1f5a3a; border-color: #248050; color: white;">💾 Save Details</button>
+        <div class="config-preview-action-row">
+          <img id="user-image-preview" src="" alt="Preview"
+            style="width:64px;height:64px;border-radius:50%;display:none;margin-top:0.5rem;" />
+          <button id="saveUserDetailsBtn" style="background-color: #1f5a3a; border-color: #248050; color: white;">💾 Save Details</button>
+        </div>
       </div>
 
       <hr />
 
       <!-- CREATE NEW USER PERSONA -->
-      <div id="create-user-section">
+      <div id="create-user-section" class="config-box-surface">
         <h3>Create New User Persona</h3>
 
-        <label for="new-user-name">User Name:</label>
-        <input type="text" id="new-user-name" placeholder="e.g. Chris, Alex, Sam" />
-
-        <label for="new-user-display">Display Name:</label>
-        <input type="text" id="new-user-display" placeholder="Full name or nickname" />
+        <div class="config-field-grid">
+          <div class="config-field">
+            <label for="new-user-name">User Name:</label>
+            <input type="text" id="new-user-name" class="config-control-short" placeholder="e.g. Chris, Alex, Sam" />
+          </div>
+          <div class="config-field">
+            <label for="new-user-display">Display Name:</label>
+            <input type="text" id="new-user-display" class="config-control-short" placeholder="Full name or nickname" />
+          </div>
+        </div>
 
         <label for="new-user-bio">Bio / Description:</label>
-        <textarea id="new-user-bio" placeholder="Write something about this user..." rows="6"></textarea>
+        <textarea id="new-user-bio" data-hwui-prompt-editor placeholder="Write something about this user..." rows="6"></textarea>
 
-        <label for="new-user-image-upload">Profile Image:</label>
-        <input type="file" id="new-user-image-upload" accept="image/*" onchange="previewNewUserImage(this)" />
-        <img id="new-user-image-preview" src="" alt="Preview"
-          style="width:64px;height:64px;border-radius:50%;display:none;margin-top:0.5rem;" />
-
-        <button onclick="createNewUser()" style="background-color: #1f5a3a; border-color: #248050; color: white;">✨ Create User Persona</button>
+        <div class="config-field">
+          <label for="new-user-image-upload">Profile Image:</label>
+          <input type="file" id="new-user-image-upload" accept="image/*" onchange="previewNewUserImage(this)" />
+        </div>
+        <div class="config-preview-action-row">
+          <img id="new-user-image-preview" src="" alt="Preview"
+            style="width:64px;height:64px;border-radius:50%;display:none;margin-top:0.5rem;" />
+          <button onclick="createNewUser()" style="background-color: #1f5a3a; border-color: #248050; color: white;">✨ Create User Persona</button>
+        </div>
       </div>
 
       <hr />
 
       <!-- DELETE USER PERSONA -->
-      <div id="delete-user-section">
+      <div id="delete-user-section" class="config-box-surface">
         <h3>Delete User Persona</h3>
         <p style="color: #aaa; font-size: 13px;">
           ⚠️ Warning: This will permanently delete the selected user persona.
@@ -1053,24 +1546,26 @@
       <div id="tab-appearance" class="config-tab-panel">
         <h3>🎨 Appearance</h3>
 
+        <div class="config-box-surface config-appearance-card">
         <!-- Background Mode Toggle -->
         <h4 style="color:#aaa; font-size:12px; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px; margin-top:0;">Background Mode</h4>
-        <div style="display:flex; gap:8px; margin-bottom:18px;">
+        <div class="config-appearance-choice-row">
           <button id="bg-mode-colour-btn" onclick="setBgMode('colour')" style="flex:1; padding:7px 0; border-radius:5px; font-size:13px; cursor:pointer; border:1px solid #444; background:#1a3a2a; color:#6f6; font-weight:600;">🎨 Theme Colour</button>
           <button id="bg-mode-image-btn" onclick="setBgMode('image')" style="flex:1; padding:7px 0; border-radius:5px; font-size:13px; cursor:pointer; border:1px solid #333; background:#2a2a2a; color:#aaa;">🖼️ Background Image</button>
+          <button class="config-action-button" onclick="openThemeModal()" style="background:#1e3a4a; border:1px solid #2a5068; color:#a0c8d8; width:100%; font-size:13px; padding:10px 0; border-radius:6px; cursor:pointer;">🎨 Open Theme Editor</button>
         </div>
 
-        <!-- Colour mode info -->
-        <div id="bg-colour-section">
-          <p style="font-size:12px; color:#888; margin:0 0 10px;">Background colour is controlled by <strong style="color:#aaa;">Chat Panel BG</strong> in the Theme Editor.</p>
-          <button onclick="openThemeModal()" style="background:#1e3a4a; border:1px solid #2a5068; color:#a0c8d8; width:100%; font-size:13px; padding:10px 0; border-radius:6px; cursor:pointer;">🎨 Open Theme Editor</button>
-        </div>
+        <!-- Colour mode hook retained for mode-switching behavior. -->
+        <div id="bg-colour-section"></div>
 
         <!-- Image mode -->
         <div id="bg-image-section" style="display:none;">
           <input type="file" id="bg-image-input" accept="image/*" style="display:none;" onchange="handleBgImageChange(this)">
-          <button onclick="document.getElementById('bg-image-input').click()" style="background-color: #3a2a5a; border-color: #6a4a9a; color: white; width:100%; margin-bottom:8px; padding:9px 0; border-radius:5px; font-size:13px; cursor:pointer;">🖼️ Choose Image</button>
-          <button onclick="clearBackground()" style="background-color: #3a3b3f; border-color: #555; color: #aaa; width:100%; font-size:12px; margin-bottom:14px; padding:7px 0; border-radius:5px; cursor:pointer;">✕ Clear Image</button>
+          <div class="config-action-row">
+            <button class="config-action-button" onclick="document.getElementById('bg-image-input').click()" style="background-color: #3a2a5a; border-color: #6a4a9a; color: white; width:100%; margin-bottom:8px; padding:9px 0; border-radius:5px; font-size:13px; cursor:pointer;">🖼️ Choose Image</button>
+            <button class="config-action-button" onclick="clearBackground()" style="background-color: #3a3b3f; border-color: #555; color: #aaa; width:100%; font-size:12px; margin-bottom:14px; padding:7px 0; border-radius:5px; cursor:pointer;">✕ Clear Image</button>
+          </div>
+        </div>
         </div>
 
       </div><!-- end tab-appearance -->
@@ -1149,10 +1644,12 @@
 
         <label for="voice-forge-text">Test text</label>
         <textarea id="voice-forge-text" rows="5" placeholder="Enter the line the blended voice should speak...">Hello. This is a test of a newly blended voice.</textarea>
-        <button id="voice-forge-save-text" type="button" onclick="saveVoiceForgeTestText()" style="margin-top:6px; background-color:#1f3a5a; border-color:#245080; color:white;">💾 Save Test Text</button>
-        <label for="voice-forge-seed" style="margin-top:10px;">Seed <span style="color:#777; font-weight:normal;">(optional)</span></label>
-        <input id="voice-forge-seed" type="number" step="1" placeholder="Random">
-        <button id="voice-forge-generate" type="button" onclick="generateVoiceForgeBlend()" style="margin-top:14px; background-color:#1f5a3a; border-color:#248050; color:white;">Generate Blend</button>
+        <button id="voice-forge-save-text" class="config-action-button" type="button" onclick="saveVoiceForgeTestText()" style="margin-top:6px; background-color:#1f3a5a; border-color:#245080; color:white;">💾 Save Test Text</button>
+        <div class="config-inline-field voice-forge-seed-row" style="margin-top:10px;">
+          <label for="voice-forge-seed">Seed <span style="color:#777; font-weight:normal;">(optional)</span></label>
+          <input id="voice-forge-seed" class="config-control-short" type="number" step="1" placeholder="Random">
+          <button id="voice-forge-generate" class="config-action-button" type="button" onclick="generateVoiceForgeBlend()" style="margin-top:14px; background-color:#1f5a3a; border-color:#248050; color:white;">Generate Blend</button>
+        </div>
         <div id="voice-forge-status" role="status" aria-live="polite" style="min-height:18px; margin-top:10px; font-size:12px; color:#aaa;"></div>
 
         <section id="voice-forge-result" class="voice-forge-result" hidden>
@@ -1166,13 +1663,140 @@
         </section>
       </div><!-- end tab-voice-forge -->
 
+      <!-- ===== TAB: RANDOM CHECK-INS ===== -->
+      <div id="tab-random-checkins" class="config-tab-panel">
+        <h3>Random Check-ins</h3>
+        <p class="random-checkin-intro">
+          Let the active character start a conversation while the desktop chat page is open.
+          Check-ins are disabled by default, never run in the background, and wait for your reply before another one.
+          Normal assistant replies to your messages remain immediate and unaffected.
+        </p>
+        <div class="random-checkin-profile-bar">
+          <label for="random-checkins-profile">Profile</label>
+          <select id="random-checkins-profile" onchange="selectRandomCheckinProfile(this.value)"></select>
+          <button type="button" class="random-checkin-profile-btn random-checkin-profile-save" onclick="saveRandomCheckinSettings()" title="Save these settings to the selected profile">Save</button>
+          <button type="button" class="random-checkin-profile-btn" onclick="saveRandomCheckinProfileAsNew()" title="Save these settings as a new profile">Save as new</button>
+          <button type="button" id="random-checkins-profile-delete" class="random-checkin-profile-btn random-checkin-profile-delete" onclick="deleteRandomCheckinProfile()" title="Delete the selected profile">Delete</button>
+        </div>
+        <div class="random-checkin-top-grid">
+          <div class="random-checkin-panel">
+            <div class="random-checkin-enabled-row">
+              <div>
+                <h4>Enabled</h4>
+                <small>Allow the active character to start a conversation</small>
+              </div>
+              <label class="random-checkin-toggle" aria-label="Enable Random Check-ins">
+                <input id="random-checkins-enabled" type="checkbox">
+                <span class="random-checkin-toggle-track"></span>
+              </label>
+            </div>
+          </div>
+          <div class="random-checkin-panel random-checkin-field">
+            <span>Trigger <span class="random-checkin-info" tabindex="0" role="button" aria-label="About Trigger">ⓘ<span class="random-checkin-info-tip">Random inactivity chooses one time between Minimum and Maximum after your last activity. Scheduled mode fires at the configured times or repeating interval.</span></span></span>
+            <small>When to start a check-in</small>
+            <select id="random-checkins-trigger" onchange="updateRandomCheckinFieldVisibility()" style="width:100%;">
+              <option value="random">Random inactivity interval</option>
+              <option value="scheduled">Scheduled times</option>
+            </select>
+          </div>
+        </div>
+        <div class="random-checkin-form-grid">
+          <label class="random-checkin-field"><span>Minimum inactivity (minutes) <span class="random-checkin-info" tabindex="0" role="button" aria-label="About inactivity window">ⓘ<span class="random-checkin-info-tip">Minimum and Maximum form one random waiting window. For example, 10–30 minutes schedules one check-in somewhere in that range after you stop interacting. They are not first-message or second-message timers.</span></span></span><small>Shortest time to wait after your last message</small><input id="random-checkins-min" class="config-control-short" type="number" min="1" step="1" value="30"></label>
+          <label class="random-checkin-field"><span>Maximum inactivity (minutes) <span class="random-checkin-info" tabindex="0" role="button" aria-label="About inactivity window">ⓘ<span class="random-checkin-info-tip">Minimum and Maximum form one random waiting window. For example, 10–30 minutes schedules one check-in somewhere in that range after you stop interacting. They are not first-message or second-message timers.</span></span></span><small>Longest time to wait after your last message</small><input id="random-checkins-max" class="config-control-short" type="number" min="1" step="1" value="90"></label>
+          <div id="random-checkins-schedule-fields" class="random-checkin-full" style="display:none;border:1px solid #3a3a3a;border-radius:6px;padding:10px;">
+            <label>Scheduled method
+              <select id="random-checkins-schedule-mode" class="config-control-medium" onchange="updateRandomCheckinFieldVisibility()" style="width:100%;">
+                <option value="specific">Specific times</option>
+                <option value="interval">Repeating interval</option>
+              </select>
+            </label>
+            <div id="random-checkins-specific-fields" style="margin-top:10px;">
+              <div id="random-checkins-specific-times" style="display:flex;flex-direction:column;gap:6px;"></div>
+              <button type="button" onclick="addRandomCheckinSpecificTime()" style="margin-top:8px;">+ Add time</button>
+            </div>
+            <label id="random-checkins-interval-fields" style="display:none;margin-top:10px;">Repeating interval
+              <select id="random-checkins-interval" class="config-control-medium" style="width:100%;">
+                <option value="1">Every 1 minute</option>
+                <option value="5">Every 5 minutes</option>
+                <option value="15">Every 15 minutes</option>
+                <option value="30">Every 30 minutes</option>
+                <option value="60">Every 60 minutes / on the hour</option>
+              </select>
+            </label>
+          </div>
+          <label class="random-checkin-field"><span>Message mode <span class="random-checkin-info" tabindex="0" role="button" aria-label="About message modes">ⓘ<span class="random-checkin-info-tip">Random: the character spontaneously chooses what to say; requires an existing conversation with at least one genuine user message. Guided: generates a fresh spontaneous message inspired by your themes; guidance stays invisible; also requires a genuine user message. Custom: sends one exact message randomly chosen from your pool, with no model generation; it can work in a new or empty chat.</span></span></span><small>How check-in messages are chosen</small>
+            <select id="random-checkins-message-mode" class="config-control-medium" onchange="updateRandomCheckinFieldVisibility()" style="width:100%;">
+              <option value="random">Random</option>
+              <option value="guided">Guided</option>
+              <option value="custom">Custom</option>
+            </select>
+          </label>
+          <label class="random-checkin-field"><span>Maximum per day <span class="random-checkin-info" tabindex="0" role="button" aria-label="About daily maximum">ⓘ<span class="random-checkin-info-tip">The maximum number of automatic check-ins across the day. This is not the number sent consecutively.</span></span></span><small>Limit the number of check-ins per day</small><input id="random-checkins-max-day" class="config-control-short" type="number" min="1" max="100" step="1" value="3"></label>
+          <label id="random-checkins-guidance-field" style="grid-column:1 / -1;display:none;">Guidance / themes
+            <textarea id="random-checkins-guidance" rows="5" placeholder="ask my opinion about things&#10;bring up interesting topics&#10;occasionally refer to earlier conversations" style="width:100%;box-sizing:border-box;"></textarea>
+          </label>
+          <label id="random-checkins-custom-field" style="grid-column:1 / -1;display:none;">Custom message pool (one message per line)
+            <textarea id="random-checkins-custom" rows="5" placeholder="Hey, how are you doing?" style="width:100%;box-sizing:border-box;"></textarea>
+          </label>
+        </div>
+        <div class="random-checkin-quiet-panel">
+          <div class="random-checkin-quiet-copy">
+            <div>
+              <h4>Quiet hours <span class="random-checkin-info" tabindex="0" role="button" aria-label="About quiet hours">ⓘ<span class="random-checkin-info-tip">No automatic check-ins fire during this period.</span></span></h4>
+              <small>Pause check-ins during a set time period</small>
+            </div>
+            <label class="random-checkin-toggle" aria-label="Enable Quiet hours">
+              <input id="random-checkins-quiet-enabled" type="checkbox">
+              <span class="random-checkin-toggle-track"></span>
+            </label>
+          </div>
+          <div class="random-checkin-quiet-divider"></div>
+          <div class="random-checkin-time-grid">
+            <label class="random-checkin-field"><span>From</span><input id="random-checkins-quiet-start" type="time" value="22:00"></label>
+            <label class="random-checkin-field"><span>Until</span><input id="random-checkins-quiet-end" type="time" value="08:00"></label>
+          </div>
+        </div>
+        <div class="random-checkin-panel random-checkin-notify-panel">
+          <div class="random-checkin-enabled-row">
+            <div>
+              <h4>Desktop notifications <span class="random-checkin-info" tabindex="0" role="button" aria-label="About desktop notifications">ⓘ<span class="random-checkin-info-tip">Notifications appear only when HWUI is unfocused or minimized. Check-ins still arrive normally when notifications are disabled.</span></span></h4>
+              <small>Show a Windows notification when a check-in arrives while HWUI is unfocused.</small>
+            </div>
+            <label class="random-checkin-toggle" aria-label="Enable Desktop notifications">
+              <input id="random-checkins-desktop-notifications" type="checkbox" checked>
+              <span class="random-checkin-toggle-track"></span>
+            </label>
+          </div>
+        </div>
+        <div class="random-checkin-panel random-checkin-notify-panel">
+          <div class="random-checkin-enabled-row">
+            <div>
+              <h4>Mobile notifications <span class="random-checkin-info" tabindex="0" role="button" aria-label="About mobile notifications">ⓘ<span class="random-checkin-info-tip">Push each saved check-in to phones enabled from HWUI mobile (🔔 on /mobile, opened through HWUI's HTTPS Tailscale address). Independent of desktop notifications. Check-ins still only fire while desktop HWUI is open.</span></span></h4>
+              <small>Send check-ins to your phone as push notifications. Tapping one opens that chat.</small>
+              <small id="random-checkins-mobile-devices" class="random-checkin-mobile-devices"></small>
+            </div>
+            <label class="random-checkin-toggle" aria-label="Enable Mobile notifications">
+              <input id="random-checkins-mobile-notifications" type="checkbox">
+              <span class="random-checkin-toggle-track"></span>
+            </label>
+          </div>
+          <div class="random-checkin-mobile-actions">
+            <button type="button" id="random-checkins-mobile-test" class="random-checkin-profile-btn" onclick="sendRandomCheckinMobileTest()">Send test notification</button>
+          </div>
+        </div>
+        <div class="random-checkin-actions">
+          <button type="button" class="random-checkin-save" onclick="saveRandomCheckinSettings()">💾 Save Random Check-ins</button>
+          <span id="random-checkins-status" style="color:#8ab;min-height:1em;"></span>
+        </div>
+      </div>
+
       <!-- ===== TAB: HELCYON-BENCH ===== -->
       <div id="tab-helcyon-bench" class="config-tab-panel">
         <div class="bench-app-shell">
           <aside class="bench-nav-rail">
             <div class="bench-brand">
               <span class="bench-brand-mark">HB</span>
-              <div><strong>Helcyon-Bench</strong><small>Native Pro workspace</small></div>
+                <div><strong>Helcyon-Bench</strong><small>Free tools, Pro automation</small></div>
             </div>
 
             <section class="bench-rail-section">
@@ -1294,27 +1918,27 @@
                   <div class="bench-pack-editor-prompt">
                     <div class="bench-pack-editor-subheading">Prompt 1</div>
                     <label>Title<input id="bench-pack-editor-title-1" type="text" placeholder="Prompt title"></label>
-                    <label>Prompt<textarea id="bench-pack-editor-prompt-1" placeholder="Write the benchmark prompt..."></textarea></label>
+                    <label>Prompt<textarea id="bench-pack-editor-prompt-1" data-hwui-prompt-editor placeholder="Write the benchmark prompt..."></textarea></label>
                   </div>
                   <div class="bench-pack-editor-prompt">
                     <div class="bench-pack-editor-subheading">Prompt 2</div>
                     <label>Title<input id="bench-pack-editor-title-2" type="text" placeholder="Prompt title"></label>
-                    <label>Prompt<textarea id="bench-pack-editor-prompt-2" placeholder="Write the benchmark prompt..."></textarea></label>
+                    <label>Prompt<textarea id="bench-pack-editor-prompt-2" data-hwui-prompt-editor placeholder="Write the benchmark prompt..."></textarea></label>
                   </div>
                   <div class="bench-pack-editor-prompt">
                     <div class="bench-pack-editor-subheading">Prompt 3</div>
                     <label>Title<input id="bench-pack-editor-title-3" type="text" placeholder="Prompt title"></label>
-                    <label>Prompt<textarea id="bench-pack-editor-prompt-3" placeholder="Write the benchmark prompt..."></textarea></label>
+                    <label>Prompt<textarea id="bench-pack-editor-prompt-3" data-hwui-prompt-editor placeholder="Write the benchmark prompt..."></textarea></label>
                   </div>
                   <div class="bench-pack-editor-prompt">
                     <div class="bench-pack-editor-subheading">Prompt 4</div>
                     <label>Title<input id="bench-pack-editor-title-4" type="text" placeholder="Prompt title"></label>
-                    <label>Prompt<textarea id="bench-pack-editor-prompt-4" placeholder="Write the benchmark prompt..."></textarea></label>
+                    <label>Prompt<textarea id="bench-pack-editor-prompt-4" data-hwui-prompt-editor placeholder="Write the benchmark prompt..."></textarea></label>
                   </div>
                   <div class="bench-pack-editor-prompt">
                     <div class="bench-pack-editor-subheading">Prompt 5</div>
                     <label>Title<input id="bench-pack-editor-title-5" type="text" placeholder="Prompt title"></label>
-                    <label>Prompt<textarea id="bench-pack-editor-prompt-5" placeholder="Write the benchmark prompt..."></textarea></label>
+                    <label>Prompt<textarea id="bench-pack-editor-prompt-5" data-hwui-prompt-editor placeholder="Write the benchmark prompt..."></textarea></label>
                   </div>
                   <div class="bench-pack-editor-actions">
                     <button id="bench-pack-editor-save" type="button" class="bench-primary-btn" onclick="saveBenchPackEditor()" disabled>Save / Rename Loaded Pack</button>
@@ -1488,6 +2112,300 @@
     if (container) container.scrollTop = 0;
     if (tabId === 'helcyon-bench') initialiseHelcyonBench();
     if (tabId === 'voice-forge') initialiseVoiceForge();
+    if (tabId === 'random-checkins') { loadRandomCheckinSettings(); refreshRandomCheckinMobileDevices(); }
+  }
+
+  function validRandomCheckinTime(value) {
+    const match = String(value || '').match(/^(\d{2}):(\d{2})$/);
+    if (!match) return false;
+    return Number(match[1]) >= 0 && Number(match[1]) < 24 &&
+      Number(match[2]) >= 0 && Number(match[2]) < 60;
+  }
+
+  function renderRandomCheckinSpecificTimes(times = null) {
+    const list = document.getElementById('random-checkins-specific-times');
+    if (!list) return;
+    const existing = times === null
+      ? Array.from(list.querySelectorAll('input[type="time"]')).map(input => input.value)
+      : times;
+    const values = (existing || []).filter(validRandomCheckinTime).slice(0, 20);
+    if (!values.length) values.push('09:00');
+    list.textContent = '';
+    values.forEach(value => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;gap:8px;align-items:center;';
+      const input = document.createElement('input');
+      input.type = 'time';
+      input.value = value;
+      input.required = true;
+      input.style.flex = '1';
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', () => {
+        row.remove();
+        if (!list.querySelector('input[type="time"]')) {
+          renderRandomCheckinSpecificTimes(['09:00']);
+        }
+        updateRandomCheckinSpecificTimeLimit();
+      });
+      row.append(input, remove);
+      list.appendChild(row);
+    });
+    updateRandomCheckinSpecificTimeLimit();
+  }
+
+  function updateRandomCheckinSpecificTimeLimit() {
+    const list = document.getElementById('random-checkins-specific-times');
+    const add = document.querySelector('button[onclick="addRandomCheckinSpecificTime()"]');
+    if (add && list) add.disabled = list.querySelectorAll('input[type="time"]').length >= 20;
+  }
+
+  function addRandomCheckinSpecificTime() {
+    const list = document.getElementById('random-checkins-specific-times');
+    if (!list) return;
+    const values = Array.from(list.querySelectorAll('input[type="time"]')).map(input => input.value);
+    if (values.length >= 20) return;
+    values.push('09:00');
+    renderRandomCheckinSpecificTimes(values);
+  }
+
+  function updateRandomCheckinFieldVisibility() {
+    const trigger = document.getElementById('random-checkins-trigger')?.value || 'random';
+    const scheduleMode = document.getElementById('random-checkins-schedule-mode')?.value || 'specific';
+    const messageMode = document.getElementById('random-checkins-message-mode')?.value || 'random';
+    const scheduleFields = document.getElementById('random-checkins-schedule-fields');
+    const specificFields = document.getElementById('random-checkins-specific-fields');
+    const intervalFields = document.getElementById('random-checkins-interval-fields');
+    const guidanceField = document.getElementById('random-checkins-guidance-field');
+    const customField = document.getElementById('random-checkins-custom-field');
+    if (scheduleFields) scheduleFields.style.display = trigger === 'scheduled' ? 'block' : 'none';
+    if (specificFields) specificFields.style.display = trigger === 'scheduled' && scheduleMode === 'specific' ? 'block' : 'none';
+    if (intervalFields) intervalFields.style.display = trigger === 'scheduled' && scheduleMode === 'interval' ? 'block' : 'none';
+    if (guidanceField) guidanceField.style.display = messageMode === 'guided' ? 'block' : 'none';
+    if (customField) customField.style.display = messageMode === 'custom' ? 'block' : 'none';
+  }
+
+  // Selected profile + the settings last loaded into the form (for the
+  // unsaved-changes check when switching profiles).
+  let randomCheckinProfileState = { active: 'Default', protected: 'Default', profiles: [] };
+  let randomCheckinFormBaseline = '';
+
+  function renderRandomCheckinProfiles(state) {
+    randomCheckinProfileState = state;
+    const select = document.getElementById('random-checkins-profile');
+    select.textContent = '';
+    state.profiles.forEach(profile => {
+      const option = document.createElement('option');
+      option.value = profile.name;
+      option.textContent = profile.name;
+      select.appendChild(option);
+    });
+    select.value = state.active;
+    document.getElementById('random-checkins-profile-delete').disabled = state.active === state.protected;
+  }
+
+  // Apply a profiles-route response: dropdown, form, and baseline.
+  function showRandomCheckinProfileState(state) {
+    renderRandomCheckinProfiles(state);
+    applyRandomCheckinSettingsToForm(state.settings);
+  }
+
+  async function randomCheckinProfileRequest(url, body) {
+    const response = await fetch(url, body === undefined ? {} : {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || ('HTTP ' + response.status));
+    return data;
+  }
+
+  async function loadRandomCheckinSettings() {
+    const status = document.getElementById('random-checkins-status');
+    if (!document.querySelector('#random-checkins-specific-times input[type="time"]')) {
+      renderRandomCheckinSpecificTimes(['09:00']);
+    }
+    try {
+      showRandomCheckinProfileState(await randomCheckinProfileRequest('/api/random-checkins/profiles'));
+      if (status) status.textContent = '';
+    } catch (error) {
+      console.error('Random check-in profiles load failed:', error);
+      // Never leave the form on its HTML defaults — a Save would write them live.
+      try {
+        applyRandomCheckinSettingsToForm(await randomCheckinProfileRequest('/api/random-checkins/settings'));
+        if (status) status.textContent = 'Profiles unavailable (restart HWUI after updating) — live settings loaded.';
+      } catch (settingsError) {
+        if (status) status.textContent = 'Could not load settings.';
+        console.error('Random check-in settings load failed:', settingsError);
+      }
+    }
+  }
+
+  async function selectRandomCheckinProfile(name) {
+    const status = document.getElementById('random-checkins-status');
+    const select = document.getElementById('random-checkins-profile');
+    if (name === randomCheckinProfileState.active) return;
+    if (JSON.stringify(collectRandomCheckinSettingsFromForm()) !== randomCheckinFormBaseline &&
+        !(await hwuiConfirm(`Discard unsaved changes to “${randomCheckinProfileState.active}”?`, { confirmText: 'Discard', danger: true }))) {
+      select.value = randomCheckinProfileState.active;
+      return;
+    }
+    try {
+      showRandomCheckinProfileState(await randomCheckinProfileRequest('/api/random-checkins/profiles/select', { name }));
+      if (status) status.textContent = `Loaded profile “${name}”.`;
+    } catch (error) {
+      select.value = randomCheckinProfileState.active;
+      if (status) status.textContent = 'Could not load profile.';
+      console.error('Random check-in profile select failed:', error);
+    }
+  }
+
+  async function saveRandomCheckinProfileAsNew() {
+    const status = document.getElementById('random-checkins-status');
+    const name = await hwuiPrompt('Name for the new Random Check-ins profile:', '', { confirmText: 'Create' });
+    if (name === null) return;
+    if (!name.trim()) { hwuiToast('Profile name cannot be empty.', 'error'); return; }
+    try {
+      const state = await randomCheckinProfileRequest('/api/random-checkins/profiles', {
+        name, settings: collectRandomCheckinSettingsFromForm()
+      });
+      showRandomCheckinProfileState(state);
+      if (status) status.textContent = `Saved as new profile “${state.active}”.`;
+      hwuiToast(`Saved as new profile “${state.active}”.`);
+    } catch (error) {
+      hwuiToast(error.message || 'Could not create profile.', 'error');
+    }
+  }
+
+  async function deleteRandomCheckinProfile() {
+    const status = document.getElementById('random-checkins-status');
+    const name = randomCheckinProfileState.active;
+    if (name === randomCheckinProfileState.protected) return;
+    const confirmed = await hwuiConfirm(
+      `Delete profile “${name}”?\nRandom Check-ins will switch to the ${randomCheckinProfileState.protected} profile.`,
+      { confirmText: 'Delete', danger: true }
+    );
+    if (!confirmed) return;
+    try {
+      showRandomCheckinProfileState(await randomCheckinProfileRequest('/api/random-checkins/profiles/delete', { name }));
+      if (status) status.textContent = `Deleted profile “${name}”.`;
+      hwuiToast(`Deleted profile “${name}”.`);
+    } catch (error) {
+      hwuiToast(error.message || 'Could not delete profile.', 'error');
+    }
+  }
+
+  function applyRandomCheckinSettingsToForm(settings) {
+    document.getElementById('random-checkins-enabled').checked = settings.enabled === true;
+    document.getElementById('random-checkins-trigger').value = settings.trigger_mode || 'random';
+    document.getElementById('random-checkins-min').value = settings.min_inactivity_minutes ?? 30;
+    document.getElementById('random-checkins-max').value = settings.max_inactivity_minutes ?? 90;
+    document.getElementById('random-checkins-schedule-mode').value = settings.schedule_mode || 'specific';
+    document.getElementById('random-checkins-interval').value = String(settings.schedule_interval_minutes || 60);
+    renderRandomCheckinSpecificTimes(settings.scheduled_times || []);
+    document.getElementById('random-checkins-message-mode').value = settings.message_mode || 'random';
+    document.getElementById('random-checkins-guidance').value = settings.guidance || '';
+    document.getElementById('random-checkins-custom').value = (settings.custom_messages || []).join('\n');
+    document.getElementById('random-checkins-quiet-enabled').checked = settings.quiet_hours_enabled === true;
+    document.getElementById('random-checkins-desktop-notifications').checked = settings.desktop_notifications !== false;
+    document.getElementById('random-checkins-mobile-notifications').checked = settings.mobile_notifications === true;
+    document.getElementById('random-checkins-quiet-start').value = settings.quiet_start || '22:00';
+    document.getElementById('random-checkins-quiet-end').value = settings.quiet_end || '08:00';
+    document.getElementById('random-checkins-max-day').value = settings.max_per_day ?? 3;
+    updateRandomCheckinFieldVisibility();
+    randomCheckinFormBaseline = JSON.stringify(collectRandomCheckinSettingsFromForm());
+  }
+
+  function collectRandomCheckinSettingsFromForm() {
+    return {
+      enabled: document.getElementById('random-checkins-enabled').checked,
+      trigger_mode: document.getElementById('random-checkins-trigger').value,
+      min_inactivity_minutes: Number(document.getElementById('random-checkins-min').value),
+      max_inactivity_minutes: Number(document.getElementById('random-checkins-max').value),
+      schedule_mode: document.getElementById('random-checkins-schedule-mode').value,
+      schedule_interval_minutes: Number(document.getElementById('random-checkins-interval').value),
+      scheduled_times: Array.from(document.querySelectorAll('#random-checkins-specific-times input[type="time"]'))
+        .map(input => input.value).filter(validRandomCheckinTime).slice(0, 20),
+      message_mode: document.getElementById('random-checkins-message-mode').value,
+      guidance: document.getElementById('random-checkins-guidance').value,
+      custom_messages: document.getElementById('random-checkins-custom').value.split('\n').map(value => value.trim()).filter(Boolean),
+      quiet_hours_enabled: document.getElementById('random-checkins-quiet-enabled').checked,
+      desktop_notifications: document.getElementById('random-checkins-desktop-notifications').checked,
+      mobile_notifications: document.getElementById('random-checkins-mobile-notifications').checked,
+      quiet_start: document.getElementById('random-checkins-quiet-start').value,
+      quiet_end: document.getElementById('random-checkins-quiet-end').value,
+      max_per_day: Number(document.getElementById('random-checkins-max-day').value)
+    };
+  }
+
+  // Saves the live settings and the selected profile (the server keeps both in step).
+  async function saveRandomCheckinSettings() {
+    const status = document.getElementById('random-checkins-status');
+    const payload = collectRandomCheckinSettingsFromForm();
+    try {
+      const response = await fetch('/api/random-checkins/settings', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const saved = await response.json();
+      applyRandomCheckinSettingsToForm(saved);
+      const savedMessage = saved.profile ? `Saved to profile “${saved.profile}”.` : 'Random Check-ins saved.';
+      if (status) status.textContent = savedMessage;
+      hwuiToast(savedMessage);
+    } catch (error) {
+      if (status) status.textContent = 'Could not save settings.';
+      hwuiToast('Could not save Random Check-ins settings.', 'error');
+      console.error('Random check-in settings save failed:', error);
+    }
+  }
+
+  // Phones are enabled from HWUI mobile (🔔 on /mobile); this only reports them.
+  async function refreshRandomCheckinMobileDevices() {
+    const line = document.getElementById('random-checkins-mobile-devices');
+    const test = document.getElementById('random-checkins-mobile-test');
+    if (!line) return;
+    try {
+      const response = await fetch('/api/push/vapid-public-key');
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      const status = await response.json();
+      const devices = Number(status.devices) || 0;
+      if (!status.available) {
+        line.textContent = status.reason === 'pywebpush_missing'
+          ? 'Unavailable: pywebpush is not installed on the server (re-run setup).'
+          : 'Unavailable: push keys could not be created on the server.';
+      } else if (!devices) {
+        line.textContent = 'No phones registered yet. Open HWUI mobile through its HTTPS address and tap 🔔.';
+      } else {
+        line.textContent = `${devices} phone${devices === 1 ? '' : 's'} registered.`;
+      }
+      if (test) test.disabled = !status.available || !devices;
+    } catch (error) {
+      line.textContent = 'Phone status unavailable.';
+      if (test) test.disabled = true;
+      console.error('Phone notification status failed:', error);
+    }
+  }
+
+  async function sendRandomCheckinMobileTest() {
+    const status = document.getElementById('random-checkins-status');
+    try {
+      const response = await fetch('/api/push/test', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}'
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || ('HTTP ' + response.status));
+      const message = result.sent
+        ? `Test sent to ${result.sent} phone${result.sent === 1 ? '' : 's'}.`
+        : 'The test notification could not be delivered.';
+      if (status) status.textContent = message;
+      hwuiToast(message, result.sent ? 'success' : 'error');
+    } catch (error) {
+      if (status) status.textContent = 'Test notification failed.';
+      hwuiToast(error.message || 'Test notification failed.', 'error');
+    }
+    await refreshRandomCheckinMobileDevices();
   }
 
   let voiceForgeInitialised = false;
@@ -1569,6 +2487,8 @@
   }
 
   async function deleteVoiceForgeExisting(slot) {
+    showHwuiProModal('Voice Forge', 'Voice creation and management are available in HWUI Pro.');
+    return;
     const elements = voiceForgeSlotElements(slot);
     const voice = elements.select.value;
     if (!voice) return;
@@ -1617,6 +2537,8 @@
   }
 
   async function toggleVoiceForgePreview(slot) {
+    showHwuiProModal('Voice Forge', 'Voice preview and blending are available in HWUI Pro.');
+    return;
     const state = voiceForgePreviews[slot];
     if (state.audio && !state.audio.paused) {
       stopVoiceForgePreview(slot);
@@ -1699,6 +2621,8 @@
   }
 
   async function saveVoiceForgeTestText() {
+    showHwuiProModal('Voice Forge', 'Voice Forge is available in HWUI Pro.');
+    return;
     const textarea = document.getElementById('voice-forge-text');
     const text = textarea.value.trim();
     if (!text) return setVoiceForgeStatus('Test text cannot be empty.', 'error');
@@ -1754,6 +2678,8 @@
   }
 
   async function generateVoiceForgeBlend() {
+    showHwuiProModal('Voice Forge', 'Voice blending is available in HWUI Pro.');
+    return;
     normaliseVoiceForgeSource('A');
     normaliseVoiceForgeSource('B');
     const sourceA = document.getElementById('voice-forge-a-select').value;
@@ -1803,6 +2729,8 @@
   }
 
   async function saveVoiceForgeVoice() {
+    showHwuiProModal('Voice Forge', 'Saving new voices is available in HWUI Pro.');
+    return;
     const voiceName = document.getElementById('voice-forge-save-name').value.trim();
     if (!voiceForgeResultId) return setVoiceForgeStatus('Generate a blend before saving it.', 'error');
     if (!voiceName) return setVoiceForgeStatus('Enter a name for the new HWUI voice.', 'error');
@@ -2273,6 +3201,8 @@
   }
 
   async function saveBenchSession() {
+    showHwuiProModal('Benchmark Sessions', 'Benchmark session automation is available in HWUI Pro.');
+    return;
     saveBenchFormState();
     let pack;
     let items;
@@ -2356,6 +3286,8 @@
   }
 
   async function loadSelectedBenchSession() {
+    showHwuiProModal('Benchmark Sessions', 'Benchmark session automation is available in HWUI Pro.');
+    return;
     const filename = document.getElementById('bench-session-select')?.value;
     if (!filename) {
       setBenchSessionMessage('Select a saved session to load first.', 'error');
@@ -2399,6 +3331,8 @@
   }
 
   async function confirmBenchSessionDelete() {
+    showHwuiProModal('Benchmark Sessions', 'Benchmark session automation is available in HWUI Pro.');
+    return;
     const filename = helcyonBenchSessionDeleteTarget;
     if (!filename) return;
     try {
@@ -2530,6 +3464,8 @@
   }
 
   async function captureBenchResponse(pack, item, slot, area, button, statusElement) {
+    showHwuiProModal('Benchmark Response Capture', 'Benchmark response capture is available in HWUI Pro.');
+    return;
     const runId = currentBenchRunId(pack.id);
     const association = HelcyonBenchPromptTransfer.getAssociation(
       localStorage,
@@ -3262,6 +4198,8 @@
   }
 
   async function startBenchJudgeRun() {
+    showHwuiProModal('Helcyon-Bench Judge', 'Automated benchmark judging is available in HWUI Pro.');
+    return;
     updateBenchJudgeAvailability();
     const buttons = [...document.querySelectorAll('[data-bench-judge-run]')];
     if (!buttons.length || buttons[0].disabled) {
@@ -3870,6 +4808,8 @@
   }
 
   async function sendBenchPrompt(pack, item, slot) {
+    showHwuiProModal('Benchmark Prompt Transfer', 'Sending benchmark prompts into chat is available in HWUI Pro.');
+    return;
     let target = await refreshHelcyonBenchTarget();
     if (!target.chat) {
       setBenchStatus('No active chat is selected. Open Chat, choose or create a chat, then return here.', 'error');
@@ -4605,7 +5545,7 @@
   document.addEventListener('DOMContentLoaded', () => {
     const params = new URLSearchParams(window.location.search);
     const requestedTab = params.get('tab');
-    if (!['helcyon-bench', 'voice-forge'].includes(requestedTab)) return;
+    if (!['helcyon-bench', 'voice-forge', 'random-checkins'].includes(requestedTab)) return;
     const button = [...document.querySelectorAll('.config-tab')].find(
       item => (item.getAttribute('onclick') || '').includes(`'${requestedTab}'`)
     );
@@ -5200,7 +6140,7 @@
     
     currentCharacter = {};
     try {
-      const response = await fetch(`/characters/${name}.json?cacheBust=${Date.now()}`);
+      const response = await fetch(`/characters/${encodeURIComponent(name)}.json?cacheBust=${Date.now()}`);
       if (!response.ok) throw new Error("Character file not found");
       const data = await response.json();
       currentCharacter = data;
@@ -5393,7 +6333,7 @@
       // preserves the on-disk value when this key is omitted. (changes.md.)
     };
     try {
-      const res = await fetch(`/characters/${name}.json`, {
+      const res = await fetch(`/characters/${encodeURIComponent(name)}.json`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(updated),
@@ -5407,55 +6347,41 @@
     }
   }
 
-  // --- IMAGE UPLOAD HELPER ---
-  async function uploadCharacterImage(file, name) {
-    const formData = new FormData();
-    formData.append("file", file);
-    if (name) formData.append("character_name", name);
-
-    try {
-      const res = await fetch("/upload_image", { method: "POST", body: formData });
-      const result = await res.json();
-      if (result.status === "ok") {
-        console.log("Image uploaded:", result.filename);
-        return result.filename;
-      } else {
-        hwuiToast("Image upload failed: " + (result.error || "unknown error"), 'error');
-        return "";
-      }
-    } catch (err) {
-      console.error("Upload failed:", err);
-      hwuiToast("Failed to upload image.", 'error');
-      return "";
-    }
-  }
-
   // --- CREATE CHARACTER ---
   async function createCharacter() {
     const name = document.getElementById("new-char-name").value.trim();
     const description = document.getElementById("new-char-description").value.trim();
     const main_prompt = document.getElementById("new-char-mainprompt").value.trim();
     const fileInput = document.getElementById("new-char-image-upload");
-    let image = "";
 
     if (!name) {
       hwuiToast("Character name is required.", 'info');
       return;
     }
 
-    if (fileInput && fileInput.files.length > 0) {
-      image = await uploadCharacterImage(fileInput.files[0], name);
-    }
-
     try {
+      // Create the card first so a taken name is refused before any image is
+      // written; the image then goes to the new key's own <key>.png.
       const res = await fetch("/create_character", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, description, main_prompt, image }),
+        body: JSON.stringify({ name, description, main_prompt, image: "" }),
       });
       const result = await res.json();
 
       if (result.status === "ok") {
+        if (fileInput && fileInput.files.length > 0) {
+          const formData = new FormData();
+          formData.append("file", fileInput.files[0]);
+          const imageRes = await fetch(`/replace_character_image/${encodeURIComponent(result.name)}`, {
+            method: "POST",
+            body: formData
+          });
+          const imageResult = await imageRes.json().catch(() => ({}));
+          if (imageResult.status !== "ok") {
+            hwuiToast("Character created, but the image upload failed: " + (imageResult.error || "unknown error"), 'error');
+          }
+        }
         hwuiToast(`Character "${name}" created successfully!`, 'success');
         document.getElementById("new-char-name").value = "";
         document.getElementById("new-char-description").value = "";
@@ -5487,7 +6413,7 @@ document.getElementById('export-char-btn').addEventListener('click', async funct
   
   try {
     // Trigger download
-    window.location.href = `/export_character/${charName}`;
+    window.location.href = `/export_character/${encodeURIComponent(charName)}`;
     console.log(`✅ Exporting character: ${charName}`);
   } catch (err) {
     console.error('Export error:', err);
@@ -5527,7 +6453,11 @@ document.getElementById('import-char-input').addEventListener('change', async fu
     }
     
     console.log(`✅ Imported character: ${result.name}`);
-    hwuiToast(`Character "${result.name}" imported successfully!`, 'success');
+    // result.name is the new storage key; display_name is the card's Name. They
+    // differ when the Name was already taken (the key gets " (2)" etc.).
+    const importedAs = (result.display_name && result.display_name !== result.name)
+      ? ` as "${result.name}" (Name: ${result.display_name})` : '';
+    hwuiToast(`Character "${result.display_name || result.name}" imported${importedAs} successfully!`, 'success');
     
     // Reload character list and select the new character
     await loadCharacterList();
@@ -5563,7 +6493,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
   }
   
   try {
-    const res = await fetch(`/delete_character/${charName}`, {
+    const res = await fetch(`/delete_character/${encodeURIComponent(charName)}`, {
       method: 'DELETE'
     });
     
@@ -5905,7 +6835,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
         }
         
         try {
-          const res = await fetch(`/duplicate_character/${currentChar}`, {
+          const res = await fetch(`/duplicate_character/${encodeURIComponent(currentChar)}`, {
             method: 'POST'
           });
           
@@ -6340,6 +7270,9 @@ async function saveTTSEngine() {
 // as a base64 data URL in localStorage — large images blow the ~5MB quota,
 // setItem throws, and the wallpaper silently fails to save.
 function handleBgImageChange(input) {
+  showHwuiProModal('Theme Editor', 'Background image editing is available in HWUI Pro.');
+  if (input) input.value = '';
+  return;
   const file = input.files[0];
   if (!file) return;
   const formData = new FormData();
@@ -6397,6 +7330,8 @@ function applyBackground(dataUrl) {
 }
 
 function clearBackground() {
+  showHwuiProModal('Theme Editor', 'Background image editing is available in HWUI Pro.');
+  return;
   fetch('/clear_bg', { method: 'POST' }).catch(() => {});
   localStorage.removeItem('hwui_bg_image');
   applyBackground(null);
@@ -6454,6 +7389,11 @@ const THEME_VARS = [
     { key: '--container-bg',      label: 'Main Area BG' },
     { key: '--chat-bg',           label: 'Chat Panel BG' },
     { key: '--project-header-bg', label: 'Project Bar (top of chat)' },
+  ]},
+  { group: 'Config / Settings Boxes', vars: [
+    { key: '--config-box-bg',     label: 'Config Box BG' },
+    { key: '--config-box-border', label: 'Config Box Border' },
+    { key: '--field-bg',          label: 'Config Prompt Fields BG' },
   ]},
   { group: 'Benchmark', vars: [
     { key: '--bench-bg',  label: 'Bench BG' },
@@ -6669,6 +7609,8 @@ function refreshPresetDropdown() {
 }
 
 async function loadPreset() {
+  showHwuiProModal('Theme Editor', 'Theme editing is available in HWUI Pro.');
+  return;
   const name = document.getElementById('theme-preset-select').value;
   if (!name || !themePresets[name]) { hwuiToast('Pick a preset first.', 'info'); return; }
   const colours = themePresets[name];
@@ -6697,6 +7639,8 @@ async function loadPreset() {
 }
 
 async function updatePreset() {
+  showHwuiProModal('Theme Editor', 'Theme editing is available in HWUI Pro.');
+  return;
   const name = document.getElementById('theme-preset-select').value;
   if (!name) { hwuiToast('Pick a preset first.', 'info'); return; }
   const colours = collectThemeUpdates();
@@ -6724,6 +7668,8 @@ async function updatePreset() {
 }
 
 async function saveAsPreset() {
+  showHwuiProModal('Theme Editor', 'Theme editing is available in HWUI Pro.');
+  return;
   const name = await hwuiPrompt('Preset name:');
   if (!name || !name.trim()) return;
   const colours = collectThemeUpdates();
@@ -6746,6 +7692,8 @@ async function saveAsPreset() {
 }
 
 async function deletePreset() {
+  showHwuiProModal('Theme Editor', 'Theme editing is available in HWUI Pro.');
+  return;
   const name = document.getElementById('theme-preset-select').value;
   if (!name) { hwuiToast('Pick a preset first.', 'info'); return; }
   if (!await hwuiConfirm(`Delete preset "${name}"?`)) return;
@@ -6765,6 +7713,14 @@ function renderThemeEditor(data) {
 }
 
 function toHex(value) {
+  // Older theme files inherit the split Config Box controls from the
+  // fallback stylesheet until they are saved once. Resolve that CSS var so
+  // the picker shows the live colour rather than a black placeholder.
+  const cssVar = String(value || '').match(/^var\(\s*(--[\w-]+)/);
+  if (cssVar) {
+    const resolved = getComputedStyle(document.documentElement).getPropertyValue(cssVar[1]).trim();
+    if (resolved && resolved !== value) value = resolved;
+  }
   // Already a hex
   if (/^#[0-9a-fA-F]{3,8}$/.test(value)) return value.slice(0,7);
   // Convert the RGB/RGBA defaults used by avatar borders into the hex format
@@ -6906,6 +7862,8 @@ function hwuiPrompt(message, defaultValue = '', opts = {}) {
 }
 
 async function saveTheme() {
+  showHwuiProModal('Theme Editor', 'Theme editing is available in HWUI Pro.');
+  return;
   // Read from live CSS vars — authoritative source, never stale
   const updates = collectThemeUpdates();
   try {
@@ -7825,7 +8783,7 @@ async function saveGlobalPostHistory() {
   overflow-y:auto; padding:30px 20px; padding-left:270px;">
 
   <div style="
-    max-width:780px; margin:0 auto;
+    max-width:960px; margin:0 auto;
     background:var(--modal-bg); border:1px solid var(--modal-border); border-radius:12px;
     box-shadow:0 20px 60px rgba(0,0,0,0.8); overflow:hidden;">
 
@@ -7846,7 +8804,7 @@ async function saveGlobalPostHistory() {
     </div>
 
     <!-- Body: sections stacked -->
-    <div id="theme-modal-body" style="padding:24px; display:flex; flex-direction:column; gap:32px;">
+    <div id="theme-modal-body" style="padding:24px; display:flex; flex-direction:column; gap:28px;">
       <!-- populated by renderThemeModal() -->
     </div>
   </div>
@@ -7905,6 +8863,8 @@ async function switchThemeFile(name) {
 }
 
 async function newThemeFile() {
+  showHwuiProModal('Theme Editor', 'Custom themes are available in HWUI Pro.');
+  return;
   const name = await hwuiPrompt('New theme name (e.g. "dark-blue"):');
   if (!name || !name.trim()) return;
   try {
@@ -7920,6 +8880,8 @@ async function newThemeFile() {
 }
 
 async function deleteThemeFile() {
+  showHwuiProModal('Theme Editor', 'Custom themes are available in HWUI Pro.');
+  return;
   const name = _activeThemeName;
   if (!await hwuiConfirm(`Delete theme "${name}"? This cannot be undone.`)) return;
   try {
@@ -8027,6 +8989,29 @@ const THEME_SECTIONS = [
   },
 
   {
+    title: 'Config / Settings Boxes',
+    vars: [
+      { key: '--config-box-bg', label: 'Config Box BG' },
+      { key: '--config-box-border', label: 'Config Box Border' },
+      { key: '--field-bg', label: 'Config Prompt Fields BG' },
+    ],
+    preview: (el) => {
+      el.innerHTML = `
+        <div style="background:var(--container-bg); border:1px solid var(--field-border); border-radius:10px; padding:14px; color:var(--model-msg-text);">
+          <div style="font-size:10px; text-transform:uppercase; letter-spacing:.6px; color:var(--theme-preview-muted-text); margin-bottom:10px;">Main Area BG · surrounding surface</div>
+          <div style="background:var(--config-box-bg); border:1px solid var(--config-box-border); border-radius:10px; padding:18px;">
+            <div style="font-size:15px; font-weight:700; margin-bottom:12px;">Settings section</div>
+            <div style="display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:10px;">
+              <div style="background:var(--field-bg); border:1px solid var(--field-border); border-radius:4px; padding:8px 10px; font-size:12px;">Display name</div>
+              <div style="background:var(--field-bg); border:1px solid var(--field-border); border-radius:4px; padding:8px 10px; font-size:12px;">Profile image</div>
+            </div>
+            <div style="margin-top:10px; padding-top:10px; border-top:1px solid var(--config-box-border); color:var(--theme-preview-muted-text); font-size:11px;">Config Prompt Fields BG</div>
+          </div>
+        </div>`;
+    }
+  },
+
+  {
     title: 'Benchmark',
     vars: [
       { key: '--bench-bg', label: 'Bench BG' },
@@ -8115,7 +9100,6 @@ const THEME_SECTIONS = [
     vars: [
       { key: '--input-bg',           label: 'Input Box BG' },
       { key: '--input-border',       label: 'Input Box Border' },
-      { key: '--field-bg',           label: 'Form Field BG' },
       { key: '--field-border',       label: 'Form Field Border' },
       { key: '--field-border-focus', label: 'Form Field Focus Border' },
       { key: '--token-panel-bg',     label: 'Token Panel BG' },
@@ -8123,16 +9107,8 @@ const THEME_SECTIONS = [
     ],
     preview: (el) => {
       el.innerHTML = `
-        <div style="display:flex; flex-direction:column; gap:8px;">
-          <div style="background:var(--input-bg); border:1px solid var(--input-border); border-radius:8px; padding:10px 14px; font-size:13px; color:var(--text-dim); min-height:42px;">
-            Type a message... &nbsp;<span style="opacity:0.4">← Chat input box</span>
-          </div>
-          <div style="background:var(--container-bg); border-radius:6px; padding:10px; display:flex; flex-direction:column; gap:6px;">
-            <div style="font-size:10px; color:var(--theme-preview-muted-text); text-transform:uppercase; letter-spacing:0.6px; margin-bottom:2px;">Config page form fields</div>
-            <input type="text" disabled placeholder="e.g. Character name..." style="background:var(--field-bg); border:1px solid var(--field-border); border-radius:4px; padding:6px 10px; font-size:13px; color:var(--text-dim); width:100%; box-sizing:border-box;">
-            <textarea disabled placeholder="Short bio or purpose..." style="background:var(--field-bg); border:1px solid var(--field-border); border-radius:4px; padding:6px 10px; font-size:13px; color:var(--text-dim); width:100%; box-sizing:border-box; resize:none; height:52px;"></textarea>
-            <div style="font-size:10px; color:var(--theme-preview-muted-text); margin-top:2px;">Focus border: <span style="color:var(--field-border-focus);">■</span> var(--field-border-focus)</div>
-          </div>
+        <div style="background:var(--input-bg); border:1px solid var(--input-border); border-radius:8px; padding:10px 14px; font-size:13px; color:var(--text-dim); min-height:42px;">
+          Type a message... &nbsp;<span style="opacity:0.4">← Main chat bar only</span>
         </div>`;
     }
   },
@@ -8150,7 +9126,7 @@ const THEME_SECTIONS = [
     ],
     preview: (el) => {
       el.innerHTML = `
-        <div style="background:var(--modal-bg); border:1px solid var(--modal-border); border-radius:8px; overflow:hidden; max-width:420px;">
+        <div style="background:var(--modal-bg); border:1px solid var(--modal-border); border-radius:8px; overflow:hidden; max-width:100%;">
           <div style="padding:14px 18px; border-bottom:1px solid var(--modal-border); display:flex; justify-content:space-between;">
             <span style="font-size:15px; font-weight:700; color:var(--modal-text);">Character Memory</span>
             <span style="color:var(--text-dim);">✕</span>
@@ -8186,14 +9162,14 @@ const THEME_SECTIONS = [
     ],
     preview: (el) => {
       el.innerHTML = `
-        <div style="background:var(--modal-bg); border:1px solid var(--modal-border); border-radius:8px; overflow:hidden; max-width:420px;">
+        <div style="background:var(--container-bg); border:1px solid var(--modal-border); border-radius:8px; overflow:hidden; max-width:100%;">
           <div style="padding:14px 18px; border-bottom:1px solid var(--modal-border);">
             <span style="font-size:15px; font-weight:700; color:var(--modal-text);">Project Management</span>
           </div>
           <div style="padding:10px 14px; display:flex; flex-direction:column; gap:6px;">
             <div style="background:var(--project-header-bg); border-radius:4px; padding:5px 10px; font-size:10px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.6px;">Your Projects</div>
-            <div style="background:var(--project-item-bg); border:1px solid var(--project-item-border); border-radius:5px; padding:8px 12px; display:flex; justify-content:space-between; align-items:center;">
-              <span style="font-size:13px; color:#ddd;">Admin and Shard Creation</span>
+            <div style="background:var(--config-box-bg); border:1px solid var(--config-box-border); border-radius:5px; padding:8px 12px; display:flex; justify-content:space-between; align-items:center;">
+              <span style="font-size:13px; color:#ddd;">Neutral folder card</span>
               <div style="display:flex; gap:4px;">
                 <div style="width:22px; height:22px; background:var(--icon-button-bg); border-radius:3px;"></div>
                 <div style="width:22px; height:22px; background:var(--icon-button-bg); border-radius:3px;"></div>
@@ -8242,7 +9218,7 @@ function renderThemeModal(data) {
 
   for (const section of THEME_SECTIONS) {
     const wrap = document.createElement('div');
-    wrap.style.cssText = 'display:flex; gap:28px; align-items:flex-start;';
+    wrap.style.cssText = 'display:flex; gap:24px; align-items:flex-start;';
 
     // Left: pickers
     const left = document.createElement('div');
@@ -8360,7 +9336,7 @@ function renderThemeModal(data) {
     right.style.cssText = 'flex:1; min-width:0;';
     const previewLabel = document.createElement('div');
     previewLabel.style.cssText = 'font-size:10px; color:var(--theme-editor-heading-text); text-transform:uppercase; letter-spacing:0.6px; margin-bottom:8px;';
-    previewLabel.textContent = 'Preview';
+    previewLabel.textContent = 'Live preview';
     right.appendChild(previewLabel);
     const previewWrap = document.createElement('div');
     right.appendChild(previewWrap);

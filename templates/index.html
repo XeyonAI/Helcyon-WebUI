@@ -7,9 +7,9 @@
        127.0.0.1 origin. -->
   <script src="/build_scope.js"></script>
   <title>Helcyon-WebUI</title>
-  <link rel="stylesheet" href="/style.css?v=25">
+  <link rel="stylesheet" href="/style.css?v=27">
   <link rel="stylesheet" href="/theme-files/midnight.css" id="active-theme-link">
-  <script src="/static/text_scale.js" defer></script>
+  <script src="/static/text_scale.js?v=3" defer></script>
   <style>
     /* Cog dropdown menu — converted from the old #settings-link <a>.
        Declared after style.css so #cog-menu svg overrides #settings-link svg. */
@@ -46,6 +46,15 @@
       background: var(--sidebar-button-hover, #2D3E4F);
       font-weight: bold;
     }
+    /* A reply excluded from context stays visible but is not sent to the model:
+       dimmed, with a small label; its toggle stays highlighted. */
+    .model-msg.context-excluded { opacity: 0.55; }
+    .context-excluded-label {
+      display: block; margin-top: 4px;
+      font-size: 11px; font-style: italic;
+      color: var(--text-muted, #8a8a8a);
+    }
+    .msg-action-bar button.context-toggle.is-excluded { color: rgba(255, 190, 90, 0.9) !important; }
   </style>
   <script>
     // Always fetch active theme with cache-bust so saved changes appear immediately
@@ -55,6 +64,10 @@
       if (link) link.href = '/theme-files/' + name + '.css?v=' + Date.now();
     }).catch(()=>{}); // silent fail — default midnight.css already loaded above
   </script>
+  <!-- Shared desktop/mobile chat core: request, history and reply-cleaning
+       rules used by BOTH pages (mobile.html loads the same file). Not deferred —
+       page scripts below call HwuiChatCore during load. -->
+  <script src="/static/hwui_chat_core.js?v=1"></script>
   <!-- JS Utils -->
   <script src="/utils/utils.js" defer></script>
   <script>
@@ -646,7 +659,7 @@
           </div>
 
           <!-- Floating pill -->
-          <div id="input-row" style="pointer-events:all;display:flex;flex-direction:row;align-items:center;gap:6px;background:var(--container-bg,#131922);border:1px solid var(--sidebar-border,#2a2a2a);border-radius:16px;padding:5px 10px;box-shadow:0 4px 24px rgba(0,0,0,0.5);width:100%;max-width:calc(var(--chat-width) - 100px) !important;box-sizing:border-box;overflow:visible;">
+          <div id="input-row" style="pointer-events:all;display:flex;flex-direction:row;align-items:center;gap:6px;background:var(--container-bg,#131922);border:1px solid var(--sidebar-border,#2a2a2a);border-radius:16px;padding:7px 12px;box-shadow:0 4px 24px rgba(0,0,0,0.5);width:100%;max-width:calc(var(--chat-width) - 100px) !important;box-sizing:border-box;overflow:visible;">
 
             <!-- + menu button -->
             <div id="input-menu-wrap" style="position:relative;flex-shrink:0;line-height:0;">
@@ -743,7 +756,8 @@
       </div>
       <div class="modal-body">
         <textarea 
-          id="author-note" 
+          id="author-note"
+          data-hwui-prompt-editor
           placeholder="Add scene direction, tone adjustments, style guidance...
           
 Examples:
@@ -882,7 +896,7 @@ Examples:
             <input type="text" id="edit-project-name" readonly>
 
             <label>Instructions</label>
-            <textarea id="edit-project-instructions" rows="6" placeholder="Project instructions..."></textarea>
+            <textarea id="edit-project-instructions" data-hwui-prompt-editor rows="6" placeholder="Project instructions..."></textarea>
 
             <hr>
 
@@ -905,7 +919,7 @@ Examples:
             </div>
             <div id="rp-opener-section" style="display:none;">
               <label>Opening Scene</label>
-              <textarea id="edit-project-rp-opener" rows="3" placeholder="*Character walks in...* Hey, how's it going?"></textarea>
+              <textarea id="edit-project-rp-opener" data-hwui-prompt-editor rows="3" placeholder="*Character walks in...* Hey, how's it going?"></textarea>
               <small>Sets the scene and formatting style for new chats.</small>
             </div>
 
@@ -1089,17 +1103,30 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
   let systemPrompt = '';
   let activeUserName = 'User';
   let userImageCache = {}; // name → image filename
-  let currentCharName = '';  
+  let currentCharName = '';
+  // Storage key (characters/<key>.json) of the loaded card, set on every card
+  // load. It is the only identifier for backend calls about the card (card
+  // file, chats, memory, session summaries, voice, check-ins). The card's
+  // editable Name (currentCharacter.name) is model/display identity only and
+  // may differ from the key or be shared by several cards.
+  let currentCharacterKey = '';
   let lastPrompt = localStorage.getItem('lastPrompt') || '';
   let isCreatingNewChat = false;
   let chatLoadGeneration = 0;
   let chatLoadPromise = null;
   const CHAT_INPUT_DRAFT_KEY = 'hwui_chat_input_draft';
+  let randomCheckinTimer = null;
+  let randomCheckinTimerToken = 0;
+  let randomCheckinSettings = null;
+  let randomCheckinActivityTimer = null;
+  let randomCheckinFireInFlight = false;
+  let randomCheckinLastActivityAt = null;
+  // { chatKey, at } of the last user-driven chat restore; see randomCheckinInactivityFloor().
+  let randomCheckinRestoredChat = null;
+  const randomCheckinCompletionRetryTimers = new Map();
 
   function createHwuiMessageId() {
-    return crypto.randomUUID
-      ? crypto.randomUUID()
-      : `message-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    return HwuiChatCore.createMessageId();
   }
 
   function activeBenchSubmissionForSource(sourceUserMessageId) {
@@ -1117,6 +1144,8 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
   }
 
   async function registerBenchSubmission(context) {
+    showHwuiProModal('Benchmark Prompt Transfer', 'Sending benchmark prompts into chat is available in HWUI Pro.');
+    return false;
     if (!context) return false;
     if (!currentChatId) {
       // Registration must never fail silently while generation continues.
@@ -1148,7 +1177,7 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
       source_user_message_id: context.source_user_message_id,
       source_user_position: context.source_user_position,
       submitted_at: context.submitted_at,
-      character: context.character || currentCharName || currentCharacter?.name || ''
+      character: context.character || currentCharacterKey || currentCharName || ''
     };
     let response;
     let result;
@@ -1569,6 +1598,8 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
   }
 
   async function captureActiveBenchResponse() {
+    showHwuiProModal('Benchmark Response Capture', 'Benchmark response capture is available in HWUI Pro.');
+    return;
     const association = await refreshBenchChatControl();
     if (!association || !benchAssociationMatchesCurrentChat(association)) return;
     if (association.status !== 'ready_to_capture' && association.generation_status !== 'ready_to_capture') return;
@@ -1620,7 +1651,7 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
     const dropdown = document.getElementById('character-select');
     return {
       chat: currentChatFilename || localStorage.getItem('currentChatFilename') || '',
-      character: (currentCharacter && currentCharacter.name) || currentCharName || (dropdown && dropdown.value) || localStorage.getItem('lastCharacter') || ''
+      character: currentCharacterKey || currentCharName || (dropdown && dropdown.value) || localStorage.getItem('lastCharacter') || ''
     };
   }
 
@@ -2268,84 +2299,9 @@ function sanitizeMarkdown(text) {
   return text;
 }
 
-// Strip ChatML tokens and role-leakage ONLY from text outside fenced code blocks.
-// Content inside ``` fences is preserved verbatim — so shard generation works correctly.
-function stripChatMLOutsideCodeBlocks(text, charName, userName) {
-  // Recognise CommonMark fence runs, not only exactly three delimiters. CX/SFT
-  // output legitimately uses an outer four-backtick fence when its Response
-  // contains an inner triple-backtick ChatML block.
-  const parts = [];
-  let plainStart = 0;
-  let cursor = 0;
-  while (cursor < text.length) {
-    const lineEnd = text.indexOf('\n', cursor);
-    const nextLine = lineEnd === -1 ? text.length : lineEnd + 1;
-    const line = text.slice(cursor, lineEnd === -1 ? text.length : lineEnd).replace(/\r$/, '');
-    const opener = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[^\r\n]*$/);
-    if (!opener) {
-      cursor = nextLine;
-      continue;
-    }
-
-    if (cursor > plainStart) parts.push({ fenced: false, value: text.slice(plainStart, cursor) });
-    const fenceChar = opener[1][0];
-    const fenceLength = opener[1].length;
-    let fenceEnd = text.length;
-    let scan = nextLine;
-    while (scan < text.length) {
-      const closeLineEnd = text.indexOf('\n', scan);
-      const closeNext = closeLineEnd === -1 ? text.length : closeLineEnd + 1;
-      const closeLine = text.slice(
-        scan,
-        closeLineEnd === -1 ? text.length : closeLineEnd
-      ).replace(/\r$/, '');
-      const closer = closeLine.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/);
-      if (
-        closer &&
-        closer[1][0] === fenceChar &&
-        closer[1].length >= fenceLength
-      ) {
-        fenceEnd = closeNext;
-        break;
-      }
-      scan = closeNext;
-    }
-    parts.push({ fenced: true, value: text.slice(cursor, fenceEnd) });
-    cursor = fenceEnd;
-    plainStart = fenceEnd;
-  }
-  if (plainStart < text.length) parts.push({ fenced: false, value: text.slice(plainStart) });
-  if (!parts.length) parts.push({ fenced: false, value: text });
-
-  return parts.map(function(part) {
-    if (part.fenced) return part.value;
-    return part.value
-      .replace(/<\|im_start\|>assistant/gi, '')
-      .replace(/<\|im_start\|>user/gi, '')
-      .replace(/<\|im_start\|>system/gi, '')
-      .replace(/<\|im_end\|>/gi, '')
-      .replace(/\bim_end\|?>/gi, '')
-      .replace(/<\/\|im_end\|>/gi, '')
-      .replace(/_end\|?>/gi, '')
-      // Only remove a standalone damaged control-marker tail. Both punctuation
-      // characters are explicit so ordinary words such as backend/weekend/friend
-      // can never lose their "end" substring again.
-      .replace(/(?<![\p{L}\p{N}_])End(?:\|>|[|>])(?![\p{L}\p{N}_])/giu, '')
-      .replace(/\n(?:user|assistant|system)(?:\n|:)/gi, '\n')  // strip role header only — [\s\S]*$ was wiping real responses mid-stream
-      .replace(new RegExp('^' + (charName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':\\s*', 'gim'), '')
-      .replace(new RegExp('^' + (userName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ':\\s*', 'gim'), '')
-      .replace(/^User:\s*/gim, '')
-      .replace(/^Assistant:\s*/gim, '')
-      .replace(/\[Author['']s Note:[^\]]*\]/gi, '')
-      .replace(/^STYLE REMINDER:.*$/gim, '')
-      .replace(/\[MEMORY[_ ]ADD:[^|\]]*\|[^|\]]*\|([^\]]*)\]/gi, '$1')
-      .replace(/\[MEMORY[_ ]ADD:[^\]]*\]/gi, '')
-      .replace(/^MEMORY[_ ]ADD:[^|]*\|[^|]*\|(.+)$/gim, '$1')
-      .replace(/^MEMORY[_ ]ADD:[^|]*\|(.+)$/gim, '$1')
-      .replace(/^MEMORY[_ ]ADD:[^\n]*$/gim, '');
-  }).join('');
-}
-
+// Strip ChatML tokens and role-leakage: stripChatMLOutsideCodeBlocks() lives in
+// /static/hwui_chat_core.js, shared with mobile.html so both pages store the same
+// cleaned assistant text. It is still callable here as a global.
 
 // ── Extended-thinking stream demux (Anthropic) ──────────────────────────────
 // Anthropic and local llama.cpp wrap reasoning deltas in STX sentinels so the
@@ -3864,12 +3820,13 @@ if (typeof marked === "undefined") {
 async function loadCharacter(name, skipChatHistory = false) {
     const loadGeneration = ++characterLoadGeneration;
     try {
-      const res = await fetch('/characters/' + name + '.json');
+      const res = await fetch('/characters/' + encodeURIComponent(name) + '.json');
       if (!res.ok) throw new Error('Character file not found');
       const data = await res.json();
       if (loadGeneration !== characterLoadGeneration) return false;
       window.currentCharacter = data;
       currentCharacter = data;
+      currentCharacterKey = name;
       // Build image list: prefer data.images array, fallback to single data.image
       const imgList = (data.images && data.images.length > 0) ? data.images : (data.image ? [data.image] : []);
       initCharSlideshow(imgList, name);
@@ -3946,8 +3903,8 @@ async function loadCharacter(name, skipChatHistory = false) {
 // ==================================================
 async function loadChatHistory() {
   try {
-    if (!currentCharacter.name) return;
-    const res = await fetch('/get_chat_history/' + currentCharacter.name);
+    if (!currentCharacterKey) return;
+    const res = await fetch('/get_chat_history/' + encodeURIComponent(currentCharacterKey));
     if (!res.ok) throw new Error('Failed to fetch chat history');
     const hist = await res.json();
     const chat = document.getElementById('chat');
@@ -4040,8 +3997,8 @@ function persistChatState() {
   if (currentChatFilename) {
     localStorage.setItem('currentChatFilename', currentChatFilename);
   }
-  if (currentCharacter && currentCharacter.name) {
-    localStorage.setItem('lastCharacter', currentCharacter.name);
+  if (currentCharacterKey) {
+    localStorage.setItem('lastCharacter', currentCharacterKey);
   }
 }
 
@@ -4129,6 +4086,7 @@ function persistChatState() {
       const title = document.createElement('span');
       title.textContent = displayTitle;
       title.classList.add('chat-title');
+      title.title = displayTitle;
 
       const tooltip = document.createElement('span');
       tooltip.classList.add('chat-title-tooltip');
@@ -4681,11 +4639,12 @@ function persistChatState() {
     let characterPrefix = "";
     let remainingText = nameWithoutExt;
     
-    // Match character name
+    // Match the owning character key (longest first, case-insensitive), and
+    // keep the prefix exactly as it is spelled in the filename.
     for (const charName of sortedChars) {
       const prefixToMatch = charName + " - ";
-      if (nameWithoutExt.startsWith(prefixToMatch)) {
-        characterPrefix = prefixToMatch;
+      if (nameWithoutExt.toLowerCase().startsWith(prefixToMatch.toLowerCase())) {
+        characterPrefix = nameWithoutExt.substring(0, prefixToMatch.length);
         remainingText = nameWithoutExt.substring(prefixToMatch.length);
         break;
       }
@@ -4846,13 +4805,17 @@ function persistChatState() {
       for (var i = parts.length - 1; i >= 1; i--) {
         var potentialCharName = parts.slice(0, i).join(' - ');
         
-        // Check if this exists in our character list (synchronously check localStorage cache)
+        // Check if this exists in our character list (synchronously check localStorage cache).
+        // Keys are case-insensitive, so "GPT-5.6 Sol - test - …" belongs to the
+        // "GPT-5.6 Sol - Test" key; return the key as the list spells it.
         var charListCache = localStorage.getItem('characterListCache');
         if (charListCache) {
           var availableChars = JSON.parse(charListCache);
-          if (availableChars.includes(potentialCharName)) {
-            console.log('✅ Extracted (matched against character list):', potentialCharName);
-            return potentialCharName;
+          var wanted = potentialCharName.toLowerCase();
+          var matchedKey = availableChars.find(function(key) { return String(key).toLowerCase() === wanted; });
+          if (matchedKey) {
+            console.log('✅ Extracted (matched against character list):', matchedKey);
+            return matchedKey;
           }
         }
       }
@@ -4901,12 +4864,13 @@ function persistChatState() {
     dropdown.value = option.value;
     
     try {
-      var res = await fetch('/get_character/' + option.value);
+      var res = await fetch('/get_character/' + encodeURIComponent(option.value));
       if (!res.ok) throw new Error('Failed to load character');
       
       var characterData = await res.json();
       if (loadGeneration !== characterLoadGeneration) return false;
       currentCharacter = characterData;
+      currentCharacterKey = option.value;
       
       const imgList2 = (characterData.images && characterData.images.length > 0) ? characterData.images : (characterData.image ? [characterData.image] : []);
       initCharSlideshow(imgList2, option.value);
@@ -4953,6 +4917,391 @@ async function openChat(filename) {
   }
 }
 
+function clearRandomCheckinTimer() {
+    if (randomCheckinTimer) clearTimeout(randomCheckinTimer);
+    randomCheckinTimer = null;
+    randomCheckinTimerToken += 1;
+  }
+
+  // Selecting a chat is itself user activity in it. Every user-driven restore
+  // (sidebar click, Branch from an assistant message, a save-conflict reload,
+  // startup restore) goes through _openChatInternal, which records it here. A
+  // restored deadline can already be in the past — backfilled from an hours-old
+  // last user turn, or stored while the user was in another chat — and a past
+  // deadline arms a 1 s timer, so that interaction fired a check-in at once. In
+  // random mode, nothing may fire before the configured minimum inactivity has
+  // passed since the restore. Scheduled mode follows wall-clock times: no floor.
+  function randomCheckinInactivityFloor(settings) {
+    if (settings?.trigger_mode !== 'random') return 0;
+    const restored = randomCheckinRestoredChat;
+    if (!restored || restored.chatKey !== randomCheckinChatKey()) return 0;
+    const minutes = Number(settings.min_inactivity_minutes);
+    return Number.isFinite(minutes) && minutes > 0 ? restored.at + minutes * 60000 : 0;
+  }
+
+  function randomCheckinChatKey() {
+    return currentChatFilename || '';
+  }
+
+  function captureRandomCheckinSnapshot() {
+    return {
+      chatKey: randomCheckinChatKey(),
+      characterName: currentCharacterKey || currentCharName || '',
+      loadedChat: window.loadedChat
+    };
+  }
+
+  function randomCheckinSnapshotIsCurrent(snapshot) {
+    return Boolean(snapshot) &&
+      snapshot.chatKey === randomCheckinChatKey() &&
+      snapshot.characterName === (currentCharacterKey || currentCharName || '') &&
+      snapshot.loadedChat === window.loadedChat;
+  }
+
+  function randomCheckinHasUserTurn() {
+    return Array.isArray(window.loadedChat) && window.loadedChat.some(message =>
+      message && message.role === 'user' && !message.hidden && !message.is_opening_line
+    );
+  }
+
+  // Custom check-ins insert a fixed pool message with no model call, so an
+  // untouched chat (new, empty, or opening line only) is eligible. Generated
+  // modes still need a genuine user turn: /chat rejects an automatic event
+  // without conversation history.
+  function randomCheckinChatEligible(settings) {
+    if (!Array.isArray(window.loadedChat)) return false;
+    return settings?.message_mode === 'custom' || randomCheckinHasUserTurn();
+  }
+
+  function randomCheckinQuiet(settings, date = new Date()) {
+    if (!settings?.quiet_hours_enabled) return false;
+    const parse = value => {
+      const [hours, minutes] = String(value || '').split(':').map(Number);
+      return Number.isFinite(hours) && Number.isFinite(minutes) ? hours * 60 + minutes : null;
+    };
+    const start = parse(settings.quiet_start);
+    const end = parse(settings.quiet_end);
+    if (start === null || end === null || start === end) return false;
+    const current = date.getHours() * 60 + date.getMinutes();
+    return start < end ? current >= start && current < end : current >= start || current < end;
+  }
+
+  function randomCheckinNextQuietBoundary(settings, from = new Date()) {
+    const [hours, minutes] = String(settings.quiet_end || '').split(':').map(Number);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return from.getTime() + 60000;
+    const next = new Date(from);
+    next.setHours(hours, minutes, 0, 0);
+    if (next.getTime() <= from.getTime()) next.setDate(next.getDate() + 1);
+    return next.getTime();
+  }
+
+  function randomCheckinNextScheduled(settings, from = new Date()) {
+    if (settings.schedule_mode === 'interval') {
+      const allowed = [1, 5, 15, 30, 60];
+      const interval = allowed.includes(Number(settings.schedule_interval_minutes))
+        ? Number(settings.schedule_interval_minutes)
+        : 60;
+      const candidate = new Date(from);
+      candidate.setSeconds(0, 0);
+      candidate.setMinutes(Math.floor(candidate.getMinutes() / interval) * interval + interval);
+      const maximumSteps = Math.ceil(1440 / interval) + 1;
+      for (let step = 0; step < maximumSteps; step += 1) {
+        if (!randomCheckinQuiet(settings, candidate)) return candidate.getTime();
+        candidate.setMinutes(candidate.getMinutes() + interval);
+      }
+      return null;
+    }
+    const candidates = (settings.scheduled_times || []).map(value => {
+      const [hours, minutes] = String(value).split(':').map(Number);
+      if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+      const candidate = new Date(from);
+      candidate.setHours(hours, minutes, 0, 0);
+      if (candidate.getTime() <= from.getTime()) candidate.setDate(candidate.getDate() + 1);
+      return randomCheckinQuiet(settings, candidate) ? null : candidate.getTime();
+    }).filter(value => value !== null);
+    return candidates.length ? Math.min(...candidates) : null;
+  }
+
+  function randomCheckinNextDayBoundary(from = new Date()) {
+    const next = new Date(from);
+    next.setHours(24, 0, 1, 0);
+    return next.getTime();
+  }
+
+  async function completeRandomCheckin(chatKey, fireId, success) {
+    if (!fireId || !chatKey) return;
+    const retryKey = `${chatKey}:${fireId}`;
+    try {
+      const response = await fetch('/api/random-checkins/complete', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat: chatKey, fire_id: fireId, success: Boolean(success) })
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const existingRetry = randomCheckinCompletionRetryTimers.get(retryKey);
+      if (existingRetry) clearTimeout(existingRetry);
+      randomCheckinCompletionRetryTimers.delete(retryKey);
+      if (response.ok && chatKey === randomCheckinChatKey()) {
+        const state = await response.json();
+        if (randomCheckinSettings) randomCheckinSettings.runtime = state.runtime;
+      }
+      return true;
+    } catch (error) {
+      console.warn('Random check-in completion update failed:', error);
+      if (!randomCheckinCompletionRetryTimers.has(retryKey)) {
+        const retryTimer = setTimeout(async () => {
+          randomCheckinCompletionRetryTimers.delete(retryKey);
+          const completed = await completeRandomCheckin(chatKey, fireId, success);
+          if (completed && chatKey === randomCheckinChatKey()) {
+            await refreshRandomCheckinScheduler();
+          }
+        }, 30000);
+        randomCheckinCompletionRetryTimers.set(retryKey, retryTimer);
+      }
+      return false;
+    }
+  }
+
+  // Native desktop notice for a check-in that has been added and saved. Called
+  // once per delivered fire (never from render/auto-save), deduped by fire ID.
+  // The Electron main process decides whether HWUI is in front of the user;
+  // in a plain browser there is no bridge and this is a no-op. The "Desktop
+  // notifications" setting (default on) suppresses only this toast — the
+  // check-in itself has already been delivered and saved.
+  const randomCheckinNotifiedFireIds = new Set();
+  function notifyRandomCheckinDelivered(chatKey, fireId, characterName, message) {
+    if (!fireId || randomCheckinNotifiedFireIds.has(fireId)) return;
+    randomCheckinNotifiedFireIds.add(fireId);
+    // Never let a notification problem reach the caller: the check-in is already
+    // saved and completed, and a throw would be treated as a failed delivery.
+    try {
+      if (randomCheckinSettings?.desktop_notifications === false) return;
+      const bridge = window.hwuiDesktop;
+      if (!bridge || typeof bridge.notifyCheckin !== 'function') return;
+      bridge.notifyCheckin({ id: fireId, chat: chatKey, title: characterName, body: String(message || '') });
+    } catch (error) {
+      try { console.warn('Random check-in notification failed:', error); } catch (_) {}
+    }
+  }
+
+  // Notification click: HWUI is already focused by the launcher; open the
+  // check-in's chat through the normal sidebar path when it is listed and idle.
+  function openRandomCheckinChatFromNotification(chat) {
+    if (!chat || chat === currentChatFilename || window.isSending) return;
+    const item = Array.from(document.querySelectorAll('.chat-item'))
+      .find(candidate => candidate.dataset.filename === chat);
+    if (item) item.click();
+  }
+  try { window.hwuiDesktop?.onOpenChat?.(openRandomCheckinChatFromNotification); } catch (_) {}
+
+  // Provider-only user event for Random/Guided generations (never saved or shown).
+  // Framed as a situation — the character chooses to speak first — rather than
+  // an order to perform something. It deliberately never names the mechanism
+  // (no "check-in", briefing, guidance, schedule…): a model handed an order
+  // announces carrying it out ("Briefing complete… today's check-in"). Guided
+  // themes are offered as ideas to adopt as the character's own thought.
+  // The event sits where a user turn would, so it also has to stop the model
+  // treating it as one: live output resumed the last topic for paragraphs
+  // ("Let me guess: you're sitting somewhere quiet…"). Hence: initiating after
+  // a lull, a varied lead-in, earlier talk only as a spark, and text length.
+  // app.py's fallback for a missing event text is this same base framing.
+  function randomCheckinEventText(mode, guidance) {
+    let text = "(The user hasn't sent anything new, and the conversation has gone quiet for a while. " +
+      "You've decided to message them first.)\n\n" +
+      "This is you reaching out on your own after a lull, not a reply to their last message: don't " +
+      "answer it again or carry on the previous discussion as if they'd just written back. Something " +
+      "from earlier can spark what you say, as a callback or a passing thought, but come at it fresh.\n\n" +
+      "Open the way someone does when texting first, with a small lead-in before the substance: a " +
+      "greeting, a random thought, a quick \"you still around?\", or whatever suits you and the moment. " +
+      "Word it your own way, and open differently from any earlier message of yours in this " +
+      "conversation. Then share what's on your mind: playful, affectionate, curious, an observation " +
+      "or a callback, whatever fits you and them.\n\n" +
+      "Keep it short, like a text: usually 20 to 80 words, in one to three short paragraphs. No essay, " +
+      "recap, list or extended advice.\n\n" +
+      "Send only the message itself, without announcing, explaining or labelling why you're reaching " +
+      "out, without dwelling on how long they've been quiet, and without guessing where they are or " +
+      "what they're doing.";
+    const ideas = mode === 'guided'
+      ? String(guidance || '').split('\n').map(line => line.replace(/^\s*[-*•]\s*/, '').trim()).filter(Boolean)
+      : [];
+    if (ideas.length) {
+      text += "\n\nIf one fits naturally, let it shape what you bring up, as your own idea:\n" +
+        ideas.map(idea => `- ${idea}`).join('\n');
+    }
+    return text;
+  }
+
+  async function appendCustomRandomCheckin(message, checkinId, snapshot) {
+    if (!message || !randomCheckinSnapshotIsCurrent(snapshot)) return false;
+    const timestamp = new Date().toISOString();
+    snapshot.loadedChat.push({
+      role: 'assistant', content: message,
+      speaker: snapshot.characterName,
+      timestamp, message_id: createHwuiMessageId(),
+      message_kind: 'automatic_checkin', checkin_id: checkinId,
+      generation_status: 'completed', generation_completed_at: timestamp
+    });
+    window._chatDirty = true;
+    renderChatMessages(snapshot.loadedChat);
+    if (!randomCheckinSnapshotIsCurrent(snapshot)) return false;
+    const saved = await autoSaveCurrentChat();
+    return Boolean(saved?.ok);
+  }
+
+  async function fireRandomCheckin(token) {
+    if (token !== randomCheckinTimerToken || randomCheckinFireInFlight) return;
+    randomCheckinFireInFlight = true;
+    clearRandomCheckinTimer();
+    const snapshot = captureRandomCheckinSnapshot();
+    const fireId = `random-checkin-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    let rearmNotBefore = Date.now() + 5000;
+    try {
+      if (!randomCheckinSettings?.enabled || !randomCheckinChatEligible(randomCheckinSettings)) return;
+      if (window.isSending) return;
+      // A timer armed before the current chat was restored (e.g. the previous
+      // chat's, still live while the new chat's refresh is in flight) must not
+      // claim for it before its minimum inactivity; re-arm at the floor instead.
+      const inactivityFloor = randomCheckinInactivityFloor(randomCheckinSettings);
+      if (inactivityFloor > Date.now()) { rearmNotBefore = inactivityFloor; return; }
+      const claim = await fetch('/api/random-checkins/claim', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat: snapshot.chatKey, fire_id: fireId, character: snapshot.characterName })
+      });
+      const result = await claim.json();
+      if (!claim.ok || !result.accepted) {
+        if (result.reason === 'quiet_hours') {
+          rearmNotBefore = randomCheckinNextQuietBoundary(randomCheckinSettings, new Date());
+        } else if (result.reason === 'daily_max') {
+          rearmNotBefore = randomCheckinNextDayBoundary();
+        } else if (result.reason === 'not_due' || result.reason === 'occurrence_claimed') {
+          rearmNotBefore = 0;
+        }
+        return;
+      }
+      if (result.already_claimed) return;
+      if (!randomCheckinSnapshotIsCurrent(snapshot)) {
+        await completeRandomCheckin(snapshot.chatKey, result.fire_id, false);
+        return;
+      }
+      if (result.message_mode === 'custom') {
+        const saved = await appendCustomRandomCheckin(result.message, result.fire_id, snapshot);
+        await completeRandomCheckin(snapshot.chatKey, result.fire_id, saved);
+        if (saved) notifyRandomCheckinDelivered(snapshot.chatKey, result.fire_id, snapshot.characterName, result.message);
+      } else {
+        const triggerText = randomCheckinEventText(result.message_mode, randomCheckinSettings?.guidance);
+        if (window.isSending || !randomCheckinSnapshotIsCurrent(snapshot) || !randomCheckinHasUserTurn()) {
+          await completeRandomCheckin(snapshot.chatKey, result.fire_id, false);
+          return;
+        }
+        await fetchAndDisplayResponse('', document.getElementById('chat'), false, null, null, {
+          automaticCheckin: true, checkinId: result.fire_id, fireId: result.fire_id,
+          triggerText, checkinSnapshot: snapshot, checkinChatKey: snapshot.chatKey,
+          characterName: snapshot.characterName
+        });
+      }
+    } catch (error) {
+      console.warn('Random check-in fire failed:', error);
+      rearmNotBefore = Date.now() + 30000;
+      await completeRandomCheckin(snapshot.chatKey, fireId, false);
+    } finally {
+      randomCheckinFireInFlight = false;
+      await refreshRandomCheckinScheduler(rearmNotBefore);
+    }
+  }
+
+  function armRandomCheckinScheduler(notBefore = 0) {
+    clearRandomCheckinTimer();
+    const settings = randomCheckinSettings;
+    if (!settings?.enabled || !randomCheckinChatKey() || !randomCheckinChatEligible(settings) || settings.runtime?.pending) return;
+    const now = new Date();
+    let dueAt = settings.trigger_mode === 'scheduled'
+      ? randomCheckinNextScheduled(settings, now)
+      : Number(settings.runtime?.next_due_at) * 1000;
+    if (!Number.isFinite(dueAt) || dueAt <= 0) return;
+    dueAt = Math.max(dueAt, randomCheckinInactivityFloor(settings));
+    if (settings.trigger_mode === 'random' && randomCheckinQuiet(settings, new Date(dueAt))) {
+      dueAt = randomCheckinNextQuietBoundary(settings, new Date(dueAt));
+    }
+    dueAt = Math.max(dueAt, Number(notBefore) || 0);
+    const token = randomCheckinTimerToken;
+    randomCheckinTimer = setTimeout(() => fireRandomCheckin(token), Math.max(1000, dueAt - Date.now()));
+  }
+
+  async function refreshRandomCheckinScheduler(notBefore = 0) {
+    if (!currentChatFilename) { clearRandomCheckinTimer(); return; }
+    const refreshChatKey = currentChatFilename;
+    const refreshLoadedChat = window.loadedChat;
+    const refreshLoadGeneration = chatLoadGeneration;
+    // A chat switch or reload runs its own refresh, so a stale one just stops.
+    // A same-load history swap (e.g. the new-chat opening-line auto-save
+    // replacing loadedChat) has no newer refresh coming, so re-derive from the
+    // current state instead of silently leaving the chat unarmed.
+    const historyOnlySwapped = () => currentChatFilename === refreshChatKey &&
+      chatLoadGeneration === refreshLoadGeneration &&
+      window.loadedChat !== refreshLoadedChat;
+    try {
+      const response = await fetch(`/api/random-checkins/settings?chat=${encodeURIComponent(refreshChatKey)}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const refreshedSettings = await response.json();
+      if (historyOnlySwapped()) return refreshRandomCheckinScheduler(notBefore);
+      if (currentChatFilename !== refreshChatKey || window.loadedChat !== refreshLoadedChat) return;
+      randomCheckinSettings = refreshedSettings;
+      if (!randomCheckinSettings.runtime?.last_activity_at && randomCheckinChatEligible(randomCheckinSettings)) {
+        const lastUser = [...window.loadedChat].reverse().find(message =>
+          message && message.role === 'user' && !message.hidden && !message.is_opening_line
+        );
+        const activityResponse = await fetch('/api/random-checkins/activity', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat: refreshChatKey,
+            message: false,
+            ...(lastUser?.timestamp ? { at: lastUser.timestamp } : {})
+          })
+        });
+        if (!activityResponse.ok) throw new Error(`Activity HTTP ${activityResponse.status}`);
+        const activityState = await activityResponse.json();
+        if (historyOnlySwapped()) return refreshRandomCheckinScheduler(notBefore);
+        if (currentChatFilename !== refreshChatKey || window.loadedChat !== refreshLoadedChat) return;
+        randomCheckinSettings.runtime = activityState.runtime;
+      }
+      randomCheckinLastActivityAt = randomCheckinSettings.runtime?.last_activity_at || null;
+      armRandomCheckinScheduler(notBefore);
+    } catch (error) {
+      console.warn('Random check-in settings unavailable:', error);
+      if (!historyOnlySwapped() &&
+          (currentChatFilename !== refreshChatKey || window.loadedChat !== refreshLoadedChat)) return;
+      clearRandomCheckinTimer();
+      const token = randomCheckinTimerToken;
+      const retryDelay = Math.max(30000, (Number(notBefore) || 0) - Date.now());
+      randomCheckinTimer = setTimeout(() => {
+        if (token !== randomCheckinTimerToken) return;
+        randomCheckinTimer = null;
+        void refreshRandomCheckinScheduler();
+      }, retryDelay);
+    }
+  }
+
+  function noteRandomCheckinActivity(isMessage = false) {
+    randomCheckinLastActivityAt = new Date().toISOString();
+    clearRandomCheckinTimer();
+    if (!currentChatFilename) return;
+    const activityChatKey = currentChatFilename;
+    const activityLoadedChat = window.loadedChat;
+    if (randomCheckinActivityTimer) clearTimeout(randomCheckinActivityTimer);
+    const send = () => fetch('/api/random-checkins/activity', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat: activityChatKey, message: Boolean(isMessage) })
+    }).then(async response => {
+      if (response.ok) {
+        const state = await response.json();
+        if (currentChatFilename !== activityChatKey || window.loadedChat !== activityLoadedChat) return;
+        if (randomCheckinSettings) randomCheckinSettings.runtime = state.runtime;
+        armRandomCheckinScheduler();
+      }
+    }).catch(error => console.warn('Random check-in activity update failed:', error));
+    if (isMessage) { void send(); }
+    else randomCheckinActivityTimer = setTimeout(() => { void send(); }, 500);
+  }
+
 async function _openChatInternal(filename, loadGeneration) {
   if (window._preferredModelLoading) return;
   // 🔒 BLOCK if we're creating a new chat AND this isn't the new chat file
@@ -4990,6 +5339,7 @@ async function _openChatInternal(filename, loadGeneration) {
     }
     
     currentChatFilename = filename;
+    randomCheckinRestoredChat = { chatKey: filename, at: Date.now() };
     currentChatId = data.chat_id || null;
     HelcyonBenchPromptTransfer.handleChatChanged(localStorage, currentChatFilename);
     refreshBenchChatControl();
@@ -5003,24 +5353,8 @@ async function _openChatInternal(filename, loadGeneration) {
     // ✅ FIX 2: Normalise legacy "User" speaker label to actual active user name
     var _activeUserFix = localStorage.getItem('activeUserName') || activeUserName || 'User';
     const loadedMessages = await Promise.all(data.messages.map(async function(msg) {
-      var spk = msg.speaker || null;
-      if (spk && spk.toLowerCase() === 'user' && msg.role === 'user') {
-        spk = _activeUserFix;
-      }
-      var mapped = {
-        role: msg.role,
-        content: msg.content,
-        speaker: spk
-      };
-      if (msg.is_opening_line) mapped.is_opening_line = true;
-      if (msg.timestamp) mapped.timestamp = msg.timestamp;
-      if (msg.message_id) mapped.message_id = msg.message_id;
-      if (msg.reply_to_message_id) mapped.reply_to_message_id = msg.reply_to_message_id;
-      if (msg.generation_status) mapped.generation_status = msg.generation_status;
-      if (msg.generation_started_at) mapped.generation_started_at = msg.generation_started_at;
-      if (msg.generation_completed_at) mapped.generation_completed_at = msg.generation_completed_at;
-      if (msg.thinking) mapped.thinking = msg.thinking;
-      if (msg.hasImage) mapped.hasImage = true;
+      // Shared with mobile.html: every per-message field that save writes back.
+      var mapped = HwuiChatCore.mapLoadedMessage(msg, { activeUserName: _activeUserFix });
       if (Array.isArray(msg.previewUrls) && msg.previewUrls.length > 0) {
         mapped.previewUrls = (await Promise.all(msg.previewUrls.map(async function(url) {
           if (typeof url !== 'string' || url.startsWith('data:')) return url;
@@ -5061,6 +5395,11 @@ async function _openChatInternal(filename, loadGeneration) {
 
     // Render from normalised loadedChat so avatar lookup gets the real name, not "User"
     renderChatMessages(window.loadedChat);
+    // Author's Note is stored server-side per chat so mobile gets the same one.
+    // Move this browser's legacy localStorage copy (if any) up once; until that
+    // succeeds the legacy note is still sent as the /chat override.
+    void HwuiChatCore.migrateLegacyAuthorNote((...args) => fetch(...args), localStorage, filename, data.author_note || '');
+    void refreshRandomCheckinScheduler();
     settleBenchChatScroll(activeBenchChatAssociation());
 
     console.log('💾 Loaded ' + window.loadedChat.length + ' messages into context');
@@ -5358,6 +5697,21 @@ async function _openChatInternal(filename, loadGeneration) {
             modelEditBtn.onclick = function() { editSpecificMessage(i, span, rawContent); };
           })(index, modelSpan, content);
 
+          // Included/excluded from context. Excluded replies stay visible and
+          // saved; /chat simply does not send them to the model.
+          var contextExcluded = msg.exclude_from_context === true;
+          var modelContextBtn = document.createElement("button");
+          modelContextBtn.className = "context-toggle" + (contextExcluded ? " is-excluded" : "");
+          modelContextBtn.title = contextExcluded
+            ? "Excluded from context — click to include it again"
+            : "Included in context — click to exclude it";
+          modelContextBtn.setAttribute("aria-pressed", contextExcluded ? "true" : "false");
+          modelContextBtn.innerHTML = contextExcluded
+            ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"></path><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line></svg>'
+            : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>';
+          modelContextBtn.onclick = function() { toggleContextExclusion(index); };
+          if (contextExcluded) div.classList.add("context-excluded");
+
           var modelDeleteBtn = document.createElement("button");
           modelDeleteBtn.title = "Delete";
           modelDeleteBtn.className = "action-delete";
@@ -5384,6 +5738,7 @@ async function _openChatInternal(filename, loadGeneration) {
           modelActionBar.appendChild(modelContinueBtn);
           modelActionBar.appendChild(modelReplayBtn);
           modelActionBar.appendChild(modelEditBtn);
+          modelActionBar.appendChild(modelContextBtn);
           modelActionBar.appendChild(modelDeleteBtn);
           modelActionBar.appendChild(modelBranchBtn);
           if (modelShardExportBtn) modelActionBar.appendChild(modelShardExportBtn);
@@ -5397,6 +5752,12 @@ async function _openChatInternal(filename, loadGeneration) {
             div._thinkPanel.open = false;
           }
           div.appendChild(makeTimestampEl(msg.timestamp));
+          if (contextExcluded) {
+            var excludedLabel = document.createElement("span");
+            excludedLabel.className = "context-excluded-label";
+            excludedLabel.textContent = "Excluded from context — not sent to the model";
+            div.appendChild(excludedLabel);
+          }
           // Span is now in DOM — render HTML with code blocks as proper siblings
           if (modelSpan._pendingHtml !== undefined) {
             renderModelHTML(modelSpan, modelSpan._pendingHtml);
@@ -5548,7 +5909,7 @@ async function sendPrompt() {
       var dropdown = document.getElementById('character-select');
       var currentChar = dropdown.value;
       
-      if (!currentCharacter || currentCharacter.name !== currentChar) {
+      if (!currentCharacter || currentCharacterKey !== currentChar) {
         console.log('⚠️ Character mismatch, reloading:', currentChar);
         await loadCharacter(currentChar, true);
       }
@@ -5605,6 +5966,7 @@ async function sendPrompt() {
     });
 
     if (!input && !hasImages && !hasDocs) return;
+    noteRandomCheckinActivity(true);
     hideOpeningQuestions();
 
     // Document text the model will read — folded into this turn's content,
@@ -5716,7 +6078,7 @@ async function sendPrompt() {
         source_user_message_id: sourceUserMessageId,
         source_user_position: sourceUserPosition,
         chat_id: currentChatId,
-        character: currentCharName || currentCharacter?.name || '',
+        character: currentCharacterKey || currentCharName || '',
         submitted_at: userMessageTimestamp
       }
     );
@@ -5751,7 +6113,9 @@ async function sendPrompt() {
     box.style.height = 'auto';
     clearChatInputDraft();
     try {
-      await fetchAndDisplayResponse(input, chat, false, modelText, sourceUserMessageId);
+      await fetchAndDisplayResponse(input, chat, false, modelText, sourceUserMessageId, {
+        genuineUserSend: true
+      });
     } catch (err) {
       console.error("⚠️ sendPrompt error:", err);
       chat.innerHTML += '<div class="message error-msg">⚠️ Error sending message.</div>';
@@ -5793,14 +6157,23 @@ async function sendPrompt() {
     return messages.map(msg => `${speakerFor(msg)}: ${msg.content}`).join('\n\n');
   }
 
+  function extractMemoryCommandFact(commandText) {
+    if (!commandText || typeof commandText !== 'string') return '';
+    return commandText.replace(
+      /^(?:(?:please|can you|could you|would you|i want you to)\s+)*(?:remember\s+(?:this|that|it|to|my|the)?|save\s+(?:this|that|it)?(?:\s+to\s+(?:your\s+)?memory)?|make\s+a\s+note\s+(?:that|of)?|take\s+a\s+note\s+(?:that|of)?|note\s+(?:this|that)?\s+down|don['’]?t\s+forget\s+(?:that)?|add\s+(?:this|that|it)?\s+to\s+(?:your\s+)?memory|keep\s+(?:this|that|it)?\s+in\s+mind|memorize\s+(?:this|that|it)?|store\s+(?:this|that|it)?(?:\s+in\s+memory)?|jot\s+(?:this|that|it)?\s+down)[\s,.:;!]*/i,
+      ''
+    ).trim();
+  }
+
   async function saveMemoryFromChat(commandText, inputBox) {
     const history = recentVisibleChatForMemory();
-    if (!history.length) {
-      hwuiToast('No conversation to save to memory yet.', 'info');
+    const fact = extractMemoryCommandFact(commandText);
+    if (!history.length && !fact) {
+      hwuiToast('No conversation or fact to save to memory yet.', 'info');
       return;
     }
     const dropdown = document.getElementById('character-select');
-    const character = dropdown ? dropdown.value : (currentCharacter?.name || currentCharName || '');
+    const character = dropdown ? dropdown.value : (currentCharacterKey || currentCharName || '');
     if (!character) {
       hwuiToast('No character selected.', 'info');
       return;
@@ -5812,15 +6185,19 @@ async function sendPrompt() {
     clearChatInputDraft();
     hwuiToast('Saving memory...');
     try {
+      const effectiveHistory = [...history];
+      if (commandText) {
+        effectiveHistory.push({ role: 'user', content: commandText });
+      }
       const res = await fetch('/auto_memory/capture', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           character,
           user_name: activeUserName || localStorage.getItem('activeUserName') || 'Chris',
-          user_text: 'remember this',
-          assistant_text: memoryTranscriptFromMessages(history),
-          recent_messages: history,
+          user_text: commandText || 'remember this',
+          assistant_text: memoryTranscriptFromMessages(effectiveHistory),
+          recent_messages: effectiveHistory,
           force_save: true
         })
       });
@@ -5945,7 +6322,7 @@ async function sendPrompt() {
         role: msg.role,
         content: msg.content
       }));
-      const character = currentCharacter?.name || currentCharName || '';
+      const character = currentCharacterKey || currentCharName || '';
       const response = await fetch('/auto_memory/capture', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -5988,20 +6365,31 @@ async function sendPrompt() {
     return safeText.slice(0, safeCount);
   }
 
-  async function fetchAndDisplayResponse(input, chat, isRegenerate = false, modelTextForSend = null, sourceUserMessageId = null) {
+  async function fetchAndDisplayResponse(input, chat, isRegenerate = false, modelTextForSend = null, sourceUserMessageId = null, options = {}) {
     console.log('🚀🚀🚀 fetchAndDisplayResponse CALLED', new Date().getTime(), 'isRegenerate:', isRegenerate);
     console.trace();
     let replySourceUserMessageId = sourceUserMessageId;
     let generationStartedAt = null;
     let responseReader = null;
-    
-    try {
-      if (window.isSending) {
-        console.log('⛔ BLOCKED - already sending');
-        return;
+    const automaticCheckin = Boolean(options.automaticCheckin);
+    // A check-in that lost its claim snapshot or the generation race never
+    // owns the shared sending lock, so it must not enter the shared cleanup.
+    if (automaticCheckin && !randomCheckinSnapshotIsCurrent(options.checkinSnapshot)) {
+      await completeRandomCheckin(options.checkinChatKey, options.fireId, false);
+      return false;
+    }
+    if (window.isSending) {
+      console.log('⛔ BLOCKED - already sending');
+      if (automaticCheckin) {
+        await completeRandomCheckin(options.checkinChatKey, options.fireId, false);
       }
+      return false;
+    }
+
+    try {
       window.isSending = true;
       window._generationCancelled = false;
+      window._randomCheckinGeneration = automaticCheckin ? options : null;
       const sourceMessage = [...(window.loadedChat || [])].reverse().find(message =>
         message.role === 'user' && !message.hidden &&
         (!sourceUserMessageId || message.message_id === sourceUserMessageId)
@@ -6014,7 +6402,7 @@ async function sendPrompt() {
         Array.isArray(sourceMessage.content) &&
         sourceMessage.content.some(part => part && part.type === 'image_url')
       );
-      replySourceUserMessageId = sourceUserMessageId || sourceMessage?.message_id || null;
+      replySourceUserMessageId = automaticCheckin ? null : (sourceUserMessageId || sourceMessage?.message_id || null);
       generationStartedAt = new Date().toISOString();
       if (replySourceUserMessageId) {
         await updateBenchGenerationState(replySourceUserMessageId, 'generating');
@@ -6051,63 +6439,22 @@ async function sendPrompt() {
       }
       
       const dropdown = document.getElementById("character-select");
-      currentCharName = dropdown ? dropdown.value : (currentCharacter?.name || "Unknown");
+      currentCharName = dropdown ? dropdown.value : (currentCharacterKey || "Unknown");
       
       console.log('📤 Sending to /chat with character:', currentCharName);
       console.log('📊 DEBUG: Sending conversation with', window.loadedChat.length, 'messages');
 
-      // Strip images from all but the most recent multimodal message
-      // This prevents massive payloads and base64 spam when using text-only models
-      const visibleChat = window.loadedChat.filter(msg => !msg.hidden);
-      // chatToSend includes hidden messages (e.g. memory confirm) so the model has context,
-      // but strips the hidden flag so the backend treats them as normal turns
-      const chatForSend = window.loadedChat.map(msg => msg.hidden ? {...msg, hidden: undefined} : msg);
-      if (modelTextForSend && typeof modelTextForSend === 'string') {
-        for (let i = chatForSend.length - 1; i >= 0; i--) {
-          if (chatForSend[i] && chatForSend[i].role === 'user') {
-            if (Array.isArray(chatForSend[i].content)) {
-              let replacedText = false;
-              const parts = chatForSend[i].content.map(part => {
-                if (!replacedText && part && part.type === 'text') {
-                  replacedText = true;
-                  return { ...part, text: modelTextForSend };
-                }
-                return part;
-              });
-              chatForSend[i] = replacedText
-                ? { ...chatForSend[i], content: parts }
-                : { ...chatForSend[i], content: [{ type: 'text', text: modelTextForSend }, ...chatForSend[i].content] };
-            } else {
-              chatForSend[i] = { ...chatForSend[i], content: modelTextForSend };
-            }
-            break;
-          }
-        }
-      }
-      let lastImageIdx = -1;
-      for (let i = visibleChat.length - 1; i >= 0; i--) {
-        if (Array.isArray(visibleChat[i].content)) {
-          lastImageIdx = i;
-          break;
-        }
-      }
-      const chatToSend = chatForSend.map((msg, i) => {
-        if (Array.isArray(msg.content)) {
-          if (i === lastImageIdx) {
-            return msg; // Keep the most recent image message intact
-          } else {
-            // Strip images from older messages — text only
-            const textOnly = msg.content.filter(p => p.type === 'text').map(p => p.text).join(' ');
-            return { role: msg.role, content: textOnly || '[image]' };
-          }
-        }
-        return msg;
-      });
+      // Shared with mobile.html (HwuiChatCore.buildConversationHistory): hidden
+      // turns (e.g. memory confirm) ride along with the flag stripped so the
+      // model has context, modelTextForSend replaces the latest user text, and
+      // only the most recent multimodal turn keeps its images (prevents massive
+      // payloads and base64 spam when using text-only models).
+      const chatToSend = HwuiChatCore.buildConversationHistory(window.loadedChat, { modelTextForSend });
 
       // Natural image requests take a schema-constrained internal action pass
       // before the visible /chat response. The active model decides and writes
       // the SDXL prompt into JSON; HWUI never renders that internal prompt.
-      if (!currentTurnHasImage && !isRegenerate) {
+      if (!automaticCheckin && !currentTurnHasImage && !isRegenerate) {
         try {
           const actionResponse = await fetch('/image_generation_action', {
             method: 'POST',
@@ -6131,20 +6478,36 @@ async function sendPrompt() {
         }
       }
       
+      const requestChatFilename = automaticCheckin ? options.checkinChatKey : currentChatFilename;
+      const memoryConfirmOverride = window._memoryConfirmNote
+        ? (window._memoryConfirmNote = false, '[SYSTEM OVERRIDE: The user just confirmed a memory save. Write ONE short sentence confirming it is saved. Do NOT write any MEMORY ADD tags. Do NOT summarize. Do NOT ask questions.]')
+        : '';
+      // Same body builder as mobile.html. Sampling (temperature/max_tokens/
+      // top_p/etc.) is sourced server-side from settings.json via
+      // load_sampling_settings() — client values were inert, so none are sent.
+      // See CHANGES.md "Pending / Backlog" for the memory-confirm cap.
+      const chatRequestBody = HwuiChatCore.buildChatRequestBody({
+        character: automaticCheckin ? options.characterName : currentCharName,
+        userName: activeUserName,
+        chatFilename: requestChatFilename,
+        conversationHistory: chatToSend,
+        currentTurnHasImage: currentTurnHasImage,
+        genuineUserSend: options.genuineUserSend === true,
+        // The Author's Note is resolved server-side from this chat, so desktop
+        // and mobile get the same one. Only a one-turn override is sent: the
+        // memory-confirm instruction, or a legacy local note not yet migrated.
+        authorNoteOverride: memoryConfirmOverride || HwuiChatCore.pendingLegacyAuthorNote(localStorage, requestChatFilename),
+        extra: automaticCheckin ? {
+          automatic_event: 'random_checkin',
+          automatic_event_text: options.triggerText,
+          checkin_id: options.checkinId,
+          fire_id: options.fireId
+        } : null,
+      });
       const response = await fetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          character: currentCharName,
-          user_name: activeUserName,
-          current_chat_filename: currentChatFilename,
-          conversation_history: chatToSend,
-          current_turn_has_image: currentTurnHasImage,
-          author_note: (window._memoryConfirmNote ? (window._memoryConfirmNote = false, '[SYSTEM OVERRIDE: The user just confirmed a memory save. Write ONE short sentence confirming it is saved. Do NOT write any MEMORY ADD tags. Do NOT summarize. Do NOT ask questions.]') : localStorage.getItem(`author-note-${currentChatFilename}`) || ''),
-          // Sampling (temperature/max_tokens/top_p/etc.) is sourced server-side
-          // from settings.json via load_sampling_settings() — client values were
-          // inert. See CHANGES.md "Pending / Backlog" for the memory-confirm cap.
-        })
+        body: JSON.stringify(chatRequestBody)
       });
       
       if (!response.ok) {
@@ -6162,6 +6525,7 @@ async function sendPrompt() {
         if (replySourceUserMessageId) {
           await updateBenchGenerationState(replySourceUserMessageId, 'error');
         }
+        if (automaticCheckin) await completeRandomCheckin(options.checkinChatKey, options.fireId, false);
         return;
       }
       
@@ -6179,6 +6543,10 @@ async function sendPrompt() {
         !response.headers.get("content-type")?.includes("text/event-stream")
       ) {
         console.log('📍 Taking NON-STREAMING path');
+        if (automaticCheckin && !randomCheckinSnapshotIsCurrent(options.checkinSnapshot)) {
+          await completeRandomCheckin(options.checkinChatKey, options.fireId, false);
+          return false;
+        }
         const data = await response.json();
         const imageAction = parseHwuiImageAction(data.text || '');
         if (imageAction) {
@@ -6245,7 +6613,7 @@ async function sendPrompt() {
         
         const lastLoadedMessage = window.loadedChat[window.loadedChat.length - 1];
         const isDuplicate = Boolean(
-          lastLoadedMessage &&
+          !automaticCheckin && lastLoadedMessage &&
           lastLoadedMessage.role === "assistant" &&
           lastLoadedMessage.content === message
         );
@@ -6260,7 +6628,8 @@ async function sendPrompt() {
             reply_to_message_id: replySourceUserMessageId,
             generation_status: assistantStatus,
             generation_started_at: generationStartedAt,
-            generation_completed_at: generationCompletedAt
+            generation_completed_at: generationCompletedAt,
+            ...(automaticCheckin ? { message_kind: 'automatic_checkin', checkin_id: options.checkinId } : {})
           });
           window._chatDirty = true;  // stale-write guard
           console.log('✅ Added non-streaming response to loadedChat');
@@ -6268,7 +6637,11 @@ async function sendPrompt() {
           console.warn('⚠️ Skipped duplicate non-streaming response');
         }
         
-        await autoSaveCurrentChat();
+        const automaticSave = await autoSaveCurrentChat();
+        if (automaticCheckin) await completeRandomCheckin(options.checkinChatKey, options.fireId, Boolean(automaticSave?.ok && assistantCompleted));
+        if (automaticCheckin && automaticSave?.ok && assistantCompleted) {
+          notifyRandomCheckinDelivered(options.checkinChatKey, options.fireId, options.characterName, message);
+        }
         if (replySourceUserMessageId) {
           await updateBenchGenerationState(
             replySourceUserMessageId,
@@ -6276,7 +6649,7 @@ async function sendPrompt() {
             assistantMessageId
           );
         }
-        await captureAutomaticMemory(input, message);
+        if (!automaticCheckin) await captureAutomaticMemory(input, message);
 
         // Auto-name if still a "New Chat" — filename guard is the sole trigger
         if (currentChatFilename && currentChatFilename.includes('New Chat')) {
@@ -6359,9 +6732,9 @@ async function sendPrompt() {
       let streamReadFailed = false;
       let hwuiActionState = 'pending'; // forming action prefixes stay out of display/TTS
 
-      // Get user/char names for cleanup
+      // Get user/char names for cleanup — the model speaks as the card's Name.
       const userName = activeUserName || "User";
-      const charName = currentCharName || "Assistant";
+      const charName = currentCharacter?.name || currentCharName || "Assistant";
 
       // ── Adaptive drip / typewriter renderer ───────────────────────────────
       // Decouples backend SSE cadence from the visual reveal so every backend
@@ -6395,11 +6768,46 @@ async function sendPrompt() {
         chat.scrollTop = chat.scrollHeight;
       }
 
+      // Hidden pages (minimized/covered window) get NO animation frames, so the
+      // reveal must never gate completion: everything after `await dripDone`
+      // (save, bench state, check-in completion/notification) would otherwise
+      // wait until the user came back — for minutes. One rule for every stream:
+      // a hidden page flushes as soon as the stream ends, and a user returning
+      // mid-stream sees everything received while away at once. A page that
+      // stays visible keeps the frame-driven typewriter exactly as before.
+      let finishDrip = () => {};
       const dripDone = new Promise((resolve) => {
         const MIN_CPS = 45, MAX_CPS = 600, DRAIN_SEC = 0.35;
         let lastTs = performance.now();
         let carry  = 0;           // fractional-char accumulator across frames
+        let finished = false;
+        const onDripVisibility = () => {
+          if (finished) return;
+          if (document.hidden) {
+            // Hidden between stream end and the next frame: nothing would flush.
+            if (streamDone) finishDrip();
+            return;
+          }
+          // Back while still streaming: skip the backlog, keep dripping new text.
+          // (Never after Stop — cancellation freezes at what the user saw.)
+          if (!window._generationCancelled && revealedCount < cleanedFull.length) {
+            revealedCount = cleanedFull.length;
+            renderRevealed(false);
+          }
+        };
+        document.addEventListener('visibilitychange', onDripVisibility);
+        // Stream ended → flush ALL remaining chars at once. The user never waits
+        // on the typewriter after generation is actually finished.
+        finishDrip = () => {
+          if (finished) return;
+          finished = true;
+          document.removeEventListener('visibilitychange', onDripVisibility);
+          revealedCount = cleanedFull.length;
+          renderRevealed(true);
+          resolve();
+        };
         function tick(ts) {
+          if (finished) return;
           const dt = Math.min((ts - lastTs) / 1000, 0.1);  // clamp dt after a tab stall
           lastTs = ts;
 
@@ -6430,11 +6838,7 @@ async function sendPrompt() {
             return;
           }
 
-          // Stream ended → flush ALL remaining chars at once. The user never waits
-          // on the typewriter after generation is actually finished.
-          revealedCount = cleanedFull.length;
-          renderRevealed(true);
-          resolve();
+          finishDrip();
         }
         requestAnimationFrame(tick);
       });
@@ -6529,6 +6933,11 @@ async function sendPrompt() {
 
       // Signal the drip we're done; normal completion flushes the remainder.
       streamDone = true;
+      // Completion never waits on animation frames (see the drip above): flush
+      // now when hidden; when visible the next frame flushes, with a timer
+      // fallback in case frames stop without a visibility change.
+      if (document.hidden) finishDrip();
+      else setTimeout(finishDrip, 250);
       await dripDone;
 
       if (window._generationCancelled) {
@@ -6538,8 +6947,14 @@ async function sendPrompt() {
         rawAll = cleanedMessage;
       }
 
+      if (automaticCheckin && !randomCheckinSnapshotIsCurrent(options.checkinSnapshot)) {
+        if (modelWrapper && modelWrapper.parentNode) modelWrapper.remove();
+        await completeRandomCheckin(options.checkinChatKey, options.fireId, false);
+        return false;
+      }
+
       const capturedImageAction = parseHwuiImageAction(fullMessage);
-      if (capturedImageAction || hwuiActionState === 'action') {
+      if (!automaticCheckin && (capturedImageAction || hwuiActionState === 'action')) {
         window._streamingPartial = "";
         if (modelWrapper && modelWrapper.parentNode) modelWrapper.remove();
         if (!capturedImageAction) {
@@ -6570,6 +6985,7 @@ async function sendPrompt() {
           if (replySourceUserMessageId) {
             await updateBenchGenerationState(replySourceUserMessageId, 'error');
           }
+          if (automaticCheckin) await completeRandomCheckin(options.checkinChatKey, options.fireId, false);
         } else {
           console.warn('⚠️ Empty response detected (model sent nothing) — retrying once...');
           streamEl.innerHTML = '<em style="color:#888; font-size:0.9em;">⟳ Empty response, retrying…</em>';
@@ -6578,13 +6994,14 @@ async function sendPrompt() {
           await new Promise(r => setTimeout(r, 900));
           if (modelWrapper && modelWrapper.parentNode) modelWrapper.remove();
           window.isSending = false;
-          await fetchAndDisplayResponse(input, chat, 'retry', modelTextForSend, replySourceUserMessageId);
+          await fetchAndDisplayResponse(input, chat, 'retry', modelTextForSend, replySourceUserMessageId, options);
         }
         return;
       }
       if (!window._generationCancelled && (!cleanedMessage || cleanedMessage.trim().length < 2)) {
         console.warn('⚠️ cleanedMessage empty after stripping — raw fallback');
-        cleanedMessage = fullMessage.replace(/<\|im_start\|>\w*/gi, '').replace(/<\|im_end\|>/gi, '').trim();
+        // Same fallback mobile uses via HwuiChatCore.finalizeAssistantText().
+        cleanedMessage = HwuiChatCore.rawAssistantFallback(fullMessage);
       }
       // ─────────────────────────────────────────────────────────────────
 
@@ -6612,8 +7029,8 @@ async function sendPrompt() {
       if (!window.loadedChat) window.loadedChat = [];
       
       const lastLoadedMessage = window.loadedChat[window.loadedChat.length - 1];
-      const isDuplicate = Boolean(
-        lastLoadedMessage &&
+        const isDuplicate = Boolean(
+        !automaticCheckin && lastLoadedMessage &&
         lastLoadedMessage.role === "assistant" &&
         lastLoadedMessage.content === finalText
       );
@@ -6629,7 +7046,8 @@ async function sendPrompt() {
           generation_status: assistantStatus,
           generation_started_at: generationStartedAt,
           generation_completed_at: generationCompletedAt,
-          ...(completedThinking ? { thinking: completedThinking } : {})
+          ...(completedThinking ? { thinking: completedThinking } : {}),
+          ...(automaticCheckin ? { message_kind: 'automatic_checkin', checkin_id: options.checkinId } : {})
         });
         window._chatDirty = true;  // stale-write guard
         console.log('✅ Added assistant response to loadedChat. Total messages:', window.loadedChat.length);
@@ -6655,7 +7073,12 @@ async function sendPrompt() {
       // (two replies to one user turn make capture ambiguous → invalidated).
       window._streamingPartial = "";
 
-      await autoSaveCurrentChat();
+      const automaticSave = await autoSaveCurrentChat();
+      window._randomCheckinGeneration = null;
+      if (automaticCheckin) await completeRandomCheckin(options.checkinChatKey, options.fireId, Boolean(automaticSave?.ok && assistantStatus === 'completed'));
+      if (automaticCheckin && automaticSave?.ok && assistantStatus === 'completed') {
+        notifyRandomCheckinDelivered(options.checkinChatKey, options.fireId, options.characterName, finalText);
+      }
       if (replySourceUserMessageId) {
         await updateBenchGenerationState(
           replySourceUserMessageId,
@@ -6667,7 +7090,7 @@ async function sendPrompt() {
       // Save trained memory output immediately. The server uses the model's
       // title, keywords, and summary directly; its classifier is only a
       // fallback when an explicit request produced no valid memory object/tag.
-      const autoMemoryHandled = await captureAutomaticMemory(input, rawFullMessage);
+      const autoMemoryHandled = automaticCheckin ? false : await captureAutomaticMemory(input, rawFullMessage);
 
       // Auto-name if still a "New Chat" — filename guard is the sole trigger
       if (currentChatFilename && currentChatFilename.includes('New Chat')) {
@@ -6709,6 +7132,7 @@ async function sendPrompt() {
     } catch (err) {
       console.error("❌ Chat fetch error:", err);
       chat.innerHTML += '<div class="message error-msg">⚠️ Failed to reach server.</div>';
+      if (automaticCheckin) await completeRandomCheckin(options.checkinChatKey, options.fireId, false);
       if (replySourceUserMessageId) {
         await updateBenchGenerationState(replySourceUserMessageId, 'error');
       }
@@ -6722,6 +7146,7 @@ async function sendPrompt() {
       // now in window.loadedChat (or was empty), so drop the partial mirror so a
       // later pagehide doesn't re-append stale text.
       window._streamingPartial = "";
+      window._randomCheckinGeneration = null;
       // Refresh the token monitor with this turn's budget when visible.
       if (window.refreshTokenMonitor) window.refreshTokenMonitor();
     }
@@ -6827,47 +7252,11 @@ async function sendPrompt() {
         return;
       }
       
-      // 🔒 PREVENT CONSECUTIVE ASSISTANT MESSAGES
-      for (let i = window.loadedChat.length - 1; i > 0; i--) {
-        const current = window.loadedChat[i];
-        const previous = window.loadedChat[i - 1];
-        
-        if (current.role === 'assistant' && previous.role === 'assistant') {
-          console.log('⚠️ REMOVING CONSECUTIVE ASSISTANT MESSAGE at index', i);
-          window.loadedChat.splice(i, 1);
-        }
-      }
-      
-      // 🔥 DEDUPLICATE loadedChat before saving — ADJACENT-ONLY.
-      // ⚠️ DO NOT make this a global seen-set dedup again. A global dedup removes
-      // ANY turn whose role:content matches an earlier one ANYWHERE in the array,
-      // which silently destroys legitimately-repeated messages — "continue",
-      // "yes", a re-asked question — mid-chat, collapsing whole user+assistant
-      // pairs. That was the root cause of regenerate "skipping back" (regenerate
-      // forces a save, which is when the damage surfaced). Repeated messages are
-      // VALID; only an accidental exact double-push is a real duplicate, and that
-      // is ALWAYS adjacent. So we only drop a turn that is identical (same role
-      // AND same content) to the turn IMMEDIATELY before it. See changes.md
-      // (June 6 2026 — regenerate strip-too-far).
-      const dedupedChat = [];
-      let prevKey = null;
-
-      for (let i = 0; i < window.loadedChat.length; i++) {
-        const msg = window.loadedChat[i];
-        // Handle multimodal content — extract text for dedup key (same as before)
-        const contentKey = Array.isArray(msg.content)
-          ? msg.content.filter(p => p.type === 'text').map(p => p.text).join(' ')
-          : msg.content;
-        const key = `${msg.role}:${contentKey}`;
-
-        if (key === prevKey) {
-          // Identical to the turn directly before it → accidental double-push.
-          console.warn('⚠️ ADJACENT DUPLICATE REMOVED:', msg);
-          continue;
-        }
-        dedupedChat.push(msg);
-        prevKey = key;
-      }
+      // 🔒 Consecutive-assistant removal (automatic check-ins exempt) + ADJACENT-ONLY
+      // dedup. Shared with mobile.html via HwuiChatCore.prepareHistoryForSave — see the
+      // ⚠️ note there: DO NOT make this a global seen-set dedup again (it destroyed
+      // legitimately-repeated messages; changes.md June 6 2026 + Sep 2026 parity).
+      const dedupedChat = HwuiChatCore.prepareHistoryForSave(window.loadedChat);
 
       console.log(`📊 Original: ${window.loadedChat.length}, Deduped: ${dedupedChat.length}`);
       
@@ -6878,30 +7267,17 @@ async function sendPrompt() {
       console.log('📦 Messages to save:', JSON.stringify(dedupedChat, null, 2));
       
       var charName = extractCharacterFromFilename(currentChatFilename) || 'Assistant';
+      // Speaker labels carry the card's Name; the filename key is only the fallback.
+      var charLabel = (currentCharacter && currentCharacter.name) || charName;
       var activeUserNameFallback = localStorage.getItem('activeUserName') || activeUserName;
-      
-      const messages = dedupedChat.filter(msg => !msg.hidden).map(msg => ({
-        role: msg.role,
-        // Keep model-facing chat text compact; the complete prepared image used
-        // by the thumbnail/lightbox lives only in verified message metadata.
-        content: Array.isArray(msg.content)
-          ? (msg.content.filter(p => p.type === 'text').map(p => p.text).join(' ').trim() + ' [image]').trim()
-          : msg.content,
-        // Use stored speaker if available, fall back to current active user/char
-        speaker: msg.speaker || (msg.role === 'user' ? activeUserNameFallback : charName),
-        // Preserve opening line flag so backend can exclude it from new chat detection
-        ...(msg.is_opening_line ? { is_opening_line: true } : {}),
-        // Preserve timestamp so it survives save/load cycles
-        ...(msg.timestamp ? { timestamp: msg.timestamp } : {}),
-        ...(msg.message_id ? { message_id: msg.message_id } : {}),
-        ...(msg.reply_to_message_id ? { reply_to_message_id: msg.reply_to_message_id } : {}),
-        ...(msg.generation_status ? { generation_status: msg.generation_status } : {}),
-        ...(msg.generation_started_at ? { generation_started_at: msg.generation_started_at } : {}),
-        ...(msg.generation_completed_at ? { generation_completed_at: msg.generation_completed_at } : {}),
-        ...(msg.thinking ? { thinking: msg.thinking } : {}),
-        ...(msg.hasImage ? { hasImage: true } : {}),
-        ...(Array.isArray(msg.previewUrls) && msg.previewUrls.length > 0 ? { previewUrls: msg.previewUrls } : {})
-      }));
+
+      // Same serializer mobile.html and the pagehide beacon use. Hidden turns are
+      // dropped; the server rebuilds the metadata sidecar from every save, so every
+      // per-message field (ids, check-in kind, thinking, exclusion...) is written back.
+      const messages = HwuiChatCore.serializeHistoryForSave(dedupedChat, {
+        userName: activeUserNameFallback,
+        charName: charLabel
+      });
       
       const res = await fetch('/chats/save', {
         method: 'POST',
@@ -6958,36 +7334,20 @@ async function sendPrompt() {
 
     // Resolve character name reliably
     const dropdown = document.getElementById('character-select');
-    currentCharName = dropdown ? dropdown.value : (currentCharacter?.name || currentCharName);
+    currentCharName = dropdown ? dropdown.value : (currentCharacterKey || currentCharName);
 
-    // Find the last assistant entry in loadedChat
-    let lastAssistantIdx = -1;
-    for (let i = window.loadedChat.length - 1; i >= 0; i--) {
-      if (window.loadedChat[i].role === 'assistant' && !window.loadedChat[i].hidden) {
-        lastAssistantIdx = i;
-        break;
-      }
-    }
-
-    if (lastAssistantIdx === -1) {
+    // Shared with mobile.html (HwuiChatCore.buildContinueRequest): the last
+    // visible assistant reply leaves history, only its last ~200 chars go to
+    // the model as continue_prefix (sending the full message makes the model
+    // think the response is nearly done and fire EOS after a few tokens), and
+    // the head is retained so the original text isn't lost on continue.
+    const continueRequest = HwuiChatCore.buildContinueRequest(window.loadedChat);
+    if (!continueRequest) {
       hwuiToast('No previous model message to continue.', 'info');
       return;
     }
-
-    // Only use the last ~200 chars of the previous response as the continue prefix.
-    // Sending the full message makes the model think the response is nearly done
-    // and it fires EOS after just a few tokens ("isn" etc).
-    const fullPrevContent = window.loadedChat[lastAssistantIdx].content || '';
-    const continuePrefix = fullPrevContent.length > 200
-      ? fullPrevContent.slice(-200)
-      : fullPrevContent;
-    // Preserve the head of the truncated message (everything before the 200-char
-    // prefix). Only the prefix is sent to the model (EOS-avoidance, above), but
-    // the head must be retained so the original text isn't lost on continue.
-    const retainedHead = fullPrevContent.length > 200
-      ? fullPrevContent.slice(0, -200)
-      : "";
-    window.loadedChat.splice(lastAssistantIdx, 1);
+    const { continuePrefix, retainedHead } = continueRequest;
+    window.loadedChat.splice(continueRequest.lastAssistantIdx, 1);
     window._chatDirty = true;  // stale-write guard: continue mutates history
 
     // Keep existing bubble — stream directly into it
@@ -6995,33 +7355,27 @@ async function sendPrompt() {
     const existingWrapper = wrappers.length ? wrappers[wrappers.length - 1] : null;
     const existingStreamEl = existingWrapper ? existingWrapper.querySelector('.model-text') : null;
 
-    // Build history without the popped assistant message
-    const visibleChat = window.loadedChat.filter(msg => !msg.hidden);
-    const chatToSend = visibleChat.map(msg => {
-      if (Array.isArray(msg.content)) {
-        const textOnly = msg.content.filter(p => p.type === 'text').map(p => p.text).join(' ');
-        return { role: msg.role, content: textOnly || '[image]' };
-      }
-      return msg;
-    });
+    // History without the popped assistant message (images reduced to text).
+    const chatToSend = continueRequest.conversationHistory;
 
     window.isSending = true;
     const stopBtn = document.getElementById('stop-btn');
     if (stopBtn) stopBtn.style.display = 'inline-block';
 
     try {
+      // Same body builder as mobile.html; sampling is sourced server-side and
+      // the Author's Note is resolved server-side from this chat.
       const response = await fetch('/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: JSON.stringify(HwuiChatCore.buildChatRequestBody({
           character: currentCharName,
-          user_name: activeUserName,
-          current_chat_filename: currentChatFilename,
-          conversation_history: chatToSend,
-          continue_prefix: continuePrefix,
-          author_note: localStorage.getItem(`author-note-${currentChatFilename}`) || '',
-          // Sampling sourced server-side from settings.json — client values were inert.
-        })
+          userName: activeUserName,
+          chatFilename: currentChatFilename,
+          conversationHistory: chatToSend,
+          continuePrefix: continuePrefix,
+          authorNoteOverride: HwuiChatCore.pendingLegacyAuthorNote(localStorage, currentChatFilename),
+        }))
       });
 
       if (!response.ok) {
@@ -7032,6 +7386,7 @@ async function sendPrompt() {
       }
 
       const charName = currentCharName;
+      const charLabel = currentCharacter?.name || charName;  // the Name the model speaks as
       let streamEl;
 
       if (existingStreamEl) {
@@ -7088,7 +7443,7 @@ async function sendPrompt() {
         // Continue extends an existing message, so any thinking is peeled off and
         // not shown (no panel here) — only the answer text is rendered/saved.
         const _ans = splitThinking(rawFull).answer;
-        const cleaned = stripChatMLOutsideCodeBlocks(_ans, charName, userName).trim();
+        const cleaned = stripChatMLOutsideCodeBlocks(_ans, charLabel, userName).trim();
 
         renderLiveModelHTML(streamEl, typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(cleaned)) : cleaned);
         chat.scrollTop = chat.scrollHeight;
@@ -7097,7 +7452,8 @@ async function sendPrompt() {
       const decoderTail = decoder.decode();
       if (decoderTail) rawFull += decoderTail;
 
-      let finalText = stripChatMLOutsideCodeBlocks(splitThinking(rawFull).answer, charName, userName).trim();
+      // Same stored-text rule as mobile.html's continue.
+      let finalText = HwuiChatCore.finalizeContinuedText(splitThinking(rawFull).answer, charLabel, userName);
 
       renderModelHTML(streamEl, typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(finalText)) : finalText);
       addCodeCopyButtons(streamEl.parentNode || streamEl);
@@ -7364,6 +7720,7 @@ async function stopGeneration() {
       textarea.value = line;
       textarea.placeholder = `Opening line ${index + 1}...`;
       textarea.dataset.index = index;
+      textarea.dataset.hwuiPromptEditor = '';
       
       const deleteBtn = document.createElement('button');
       deleteBtn.textContent = '🗑️';
@@ -7390,6 +7747,7 @@ async function stopGeneration() {
     
     const textarea = document.createElement('textarea');
     textarea.placeholder = 'New opening line...';
+    textarea.dataset.hwuiPromptEditor = '';
     
     const deleteBtn = document.createElement('button');
     deleteBtn.textContent = '🗑️';
@@ -7422,6 +7780,7 @@ async function stopGeneration() {
       textarea.value = question;
       textarea.placeholder = `Opening question ${index + 1}...`;
       textarea.dataset.index = index;
+      textarea.dataset.hwuiPromptEditor = '';
 
       const deleteBtn = document.createElement('button');
       deleteBtn.textContent = '\u{1F5D1}\uFE0F';
@@ -7452,6 +7811,7 @@ async function stopGeneration() {
 
     const textarea = document.createElement('textarea');
     textarea.placeholder = 'New opening question...';
+    textarea.dataset.hwuiPromptEditor = '';
 
     const deleteBtn = document.createElement('button');
     deleteBtn.textContent = '\u{1F5D1}\uFE0F';
@@ -7674,7 +8034,7 @@ async function stopGeneration() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          character: currentCharacter.name,
+          character: currentCharacterKey || currentCharacter.name,
           messages: window.loadedChat,
           user_name: activeUserName || localStorage.getItem('activeUserName') || 'User'
         })
@@ -8559,6 +8919,42 @@ async function stopGeneration() {
   // DELETE MESSAGE
   // ==================================================
   
+  // ==================================================
+  // EXCLUDE / INCLUDE A REPLY IN CONTEXT
+  // ==================================================
+  // The reply keeps its text, stays on screen and stays in the saved chat; /chat
+  // just stops sending it to the model (app.py _exclude_flagged_history), and End
+  // Session leaves it out of the summary. The flag is saved in the chat's
+  // metadata sidecar, so it is restored when the chat is reopened.
+  async function toggleContextExclusion(messageIndex) {
+    const msg = window.loadedChat && window.loadedChat[messageIndex];
+    if (!msg || msg.role !== 'assistant') return;
+    if (window.isSending) {
+      hwuiToast('Wait for the current reply to finish, then try again.', 'info');
+      return;
+    }
+    if (window.isSaving) {
+      hwuiToast('Previous save still in progress. Please wait and try again.', 'info');
+      return;
+    }
+    const excluding = msg.exclude_from_context !== true;
+    if (excluding) {
+      msg.exclude_from_context = true;
+    } else {
+      delete msg.exclude_from_context;
+    }
+    window._chatDirty = true;  // stale-write guard: tab has local changes
+    renderChatMessages(window.loadedChat);
+    const saved = await autoSaveCurrentChat();
+    if (!saved || !saved.ok) {
+      if (!(saved && saved.conflict)) {
+        hwuiToast('Could not save the change — it will be saved with the next message.', 'error');
+      }
+      return;
+    }
+    showToast(excluding ? 'Reply excluded from context' : 'Reply included in context again');
+  }
+
   async function deleteSpecificMessage(messageIndex) {
   if (!window.loadedChat || !Array.isArray(window.loadedChat)) {
     hwuiToast('No chat loaded.', 'info');
@@ -8646,7 +9042,7 @@ async function loadCharacterMemory() {
     character = 'global';
   } else {
     const dropdown = document.getElementById('character-select');
-    character = dropdown ? dropdown.value : (currentCharacter?.name || '');
+    character = dropdown ? dropdown.value : (currentCharacterKey || '');
   }
 
   if (!character) {
@@ -8717,7 +9113,7 @@ async function deleteMemory(index) {
     character = 'global';
   } else {
     const dropdown = document.getElementById('character-select');
-    character = dropdown ? dropdown.value : (currentCharacter?.name || '');
+    character = dropdown ? dropdown.value : (currentCharacterKey || '');
   }
   
   if (!character) return;
@@ -8748,7 +9144,7 @@ async function saveEditMemory(index) {
     character = 'global';
   } else {
     const dropdown = document.getElementById('character-select');
-    character = dropdown ? dropdown.value : (currentCharacter?.name || '');
+    character = dropdown ? dropdown.value : (currentCharacterKey || '');
   }
   if (!character) return;
   const content = document.getElementById(`memory-edit-text-${index}`).value.trim();
@@ -9017,7 +9413,7 @@ async function submitAddMemory() {
     character = 'global';
   } else {
     const dropdown = document.getElementById('character-select');
-    character = dropdown ? dropdown.value : (currentCharacter?.name || '');
+    character = dropdown ? dropdown.value : (currentCharacterKey || '');
   }
   if (!character) { hwuiToast('No character selected', 'info'); return; }
   const title = document.getElementById('memory-add-title').value.trim() || 'Untitled';
@@ -9165,28 +9561,16 @@ function showAutoMemoryToast(character, title, undoToken) {
         if (!window._chatDirty && !_inFlightPartial) return;
 
         var charName = extractCharacterFromFilename(currentChatFilename) || 'Assistant';
+        var charLabel = (currentCharacter && currentCharacter.name) || charName;
         var activeUserNameFallback = localStorage.getItem('activeUserName') || activeUserName;
 
-        // Same payload shape autoSaveCurrentChat() builds: drop hidden turns,
-        // flatten multimodal content to text (+ [image] marker), keep speaker /
-        // is_opening_line / timestamp.
-        var msgs = window.loadedChat.filter(function(m){ return !m.hidden; }).map(function(m){
-          return {
-            role: m.role,
-            content: Array.isArray(m.content)
-              ? (m.content.filter(function(p){ return p.type === 'text'; }).map(function(p){ return p.text; }).join(' ').trim() + ' [image]').trim()
-              : m.content,
-            speaker: m.speaker || (m.role === 'user' ? activeUserNameFallback : charName),
-            ...(m.is_opening_line ? { is_opening_line: true } : {}),
-            ...(m.timestamp ? { timestamp: m.timestamp } : {}),
-            ...(m.message_id ? { message_id: m.message_id } : {}),
-            ...(m.reply_to_message_id ? { reply_to_message_id: m.reply_to_message_id } : {}),
-            ...(m.generation_status ? { generation_status: m.generation_status } : {}),
-            ...(m.generation_started_at ? { generation_started_at: m.generation_started_at } : {}),
-            ...(m.generation_completed_at ? { generation_completed_at: m.generation_completed_at } : {}),
-            ...(m.hasImage ? { hasImage: true } : {}),
-            ...(Array.isArray(m.previewUrls) && m.previewUrls.length > 0 ? { previewUrls: m.previewUrls } : {})
-          };
+        // The exact payload shape autoSaveCurrentChat() and mobile.html build
+        // (shared serializer): drop hidden turns, flatten multimodal content to
+        // text (+ [image] marker), keep speaker and every per-message field —
+        // the sidecar is rebuilt from this save, so an omitted field is erased.
+        var msgs = HwuiChatCore.serializeHistoryForSave(window.loadedChat, {
+          userName: activeUserNameFallback,
+          charName: charLabel
         });
 
         // Stream in progress → the assistant turn isn't pushed yet; preserve the
@@ -9209,11 +9593,16 @@ function showAutoMemoryToast(character, title, undoToken) {
             msgs.push({
               role: 'assistant',
               content: window._streamingPartial,
-              speaker: charName,
+              speaker: charLabel,
               timestamp: new Date().toISOString(),
               message_id: createHwuiMessageId(),
               reply_to_message_id: sourceUser && sourceUser.message_id,
-              generation_status: window._generationCancelled ? 'cancelled' : 'incomplete'
+              generation_status: window._generationCancelled ? 'cancelled' : 'incomplete',
+              ...(window._randomCheckinGeneration &&
+                  randomCheckinSnapshotIsCurrent(window._randomCheckinGeneration.checkinSnapshot) ? {
+                message_kind: 'automatic_checkin',
+                checkin_id: window._randomCheckinGeneration.checkinId
+              } : {})
             });
           }
         }
@@ -9376,6 +9765,7 @@ function showAutoMemoryToast(character, title, undoToken) {
       }
     };
     inputBox.addEventListener('input', saveChatInputDraft);
+    inputBox.addEventListener('input', () => noteRandomCheckinActivity(false));
     document.querySelectorAll('a[href="/config"]').forEach((link) => {
       link.addEventListener('click', saveChatInputDraft, true);
       link.addEventListener('mousedown', saveChatInputDraft, true);
@@ -9433,6 +9823,7 @@ function showAutoMemoryToast(character, title, undoToken) {
     consumePendingBenchPrompt();
     restoreChatInputDraft();
     refreshBenchChatControl();
+    void refreshRandomCheckinScheduler();
     
   });
   
@@ -10371,8 +10762,9 @@ async function reassignChatCharacter(filename, newChar) {
   const cache = JSON.parse(localStorage.getItem('characterListCache') || '[]');
   const sorted = cache.slice().sort((a, b) => b.length - a.length);
   let remaining = nameWithoutExt;
+  const lowerName = nameWithoutExt.toLowerCase();
   for (const c of sorted) {
-    if (nameWithoutExt.startsWith(c + ' - ')) { remaining = nameWithoutExt.substring((c + ' - ').length); break; }
+    if (lowerName.startsWith((c + ' - ').toLowerCase())) { remaining = nameWithoutExt.substring((c + ' - ').length); break; }
   }
   // Fallback: no known prefix matched → treat everything after the first " - " as the rest.
   if (remaining === nameWithoutExt) {

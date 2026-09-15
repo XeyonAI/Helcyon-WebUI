@@ -31,12 +31,10 @@ QWENTTS_CPP_SERVER_URL = 'http://127.0.0.1:8768'
 OMNIVOICE_SERVER_URL    = 'http://127.0.0.1:8001'
 DEFAULT_VOICE = 'Sol'
 VOICE_FORGE_DEFAULT_TEXT = 'Hello. This is a test of a newly blended voice.'
-
+VOICE_FORGE_TEST_TEXT_FILENAME = '_voice_forge_test_text.txt'
 
 def _voice_forge_pro_only():
     return jsonify({'error': 'Voice Forge is available in the Pro build only.'}), 403
-
-
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.json')
 VOICE_GROUPS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'voice_groups.json')  # legacy path
 QWENTTS_VOICES_DIR = Path(os.getenv(
@@ -119,6 +117,79 @@ def save_settings(data):
     except Exception as e:
         logging.error(f"❌ Failed to save settings: {e}")
         return False
+
+
+def _voice_forge_test_text_path():
+    return QWENTTS_VOICES_DIR / VOICE_FORGE_TEST_TEXT_FILENAME
+
+
+def _repair_voice_forge_mojibake(text):
+    """Repair common UTF-8-as-Windows-1252 text from the legacy setting."""
+    repaired = text
+    markers = ('\u00c3', '\u00c2', '\u00e2', '\u20ac\u2122', '\ufffd')
+    for _ in range(2):
+        direct = repaired.replace('\u00e2\u20ac\u2122', '\u2019').replace('\u20ac\u2122', '\u2019')
+        if direct != repaired:
+            repaired = direct
+            continue
+        if not any(marker in repaired for marker in markers):
+            break
+        try:
+            candidate = repaired.encode('cp1252').decode('utf-8')
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            candidate = repaired
+        if candidate == repaired:
+            break
+        repaired = candidate
+    return repaired
+
+
+def _write_voice_forge_test_text(text):
+    """Atomically persist Voice Forge's test text in the shared voice folder."""
+    path = _voice_forge_test_text_path()
+    temporary = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        import tempfile
+        fd, temporary = tempfile.mkstemp(
+            suffix='.tmp', prefix=f'.{VOICE_FORGE_TEST_TEXT_FILENAME}.', dir=path.parent, text=True
+        )
+        with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as handle:
+            handle.write(text + '\n')
+        os.replace(temporary, path)
+        return True
+    except Exception as exc:
+        if temporary:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+        logging.error(f'❌ Failed to save Voice Forge test text: {exc}')
+        return False
+
+
+def _load_voice_forge_test_text():
+    """Read the shared UTF-8 text, migrating the old settings value once."""
+    path = _voice_forge_test_text_path()
+    if path.is_file():
+        try:
+            text = path.read_text(encoding='utf-8-sig').strip()
+            if text:
+                repaired = _repair_voice_forge_mojibake(text)
+                if repaired != text:
+                    _write_voice_forge_test_text(repaired)
+                return repaired
+            return None
+        except (OSError, UnicodeError) as exc:
+            logging.error(f'⚠️ Could not read Voice Forge test text: {exc}')
+            return None
+
+    legacy = get_settings().get('voice_forge_test_text')
+    if isinstance(legacy, str) and legacy.strip():
+        text = _repair_voice_forge_mojibake(legacy.strip())
+        _write_voice_forge_test_text(text)
+        return text
+    return None
 
 def get_engine():
     return get_settings().get('tts_engine', 'f5')
@@ -609,8 +680,8 @@ def get_voices():
 @tts_bp.route('/voice-forge/settings', methods=['GET'])
 def get_voice_forge_settings():
     return _voice_forge_pro_only()
-    text = get_settings().get('voice_forge_test_text')
-    return jsonify({'test_text': text.strip() if isinstance(text, str) and text.strip() else VOICE_FORGE_DEFAULT_TEXT})
+    text = _load_voice_forge_test_text()
+    return jsonify({'test_text': text or VOICE_FORGE_DEFAULT_TEXT})
 
 
 @tts_bp.route('/voice-forge/settings', methods=['POST'])
@@ -623,7 +694,7 @@ def save_voice_forge_settings():
     text = text.strip()
     if len(text) > 10000:
         return jsonify({'error': 'Test text is too long'}), 400
-    if not save_settings({'voice_forge_test_text': text}):
+    if not _write_voice_forge_test_text(text):
         return jsonify({'error': 'Could not save Voice Forge test text'}), 500
     return jsonify({'status': 'ok', 'test_text': text})
 
