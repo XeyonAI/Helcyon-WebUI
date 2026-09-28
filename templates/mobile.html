@@ -6,14 +6,26 @@
        localStorage, so each build gets its own namespace on the shared
        127.0.0.1 origin. -->
   <script src="/build_scope.js"></script>
+  <!-- Shared desktop/mobile chat core (same file index.html loads): request,
+       history and reply-cleaning rules, so identical chat state produces the
+       same model input from either page. -->
+  <script src="/static/hwui_chat_core.js?v=1"></script>
   <script src="/static/text_scale.js" defer></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <!-- Installable web app (push_routes.py): phone notifications for Random Check-ins. -->
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="theme-color" content="#000000" />
+  <link rel="apple-touch-icon" href="/static/icons/hwui-192.png" />
   <title>Helcyon</title>
   <script>
 const marked={parse:function(txt){
   if(!txt)return '';
+  // Model replies can arrive with CRLF line endings (especially from saved
+  // desktop chats). Normalize only for Markdown tokenization so paragraph
+  // boundaries are recognized without changing the stored response text.
+  txt=String(txt).replace(/\r\n?/g,'\n');
   function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
   function inline(s){
     // Markdown links FIRST (before esc/emphasis) so URL contents (underscores/
@@ -78,7 +90,8 @@ const marked={parse:function(txt){
     return line.replace(/[ \t]+(?=\d+\.\s+)/g,'\n');
   });
   txt=txt.replace(/^[ \t]*([-*_]{3,})[ \t]*$/gm,'\n\n$1\n\n');
-  let blocks=txt.split(/\n\n+/);
+  // Markdown permits spaces/tabs on an otherwise blank separator line.
+  let blocks=txt.split(/\n[ \t]*\n(?:[ \t]*\n)*/);
   let html='';
   blocks.forEach(function(block){
     // Pass through already-rendered code block divs unchanged
@@ -147,9 +160,13 @@ const marked={parse:function(txt){
     #user-text::placeholder { color: var(--text-dim); }
     #send-btn { flex-shrink: 0; width: 40px; height: 40px; border-radius: 50%; background: var(--accent); border: none; color: white; cursor: pointer; display: flex; align-items: center; justify-content: center; }
     #send-btn:active { transform: scale(0.9); }
+    #ptt-actions { display: flex; gap: 8px; }
     #ptt-btn { width: 100%; height: 58px; border-radius: 12px; background: var(--ptt-idle); border: 2px solid var(--border); color: var(--text-dim); font-size: 14px; font-weight: 600; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; transition: all 0.15s; -webkit-user-select: none; user-select: none; position: relative; overflow: hidden; }
+    #ptt-actions #ptt-btn { flex: 1; }
     #ptt-btn.recording { background: var(--ptt-active); border-color: #e06a6a; color: white; animation: pulse-red 1s infinite; }
     #ptt-btn.processing { background: var(--ptt-processing); border-color: #c09a2a; color: #f0d070; }
+    #ptt-send-btn { display: none; flex: 0 0 86px; height: 58px; border-radius: 12px; background: var(--accent); border: 2px solid #6d9ed8; color: white; font-size: 14px; font-weight: 600; cursor: pointer; align-items: center; justify-content: center; }
+    #ptt-send-btn:active { transform: scale(0.96); }
     @keyframes pulse-red { 0%,100%{box-shadow:0 0 0 0 rgba(193,74,74,0.4)} 50%{box-shadow:0 0 0 8px rgba(193,74,74,0)} }
     .mic-svg { flex-shrink: 0; }
     #waveform { display: none; gap: 3px; align-items: center; height: 18px; }
@@ -179,6 +196,18 @@ const marked={parse:function(txt){
     .m-code-wrap pre code { background: none; padding: 0; font-size: 13px; }
     .msg-bubble strong { color: #dde; font-weight: 600; }
     .msg-bubble br { display: block; content: ''; margin: 2px 0; }
+    /* Match source-backed streaming: one blank line is one line-height. */
+    .ai .msg-bubble p { margin-bottom: 1.4em; white-space: pre-wrap; }
+    .ai .msg-bubble p:last-child { margin-bottom: 0; }
+    .ai .msg-bubble br { display: inline; margin: 0; }
+    .mobile-reaction-badge { display:inline-flex; align-items:center; justify-content:center; min-width:23px; height:21px; margin-top:3px; padding:0 6px; border:1px solid var(--border); border-radius:999px; background:var(--surface2); font-size:13px; line-height:1; }
+    .mobile-reaction-row { display:flex; align-items:center; gap:5px; margin-top:3px; padding:0 4px; position:relative; }
+    .mobile-reaction-row button { background:none; border:0; color:var(--text-dim); border-radius:5px; padding:3px 5px; font-size:12px; cursor:pointer; }
+    .mobile-reaction-row .mobile-reaction-icon { width:17px; height:17px; display:block; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+    .mobile-reaction-row button:hover { background:var(--surface2); color:var(--text); }
+    .mobile-reaction-picker { display:none; gap:2px; padding:3px; border:1px solid var(--border); border-radius:8px; background:var(--surface); box-shadow:0 4px 16px rgba(0,0,0,.35); }
+    .mobile-reaction-picker.is-open { display:flex; }
+    .mobile-reaction-picker button { font-size:15px; padding:3px 4px; }
   </style>
 </head>
 <body>
@@ -191,6 +220,7 @@ const marked={parse:function(txt){
         <div id="header-name">Helcyon</div>
         <div id="header-status">Ready</div>
       </div>
+      <button id="mobile-push-btn" onclick="openMobilePushPanel()" title="Phone notifications" aria-label="Phone notifications" style="flex-shrink:0;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:6px 9px;color:var(--text-dim);font-size:15px;cursor:pointer;line-height:1;">🔔</button>
       <button id="mobile-backend-btn" onclick="openBackendPicker()" title="Choose backend (Local / OpenAI / Anthropic)" style="flex-shrink:0;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:6px 9px;color:var(--text-dim);font-size:15px;cursor:pointer;line-height:1;">🔌</button>
       <button id="tts-toggle" onclick="toggleTTS()">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07M18.36 5.64a9 9 0 0 1 0 12.73"/></svg>
@@ -232,11 +262,14 @@ const marked={parse:function(txt){
       <button onclick="resumeLastResponse()" style="flex:1;background:rgba(40,80,120,0.3);border:1px solid #2a4a6a;color:#7ab4f5;border-radius:8px;padding:5px 0;font-size:12px;cursor:pointer;">🔄 Resume</button>
       <button id="continue-btn" onclick="continueResponse()" style="flex:1;background:rgba(40,60,40,0.3);border:1px solid #2a4a2a;color:#6dbf8a;border-radius:8px;padding:5px 0;font-size:12px;cursor:pointer;">▶ Continue</button>
     </div>
-    <button id="ptt-btn" onclick="toggleMic()">
-      <svg class="mic-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-      <div id="waveform"><span></span><span></span><span></span><span></span><span></span></div>
-      <span id="ptt-label">Tap to Talk</span>
-    </button>
+    <div id="ptt-actions">
+      <button id="ptt-btn" onclick="toggleMic()">
+        <svg class="mic-svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+        <div id="waveform"><span></span><span></span><span></span><span></span><span></span></div>
+        <span id="ptt-label">Tap to Talk</span>
+      </button>
+      <button id="ptt-send-btn" onclick="finishRecording()" aria-label="Send recording">Send</button>
+    </div>
   </div>
   <!-- Chat List Panel (inline, sits below header inside #app flex column) -->
   <div id="chat-panel" style="display:none;flex:1;flex-direction:column;overflow:hidden;background:var(--bg);">
@@ -290,6 +323,19 @@ const marked={parse:function(txt){
   </div>
 </div>
 
+<!-- Phone notifications bottom-sheet (Web Push for Random Check-ins) -->
+<div id="mobile-push-modal" style="display:none;position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,0.75);align-items:flex-end;justify-content:center;" onclick="if(event.target===this)closeMobilePushPanel()">
+  <div style="background:var(--surface);border:1px solid var(--border);border-top-left-radius:16px;border-top-right-radius:16px;padding:16px 14px calc(20px + env(safe-area-inset-bottom));width:100%;max-width:520px;box-shadow:0 -8px 32px rgba(0,0,0,0.6);">
+    <div style="font-size:12px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.6px;margin-bottom:12px;text-align:center;">Phone notifications</div>
+    <div id="mobile-push-status" style="font-size:14px;color:var(--text);line-height:1.5;margin-bottom:6px;text-align:center;">Checking…</div>
+    <div id="mobile-push-note" style="display:none;font-size:12px;color:#e0a060;line-height:1.5;margin-bottom:10px;text-align:center;"></div>
+    <button id="mobile-push-enable" onclick="enableMobilePush()" style="display:none;width:100%;padding:13px 14px;margin-top:8px;background:var(--accent);border:none;border-radius:10px;color:white;font-size:15px;cursor:pointer;">Enable phone notifications</button>
+    <button id="mobile-push-test" onclick="sendMobilePushTest()" style="display:none;width:100%;padding:13px 14px;margin-top:8px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;color:var(--text);font-size:15px;cursor:pointer;">Send test notification</button>
+    <button id="mobile-push-disable" onclick="disableMobilePush()" style="display:none;width:100%;padding:11px 14px;margin-top:8px;background:#2a1a1a;border:1px solid #6a2a2a;color:#e88;border-radius:10px;font-size:14px;cursor:pointer;">Turn off on this phone</button>
+    <button onclick="closeMobilePushPanel()" style="width:100%;padding:11px 0;margin-top:12px;background:transparent;border:none;color:var(--text-dim);font-size:13px;cursor:pointer;">Close</button>
+  </div>
+</div>
+
 <!-- Model Picker Modal -->
 <div id="model-modal" style="display:none;position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,0.7);" onclick="if(event.target===this)closeModelPicker()">
   <div style="position:absolute;bottom:0;left:0;right:0;background:var(--surface);border-radius:16px 16px 0 0;max-height:75vh;display:flex;flex-direction:column;">
@@ -325,6 +371,11 @@ const marked={parse:function(txt){
 <div id="toast"></div>
 <script>
 let characterName='Assistant',charFilename='Assistant',userName='User',chatHistory=[],ttsEnabled=false,ttsVoice=null,mobileChatFilename=null,mobileChatBaseCount=0;
+// Character guard: mobileSelectedCharKey is the character the user picked;
+// mobileCharReadyKey is the key whose card actually loaded. /chat (and memory
+// capture) only ever send a ready key, so a failed /get_character can never
+// leave the previous character's key to be sent silently.
+let mobileSelectedCharKey=null,mobileCharReadyKey=null;
 // Guards against overlapping /chat requests — a double-tap or a mobile keyboard's
 // Enter key firing twice would otherwise send two concurrent generations. The
 // backend runs llama-server with parallel:1, so a second request preempts the
@@ -343,7 +394,7 @@ function setSendBusy(busy){
   const rb=document.getElementById('regen-btn');if(rb)rb.disabled=busy;
   const cb=document.getElementById('continue-btn');if(cb)cb.disabled=busy;
 }
-let mediaRecorder=null,audioChunks=[],isRecording=false;
+let mediaRecorder=null,audioChunks=[],isRecording=false,audioProcessTimer=null;
 let ttsQueue=[],ttsProcessing=false,ttsProcessingRun=0,currentAudio=null,isPlayingAudio=false,ttsOnComplete=null;
 let mobileTTSEngine='f5',mobileQwenCtx=null,mobileQwenNext=0,mobileQwenSources=[],mobileQwenAbort=null,mobileQwenLiveRun=0;
 let replayTimeout=null;
@@ -378,10 +429,15 @@ window.addEventListener('DOMContentLoaded',async()=>{
   await loadUserName();await loadCharacterList();await loadProjects();loadTTSPrefs();
   initTTSEngine();
   checkMobileBackend();
+  // A notification tap arrives as /mobile?chat=…&project=… — read it, then drop
+  // the query so a reload does not reopen it.
+  const deepLink=mobileDeepLinkFromUrl(location.href);
   // Push initial state so back button has somewhere to go
-  history.replaceState({view:'chatlist'},'');
+  history.replaceState({view:'chatlist'},'',deepLink?location.pathname:undefined);
   await openChatList();
+  if(deepLink)await openMobileDeepLink(deepLink);
   scrollToBottom();
+  initMobilePush();
 });
 
 // Back button intercept — go to chat list if in a chat, otherwise let browser handle it
@@ -426,6 +482,7 @@ async function loadCharacterList(){
     else if(saved&&chars.includes(saved)){characterName=saved;}
     else if(chars.length>0){characterName=chars[0];}
     if(characterName){sel.value=characterName;}
+    mobileSelectedCharKey=characterName;
     await loadCharacterInfo(characterName);
     setActiveCharacterServer(characterName);
   }catch(e){console.warn('char list error',e);}
@@ -435,6 +492,8 @@ async function switchCharacter(name){
   if(window._mobilePreferredModelLoading)return;
   if(!name)return;
   characterName=name;
+  mobileSelectedCharKey=name;
+  mobileCharReadyKey=null;  // not sendable until this card has loaded
   localStorage.setItem('lastCharacter',name);
   setActiveCharacterServer(name);
   chatHistory=[];
@@ -447,6 +506,7 @@ async function switchCharacter(name){
   showToast('Switched to '+name);
 }
 
+// Returns true only when the card loaded; the key is then marked ready to send.
 async function loadCharacterInfo(charName){
   try{
     let res=await fetch('/get_character/'+encodeURIComponent(charName));
@@ -455,6 +515,7 @@ async function loadCharacterInfo(charName){
       const d=await res.json();
       characterName=d.name||charName;
       charFilename=charName;
+      mobileCharReadyKey=charName;
       document.getElementById('header-name').textContent=characterName;
       document.getElementById('header-avatar').src='/static/images/'+(d.image||charName+'.png');
       document.getElementById('header-avatar').onerror=function(){this.src='/static/images/default.png';};
@@ -477,9 +538,43 @@ async function loadCharacterInfo(charName){
         }
       }catch(e){}
     }else{
+      // Failed card load: never let the previous character's key stay sendable.
+      if(mobileCharReadyKey!==charName)mobileCharReadyKey=null;
       document.getElementById('header-name').textContent=charName;
     }
-  }catch(e){console.warn('loadCharacterInfo error',e);}
+  }catch(e){
+    console.warn('loadCharacterInfo error',e);
+    if(mobileCharReadyKey!==charName)mobileCharReadyKey=null;
+  }
+  return mobileCharReadyKey===charName;
+}
+
+// The character key a /chat request may use: the selected card, and only once
+// it has loaded. Retries the card once; null (with a toast) when it still fails.
+async function mobileRequestCharacter(){
+  if(mobileSelectedCharKey&&mobileCharReadyKey===mobileSelectedCharKey)return mobileCharReadyKey;
+  if(mobileSelectedCharKey&&await loadCharacterInfo(mobileSelectedCharKey))return mobileCharReadyKey;
+  showToast('⚠️ Character not loaded — reselect it and try again');
+  return null;
+}
+
+// /chat body — the same shared builder desktop uses. No sampler values (the
+// backend sources sampling from settings.json) and no Author's Note (resolved
+// server-side from the chat). request_id is mobile's own request-ownership id
+// for logging and stale-response guards; the backend ignores it.
+function mobileChatRequestBody(requestCharacter,requestId,options={}){
+  const body=HwuiChatCore.buildChatRequestBody({
+    character:requestCharacter,
+    userName:userName,
+    chatFilename:mobileChatFilename,
+    conversationHistory:options.conversationHistory||HwuiChatCore.buildConversationHistory(chatHistory),
+    diagnosticHistoryIds:options.diagnosticHistoryIds||chatHistory.map(message=>message?.message_id||null),
+    genuineUserSend:options.genuineUserSend===true,
+    continuePrefix:options.continuePrefix,
+  });
+  body.request_id=requestId;
+  body.generation_kind=options.generationKind||'normal';
+  return body;
 }
 
 function mobilePreferredModelName(modelId){
@@ -564,17 +659,38 @@ function toggleMic(){
   unlockAudio();
   showToast('toggleMic called, isRecording='+isRecording);
   if(isRecording){
-    isRecording=false;
-    setPTTState('processing');
-    setStatus('Transcribing...');
-    // Directly process whatever chunks we have, don't wait for onstop
-    setTimeout(()=>processAudioChunks(), 300);
-    // Also try to stop the recorder to free the mic
-    try{if(mediaRecorder&&mediaRecorder.state==='recording')mediaRecorder.stop();}catch(e){}
+    cancelRecording();
   }else{
     if(ttsEnabled)stopAllAudio();
     startRecording();
   }
+}
+
+function finishRecording(){
+  if(!isRecording)return;
+  isRecording=false;
+  setPTTState('processing');
+  setStatus('Transcribing...');
+  // Give the recorder time to deliver its final chunk before processing.
+  audioProcessTimer=setTimeout(()=>{audioProcessTimer=null;processAudioChunks();},300);
+  try{if(mediaRecorder&&mediaRecorder.state==='recording')mediaRecorder.stop();}catch(e){}
+}
+
+function cancelRecording(){
+  if(!isRecording)return;
+  isRecording=false;
+  if(audioProcessTimer){clearTimeout(audioProcessTimer);audioProcessTimer=null;}
+  const recorder=mediaRecorder;
+  mediaRecorder=null;
+  audioChunks=[];
+  if(recorder){
+    recorder.ondataavailable=null;
+    try{if(recorder.state==='recording')recorder.stop();}catch(e){}
+    if(recorder.stream)recorder.stream.getTracks().forEach(t=>t.stop());
+  }
+  setPTTState('idle');
+  setStatus('Ready');
+  showToast('Recording cancelled');
 }
 
 async function startRecording(){
@@ -633,9 +749,10 @@ async function stopRecording(){
 }
 
 function setPTTState(state){
-  const btn=document.getElementById('ptt-btn'),lbl=document.getElementById('ptt-label'),wave=document.getElementById('waveform'),mic=btn.querySelector('.mic-svg');
+  const btn=document.getElementById('ptt-btn'),sendBtn=document.getElementById('ptt-send-btn'),lbl=document.getElementById('ptt-label'),wave=document.getElementById('waveform'),mic=btn.querySelector('.mic-svg');
   btn.classList.remove('recording','processing');
-  if(state==='recording'){btn.classList.add('recording');wave.classList.add('active');mic.style.display='none';lbl.textContent='Release to Send';}
+  sendBtn.style.display=state==='recording'?'flex':'none';
+  if(state==='recording'){btn.classList.add('recording');wave.classList.add('active');mic.style.display='none';lbl.textContent='Cancel';}
   else if(state==='processing'){btn.classList.add('processing');wave.classList.remove('active');mic.style.display='';lbl.textContent='Thinking...';}
   else{wave.classList.remove('active');mic.style.display='';lbl.textContent='Tap to Talk';}
 }
@@ -678,14 +795,27 @@ function memoryTranscriptFromMessages(messages){
   return messages.map(msg=>speakerFor(msg)+': '+msg.content).join('\n\n');
 }
 
+function extractMemoryCommandFact(commandText){
+  if(!commandText||typeof commandText!=='string')return '';
+  return commandText.replace(
+    /^(?:(?:please|can you|could you|would you|i want you to)\s+)*(?:remember\s+(?:this|that|it|to|my|the)?|save\s+(?:this|that|it)?(?:\s+to\s+(?:your\s+)?memory)?|make\s+a\s+note\s+(?:that|of)?|take\s+a\s+note\s+(?:that|of)?|note\s+(?:this|that)?\s+down|don['’]?t\s+forget\s+(?:that)?|add\s+(?:this|that|it)?\s+to\s+(?:your\s+)?memory|keep\s+(?:this|that|it)?\s+in\s+mind|memorize\s+(?:this|that|it)?|store\s+(?:this|that|it)?(?:\s+in\s+memory)?|jot\s+(?:this|that|it)?\s+down)[\s,.:;!]*/i,
+    ''
+  ).trim();
+}
+
 async function saveMemoryFromChat(commandText){
   const history=recentVisibleChatForMemory();
-  if(!history.length){showToast('No conversation to save to memory yet');setStatus('Ready');return;}
+  const fact=extractMemoryCommandFact(commandText);
+  if(!history.length&&!fact){showToast('No conversation or fact to save to memory yet');setStatus('Ready');return;}
+  const memoryCharacter=await mobileRequestCharacter();
+  if(!memoryCharacter){setStatus('Ready');return;}
   setStatus('Saving memory...');
   showToast('Saving memory...');
   try{
+    const effectiveHistory=[...history];
+    if(commandText)effectiveHistory.push({role:'user',content:commandText});
     const res=await fetch('/auto_memory/capture',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({character:charFilename||characterName,user_name:userName,user_text:'remember this',assistant_text:memoryTranscriptFromMessages(history),recent_messages:history,force_save:true})});
+      body:JSON.stringify({character:memoryCharacter,user_name:userName,user_text:commandText||'remember this',assistant_text:memoryTranscriptFromMessages(effectiveHistory),recent_messages:effectiveHistory,force_save:true})});
     const result=await res.json().catch(()=>({}));
     if(res.ok&&result.status==='saved')showToast('Memory saved: '+(result.title||'Saved memory'));
     else if(result.reason==='duplicate')showToast('That memory is already saved');
@@ -721,11 +851,11 @@ async function saveAsDocumentFromChat(commandText){
   // followed by a brief assistant-style acknowledgement.
   const userTs=new Date().toISOString();
   addBubble('user',userName,commandText,userTs);
-  chatHistory.push({role:'user',content:commandText,speaker:userName,timestamp:userTs});
+  chatHistory.push({role:'user',content:commandText,speaker:userName,timestamp:userTs,message_id:HwuiChatCore.createMessageId()});
 
   const ackText='One moment — turning this into a document...';
   const ackBubble=addBubble('ai',characterName,ackText,new Date().toISOString());
-  const ackMsg={role:'assistant',content:ackText,speaker:characterName,timestamp:new Date().toISOString()};
+  const ackMsg={role:'assistant',content:ackText,speaker:characterName,timestamp:new Date().toISOString(),message_id:HwuiChatCore.createMessageId()};
   chatHistory.push(ackMsg);
   await saveChatToDisk();
 
@@ -762,12 +892,18 @@ async function sendMessage(text){
   if(saveDocumentIntentGate(text)){await saveAsDocumentFromChat(text);return;}
   if(memoryIntentGate(text)){await saveMemoryFromChat(text);return;}
   mobileSending=true;setSendBusy(true);
+  // Resolve the character BEFORE touching history: a card that failed to load
+  // must stop the send, never silently send the previous character's key.
+  const requestCharacter=await mobileRequestCharacter();
+  if(!requestCharacter){mobileSending=false;setSendBusy(false);return;}
   const requestId=`mob-${Date.now()}-${++mobileRequestSequence}-${Math.random().toString(36).slice(2,8)}`;
   const requestController=new AbortController();
   mobileActiveRequest={id:requestId,controller:requestController};
   console.log('📱 Mobile request start',{request_id:requestId,active_request_id:requestId,text_length:text.length,text_hash:mobileRequestHash(text)});
   const userTs=new Date().toISOString();
-  addBubble('user',userName,text,userTs);chatHistory.push({role:'user',content:text,speaker:userName,timestamp:userTs});
+  const userMessageId=HwuiChatCore.createMessageId();
+  const userEntry={role:'user',content:text,speaker:userName,timestamp:userTs,message_id:userMessageId};
+  addBubble('user',userName,text,userTs,userEntry);chatHistory.push(userEntry);
   // Persist the user's turn before generation begins so an interrupted mobile
   // request cannot take the prompt and its newly-created thread with it.
   const promptSaved=await saveChatToDisk();
@@ -777,14 +913,15 @@ async function sendMessage(text){
     return;
   }
   showTyping(true);setStatus('Thinking...');setPTTState('idle');
-  showToast('Sending as char: '+charFilename);
+  showToast('Sending as char: '+requestCharacter);
+  const generationStartedAt=new Date().toISOString();
   try{
     console.log('📱 Mobile /chat submit',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null,history_length:chatHistory.length});
-    const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({character:charFilename||characterName,user_name:userName,current_chat_filename:mobileChatFilename,conversation_history:chatHistory,author_note:'',temperature:0.8,max_tokens:4096,stop:[],request_id:requestId}),signal:requestController.signal});
+    const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(mobileChatRequestBody(requestCharacter,requestId,{genuineUserSend:true})),signal:requestController.signal});
     if(!res.ok){showTyping(false);showToast('⚠️ Server error '+res.status);setStatus('Error');return;}
     const ct=res.headers.get('content-type')||'';
-    if(ct.includes('text/event-stream')&&res.body){await handleStream(res,requestId);}
-    else{const data=await res.json();const reply=data.text||'';mobileLogResponse('received',requestId,reply);if(!mobileRequestIsActive(requestId)){console.warn('📱 Mobile stale completion ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});return;}showTyping(false);addBubble('ai',characterName,reply);chatHistory.push({role:'assistant',content:reply});console.log('📱 Mobile assistant append',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null,response_length:reply.length,response_hash:mobileRequestHash(reply)});await saveChatToDisk();if(ttsEnabled)speakText(reply);setStatus('Ready');}
+    if(ct.includes('text/event-stream')&&res.body){await handleStream(res,requestId,{replyToMessageId:userMessageId,startedAt:generationStartedAt});}
+    else{await appendNonStreamedReply(res,requestId,{replyToMessageId:userMessageId,startedAt:generationStartedAt});}
   }catch(err){if(err.name!=='AbortError'){showTyping(false);showToast('⚠️ Connection error');setStatus('Offline?');}}
   finally{console.log('📱 Mobile request end',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});if(mobileActiveRequest?.id===requestId){mobileActiveRequest=null;mobileSending=false;setSendBusy(false);}else{console.warn('📱 Mobile stale request end ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});}}
 }
@@ -810,23 +947,47 @@ function _mobSplit(raw){
   return{thinking:thinking,answer:answer};
 }
 
-async function handleStream(res,requestId=null){
+// options.replyToMessageId / options.startedAt — desktop's completion metadata
+// for the stored reply. Continue: options.continueMessage is the reply being
+// continued (replaced only on success) and options.seedText is its head +
+// continue_prefix, which the streamed tokens extend (same as desktop).
+// Returns true once the reply has been appended to chatHistory.
+async function handleStream(res,requestId=null,options={}){
   stopAllAudio();
+  const reactionDiagnosticId=res.headers.get('X-HWUI-Reaction-Diagnostic');
+  let reactionDiagnosticParserLogged=false;
+  if(reactionDiagnosticId)console.info('🧪 REACTION DIAGNOSTIC response identified',{request_id:reactionDiagnosticId,source_message_id:options.replyToMessageId});
   const responseRun=++mobileTTSRun;
   mobileQwenOwnerRun=0;mobileQwenMode=null;
-  const reader=res.body.getReader(),decoder=new TextDecoder();let fullText='';let rawAll='';let prevAns=0;let thinkEl=null;
+  const seedText=options.seedText||'';
+  const reader=res.body.getReader(),decoder=new TextDecoder();let fullText=seedText;let rawAll=seedText;let prevAns=seedText.length;let ttsSpokenLen=HwuiChatCore.ttsSpeakableDelta(seedText,0,{charName:characterName,userName:userName}).spokenLength;let thinkEl=null;let modelReaction=null;let modelReactionAttached=false;
   showTyping(false);
   // Reset TTS buffer for new response
   ttsSentenceBuffer='';ttsStreamingComplete=false;
   ttsPendingBatch='';ttsFirstBatchSent=false;
   ttsInsideCodeBlock=false;ttsBacktickTail='';
 
-  const wrap=document.createElement('div');wrap.className='msg-wrap ai';
+  const wrap=document.createElement('div');wrap.className='msg-wrap ai';wrap.style.display='none';
   const s=document.createElement('div');s.className='msg-sender';s.textContent=characterName;
   const bubble=document.createElement('div');bubble.className='msg-bubble';
   const textSpan=document.createElement('div');bubble.appendChild(textSpan);
   wrap.appendChild(s);wrap.appendChild(bubble);
   document.getElementById('chat').insertBefore(wrap,document.getElementById('typing-indicator'));
+
+  // Shown text gets the same ChatML/role-leak cleaning desktop applies (shared).
+  function renderAnswer(text,final=false){
+    if(!final){HwuiChatCore.renderStreamingAssistantText(textSpan,text);return;}
+    HwuiChatCore.finishStreamingAssistantText(textSpan);
+    if(typeof marked!=='undefined')textSpan.innerHTML=marked.parse(text);
+    else textSpan.textContent=text;
+  }
+  // streaming render: holdback may truncate the tail on purpose; the stored
+  // text comes from finalizeAssistantText, which cleans without streaming.
+  const cleanedAnswer=()=>HwuiChatCore.stripChatMLOutsideCodeBlocks(HwuiChatCore.parseAssistantReaction(fullText,{final:false}).text,characterName,userName,{streaming:true});
+  if(seedText){const seededAnswer=cleanedAnswer();renderAnswer(seededAnswer);if(seededAnswer)wrap.style.display='';}
+  // A Continue that does not complete leaves the original reply in place: drop
+  // the new bubble (the caller restores the original one).
+  const abandonStream=()=>{if(options.continueMessage)wrap.remove();return false;};
 
   // HWUI streams raw text chunks — append and buffer for TTS simultaneously
   function consumeDecodedChunk(chunk){
@@ -848,16 +1009,31 @@ async function handleStream(res,requestId=null){
       }
       thinkEl._body.textContent=parts.thinking;
     }
-    const ansDelta=parts.answer.slice(prevAns);
     prevAns=parts.answer.length;
     fullText=parts.answer;
-    if(typeof marked!=='undefined'){textSpan.innerHTML=marked.parse(fullText);}
-    else{textSpan.textContent=fullText;}
-    if(ttsEnabled&&ansDelta)bufferTextForTTS(ansDelta);
+    const reactionAnswer=HwuiChatCore.parseAssistantReaction(fullText,{final:false});
+    if(reactionAnswer.reaction){
+      modelReaction=reactionAnswer.reaction;
+      if(!modelReactionAttached)modelReactionAttached=applyMobileModelReaction(reactionAnswer.reaction,options.replyToMessageId);
+    }
+    if(reactionDiagnosticId&&reactionAnswer.reaction&&!reactionDiagnosticParserLogged){reactionDiagnosticParserLogged=true;console.info('🧪 REACTION DIAGNOSTIC streaming parser detected marker',{request_id:reactionDiagnosticId,reaction:reactionAnswer.reaction});}
+    const cleaned=cleanedAnswer();
+    renderAnswer(cleaned);
+    // Keep the reaction-visible ordering without exposing an empty stream
+    // bubble: render the first answer text before revealing its wrapper.
+    if(parts.thinking||cleaned)wrap.style.display='';
+    // Speech uses the SAME cleaned text as the bubble, via the shared core.
+    // This previously passed the RAW delta straight to TTS with no cleaning at
+    // all, so internal scaffolding could be spoken while the bubble looked
+    // clean (2026-09-19). The cursor counts cleaned characters, so the seed
+    // length above is measured the same way for Continue.
+    const speakable=HwuiChatCore.ttsSpeakableDelta(reactionAnswer.text,ttsSpokenLen,{charName:characterName,userName:userName});
+    ttsSpokenLen=speakable.spokenLength;
+    if(ttsEnabled&&speakable.text)bufferTextForTTS(speakable.text);
     scrollToBottom();
   }
   while(true){
-    if(requestId&&!mobileRequestIsActive(requestId)){console.warn('📱 Mobile stale stream ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});await reader.cancel();return;}
+    if(requestId&&!mobileRequestIsActive(requestId)){console.warn('📱 Mobile stale stream ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});await reader.cancel();return abandonStream();}
     const{done,value}=await reader.read();
     if(done)break;
     consumeDecodedChunk(decoder.decode(value,{stream:true}));
@@ -865,8 +1041,30 @@ async function handleStream(res,requestId=null){
   // Drain any multibyte UTF-8 character buffered across the final transport chunk.
   consumeDecodedChunk(decoder.decode());
   if(thinkEl)thinkEl.open=false;
-  if(requestId&&!mobileRequestIsActive(requestId)){console.warn('📱 Mobile stale stream completion ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});return;}
+  if(requestId&&!mobileRequestIsActive(requestId)){console.warn('📱 Mobile stale stream completion ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});return abandonStream();}
   mobileLogResponse('stream-complete',requestId||'untracked',fullText);
+  // The text stored in history is exactly what desktop stores (shared rules):
+  // cleaned of ChatML/role leakage, memory tags and echoed notes, with desktop's
+  // raw fallback when cleaning empties it. A continued reply is head + prefix +
+  // new tokens, cleaned without the fallback (as desktop's continue).
+  const finalReactionOutput=HwuiChatCore.parseAssistantReaction(fullText,{final:true});
+  if(finalReactionOutput.reaction)modelReaction=finalReactionOutput.reaction;
+  const storedText=options.continueMessage
+    ?HwuiChatCore.finalizeContinuedText(finalReactionOutput.text,characterName,userName)
+    :HwuiChatCore.finalizeAssistantText(finalReactionOutput.text,characterName,userName);
+  const completedThinking=options.continueMessage?'':_mobSplit(rawAll).thinking;
+  if(!storedText){
+    // Desktop never stores an empty assistant turn.
+    console.warn('📱 Mobile empty response not stored',{request_id:requestId||'untracked'});
+    HwuiChatCore.finishStreamingAssistantText(textSpan);
+    textSpan.innerHTML='<em style="color:#e07070;font-size:0.9em;">⚠️ Model returned an empty response. Try Regenerate.</em>';
+    // The bubble is collapsed until the first visible text, so the notice has
+    // to reveal it — otherwise a reaction-only reply leaves an invisible empty
+    // bubble in the thread and says nothing (desktop does the same).
+    wrap.style.display='';
+    setStatus('Ready');
+    return abandonStream();
+  }
 
   // Replay button — state driven purely by globals (isPlayingAudio, ttsProcessing, replayTimeout)
   // exactly like utils.js. No local flags, no watchers, no callbacks for button state.
@@ -893,7 +1091,7 @@ async function handleStream(res,requestId=null){
     replayTimeout=setTimeout(()=>{
       replayTimeout=null;
       ++mobileTTSRun;mobileQwenOwnerRun=0;mobileQwenMode=null;
-      const lines=fullText.replace(/\*\*/g,'').replace(/\*/g,'').replace(/_/g,'').replace(/#{1,6}\s/g,'').split('\n');
+      const lines=storedText.replace(/\*\*/g,'').replace(/\*/g,'').replace(/_/g,'').replace(/#{1,6}\s/g,'').split('\n');
       for(const line of lines){const t=line.trim();if(t.length>2)splitAndQueue(t);}
       ttsStreamingComplete=true;
       if(ttsQueue.length>0)processQueue();
@@ -904,11 +1102,40 @@ async function handleStream(res,requestId=null){
   wrap.appendChild(replayRow2);
   const aiTs=new Date().toISOString();
   const ts=document.createElement('div');ts.className='msg-time';ts.textContent=fmtTime(new Date(aiTs));wrap.appendChild(ts);
-  attachLongPress(wrap,fullText,'ai');
-  if(typeof marked!=='undefined'){textSpan.innerHTML=marked.parse(fullText);}
-  if(requestId&&!mobileRequestIsActive(requestId)){console.warn('📱 Mobile stale assistant append ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});return;}
-  chatHistory.push({role:'assistant',content:fullText,speaker:characterName,timestamp:new Date().toISOString()});
-  console.log('📱 Mobile assistant append',{request_id:requestId||'untracked',active_request_id:mobileActiveRequest?.id||null,response_length:fullText.length,response_hash:mobileRequestHash(fullText),tts_run:responseRun});
+  attachLongPress(wrap,storedText,'ai');
+  wrap.style.display='';
+  renderAnswer(storedText,true);
+  if(requestId&&!mobileRequestIsActive(requestId)){console.warn('📱 Mobile stale assistant append ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});return abandonStream();}
+  if(options.continueMessage){
+    // Continue succeeded: the continued reply replaces the original (desktop).
+    const originalIdx=chatHistory.indexOf(options.continueMessage);
+    if(originalIdx!==-1)chatHistory.splice(originalIdx,1);
+    if(options.continueWrap)options.continueWrap.remove();
+  }
+  const assistantEntry=HwuiChatCore.buildAssistantMessage({
+    content:storedText,speaker:characterName,completedAt:aiTs,
+    replyToMessageId:options.replyToMessageId,
+    startedAt:options.continueMessage?null:options.startedAt,
+    thinking:completedThinking,
+  });
+  chatHistory.push(assistantEntry);
+  // A continuation never opens with a marker: it may add a reaction but must
+  // not clear the one the continued reply already gave.
+  if(!options.continueMessage||modelReaction)syncMobileModelReaction(modelReaction,options.replyToMessageId);
+  if(reactionDiagnosticId){
+    const reactionTarget=chatHistory.find(message=>message.message_id===options.replyToMessageId);
+    window.mobileReactionDiagnosticSave={request_id:reactionDiagnosticId,source_message_id:options.replyToMessageId,expected_reaction:'😂',parser_reaction:modelReaction,attached_reaction:reactionTarget?.reaction||null};
+    console.info('🧪 REACTION DIAGNOSTIC attachment result',window.mobileReactionDiagnosticSave);
+  }
+  addMobileReactionUI(wrap,assistantEntry,'ai');
+  const modelReactionSource=chatHistory.find(message=>message.message_id===options.replyToMessageId);
+  if(modelReactionSource&&modelReactionSource!==assistantEntry&&typeof document.querySelector==='function'){
+    addMobileReactionUI(
+      document.querySelector(`.msg-wrap[data-message-id="${options.replyToMessageId}"]`),
+      modelReactionSource,'user'
+    );
+  }
+  console.log('📱 Mobile assistant append',{request_id:requestId||'untracked',active_request_id:mobileActiveRequest?.id||null,response_length:storedText.length,response_hash:mobileRequestHash(storedText),tts_run:responseRun});
   await saveChatToDisk();
   // Auto-name if still a "New Chat" — filename guard prevents re-firing after rename
   if(mobileChatFilename&&mobileChatFilename.includes('New Chat')){
@@ -918,11 +1145,126 @@ async function handleStream(res,requestId=null){
   if(ttsEnabled){
     // Mark button active and flush — button resets when processQueue finishes or stopAllAudio is called
     setReplayBtnActive(replayBtn2);
+    // Final release — see the desktop equivalent and ttsSpeakableDelta.
+    if(ttsEnabled){
+      const lastSpeakable=HwuiChatCore.ttsSpeakableDelta(fullText,ttsSpokenLen,{charName:characterName,userName:userName,final:true});
+      ttsSpokenLen=lastSpeakable.spokenLength;
+      if(lastSpeakable.text)bufferTextForTTS(lastSpeakable.text);
+    }
     flushTTSBuffer();
   }
   setStatus('Ready');scrollToBottom();
+  return true;
 }
 
+// Non-streaming /chat reply — desktop parity: stored as returned (the stream
+// cleaner only runs on streamed text), "⚠️ Unknown response" when empty and
+// marked as an error.
+async function appendNonStreamedReply(res,requestId,options={}){
+  const data=await res.json();
+  const reactionOutput=HwuiChatCore.parseAssistantReaction(data.text||'',{final:true});
+  const assistantCompleted=typeof reactionOutput.text==='string'&&reactionOutput.text.trim().length>0;
+  const reply=reactionOutput.text||'⚠️ Unknown response';
+  mobileLogResponse('received',requestId,reply);
+  if(!mobileRequestIsActive(requestId)){console.warn('📱 Mobile stale completion ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});return false;}
+  const completedAt=new Date().toISOString();
+  showTyping(false);
+  const assistantEntry=HwuiChatCore.buildAssistantMessage({
+    content:reply,speaker:characterName,completedAt,
+    replyToMessageId:options.replyToMessageId,startedAt:options.startedAt,
+    status:assistantCompleted?'completed':'error',
+  });
+  chatHistory.push(assistantEntry);
+  HwuiChatCore.setMessageReaction(chatHistory,options.replyToMessageId,reactionOutput.reaction);
+  addBubble('ai',characterName,reply,completedAt,assistantEntry);
+  const reactionSource=chatHistory.find(message=>message.message_id===options.replyToMessageId);
+  if(reactionSource&&typeof document.querySelector==='function'){
+    const sourceWrap=document.querySelector(`.msg-wrap[data-message-id="${options.replyToMessageId}"]`);
+    addMobileReactionUI(sourceWrap,reactionSource,'user');
+  }
+  console.log('📱 Mobile assistant append',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null,response_length:reply.length,response_hash:mobileRequestHash(reply)});
+  await saveChatToDisk();if(ttsEnabled&&assistantCompleted)speakText(reply);setStatus('Ready');
+  return true;
+}
+
+
+function mobileReactionBadge(message){
+  const reaction=HwuiChatCore.normalizeReaction(message&&message.reaction);
+  if(!reaction)return null;
+  const badge=document.createElement('span');
+  badge.className='mobile-reaction-badge';
+  badge.textContent=reaction;
+  badge.title='Reaction';
+  return badge;
+}
+
+async function setMobileMessageReaction(message,wrap,reaction){
+  if(!message)return;
+  HwuiChatCore.setMessageReaction([message],message.message_id,reaction);
+  const old=wrap.querySelector('.mobile-reaction-badge');
+  if(old)old.remove();
+  const badge=mobileReactionBadge(message);
+  if(badge){const row=wrap.querySelector('.mobile-reaction-row');if(row)wrap.insertBefore(badge,row);else wrap.appendChild(badge);}
+  const saved=await saveChatToDisk();
+  if(!saved)showToast('Reaction could not be saved');
+}
+
+function addMobileReactionUI(wrap,message,role){
+  if(!wrap||!message)return;
+  const old=wrap.querySelector('.mobile-reaction-badge');
+  if(old)old.remove();
+  const badge=mobileReactionBadge(message);
+  const row=wrap.querySelector('.mobile-reaction-row');
+  if(badge){if(row)wrap.insertBefore(badge,row);else wrap.appendChild(badge);}
+  if(role!=='ai'||row)return;
+  const reactionRow=document.createElement('div');
+  reactionRow.className='mobile-reaction-row';
+  const reactButton=document.createElement('button');
+  reactButton.type='button';
+  reactButton.title='React';
+  reactButton.innerHTML='<svg class="mobile-reaction-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">'+
+    '<circle cx="10.5" cy="11.5" r="7.5"></circle>'+
+    '<path d="M7.2 13.8c.8 1.2 1.9 1.8 3.3 1.8s2.5-.6 3.3-1.8"></path>'+
+    '<path d="M8.1 9.5h.01M12.9 9.5h.01M18.5 4.5v5M16 7h5"></path>'+
+    '</svg>';
+  if(typeof reactButton.setAttribute==='function')reactButton.setAttribute('aria-label','React to message');
+  const picker=document.createElement('span');
+  picker.className='mobile-reaction-picker';
+  HwuiChatCore.REACTION_EMOJIS.forEach(emoji=>{
+    const option=document.createElement('button');
+    option.type='button'; option.textContent=emoji; option.title='React '+emoji;
+    option.onclick=async e=>{e.stopPropagation();picker.classList.remove('is-open');await setMobileMessageReaction(message,wrap,emoji);};
+    picker.appendChild(option);
+  });
+  const remove=document.createElement('button');
+  remove.type='button'; remove.textContent='×'; remove.title='Remove reaction';
+  remove.onclick=async e=>{e.stopPropagation();picker.classList.remove('is-open');await setMobileMessageReaction(message,wrap,null);};
+  picker.appendChild(remove);
+  reactButton.onclick=e=>{e.stopPropagation();picker.classList.toggle('is-open');};
+  reactionRow.appendChild(reactButton);reactionRow.appendChild(picker);wrap.appendChild(reactionRow);
+}
+
+// The reply's final say on its source message's reaction, set or cleared, with
+// the badge following a clear too: regenerate keeps the user bubble, so a
+// reaction from the discarded reply otherwise stayed on screen.
+function syncMobileModelReaction(reaction,sourceMessageId){
+  if(!sourceMessageId||!Array.isArray(chatHistory))return;
+  HwuiChatCore.setMessageReaction(chatHistory,sourceMessageId,reaction);
+  const target=chatHistory.find(message=>message.message_id===sourceMessageId);
+  const sourceWrap=target&&typeof document.querySelector==='function'
+    ?document.querySelector(`.msg-wrap[data-message-id="${sourceMessageId}"]`):null;
+  if(target&&sourceWrap)addMobileReactionUI(sourceWrap,target,'user');
+}
+function applyMobileModelReaction(reaction,sourceMessageId){
+  if(!reaction||!sourceMessageId||!Array.isArray(chatHistory))return false;
+  HwuiChatCore.setMessageReaction(chatHistory,sourceMessageId,reaction);
+  const target=chatHistory.find(message=>message.message_id===sourceMessageId);
+  const sourceWrap=target&&typeof document.querySelector==='function'
+    ?document.querySelector(`.msg-wrap[data-message-id="${sourceMessageId}"]`):null;
+  if(!target||!sourceWrap)return false;
+  addMobileReactionUI(sourceWrap,target,'user');
+  return true;
+}
 
 function speakText(text){
   lastSpokenText=text;
@@ -1107,7 +1449,9 @@ function extractCharFromFilename(filename){
     const knownChars=sel?Array.from(sel.options).map(o=>o.value):[];
     for(let i=parts.length-1;i>=1;i--){
       const candidate=parts.slice(0,i).join(' - ');
-      if(knownChars.some(c=>c.toLowerCase()===candidate.toLowerCase()))return candidate;
+      // Keys are case-insensitive; return the key as the list spells it.
+      const key=knownChars.find(c=>c.toLowerCase()===candidate.toLowerCase());
+      if(key)return key;
     }
     // Fallback: everything before last " - "
     const lastDash=noExt.lastIndexOf(' - ');
@@ -1151,10 +1495,13 @@ async function loadMobileChat(filename, title){
     // Render messages
     messages.forEach(msg=>{
       const role=msg.role==='assistant'?'ai':'user';
-      const sender=msg.speaker||(role==='user'?userName:characterName);
-      addBubble(role,sender,msg.content,msg.timestamp||null);
-      chatHistory.push({role:msg.role,content:msg.content,speaker:sender,timestamp:msg.timestamp||null,
-        ...(msg.is_opening_line?{is_opening_line:true}:{})});
+      // Same load mapping as desktop: every per-message field a save writes back
+      // (check-in kind/id, message ids, thinking, generation metadata,
+      // exclude_from_context so /chat still leaves an excluded reply out).
+      const entry=HwuiChatCore.mapLoadedMessage(msg,{activeUserName:userName});
+      const sender=entry.speaker||(role==='user'?userName:characterName);
+      addBubble(role,sender,entry.content,entry.timestamp||null,entry);
+      chatHistory.push(entry);
     });
     // Show opening line if chat is empty (e.g. PC-created new chat opened on mobile)
     if(messages.length===0) await displayOpeningLineInChat();
@@ -1757,9 +2104,10 @@ function stopAllAudio(){
 
 
 
-function addBubble(role,sender,text,isoTimestamp){
+function addBubble(role,sender,text,isoTimestamp,message=null){
   const chat=document.getElementById('chat');
   const wrap=document.createElement('div');wrap.className='msg-wrap '+(role==='user'?'user':'ai');
+  if(message&&message.message_id)wrap.dataset.messageId=message.message_id;
   const s=document.createElement('div');s.className='msg-sender';s.textContent=sender;
   const b=document.createElement('div');b.className='msg-bubble';
   if(role==='ai'&&typeof marked!=='undefined'){b.innerHTML=marked.parse(text);}
@@ -1794,6 +2142,7 @@ function addBubble(role,sender,text,isoTimestamp){
     replayRow.appendChild(replayBtn);
     wrap.appendChild(replayRow);
   }
+  addMobileReactionUI(wrap,message,role);
   wrap.appendChild(t);
   attachLongPress(wrap, text, role);
   chat.insertBefore(wrap,document.getElementById('typing-indicator'));scrollToBottom();
@@ -2022,29 +2371,23 @@ async function saveChatToDisk(options={}){
   if(window.mobileSaving){return false;}
   window.mobileSaving=true;
   try{
-    // Deduplicate — same protection as desktop
-    const seen=new Set();
-    const deduped=[];
-    for(const m of chatHistory){
-      const key=m.role+':'+m.content;
-      if(!seen.has(key)){seen.add(key);deduped.push(m);}
-    }
-    chatHistory=deduped;
-    // Remove consecutive assistant messages
-    for(let i=chatHistory.length-1;i>0;i--){
-      if(chatHistory[i].role==='assistant'&&chatHistory[i-1].role==='assistant'){
-        chatHistory.splice(i,1);
-      }
-    }
-    const messages=chatHistory.map(m=>({
-      role:m.role,
-      content:m.content,
-      speaker:m.speaker||(m.role==='user'?userName:characterName),
-      ...(m.timestamp?{timestamp:m.timestamp}:{})
-    }));
+    // Desktop's save rules, shared (HwuiChatCore): an assistant turn directly
+    // after another is dropped EXCEPT an automatic check-in, and only an exact
+    // ADJACENT duplicate is dropped — never a legitimately repeated message.
+    // (The old global seen-set dedup deleted a repeated user turn before /chat.)
+    chatHistory=HwuiChatCore.prepareHistoryForSave(chatHistory);
+    // Same serializer as desktop: the server rebuilds the metadata sidecar from
+    // every save, so every per-message field (message_id, message_kind,
+    // checkin_id, is_opening_line, thinking, generation metadata,
+    // exclude_from_context, image refs) is written back, never erased.
+    const messages=HwuiChatCore.serializeHistoryForSave(chatHistory,{userName:userName,charName:characterName});
     const res=await fetch('/chats/save',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({filename:mobileChatFilename,messages,base_count:mobileChatBaseCount,allow_empty:allowEmpty})});
-    if(res.ok){mobileChatBaseCount=messages.length;return true;}
+      body:JSON.stringify({filename:mobileChatFilename,messages,base_count:mobileChatBaseCount,allow_empty:allowEmpty,reaction_diagnostic:window.mobileReactionDiagnosticSave||null})});
+    if(res.ok){
+      let savedPayload={};try{savedPayload=await res.json();}catch(e){}
+      if(savedPayload.reaction_diagnostic){console.info('🧪 REACTION DIAGNOSTIC persistence result',savedPayload.reaction_diagnostic);window.mobileReactionDiagnosticSave=null;}
+      mobileChatBaseCount=messages.length;return true;
+    }
     if(res.status===409){
       console.warn('Mobile chat save rejected to protect newer disk history');
       const currentFilename=mobileChatFilename;
@@ -2160,6 +2503,9 @@ async function regenerateLastResponse(){
   }
   if(lastUserIdx===-1){showToast('No user message to regenerate from');return;}
   mobileSending=true;setSendBusy(true);
+  const requestCharacter=await mobileRequestCharacter();
+  if(!requestCharacter){mobileSending=false;setSendBusy(false);return;}
+  const regenerateSourceId=chatHistory[lastUserIdx].message_id||null;
   const requestId=`mob-regen-${Date.now()}-${++mobileRequestSequence}-${Math.random().toString(36).slice(2,8)}`;
   const requestController=new AbortController();
   mobileActiveRequest={id:requestId,controller:requestController};
@@ -2181,14 +2527,14 @@ async function regenerateLastResponse(){
     return;
   }
   showTyping(true);setStatus('Thinking...');
+  const generationStartedAt=new Date().toISOString();
   try{
     const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({character:charFilename||characterName,user_name:userName,current_chat_filename:mobileChatFilename,
-        conversation_history:chatHistory,author_note:'',temperature:0.8,max_tokens:4096,stop:[],request_id:requestId}),signal:requestController.signal});
+      body:JSON.stringify(mobileChatRequestBody(requestCharacter,requestId,{generationKind:'regeneration'})),signal:requestController.signal});
     if(!res.ok){showTyping(false);showToast('⚠️ Server error');return;}
     const ct=res.headers.get('content-type')||'';
-    if(ct.includes('text/event-stream')&&res.body){await handleStream(res,requestId);}
-    else{const d=await res.json();const reply=d.text||'';if(!mobileRequestIsActive(requestId))return;const rgTs=new Date().toISOString();showTyping(false);addBubble('ai',characterName,reply,rgTs);chatHistory.push({role:'assistant',content:reply,speaker:characterName,timestamp:rgTs});await saveChatToDisk();if(ttsEnabled)speakText(reply);setStatus('Ready');}
+    if(ct.includes('text/event-stream')&&res.body){await handleStream(res,requestId,{replyToMessageId:regenerateSourceId,startedAt:generationStartedAt});}
+    else{await appendNonStreamedReply(res,requestId,{replyToMessageId:regenerateSourceId,startedAt:generationStartedAt});}
   }catch(e){if(e.name!=='AbortError'){showTyping(false);showToast('⚠️ Error: '+e.message);}}
   finally{if(mobileActiveRequest?.id===requestId){mobileActiveRequest=null;mobileSending=false;setSendBusy(false);}}
 }
@@ -2228,18 +2574,55 @@ async function resumeLastResponse() {
   } catch(e) { showToast('⚠️ Resume failed: ' + e.message); }
 }
 
+// True continuation — the same mechanism as desktop's continueLast(), via the
+// shared HwuiChatCore.buildContinueRequest(): the last reply leaves the request
+// history, its last ~200 chars go as continue_prefix (the backend pre-fills the
+// assistant turn with it), and the stored reply is head + prefix + new tokens.
+// No fake user message is sent or saved. The original reply stays in history
+// (and on screen) until the continuation completes; on failure it is untouched.
 async function continueResponse() {
-  // Sends a nudge so the model picks up where it left off
-  const lastAI = chatHistory.slice().reverse().find(m => m.role === 'assistant');
-  if (!lastAI) { showToast('⚠️ Nothing to continue'); return; }
-  // Check if it looks truncated — ends mid-sentence (no terminal punctuation)
-  const tail = (lastAI.content || '').trimEnd();
-  const terminated = /[.!?…"'»\]]$/.test(tail);
-  if (terminated) {
-    showToast('Response looks complete — use Resume if text is missing');
-    return;
+  if (mobileSending) { showToast('Still generating — please wait'); return; }
+  const continueRequest = HwuiChatCore.buildContinueRequest(chatHistory);
+  if (!continueRequest) { showToast('No previous model message to continue.'); return; }
+  mobileSending = true; setSendBusy(true);
+  const requestCharacter = await mobileRequestCharacter();
+  if (!requestCharacter) { mobileSending = false; setSendBusy(false); return; }
+  const continueMessage = chatHistory[continueRequest.lastAssistantIdx];
+  const continuedSource = [...continueRequest.remainingHistory].reverse().find(m => m.role === 'user' && !m.hidden);
+  const requestId = `mob-cont-${Date.now()}-${++mobileRequestSequence}-${Math.random().toString(36).slice(2,8)}`;
+  const requestController = new AbortController();
+  mobileActiveRequest = { id: requestId, controller: requestController };
+  // The continued text streams into a fresh bubble seeded with the original.
+  const aiWraps = document.querySelectorAll('#chat .msg-wrap.ai');
+  const continueWrap = aiWraps.length ? aiWraps[aiWraps.length - 1] : null;
+  if (continueWrap) continueWrap.style.display = 'none';
+  let continued = false;
+  showTyping(true); setStatus('Continuing...');
+  try {
+    const res = await fetch('/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(mobileChatRequestBody(requestCharacter, requestId, {
+        conversationHistory: continueRequest.conversationHistory,
+        diagnosticHistoryIds: continueRequest.diagnosticHistoryIds,
+        continuePrefix: continueRequest.continuePrefix,
+        generationKind: 'continuation',
+      })), signal: requestController.signal });
+    if (!res.ok) { showTyping(false); showToast('⚠️ Server error during continue'); setStatus('Error'); return; }
+    const ct = res.headers.get('content-type') || '';
+    if (ct.includes('text/event-stream') && res.body) {
+      continued = await handleStream(res, requestId, {
+        continueMessage, continueWrap,
+        seedText: continueRequest.retainedHead + continueRequest.continuePrefix,
+        replyToMessageId: continuedSource ? continuedSource.message_id || null : null,
+      });
+    } else {
+      showTyping(false); showToast('⚠️ Continue needs a streaming response'); setStatus('Ready');
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') { showTyping(false); showToast('⚠️ Error: ' + e.message); }
+  } finally {
+    if (!continued && continueWrap && continueWrap.isConnected) continueWrap.style.display = '';
+    if (mobileActiveRequest?.id === requestId) { mobileActiveRequest = null; mobileSending = false; setSendBusy(false); }
   }
-  await sendMessage('[Please continue from where you left off]');
 }
 
 let toastTimer=null;
@@ -2386,6 +2769,210 @@ async function confirmMobileCloud() {
 }
 
 async function disconnectMobileCloud() { await selectMobileBackend('local'); }
+
+// ── Phone notifications (Web Push for Random Check-ins) ──────────────────────
+// Server: push_routes.py + checkin_notifications.py. The service worker
+// (/mobile-sw.js, scope /mobile) shows each push and routes a tap back here,
+// either by opening /mobile?chat=…&project=… or by messaging an open page.
+const MOBILE_PUSH_SW_URL='/mobile-sw.js',MOBILE_PUSH_SCOPE='/mobile';
+let mobilePushRegistration=null,mobilePushBusy=false;
+
+// Notification deep link: /mobile?chat=<filename>&project=<name> ('' = no project).
+function mobileDeepLinkFromUrl(href){
+  try{
+    const url=new URL(href);
+    const chat=url.searchParams.get('chat');
+    if(!chat)return null;
+    return{chat,project:url.searchParams.get('project')||''};
+  }catch(e){return null;}
+}
+
+// Open the check-in's chat, switching project first when it lives elsewhere.
+// Leaves an in-flight reply alone, as the desktop notification click does.
+async function openMobileDeepLink(link){
+  if(!link||!link.chat)return false;
+  if(mobileSending){showToast('Finish the current reply first');return false;}
+  const project=link.project||'';
+  const sel=document.getElementById('proj-select');
+  if(sel&&sel.value!==project){
+    if(project&&!Array.from(sel.options).some(o=>o.value===project)){showToast('That chat’s project is no longer available');return false;}
+    try{
+      const res=await fetch('/projects/switch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:project||null})});
+      if(!res.ok)throw new Error('HTTP '+res.status);
+    }catch(e){showToast('⚠️ Could not switch project');return false;}
+    sel.value=project;
+    sel.classList.toggle('active',Boolean(project));
+    mobileChatFilename=null;mobileChatBaseCount=0;chatHistory=[];
+  }
+  let chats=[];
+  try{const res=await fetch('/chats/list');if(res.ok)chats=await res.json();}catch(e){}
+  const match=Array.isArray(chats)?chats.find(c=>c&&c.filename===link.chat):null;
+  if(!match){showToast('That chat is no longer available');return false;}
+  await loadMobileChat(match.filename,match.title||match.filename.replace(/\.txt$/,''));
+  return true;
+}
+
+function mobilePushSupport(){
+  if(!window.isSecureContext)return'insecure';
+  if(!('serviceWorker' in navigator)||!('PushManager' in window)||!('Notification' in window))return'unsupported';
+  return'ok';
+}
+function mobilePushKeyBytes(base64url){
+  const b64=String(base64url||'').replace(/-/g,'+').replace(/_/g,'/');
+  const raw=atob(b64+'='.repeat((4-b64.length%4)%4));
+  const bytes=new Uint8Array(raw.length);
+  for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);
+  return bytes;
+}
+// Was this subscription made with the server's current key? (Unknown → yes, no churn.)
+function mobilePushKeyMatches(subscription,publicKey){
+  const current=subscription&&subscription.options&&subscription.options.applicationServerKey;
+  if(!current||!publicKey)return true;
+  const a=new Uint8Array(current),b=mobilePushKeyBytes(publicKey);
+  return a.length===b.length&&a.every((v,i)=>v===b[i]);
+}
+function mobilePushDeviceLabel(){
+  const ua=navigator.userAgent||'';
+  const os=/Android/i.test(ua)?'Android':/iPhone|iPad|iPod/i.test(ua)?'iOS':/Windows/i.test(ua)?'Windows':/Mac OS X/i.test(ua)?'macOS':'Device';
+  const browser=/SamsungBrowser/i.test(ua)?'Samsung Internet':/EdgA?\//i.test(ua)?'Edge':/Firefox\//i.test(ua)?'Firefox':/Chrome\//i.test(ua)?'Chrome':/Safari\//i.test(ua)?'Safari':'Browser';
+  const app=window.matchMedia&&window.matchMedia('(display-mode: standalone)').matches;
+  return os+' · '+browser+(app?' (app)':'');
+}
+async function mobilePushStatus(){
+  const res=await fetch('/api/push/vapid-public-key');
+  if(!res.ok)throw new Error('HTTP '+res.status);
+  return res.json();
+}
+async function mobilePushRequest(method,url,body){
+  const res=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok){const error=new Error(data.error||('HTTP '+res.status));error.code=data.code;throw error;}
+  return data;
+}
+function registerMobilePushSubscription(subscription){
+  return mobilePushRequest('POST','/api/push/subscriptions',{subscription:subscription.toJSON(),label:mobilePushDeviceLabel()});
+}
+async function ensureMobilePushRegistration(){
+  if(!mobilePushRegistration)mobilePushRegistration=await navigator.serviceWorker.register(MOBILE_PUSH_SW_URL,{scope:MOBILE_PUSH_SCOPE});
+  return mobilePushRegistration;
+}
+function subscribeMobilePush(registration,publicKey){
+  return registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:mobilePushKeyBytes(publicKey)});
+}
+
+// Page load: register the worker (installability + push), follow taps that
+// land on an already-open page, and keep an existing subscription registered.
+async function initMobilePush(){
+  if(mobilePushSupport()!=='ok')return;
+  navigator.serviceWorker.addEventListener('message',event=>{
+    const data=event.data||{};
+    if(data.type==='hwui-open-chat')openMobileDeepLink({chat:String(data.chat||''),project:String(data.project||'')});
+  });
+  try{
+    const registration=await ensureMobilePushRegistration();
+    if(Notification.permission!=='granted')return;
+    const subscription=await registration.pushManager.getSubscription();
+    if(!subscription)return;
+    const status=await mobilePushStatus();
+    if(!status.available)return;
+    if(mobilePushKeyMatches(subscription,status.public_key)){await registerMobilePushSubscription(subscription);return;}
+    // The server's keys were regenerated: move this phone onto the new key.
+    await subscription.unsubscribe();
+    await registerMobilePushSubscription(await subscribeMobilePush(registration,status.public_key));
+  }catch(e){console.warn('Phone notification sync failed:',e);}
+}
+
+// Render the panel and return its state (insecure, unsupported, error,
+// server-unavailable, denied, off, on).
+async function renderMobilePushPanel(){
+  const statusEl=document.getElementById('mobile-push-status');
+  const noteEl=document.getElementById('mobile-push-note');
+  const buttons={enable:document.getElementById('mobile-push-enable'),test:document.getElementById('mobile-push-test'),disable:document.getElementById('mobile-push-disable')};
+  const show=(...names)=>Object.entries(buttons).forEach(([name,el])=>{el.style.display=names.includes(name)?'block':'none';});
+  const set=(state,text,note)=>{statusEl.textContent=text;noteEl.textContent=note||'';noteEl.style.display=note?'block':'none';return state;};
+  show();
+  const support=mobilePushSupport();
+  if(support==='insecure')return set('insecure','Unavailable on this connection.',
+    'HWUI is being served without its HTTPS certificate (this page is '+location.protocol+'//). Phone notifications need HWUI’s HTTPS Tailscale address, which is only served when the certificate files are next to app.py.');
+  if(support==='unsupported')return set('unsupported','This browser can’t receive push notifications.','Use Chrome on Android.');
+  let status;
+  try{status=await mobilePushStatus();}catch(e){return set('error','Could not reach HWUI.');}
+  if(!status.available)return set('server-unavailable','The HWUI server can’t send notifications yet.',
+    status.reason==='pywebpush_missing'?'pywebpush is not installed on the server. Re-run setup, then restart HWUI.':'Push keys are unavailable on the server.');
+  if(Notification.permission==='denied')return set('denied','Notifications are blocked for HWUI.',
+    'Allow them in Chrome: ⋮ → Settings → Site settings → Notifications, then come back here.');
+  let subscription=null;
+  try{subscription=await (await ensureMobilePushRegistration()).pushManager.getSubscription();}catch(e){}
+  if(!subscription||Notification.permission!=='granted'){show('enable');return set('off','Off on this phone.');}
+  show('test','disable');
+  if(!status.mobile_notifications)return set('on','On for this phone.','Mobile notifications are off in Config → Random Check-ins, so check-ins won’t be sent here until you turn them on.');
+  if(!status.checkins_enabled)return set('on','On for this phone.','Random Check-ins are turned off in Config.');
+  return set('on','On for this phone.');
+}
+function openMobilePushPanel(){document.getElementById('mobile-push-modal').style.display='flex';renderMobilePushPanel();}
+function closeMobilePushPanel(){document.getElementById('mobile-push-modal').style.display='none';}
+
+async function enableMobilePush(){
+  if(mobilePushBusy)return;
+  mobilePushBusy=true;
+  try{
+    // Ask first, straight from the tap: Chrome only prompts with a fresh user gesture.
+    const permission=await Notification.requestPermission();
+    if(permission!=='granted'){showToast(permission==='denied'?'🔕 Notifications blocked':'Notifications not allowed');return;}
+    const registration=await ensureMobilePushRegistration();
+    await navigator.serviceWorker.ready;
+    const status=await mobilePushStatus();
+    if(!status.available)throw new Error('The server can’t send notifications yet');
+    let subscription=await registration.pushManager.getSubscription();
+    if(subscription&&!mobilePushKeyMatches(subscription,status.public_key)){await subscription.unsubscribe();subscription=null;}
+    if(!subscription)subscription=await subscribeMobilePush(registration,status.public_key);
+    await registerMobilePushSubscription(subscription);
+    showToast('🔔 Phone notifications on');
+  }catch(e){console.warn('Enable phone notifications failed:',e);showToast('⚠️ '+(e.message||'Could not enable notifications'));}
+  finally{mobilePushBusy=false;await renderMobilePushPanel();}
+}
+
+async function disableMobilePush(){
+  if(mobilePushBusy)return;
+  mobilePushBusy=true;
+  try{
+    const subscription=await (await ensureMobilePushRegistration()).pushManager.getSubscription();
+    if(subscription){
+      const endpoint=subscription.endpoint;
+      await subscription.unsubscribe();
+      // If this fails the server drops the dead subscription on its next send.
+      try{await mobilePushRequest('DELETE','/api/push/subscriptions',{endpoint});}catch(e){console.warn('Unregister failed:',e);}
+    }
+    showToast('🔕 Phone notifications off');
+  }catch(e){console.warn('Disable phone notifications failed:',e);showToast('⚠️ Could not turn notifications off');}
+  finally{mobilePushBusy=false;await renderMobilePushPanel();}
+}
+
+async function sendMobilePushTest(){
+  if(mobilePushBusy)return;
+  mobilePushBusy=true;
+  try{
+    const subscription=await (await ensureMobilePushRegistration()).pushManager.getSubscription();
+    if(!subscription){showToast('Enable phone notifications first');return;}
+    const send=()=>mobilePushRequest('POST','/api/push/test',{endpoint:subscription.endpoint});
+    let result;
+    try{result=await send();}
+    catch(e){
+      if(e.code!=='not_registered')throw e;
+      await registerMobilePushSubscription(subscription);   // server lost it: re-register once
+      result=await send();
+    }
+    if(result.sent)showToast('Test sent — it should arrive in a moment');
+    else if(result.removed){
+      // The push service reported it gone; drop it here too so Enable reappears.
+      try{await subscription.unsubscribe();}catch(e){}
+      showToast('⚠️ This phone’s subscription expired — enable notifications again');
+    }
+    else showToast('⚠️ The test notification could not be delivered');
+  }catch(e){console.warn('Test notification failed:',e);showToast('⚠️ '+(e.message||'Test notification failed'));}
+  finally{mobilePushBusy=false;await renderMobilePushPanel();}
+}
+// ── end phone notifications ──
 </script>
 </body>
 </html>

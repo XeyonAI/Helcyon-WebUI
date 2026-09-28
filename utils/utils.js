@@ -35,6 +35,7 @@ window.addEventListener('resize', () => {
   hwuiPositionToastHost(document.getElementById('hwui-toast-host-top'));
   hwuiPositionToastHost(document.getElementById('hwui-toast'));
   hwuiPositionToastHost(document.getElementById('auto-memory-toast'));
+  hwuiPositionToastHost(document.getElementById('character-thoughts-toast'));
 });
 
 function hwuiToast(message, kind = 'success', ms = 2200, placement = 'bottom') {
@@ -157,18 +158,105 @@ function hwuiPrompt(message, defaultValue = '', opts = {}) {
 // ============================================================
 // AUTHOR'S NOTE
 // ============================================================
-function openAuthorNote() {
-  const modal = document.getElementById('author-note-modal');
-  const textarea = document.getElementById('author-note');
-  
-  // Load existing note for current chat
-  if (currentChatFilename) {
-    const savedNote = localStorage.getItem(`author-note-${currentChatFilename}`) || '';
-    textarea.value = savedNote;
+// The temporary note is stored server-side in the chat's metadata sidecar
+// (/chats/author_note). The character note is stored separately on the
+// character card (/character_author_note/<key>), so it follows that character
+// into new chats while the temporary note remains chat-local.
+function authorNoteNotice(message, kind = 'info') {
+  if (typeof hwuiToast === 'function') hwuiToast(message, kind);
+  else console.warn(message);
+}
+
+function closeCharacterThoughts() {
+  const toast = document.getElementById('character-thoughts-toast');
+  if (toast) toast.remove();
+}
+
+function showCharacterThoughts() {
+  const character = currentCharacterKey || document.getElementById('character-select')?.value || '';
+  const trigger = document.getElementById('character-thoughts-btn');
+  if (!character) {
+    authorNoteNotice('Select a character first.');
+    return;
   }
-  
+
+  if (trigger) trigger.disabled = true;
+  HwuiChatCore.fetchCharacterAuthorNote((...args) => fetch(...args), character)
+    .then(note => {
+      closeCharacterThoughts();
+      const toast = document.createElement('div');
+      toast.id = 'character-thoughts-toast';
+      toast.setAttribute('role', 'status');
+      toast.setAttribute('aria-live', 'polite');
+
+      const header = document.createElement('div');
+      header.className = 'character-thoughts-toast-header';
+      const title = document.createElement('span');
+      title.textContent = `${character}'s thoughts`;
+      const close = document.createElement('button');
+      close.type = 'button';
+      close.className = 'character-thoughts-toast-close';
+      close.setAttribute('aria-label', 'Close character thoughts');
+      close.textContent = '×';
+      close.addEventListener('click', closeCharacterThoughts);
+      header.append(title, close);
+
+      const noteBox = document.createElement('div');
+      noteBox.className = 'character-thoughts-toast-note';
+      noteBox.textContent = note.trim() || 'No persistent thoughts saved for this character yet.';
+
+      const actions = document.createElement('div');
+      actions.className = 'character-thoughts-toast-actions';
+      const edit = document.createElement('button');
+      edit.type = 'button';
+      edit.className = 'character-thoughts-edit';
+      edit.textContent = 'Edit';
+      edit.addEventListener('click', () => {
+        closeCharacterThoughts();
+        openAuthorNote();
+      });
+      actions.appendChild(edit);
+
+      toast.append(header, noteBox, actions);
+      document.body.appendChild(toast);
+      hwuiPositionToastHost(toast);
+    })
+    .catch(err => {
+      console.warn('Character thoughts load failed:', err);
+      authorNoteNotice('Could not load this character\'s thoughts.', 'error');
+    })
+    .finally(() => {
+      if (trigger) trigger.disabled = false;
+    });
+}
+
+async function openAuthorNote() {
+  const modal = document.getElementById('author-note-modal');
+  const persistentTextarea = document.getElementById('character-response-intent');
+  const textarea = document.getElementById('author-note');
+  const character = currentCharacterKey || document.getElementById('character-select')?.value || '';
+
+  persistentTextarea.value = '';
+  textarea.value = '';
+  const loads = [];
+  if (character) {
+    loads.push(HwuiChatCore.fetchCharacterAuthorNote((...args) => fetch(...args), character)
+      .then(note => { persistentTextarea.value = note || ''; })
+      .catch(err => console.warn('Character Response Intent load failed:', err)));
+  }
+  if (currentChatFilename) {
+    const legacyNote = HwuiChatCore.pendingLegacyAuthorNote(localStorage, currentChatFilename);
+    loads.push(HwuiChatCore.fetchChatAuthorNote((...args) => fetch(...args), currentChatFilename)
+      .then(note => { textarea.value = note || legacyNote || ''; })
+      .catch(err => {
+        console.warn("Author's Note load failed:", err);
+        textarea.value = legacyNote || '';
+      }));
+  }
+  await Promise.all(loads);
+
   modal.style.display = 'block';
-  textarea.focus();
+  persistentTextarea.focus();
 }
 
 function closeAuthorNote() {
@@ -176,15 +264,29 @@ function closeAuthorNote() {
   modal.style.display = 'none';
 }
 
-function saveAuthorNote() {
+async function saveAuthorNote() {
+  const persistentNote = document.getElementById('character-response-intent').value;
   const note = document.getElementById('author-note').value;
-  
-  if (currentChatFilename) {
-    localStorage.setItem(`author-note-${currentChatFilename}`, note);
-    console.log('✅ Author note saved for', currentChatFilename);
+  const character = currentCharacterKey || document.getElementById('character-select')?.value || '';
+
+  try {
+    if (character) {
+      await HwuiChatCore.saveCharacterAuthorNote((...args) => fetch(...args), character, persistentNote);
+    }
+    if (currentChatFilename) {
+      await HwuiChatCore.saveChatAuthorNote((...args) => fetch(...args), currentChatFilename, note);
+      // The server holds this chat's note now; drop the legacy browser copy.
+      localStorage.removeItem(HwuiChatCore.legacyAuthorNoteKey(currentChatFilename));
+    } else if (note.trim()) {
+      authorNoteNotice("The temporary / this-chat Response Intent needs an open chat; the character note was saved.");
+    }
+    console.log('✅ Response Intent notes saved', { character, chat: currentChatFilename || null });
+    closeAuthorNote();
+  } catch (err) {
+    // Keep the modal open so the text isn't lost.
+    console.error("Author's Note save failed:", err);
+    authorNoteNotice("Couldn't save the Author's Note: " + err.message);
   }
-  
-  closeAuthorNote();
 }
 
 
@@ -254,7 +356,7 @@ function openOpeningLine() {
   const textarea = document.getElementById('opening-line-text');
   
   // Get current character name
-  const charName = currentCharacter?.name || document.getElementById('character-select')?.value || 'Unknown';
+  const charName = currentCharacterKey || document.getElementById('character-select')?.value || 'Unknown';
   
   // Load current values for this CHARACTER (not chat)
   const enabled = localStorage.getItem(`opening-line-enabled-${charName}`) === 'true';
@@ -276,7 +378,7 @@ function saveOpeningLine() {
   const textarea = document.getElementById('opening-line-text');
   
   // Get current character name
-  const charName = currentCharacter?.name || document.getElementById('character-select')?.value || 'Unknown';
+  const charName = currentCharacterKey || document.getElementById('character-select')?.value || 'Unknown';
   
   // Save for this CHARACTER (not chat)
   localStorage.setItem(`opening-line-enabled-${charName}`, checkbox.checked.toString());
@@ -293,10 +395,10 @@ function saveOpeningLine() {
 }
 
 async function displayOpeningLineInChat() {
-  // Get current character name
-  const charName = 
-    currentCharacter?.name || 
-    document.getElementById('character-select')?.value || 
+  // Opening lines are stored per character storage key
+  const charName =
+    currentCharacterKey ||
+    document.getElementById('character-select')?.value ||
     localStorage.getItem('lastCharacter') || 
     'Unknown';
   
@@ -392,7 +494,7 @@ async function displayOpeningQuestions() {
   }
 
   const charName =
-    currentCharacter?.name ||
+    currentCharacterKey ||
     document.getElementById('character-select')?.value ||
     localStorage.getItem('lastCharacter') ||
     '';
@@ -891,6 +993,18 @@ function stripLinksForTTS(text) {
     .replace(/[\u{1F517}🔗]/gu, '');               // link emoji (all variants)
 }
 
+// Remove standalone kiss tokens from speech only. Keep the assistant's visible
+// message unchanged, and do not touch ordinary words containing the letter x.
+// The boundary check also handles common surrounding quotes/brackets and
+// punctuation (for example: "xxx!", (xx), or x…).
+function stripKissTokensForTTS(text) {
+  if (!text) return text;
+  return String(text)
+    .replace(/(^|[\s([{"'“‘])x{1,3}(?=$|[\s.!?,;:\u2026){\]}"'”’—–-])/giu, '$1')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]+([.!?,;:])/g, '$1');
+}
+
 // --- Called from streaming loop for each chunk ---
 function bufferTextForTTS(chunk) {
   if (!ttsEnabled || !chunk) return;
@@ -1003,6 +1117,7 @@ function splitAndQueue(text) {
              .replace(/\n*[\u{1F517}\*]*\s*Source:[^\n]*/gu, '') // Source: lines
              .replace(/https?:\/\/\S+/g, '')                 // bare URLs
              .replace(/[\u{1F517}]/gu, '');                    // link emoji
+  text = stripKissTokensForTTS(text);
   const cleaned = normaliseDecimalsForTTS(text).trim()
     .replace(/\s*\u2014\s*/g, ', ')
     .replace(/\u{1F4AF}/gu, 'one hundred percent')
@@ -1080,14 +1195,15 @@ function flushTTSBuffer() {
   if (!ttsEnabled) return;
 
   // Flush anything left in the buffer (no newline at end, no punctuation)
-  const remaining = ttsSentenceBuffer.trim()
+  const remaining = ttsSentenceBuffer.trim();
+  const speechRemaining = stripKissTokensForTTS(remaining)
     .replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '$1.')
     .replace(/(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '')
     .replace(/\*\*/g, '').replace(/\*/g, '').replace(/_/g, '')
     .trim();
 
-  if (remaining.length > 2) {
-    const withPunct = /[.!?]$/.test(remaining) ? remaining : remaining + '.';
+  if (speechRemaining.length > 2) {
+    const withPunct = /[.!?]$/.test(speechRemaining) ? speechRemaining : speechRemaining + '.';
     ttsQueue.push(withPunct);
     console.log(`📝 Flushed: "${withPunct.substring(0, 50)}"`);
   }
@@ -1575,7 +1691,7 @@ function replayLastAudio() {
 
   replayTimeout = setTimeout(() => {
     replayTimeout = null;
-    const text = stripLinksForTTS(lastAssistant.content)   // strip links BEFORE the "(" → ". " conversion below
+    const text = stripKissTokensForTTS(stripLinksForTTS(lastAssistant.content))   // strip links/kiss tokens BEFORE the "(" → ". " conversion below
       .replace(/\u{1F4AF}/gu, 'one hundred percent')
       .replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '$1.')
       .replace(/(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '')

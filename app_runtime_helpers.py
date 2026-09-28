@@ -181,6 +181,7 @@ def supports_temperature(model_id):
 
 
 OPENAI_MODEL_RULES = {
+    "gpt-6": {"token_param": "max_completion_tokens", "sampling": False},
     "gpt-5": {"token_param": "max_completion_tokens", "sampling": False},
     "o1": {"token_param": "max_completion_tokens", "sampling": False},
     "o3": {"token_param": "max_completion_tokens", "sampling": False},

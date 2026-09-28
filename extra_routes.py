@@ -5,6 +5,16 @@ import base64
 from io import BytesIO
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
+from character_routes import (
+    character_keys,
+    chat_owner_key,
+    find_character_key,
+    known_character_keys,
+    migrate_character_key_state,
+    valid_character_key,
+    write_character_index,
+)
+from chat_message_metadata import move_chat_metadata
 
 # --------------------------------------------------
 # Blueprint setup
@@ -13,17 +23,12 @@ extra = Blueprint("extra", __name__)
 APP_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 
-def _chat_filename_belongs_to_character(filename, character_name):
-    """Match current and legacy chat filenames without catching longer names."""
-    if not filename.lower().endswith(".txt"):
-        return False
-    stem = filename[:-4].casefold()
-    name = character_name.strip().casefold()
-    return bool(name) and (
-        stem == name
-        or stem.startswith(name + " - ")
-        or stem.startswith(name + "_chat_")
-    )
+def _characters_dir(app_root=APP_ROOT):
+    return os.path.join(app_root, "characters")
+
+
+def _images_dir(app_root=APP_ROOT):
+    return os.path.join(app_root, "static", "images")
 
 
 def _all_chat_directories(app_root=APP_ROOT):
@@ -49,12 +54,20 @@ def _all_chat_directories(app_root=APP_ROOT):
 
 
 def _delete_character_chats(character_name, app_root=APP_ROOT):
-    """Delete filename-bound chats across global and project chat folders."""
+    """Delete the chats owned by exactly this character key, across the global
+    and every project chat folder. Chats owned by a longer key that merely
+    starts with this one ("Gemma - GPT-5" vs "Gemma") are never touched."""
+    target = character_name.strip().casefold()
+    if not target:
+        return []
+    # The target is included even if its .json is already gone, so a stale
+    # list entry still resolves to itself and nothing longer.
+    keys = known_character_keys(_characters_dir(app_root)) + [character_name]
     deleted = []
     for chat_dir in _all_chat_directories(app_root):
         deleted_in_dir = []
         for filename in os.listdir(chat_dir):
-            if not _chat_filename_belongs_to_character(filename, character_name):
+            if (chat_owner_key(filename, keys) or "").casefold() != target:
                 continue
             chat_path = os.path.join(chat_dir, filename)
             if not os.path.isfile(chat_path):
@@ -64,24 +77,289 @@ def _delete_character_chats(character_name, app_root=APP_ROOT):
             deleted_in_dir.append(filename)
 
         if deleted_in_dir:
-            pins_path = os.path.join(chat_dir, ".pinned_chats.json")
-            try:
-                with open(pins_path, "r", encoding="utf-8") as f:
-                    pins = json.load(f)
-                if isinstance(pins, list):
-                    deleted_names = set(deleted_in_dir)
-                    remaining = [name for name in pins if name not in deleted_names]
-                    if remaining != pins:
-                        temp_path = pins_path + ".tmp"
-                        with open(temp_path, "w", encoding="utf-8") as f:
-                            json.dump(sorted(set(remaining)), f, indent=2, ensure_ascii=False)
-                            f.write("\n")
-                        os.replace(temp_path, pins_path)
-            except FileNotFoundError:
-                pass
-            except Exception as e:
-                print(f"Could not prune chat pins in {chat_dir}: {e}")
+            _rewrite_chat_pins(chat_dir, {name: None for name in deleted_in_dir})
     return deleted
+
+
+def _rewrite_chat_pins(chat_dir, renames):
+    """Apply {old_filename: new_filename or None} to a folder's pinned chats
+    (None unpins). Never raises."""
+    pins_path = os.path.join(chat_dir, ".pinned_chats.json")
+    try:
+        with open(pins_path, "r", encoding="utf-8") as f:
+            pins = json.load(f)
+        if not isinstance(pins, list):
+            return
+        updated = [renames.get(name, name) for name in pins]
+        updated = [name for name in updated if name]
+        if updated != pins:
+            temp_path = pins_path + ".tmp"
+            with open(temp_path, "w", encoding="utf-8") as f:
+                json.dump(sorted(set(updated)), f, indent=2, ensure_ascii=False)
+                f.write("\n")
+            os.replace(temp_path, pins_path)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"Could not update chat pins in {chat_dir}: {e}")
+
+
+# --------------------------------------------------
+# Character key operations (create/import/duplicate/rename/delete)
+# The storage key is the filename stem; see character_routes.py. None of
+# these ever overwrite an existing key's files, and none of them read or
+# change a card's editable "name" field except import, which keeps it.
+# --------------------------------------------------
+class CharacterKeyError(Exception):
+    """A key operation was refused; `status` is the HTTP status to return."""
+
+    def __init__(self, message, status=409):
+        super().__init__(message)
+        self.status = status
+
+
+def _chats_taken_over(new_key, app_root=APP_ROOT, moving_key=None):
+    """Chats that adding `new_key` would take from another existing card.
+
+    Ownership is the longest matching key, so a new key can capture chats
+    that belong to a shorter one ("Gemma - Hey babe" would own Gemma's
+    "Gemma - Hey babe - Aug 28.txt"), and deleting it would then delete them.
+    Returns [(current_owner, filename)]. Chats with no current owner are not
+    counted — a re-created card re-adopts its old chats, as before — and nor
+    are `moving_key`'s own chats (a rename moves those itself).
+    """
+    keys = known_character_keys(_characters_dir(app_root))
+    moving = (moving_key or "").casefold()
+    keys_after = [k for k in keys if k.casefold() != moving] + [new_key]
+    taken = []
+    for chat_dir in _all_chat_directories(app_root):
+        for filename in os.listdir(chat_dir):
+            owner = chat_owner_key(filename, keys)
+            if not owner or owner.casefold() == moving:
+                continue
+            if (chat_owner_key(filename, keys_after) or "").casefold() == new_key.casefold():
+                taken.append((owner, filename))
+    return taken
+
+
+def _require_unused_key(key, app_root=APP_ROOT, moving_key=None):
+    """Raise CharacterKeyError unless `key` is valid and owns nothing yet."""
+    if not valid_character_key(key):
+        raise CharacterKeyError(
+            f"'{key}' can't be used as a character name "
+            "(avoid < > : \" / \\ | ? * and a trailing dot)", 400)
+    existing = find_character_key(key, _characters_dir(app_root))
+    if existing:
+        raise CharacterKeyError(f"A character called '{existing}' already exists")
+    taken = _chats_taken_over(key, app_root, moving_key)
+    if taken:
+        owner, filename = taken[0]
+        raise CharacterKeyError(
+            f"'{key}' would take over {len(taken)} chat(s) that belong to "
+            f"'{owner}' (e.g. \"{filename}\"). Choose another name.")
+
+
+def _card_image_refs(data):
+    refs = [data.get("image")] + list(data.get("images") or [])
+    return {ref for ref in refs if isinstance(ref, str) and ref}
+
+
+def _session_summary_file(key, app_root=APP_ROOT):
+    """Existing session-summary file for `key`, trying the same dot/space
+    variants as session_summary_routes._resolve_session_summary_path."""
+    base = key.lower()
+    for candidate in (base, base.replace(" ", "."), base.replace(".", " ")):
+        path = os.path.join(app_root, "session_summaries", f"{candidate}_summary.txt")
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def _rename_character(old_name, new_name, app_root=APP_ROOT):
+    """Move a card and every key-owned resource from one storage key to another.
+
+    Moves characters/<old>.json, static/images/<old>.png, every chat owned by
+    exactly <old> (with its metadata sidecar and pin), memories/<old>_memory.txt,
+    the session-summary file and opening_lines/<old>.json. The card's Name
+    field and the text inside chats are left exactly as they are. Every
+    destination is checked before anything moves; any existing destination
+    refuses the whole rename.
+    """
+    char_dir = _characters_dir(app_root)
+    old_key = find_character_key(old_name, char_dir)
+    if not old_key:
+        raise CharacterKeyError(f"Character '{old_name}' not found", 404)
+    new_key = (new_name or "").strip()
+    if new_key == old_key:
+        raise CharacterKeyError("Names are identical", 400)
+    _require_unused_key(new_key, app_root, moving_key=old_key)
+
+    resource_moves = []
+    old_png = os.path.join(_images_dir(app_root), f"{old_key}.png")
+    if os.path.isfile(old_png):
+        resource_moves.append((old_png, os.path.join(_images_dir(app_root), f"{new_key}.png")))
+    old_memory = os.path.join(app_root, "memories", f"{old_key.lower()}_memory.txt")
+    if os.path.isfile(old_memory):
+        resource_moves.append((old_memory, os.path.join(app_root, "memories", f"{new_key.lower()}_memory.txt")))
+    old_summary = _session_summary_file(old_key, app_root)
+    if old_summary:
+        resource_moves.append((old_summary, os.path.join(app_root, "session_summaries", f"{new_key.lower()}_summary.txt")))
+    old_opening = os.path.join(app_root, "opening_lines", f"{old_key}.json")
+    if os.path.isfile(old_opening):
+        resource_moves.append((old_opening, os.path.join(app_root, "opening_lines", f"{new_key}.json")))
+
+    keys = known_character_keys(char_dir)
+    chat_moves = []
+    for chat_dir in _all_chat_directories(app_root):
+        for filename in os.listdir(chat_dir):
+            owner = chat_owner_key(filename, keys)
+            if not owner or owner.casefold() != old_key.casefold():
+                continue
+            if filename[:len(owner)].casefold() != owner.casefold():
+                raise CharacterKeyError(f"Can't safely rename chat \"{filename}\"; nothing was changed.")
+            # Swap only the key prefix; the title/date text is kept as written.
+            chat_moves.append((chat_dir, filename, new_key + filename[len(owner):]))
+
+    conflicts = [dst for _, dst in resource_moves if os.path.exists(dst)]
+    conflicts += [os.path.join(d, new) for d, _, new in chat_moves if os.path.exists(os.path.join(d, new))]
+    if conflicts:
+        raise CharacterKeyError(
+            f"Rename would overwrite {os.path.relpath(conflicts[0], app_root)}; nothing was changed.")
+
+    # Freeze each chat's verified turn roles while the old key and card Name
+    # still resolve. A filename/card rename must never reclassify its history.
+    from chat_routes import stabilize_chat_roles
+    for chat_dir, old_filename, _ in chat_moves:
+        try:
+            stabilize_chat_roles(chat_dir, old_filename)
+        except ValueError as exc:
+            raise CharacterKeyError(str(exc), 409) from exc
+
+    old_path = os.path.join(char_dir, f"{old_key}.json")
+    with open(old_path, "r", encoding="utf-8") as f:
+        char_data = json.load(f)
+    if os.path.isfile(old_png):
+        old_image, new_image = f"{old_key}.png", f"{new_key}.png"
+        if char_data.get("image") == old_image:
+            char_data["image"] = new_image
+        if isinstance(char_data.get("images"), list):
+            char_data["images"] = [new_image if ref == old_image else ref for ref in char_data["images"]]
+    with open(os.path.join(char_dir, f"{new_key}.json"), "x", encoding="utf-8") as f:
+        json.dump(char_data, f, indent=2, ensure_ascii=False)
+    os.remove(old_path)
+
+    for src, dst in resource_moves:
+        os.rename(src, dst)
+
+    renamed_by_dir = {}
+    for chat_dir, old_filename, new_filename in chat_moves:
+        os.rename(os.path.join(chat_dir, old_filename), os.path.join(chat_dir, new_filename))
+        move_chat_metadata(chat_dir, old_filename, chat_dir, new_filename)
+        renamed_by_dir.setdefault(chat_dir, {})[old_filename] = new_filename
+        print(f"Renamed chat: {old_filename} -> {new_filename} (in {chat_dir})")
+    for chat_dir, renames in renamed_by_dir.items():
+        _rewrite_chat_pins(chat_dir, renames)
+
+    write_character_index(char_dir)
+    print(f"Character renamed: {old_key} -> {new_key} ({len(chat_moves)} chat(s) moved)")
+    return {"old_key": old_key, "new_key": new_key, "chats_renamed": len(chat_moves)}
+
+
+def _duplicate_character(name, app_root=APP_ROOT):
+    """Copy a card to a new "<key> - Copy[ N]" key. The copy keeps the
+    original's Name (it is the same character); only the key differs. Its
+    image is copied to the copy's own <key>.png."""
+    import shutil
+    char_dir, image_dir = _characters_dir(app_root), _images_dir(app_root)
+    source_key = find_character_key(name, char_dir)
+    if not source_key:
+        raise CharacterKeyError("Character not found", 404)
+    with open(os.path.join(char_dir, f"{source_key}.json"), "r", encoding="utf-8") as f:
+        char_data = json.load(f)
+
+    base = f"{source_key} - Copy"
+    new_key, counter = base, 1
+    while True:
+        if not valid_character_key(new_key):
+            raise CharacterKeyError(f"'{new_key}' can't be used as a character name", 400)
+        if (not find_character_key(new_key, char_dir)
+                and not os.path.exists(os.path.join(image_dir, f"{new_key}.png"))
+                and not _chats_taken_over(new_key, app_root)):
+            break
+        counter += 1
+        new_key = f"{base} {counter}"
+
+    source_image = (char_data.get("image") or "").strip() or f"{source_key}.png"
+    new_image = f"{new_key}.png"
+    if os.path.isfile(os.path.join(image_dir, source_image)):
+        shutil.copy2(os.path.join(image_dir, source_image), os.path.join(image_dir, new_image))
+        if isinstance(char_data.get("images"), list):
+            char_data["images"] = [new_image if ref == source_image else ref for ref in char_data["images"]]
+        char_data["image"] = new_image
+    else:
+        char_data["image"] = "default.png"
+        print(f"⚠️ Original image not found, using default for {new_key}")
+
+    with open(os.path.join(char_dir, f"{new_key}.json"), "x", encoding="utf-8") as f:
+        json.dump(char_data, f, indent=2, ensure_ascii=False)
+    write_character_index(char_dir)
+    print(f"📋 Duplicated character: {source_key} → {new_key}")
+    return new_key
+
+
+def _import_character_key(name, app_root=APP_ROOT):
+    """A free storage key for an imported card whose embedded Name is `name`.
+    Filename-unsafe characters are dropped; a taken key gets " (2)", " (3)"…"""
+    import re
+    base = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", str(name or "")).strip().rstrip(". ")[:100].strip()
+    if not valid_character_key(base):
+        base = "Imported Character"
+    key, counter = base, 1
+    while (find_character_key(key, _characters_dir(app_root))
+           or os.path.exists(os.path.join(_images_dir(app_root), f"{key}.png"))
+           or _chats_taken_over(key, app_root)):
+        counter += 1
+        key = f"{base} ({counter})"
+    return key
+
+
+def _delete_character(name, app_root=APP_ROOT):
+    """Delete a card by storage key: its .json, its chats (exact owner only)
+    and its own <key>.png unless another card still references that file."""
+    char_dir = _characters_dir(app_root)
+    key = find_character_key(name, char_dir) or (name or "").strip()
+    if not valid_character_key(key):
+        raise CharacterKeyError(f"Invalid character '{name}'", 400)
+
+    deleted_chats = _delete_character_chats(key, app_root)
+    print(f"Deleted {len(deleted_chats)} chat(s) for character: {key}")
+
+    char_path = os.path.join(char_dir, f"{key}.json")
+    if os.path.isfile(char_path):
+        os.remove(char_path)
+        print(f"🗑️ Deleted character file: {char_path}")
+
+    image_file = f"{key}.png"
+    image_path = os.path.join(_images_dir(app_root), image_file)
+    if os.path.isfile(image_path):
+        still_used = False
+        for other in character_keys(char_dir):
+            try:
+                with open(os.path.join(char_dir, f"{other}.json"), "r", encoding="utf-8") as f:
+                    if image_file in _card_image_refs(json.load(f)):
+                        still_used = True
+                        break
+            except Exception:
+                continue
+        if still_used:
+            print(f"Kept {image_file}: another character still uses it")
+        else:
+            os.remove(image_path)
+            print(f"🗑️ Deleted character image: {image_path}")
+
+    write_character_index(char_dir)
+    return {"status": "ok", "deleted": key, "deleted_chats": len(deleted_chats)}
+
 
 # --------------------------------------------------
 # Restore previously saved chat
@@ -419,22 +697,26 @@ def import_character():
             return jsonify({"error": "Invalid character data - missing name"}), 400
         
         char_name = char_data["name"]
-        
+
         # Save character JSON
         char_dir = os.path.join(os.path.dirname(__file__), "characters")
         os.makedirs(char_dir, exist_ok=True)
-        
-        char_path = os.path.join(char_dir, f"{char_name}.json")
-        
-        # Update image filename to match character name
-        image_filename = f"{char_name}.png"
+
+        # The embedded Name is kept as the card's Name; the storage key is
+        # derived from it but never reuses an existing key (" (2)" etc.), so an
+        # import can't overwrite another card or its image.
+        char_key = _import_character_key(char_name)
+        char_path = os.path.join(char_dir, f"{char_key}.json")
+
+        # The image is owned by the key
+        image_filename = f"{char_key}.png"
         char_data["image"] = image_filename
 
         # Reconcile slideshow images[] against what exists at the destination so
         # the imported card never lands dangling refs. Export carries only the
         # ONE carrier image's pixels (the rest of images[] is just filenames),
         # so on a fresh machine those extra files won't exist — drop them.
-        # ALWAYS keep the carrier ({char_name}.png) first even though its
+        # ALWAYS keep the carrier ({char_key}.png) first even though its
         # physical save below is best-effort: the array is never emptied of its
         # primary. Only touch slideshow characters (those that already carry an
         # images[] array); single-image cards are left untouched.
@@ -446,7 +728,8 @@ def import_character():
             char_data["images"] = [image_filename] + \
                                    [f for f in _existing if f != image_filename]
 
-        with open(char_path, "w", encoding="utf-8") as f:
+        # "x" = create only: never overwrite, even if a key appeared meanwhile.
+        with open(char_path, "x", encoding="utf-8") as f:
             json.dump(char_data, f, indent=2, ensure_ascii=False)
 
         # Register in the index IMMEDIATELY after the .json is written, and
@@ -456,28 +739,10 @@ def import_character():
         # the image step (img.convert/img.save) — or a corrupt index.json that
         # blew up the read — aborted before the append, leaving {name}.json on
         # disk but UNREGISTERED (a dropdown-invisible orphan). Rebuild the
-        # index from the directory scan instead of a fragile read-append-write:
-        # it's idempotent, can't be defeated by a stale/corrupt prior index,
-        # and guarantees the just-written character is present. (Same
-        # convergence logic as app.py list_characters; list_characters will
-        # reconcile again on its next call regardless.)
-        index_name = (char_data.get("name") or char_name).strip()
+        # index (storage keys) from the directory scan instead: idempotent, and
+        # can't be defeated by a stale/corrupt prior index.
         try:
-            _names = []
-            for _f in os.listdir(char_dir):
-                if _f == "_active_character.json" or _f == "index.json":
-                    continue
-                if _f.endswith(".json"):
-                    try:
-                        with open(os.path.join(char_dir, _f), "r", encoding="utf-8") as _cf:
-                            _names.append(json.load(_cf).get("name", _f[:-5]))
-                    except Exception:
-                        _names.append(_f[:-5])
-            if index_name and index_name not in _names:
-                _names.append(index_name)  # ensure self even if scan raced
-            index_path = os.path.join(char_dir, "index.json")
-            with open(index_path, "w", encoding="utf-8") as f:
-                json.dump(sorted(set(_names)), f, indent=2, ensure_ascii=False)
+            write_character_index(char_dir)
         except Exception as _ie:
             print(f"âš ï¸ Could not rebuild characters/index.json on import: {_ie}")
 
@@ -493,11 +758,12 @@ def import_character():
                 img = img.convert('RGBA')
             img.save(image_path, "PNG")
         except Exception as _img_e:
-            print(f"âš ï¸ Import: character '{char_name}' saved + registered, "
+            print(f"âš ï¸ Import: character '{char_key}' saved + registered, "
                   f"but image save failed: {_img_e}")
 
-        print(f"âœ… Imported character: {char_name}")
-        return jsonify({"status": "ok", "name": char_name})
+        print(f"âœ… Imported character: {char_key} (Name: {char_name})")
+        # "name" stays the key for existing callers; "display_name" is the card's Name.
+        return jsonify({"status": "ok", "name": char_key, "key": char_key, "display_name": char_name})
         
     except Exception as e:
         print(f"âŒ Import failed: {e}")
@@ -510,51 +776,18 @@ def import_character():
 # --------------------------------------------------
 @extra.route('/delete_character/<n>', methods=['DELETE'])
 def delete_character(n):
-    """Delete a character and its associated files."""
+    """Delete a character (by storage key) and its key-owned files."""
     try:
-        deleted_chats = _delete_character_chats(n)
-        print(f"Deleted {len(deleted_chats)} chat(s) for character: {n}")
-
-        # Delete character JSON
-        char_path = os.path.join("characters", f"{n}.json")
-        if os.path.exists(char_path):
-            os.remove(char_path)
-            print(f"ðŸ—‘ï¸ Deleted character file: {char_path}")
-        
-        # Delete character image (if it exists)
-        # Try to load the character data first to get the image filename
-        image_file = f"{n}.png"  # Default assumption
-        image_path = os.path.join("static", "images", image_file)
-        if os.path.exists(image_path):
-            os.remove(image_path)
-            print(f"ðŸ—‘ï¸ Deleted character image: {image_path}")
-        
-        # Update character index
-        index_path = os.path.join("characters", "index.json")
-        if os.path.exists(index_path):
-            with open(index_path, "r", encoding="utf-8") as f:
-                characters = json.load(f)
-            
-            if n in characters:
-                characters.remove(n)
-                
-            with open(index_path, "w", encoding="utf-8") as f:
-                json.dump(sorted(characters), f, indent=2, ensure_ascii=False)
-            
-            print(f"âœ… Removed {n} from character index")
-        
-        return jsonify({
-            "status": "ok",
-            "deleted": n,
-            "deleted_chats": len(deleted_chats)
-        })
-        
+        return jsonify(_delete_character(n))
+    except CharacterKeyError as e:
+        return jsonify({"error": str(e)}), e.status
     except Exception as e:
-        print(f"âŒ Delete failed: {e}")
+        print(f"❌ Delete failed: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-        
+
+
 # --------------------------------------------------
 # Token Counter for Character Editor
 # --------------------------------------------------
@@ -596,74 +829,19 @@ def count_tokens():
 # --------------------------------------------------
 @extra.route('/duplicate_character/<n>', methods=['POST'])
 def duplicate_character(n):
-    """Duplicate an existing character with a new name."""
+    """Duplicate a character to a new storage key; the copy keeps its Name."""
     try:
-        import shutil
-        char_dir = os.path.join(os.path.dirname(__file__), "characters")
-        image_dir = os.path.join(os.path.dirname(__file__), "static", "images")
-        source_path = os.path.join(char_dir, f"{n}.json")
-
-        if not os.path.exists(source_path):
-            return jsonify({"error": "Character not found"}), 404
-
-        # Load original character
-        with open(source_path, "r", encoding="utf-8") as f:
-            char_data = json.load(f)
-
-        # Create new name with " - Copy" suffix
-        new_name = f"{n} - Copy"
-        counter = 1
-
-        # If "Name - Copy" exists, try "Name - Copy 2", "Name - Copy 3", etc.
-        while os.path.exists(os.path.join(char_dir, f"{new_name}.json")):
-            counter += 1
-            new_name = f"{n} - Copy {counter}"
-
-        # Update character data with new name
-        char_data["name"] = new_name
-
-        # --- COPY THE IMAGE ---
-        old_image = char_data.get("image", f"{n}.png")
-        old_image_path = os.path.join(image_dir, old_image)
-        new_image_filename = f"{new_name}.png"
-        new_image_path = os.path.join(image_dir, new_image_filename)
-
-        if os.path.exists(old_image_path):
-            shutil.copy2(old_image_path, new_image_path)
-            print(f"ðŸ–¼ï¸ Copied image: {old_image} â†’ {new_image_filename}")
-            char_data["image"] = new_image_filename
-        else:
-            # No image found, use default
-            char_data["image"] = "default.png"
-            print(f"âš ï¸ Original image not found, using default for {new_name}")
-
-        # Save duplicated character JSON
-        new_path = os.path.join(char_dir, f"{new_name}.json")
-        with open(new_path, "w", encoding="utf-8") as f:
-            json.dump(char_data, f, indent=2, ensure_ascii=False)
-
-        # Update character index
-        index_path = os.path.join(char_dir, "index.json")
-        if os.path.exists(index_path):
-            with open(index_path, "r", encoding="utf-8") as f:
-                characters = json.load(f)
-            if new_name not in characters:
-                characters.append(new_name)
-        else:
-            characters = [new_name]
-
-        with open(index_path, "w", encoding="utf-8") as f:
-            json.dump(sorted(characters), f, indent=2, ensure_ascii=False)
-
-        print(f"ðŸ“‹ Duplicated character: {n} â†’ {new_name}")
-        return jsonify({"success": True, "new_name": new_name})
-
+        new_key = _duplicate_character(n)
+        return jsonify({"success": True, "new_name": new_key, "new_key": new_key})
+    except CharacterKeyError as e:
+        return jsonify({"error": str(e)}), e.status
     except Exception as e:
-        print(f"âŒ Duplicate character failed: {e}")
+        print(f"❌ Duplicate character failed: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-    
+
+
 # --------------------------------------------------
 # Replace Character Image
 # --------------------------------------------------
@@ -827,120 +1005,25 @@ def remove_character_image(n, filename):
 # --------------------------------------------------
 @extra.route('/rename_character', methods=['POST'])
 def rename_character():
-    """Rename a character and update all associated files."""
+    """Change a character's storage key and move its key-owned resources.
+    The card's Name field and the text of existing chats are not changed."""
     try:
-        data = request.json
-        old_name = data.get('old_name', '').strip()
-        new_name = data.get('new_name', '').strip()
-        
+        data = request.json or {}
+        old_name = (data.get('old_name') or '').strip()
+        new_name = (data.get('new_name') or '').strip()
         if not old_name or not new_name:
             return jsonify({"error": "Both old and new names required"}), 400
-        
-        if old_name == new_name:
-            return jsonify({"error": "Names are identical"}), 400
-        
-        char_dir = os.path.join(os.path.dirname(__file__), "characters")
-        old_path = os.path.join(char_dir, f"{old_name}.json")
-        new_path = os.path.join(char_dir, f"{new_name}.json")
-        
-        # Check if old character exists
-        if not os.path.exists(old_path):
-            return jsonify({"error": f"Character '{old_name}' not found"}), 404
-        
-        # Check if new name already exists
-        if os.path.exists(new_path):
-            return jsonify({"error": f"Character '{new_name}' already exists"}), 409
-        
-        # 1. Load and update character JSON
-        with open(old_path, "r", encoding="utf-8") as f:
-            char_data = json.load(f)
-        
-        char_data["name"] = new_name
-        
-        # 2. Save with new filename
-        with open(new_path, "w", encoding="utf-8") as f:
-            json.dump(char_data, f, indent=2, ensure_ascii=False)
-        
-        # 3. Delete old file
-        os.remove(old_path)
-        
-        # 4. Update character index
-        index_path = os.path.join(char_dir, "index.json")
-        if os.path.exists(index_path):
-            with open(index_path, "r", encoding="utf-8") as f:
-                characters = json.load(f)
-            
-            if old_name in characters:
-                characters.remove(old_name)
-            
-            if new_name not in characters:
-                characters.append(new_name)
-            
-            with open(index_path, "w", encoding="utf-8") as f:
-                json.dump(sorted(characters), f, indent=2, ensure_ascii=False)
-        
-        # 5. Rename ALL chat files for this character across ALL project folders + global chats
-        base_dir = os.path.dirname(__file__)
-        projects_dir = os.path.join(os.getcwd(), "projects")
-        renamed_count = 0
-
-        # Build list of every chats directory to scan
-        chats_dirs_to_scan = []
-
-        global_chats = os.path.join(base_dir, "chats")
-        if os.path.exists(global_chats):
-            chats_dirs_to_scan.append(global_chats)
-
-        if os.path.exists(projects_dir):
-            for entry in os.listdir(projects_dir):
-                if entry.startswith("_"):
-                    continue  # skip meta files like _active_project.json
-                proj_chats = os.path.join(projects_dir, entry, "chats")
-                if os.path.isdir(proj_chats):
-                    chats_dirs_to_scan.append(proj_chats)
-
-        for chats_dir in chats_dirs_to_scan:
-            for filename in os.listdir(chats_dir):
-                if filename.startswith(f"{old_name} - ") and filename.endswith(".txt"):
-                    suffix = filename[len(old_name) + 3:]  # +3 for " - "
-                    old_chat_path = os.path.join(chats_dir, filename)
-                    new_chat_filename = f"{new_name} - {suffix}"
-                    new_chat_path = os.path.join(chats_dir, new_chat_filename)
-                    try:
-                        with open(old_chat_path, "r", encoding="utf-8") as cf:
-                            chat_content = cf.read()
-                        chat_content = chat_content.replace(f"{old_name}:", f"{new_name}:")
-                        with open(old_chat_path, "w", encoding="utf-8") as cf:
-                            cf.write(chat_content)
-                    except Exception as ce:
-                        print(f"Could not update speaker in {filename}: {ce}")
-                    os.rename(old_chat_path, new_chat_path)
-                    renamed_count += 1
-                    print(f"Renamed chat: {filename} -> {new_chat_filename} (in {chats_dir})")
-
-        print(f"Total chats renamed: {renamed_count}")
-        
-        # 6. Rename character image if it exists
-        image_dir = os.path.join(os.path.dirname(__file__), "static", "images")
-        old_image_path = os.path.join(image_dir, f"{old_name}.png")
-        new_image_path = os.path.join(image_dir, f"{new_name}.png")
-
-        if os.path.exists(old_image_path):
-            os.rename(old_image_path, new_image_path)
-            print(f"Image renamed: {old_name}.png -> {new_name}.png")
-            char_data["image"] = f"{new_name}.png"
-            with open(new_path, "w", encoding="utf-8") as f:
-                json.dump(char_data, f, indent=2, ensure_ascii=False)
-
-        print(f"Character renamed: {old_name} -> {new_name}")
-        return jsonify({"success": True, "new_name": new_name})
-        
+        result = _rename_character(old_name, new_name)
+        migrate_character_key_state(result["old_key"], result["new_key"])
+        return jsonify({"success": True, "new_name": result["new_key"], **result})
+    except CharacterKeyError as e:
+        return jsonify({"error": str(e)}), e.status
     except Exception as e:
-        print(f"âŒ Rename character failed: {e}")
+        print(f"❌ Rename character failed: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
-        
+
 
 # --------------------------------------------------
 # Recover orphaned chats from old character name

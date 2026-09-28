@@ -145,14 +145,14 @@
          Updated in loadProjects(). -->
     <div><strong id="topbar-title">Helcyon-WebUI</strong></div>
 
-    <!-- Electron-only window reload button. Sits in a fixed vertical stack BELOW
-         the model selector (right-aligned), under the config gear — moved out of
+    <!-- Electron-only window reload button. Sits in the fixed vertical stack
+         beneath the config gear — moved out of
          the top-right corner where it overlapped Electron's native min/max/close
          window controls (unclickable). The launcher nulls out the app menu, so
          Ctrl+R/F5 don't work — this is the in-window way to recover from a stuck
          page. Hidden in a normal browser (F5 works there). Marked no-drag. -->
     <button id="electron-reload-btn" onclick="location.reload()" title="Reload HWUI"
-      style="display:none; position:fixed; top:173px; right:12px; z-index:1001;
+      style="display:none; position:fixed; top:120px; right:12px; z-index:1001;
              width:26px; height:26px; align-items:center; justify-content:center;
              border-radius:6px; border:1px solid var(--modal-border,#2d394b);
              background:rgba(255,255,255,0.06); color:#e8e8e8; cursor:pointer;
@@ -164,7 +164,7 @@
       </svg>
     </button>
     <button id="helcyon-bench-export-btn" onclick="exportCurrentChatForHelcyonBench()" title="Export current chat for Helcyon-Bench"
-      style="position:fixed; top:218px; right:12px; z-index:1001;
+      style="position:fixed; top:155px; right:12px; z-index:1001;
              width:26px; height:26px; display:flex; align-items:center; justify-content:center;
              border-radius:6px; border:1px solid var(--modal-border,#2d394b);
              background:rgba(255,255,255,0.06); color:#e8e8e8; cursor:pointer;
@@ -176,29 +176,20 @@
         <line x1="12" y1="15" x2="12" y2="3"></line>
       </svg>
     </button>
-    <!-- Shard generator — asks the model for a JSON batch of shards and writes
-         .txt files straight to disk, bypassing chat/code-fence parsing entirely
-         (nested fences inside shard content can't break formatting). -->
-    <button id="shard-generator-btn" onclick="openShardGeneratorModal()" title="Generate shards with the model"
-      style="position:fixed; top:263px; right:12px; z-index:1001;
+    <!-- Direct shortcut to the Config page Advanced Settings panel. -->
+    <button id="advanced-settings-shortcut" onclick="window.location.href='/config?advanced=1'" title="Advanced Settings" aria-label="Open Advanced Settings"
+      style="position:fixed; top:190px; right:12px; z-index:1001;
              width:26px; height:26px; display:flex; align-items:center; justify-content:center;
              border-radius:6px; border:1px solid var(--modal-border,#2d394b);
              background:rgba(255,255,255,0.06); color:#e8e8e8; cursor:pointer;
              -webkit-app-region:no-drag; padding:0; line-height:0;">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 3v3"></path>
-        <path d="M18.4 5.6l-2.1 2.1"></path>
-        <path d="M21 12h-3"></path>
-        <path d="M12 8a4 4 0 1 0 4 4"></path>
-        <path d="M12 21v-3"></path>
-        <path d="M5.6 18.4l2.1-2.1"></path>
-        <path d="M3 12h3"></path>
-        <path d="M5.6 5.6l2.1 2.1"></path>
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M14.7 6.3a4 4 0 0 0-5-5L7.4 3.6l3 3L8.6 8.4l-3-3-2.3 2.3a4 4 0 0 0 5 5l8.9 8.9a2.1 2.1 0 0 0 3-3z"></path>
       </svg>
     </button>
     <button id="helcyon-bench-open-btn" onclick="window.location.href='/config?tab=helcyon-bench'" title="Open Helcyon-Bench" aria-label="Open Helcyon-Bench"
-      style="position:fixed; top:308px; right:12px; z-index:1001;
+      style="position:fixed; top:225px; right:12px; z-index:1001;
              width:26px; height:26px; display:flex; align-items:center; justify-content:center;
              border-radius:6px; border:1px solid var(--modal-border,#2d394b);
              background:rgba(255,255,255,0.06); color:#e8e8e8; cursor:pointer;
@@ -220,8 +211,31 @@
       }
     </script>
 
-    <!-- Model trigger — floating below top bar, right aligned -->
-    <div style="position:fixed; top:72px; right:12px; z-index:999; display:flex; align-items:center; gap:8px;">
+    <!-- Model trigger and backend indicator — floating just below the top bar
+         at the left edge of the chat area. Keep the model first so the two
+         controls read in the same order as the header layout. -->
+    <div style="position:fixed; top:72px; left:286px; z-index:999; display:flex; align-items:center; gap:8px;">
+      <button id="model-display" onclick="toggleModelPicker()" title="Switch model" style="
+        background: rgba(74, 106, 138, 0.18);
+        border: 1px solid rgba(74, 106, 138, 0.75);
+        border-radius: 20px;
+        position: relative;
+        overflow: hidden;
+        padding: 7px 16px 7px 14px;
+        font-size: 14px;
+        color: #e7edf4;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        white-space: nowrap;
+        max-width: 280px;
+        transition: border-color 0.15s, background 0.15s;
+      " onmouseover="this.style.borderColor='#4a6a8a'; this.style.background='rgba(74,106,138,0.28)'" onmouseout="this.style.borderColor='rgba(74,106,138,0.75)'; this.style.background='rgba(74,106,138,0.18)'">
+        <span id="model-load-progress" aria-hidden="true" style="position:absolute; inset:0 auto 0 0; width:0; background:rgba(74,106,138,0.35); pointer-events:none;"></span>
+        <span id="model-display-name" style="position:relative; z-index:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Loading...</span>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="position:relative; z-index:1; flex-shrink:0; opacity:0.45;"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      </button>
       <!-- OpenAI active indicator -->
       <div id="openai-indicator" title="OpenAI backend active" style="display:none; align-items:center; gap:7px; background:rgba(0,180,100,0.12); border:1px solid rgba(0,200,100,0.35); border-radius:20px; padding:6px 14px; white-space:nowrap;">
         <span style="width:8px; height:8px; border-radius:50%; background:#00e87a; display:inline-block; box-shadow:0 0 6px #00e87a; flex-shrink:0;"></span>
@@ -238,27 +252,6 @@
           <span id="anthropic-indicator-model" style="font-size:10px; color:#2aaa66;">claude</span>
         </div>
       </div>
-      <button id="model-display" onclick="toggleModelPicker()" title="Switch model" style="
-        background: rgba(210, 130, 20, 0.18);
-        border: 1px solid rgba(255, 175, 55, 0.55);
-        border-radius: 20px;
-        position: relative;
-        overflow: hidden;
-        padding: 7px 16px 7px 14px;
-        font-size: 14px;
-        color: #fff0cf;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        gap: 7px;
-        white-space: nowrap;
-        max-width: 190px;
-        transition: border-color 0.15s, background 0.15s;
-      " onmouseover="this.style.borderColor='#ffb347'; this.style.background='rgba(220,140,20,0.28)'" onmouseout="this.style.borderColor='rgba(255,175,55,0.55)'; this.style.background='rgba(210,130,20,0.18)'">
-        <span id="model-load-progress" aria-hidden="true" style="position:absolute; inset:0 auto 0 0; width:0; background:rgba(235,145,25,0.42); pointer-events:none;"></span>
-        <span id="model-display-name" style="position:relative; z-index:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Loading...</span>
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="position:relative; z-index:1; flex-shrink:0; opacity:0.45;"><polyline points="6 9 12 15 18 9"></polyline></svg>
-      </button>
     </div>
     <!-- Hidden badge containers — populated by loadModelDisplay, shown inside picker -->
     <div id="model-vision-badge" style="display:none;"></div>
@@ -269,7 +262,7 @@
       display: none;
       position: fixed;
       top: 110px;
-      right: 12px;
+      left: 286px;
       background: var(--modal-bg, #1a1f2a);
       border: 1px solid var(--modal-border, #2d394b);
       border-radius: 10px;
@@ -288,7 +281,7 @@
       </div>
     </div>
     <div id="settings-link" onclick="toggleCogMenu(event)" title="Settings"
-         style="position:fixed; top:135px; right:12px; z-index:1001; margin:0; cursor:pointer;">
+         style="position:fixed; top:82px; right:12px; z-index:1001; margin:0; cursor:pointer;">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path>
         <circle cx="12" cy="12" r="3"></circle>
@@ -602,9 +595,12 @@
             <button id="char-img-next" class="char-slide-btn" onclick="charSlide(1)" title="Next image">&#8250;</button>
             <div id="char-slide-dots"></div>
           </div>
-          <div>
-            <strong id="character-name"></strong><br>
+          <div id="character-info">
+            <strong id="character-name"></strong>
             <small id="system-prompt">System prompt will appear here</small>
+            <button id="character-thoughts-btn" type="button" onclick="showCharacterThoughts()" title="View this character's persistent Response Intent">
+              ✦ Character's thoughts
+            </button>
           </div>
           <div id="character-selects">
             <div style="display:flex; flex-direction:column; align-items:flex-end; gap:2px;">
@@ -751,23 +747,36 @@
   <div id="author-note-modal" class="modal">
     <div class="modal-content">
       <div class="modal-header">
-        <h3>Author's Note</h3>
+        <h3>Response Intent</h3>
         <span class="close" onclick="closeAuthorNote()">&times;</span>
       </div>
       <div class="modal-body">
+        <label for="character-response-intent">Character / persistent Response Intent</label>
+        <textarea
+          id="character-response-intent"
+          data-hwui-prompt-editor
+          placeholder="Examples:
+- I shouldn't ask him about his disastrous holiday unless he brings it up.
+- I don't like giving generic pep talks or motivational reassurance.
+- I should keep casual replies natural and avoid overanalysing everything.
+- I can tease him when the moment calls for it."
+          rows="6"
+        ></textarea>
+        <small style="color: #aaa; display: block; margin-top: 8px;">
+          Saved on the selected character and kept separate from each chat.
+        </small>
+        <label for="author-note" style="display:block; margin-top:16px;">Temporary / this-chat Response Intent</label>
         <textarea 
           id="author-note"
           data-hwui-prompt-editor
-          placeholder="Add scene direction, tone adjustments, style guidance...
-          
-Examples:
-- Write in a more playful, flirty tone
-- Keep responses under 3 paragraphs
-- Focus on sensory details and atmosphere"
+          placeholder="Examples:
+- I'm suspicious of what he just told me, but I don't want to show it yet.
+- The atmosphere feels tense and I should sound more guarded.
+- I'm in a playful mood tonight; I can give him a bit of shit."
           rows="10"
         ></textarea>
         <small style="color: #aaa; display: block; margin-top: 8px;">
-          This note influences the next response. Saved per-chat.
+          Saved only in this chat. A new chat starts with this field empty.
         </small>
       </div>
       <div class="modal-footer">
@@ -1143,93 +1152,7 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
     }
   }
 
-  async function registerBenchSubmission(context) {
-    showHwuiProModal('Benchmark Prompt Transfer', 'Sending benchmark prompts into chat is available in HWUI Pro.');
-    return false;
-    if (!context) return false;
-    if (!currentChatId) {
-      // Registration must never fail silently while generation continues.
-      HelcyonBenchPromptTransfer.updateAssociation(
-        localStorage,
-        context.association_id,
-        { status: 'error', generation_status: 'error', error: 'This chat has no stable id yet, so the benchmark turn could not be registered.' }
-      );
-      hwuiToast('Benchmark tracking failed: this chat has no stable id yet, so the response cannot be captured automatically.', 'error', 6000);
-      refreshBenchChatControl();
-      return false;
-    }
-    const payload = {
-      association_id: context.association_id,
-      run_id: context.run_id,
-      benchmark_id: context.benchmark_id,
-      benchmark_name: context.benchmark_name,
-      test_id: context.test_id,
-      test_title: context.test_title,
-      prompt_number: context.prompt_number,
-      category: context.category,
-      candidate_model_slot: context.candidate_model_slot,
-      candidate_model_name: context.candidate_model_name,
-      target_model: context.target_model,
-      chat_id: currentChatId,
-      target_chat_filename: currentChatFilename,
-      original_prompt: context.original_prompt || context.prompt_text,
-      submitted_prompt: context.submitted_prompt_text,
-      source_user_message_id: context.source_user_message_id,
-      source_user_position: context.source_user_position,
-      submitted_at: context.submitted_at,
-      character: context.character || currentCharacterKey || currentCharName || ''
-    };
-    let response;
-    let result;
-    try {
-      response = await fetch('/api/helcyon-bench/capture-associations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      result = await response.json();
-    } catch (error) {
-      // A network hiccup here must not abort the send, and must be visible.
-      HelcyonBenchPromptTransfer.updateAssociation(
-        localStorage,
-        context.association_id,
-        { status: 'error', generation_status: 'error', error: 'Capture association could not be registered: ' + (error.message || error) }
-      );
-      hwuiToast('Benchmark registration failed: ' + (error.message || error), 'error', 6000);
-      refreshBenchChatControl();
-      return false;
-    }
-    if (!response.ok) {
-      HelcyonBenchPromptTransfer.updateAssociation(
-        localStorage,
-        context.association_id,
-        { status: 'error', generation_status: 'error', error: result.error || 'Capture association could not be registered.' }
-      );
-      hwuiToast('Benchmark registration failed: ' + (result.error || 'the capture association was rejected.'), 'error', 6000);
-      refreshBenchChatControl();
-      return false;
-    }
-    const registered = HelcyonBenchPromptTransfer.updateAssociation(
-      localStorage,
-      context.association_id,
-      { ...result.association, status: 'submitted', chat_id: currentChatId }
-    );
-    if (registered) {
-      try {
-        const state = HelcyonBenchPromptTransfer.applyAssociationToSession(
-          await loadIntegratedBenchSession(),
-          registered
-        );
-        state.associations = HelcyonBenchPromptTransfer.getAssociations(localStorage);
-        state.active_association_id = registered.association_id;
-        await saveIntegratedBenchSession(state);
-      } catch (error) {
-        console.warn('Integrated Bench session save failed:', error);
-      }
-    }
-    refreshBenchChatControl();
-    return true;
-  }
+  async function registerBenchSubmission(context) { showHwuiProModal("Helcyon-Bench", "Live benchmark capture is available in HWUI Pro."); return; }
 
   async function updateBenchGenerationState(sourceUserMessageId, status, assistantMessageId) {
     let context = activeBenchSubmissionForSource(sourceUserMessageId);
@@ -1597,55 +1520,7 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
     }
   }
 
-  async function captureActiveBenchResponse() {
-    showHwuiProModal('Benchmark Response Capture', 'Benchmark response capture is available in HWUI Pro.');
-    return;
-    const association = await refreshBenchChatControl();
-    if (!association || !benchAssociationMatchesCurrentChat(association)) return;
-    if (association.status !== 'ready_to_capture' && association.generation_status !== 'ready_to_capture') return;
-
-    const existingState = await loadIntegratedBenchSession();
-    const key = HelcyonBenchPromptTransfer.responseKey(association);
-    if (String(existingState.responses?.[key] || '').trim() && !window.confirm(
-      `Model ${association.candidate_model_slot}'s response field already contains text. Replace it with the exact captured HWUI response?`
-    )) return;
-
-    const button = document.getElementById('bench-chat-capture');
-    button.disabled = true;
-    try {
-      const response = await fetch(
-        `/api/helcyon-bench/capture-associations/${encodeURIComponent(association.association_id)}/capture`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ candidate_model_slot: association.candidate_model_slot })
-        }
-      );
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'The exact benchmark response could not be captured.');
-      const capturedAssociation = { ...association, ...(result.association || {}), status: 'captured' };
-      HelcyonBenchPromptTransfer.updateAssociation(
-        localStorage,
-        association.association_id,
-        capturedAssociation
-      );
-      const state = {
-        ...HelcyonBenchPromptTransfer.applyAssociationToSession(
-          existingState,
-          capturedAssociation,
-          result
-        ),
-        ...(result.session || {})
-      };
-      state.focus_response_on_return = true;
-      localStorage.setItem(HelcyonBenchPromptTransfer.FORM_STATE_KEY, JSON.stringify(state));
-      window.location.href = HelcyonBenchPromptTransfer.returnUrl(capturedAssociation);
-    } catch (error) {
-      button.disabled = false;
-      hwuiToast(error.message, 'error', 5000);
-      await refreshBenchChatControl();
-    }
-  }
+  async function captureActiveBenchResponse() { showHwuiProModal("Helcyon-Bench", "Capturing live chat responses is available in HWUI Pro."); return; }
 
   function getChatInputDraftContext() {
     const dropdown = document.getElementById('character-select');
@@ -2365,6 +2240,124 @@ function splitThinking(raw) {
   }
   return { thinking, answer, open: false };
 }
+// ── Per-message reactions ────────────────────────────────────────────────
+function createMessageReactionBadge(message) {
+  const reaction = HwuiChatCore.normalizeReaction(message && message.reaction);
+  if (!reaction) return null;
+  const badge = document.createElement('span');
+  badge.className = 'message-reaction-badge';
+  badge.textContent = reaction;
+  badge.title = 'Reaction';
+  return badge;
+}
+
+function updateMessageReactionBadge(wrapper, message) {
+  if (!wrapper) return;
+  const existing = wrapper.querySelector('.message-reaction-badge');
+  if (existing) existing.remove();
+  const badge = createMessageReactionBadge(message);
+  if (!badge) return;
+  const stack = wrapper.querySelector('.message-stack');
+  const actionBar = stack && stack.querySelector('.msg-action-bar');
+  if (actionBar) stack.insertBefore(badge, actionBar);
+  else if (stack) stack.appendChild(badge);
+}
+
+async function setDesktopMessageReaction(message, wrapper, reaction) {
+  if (!message) return;
+  HwuiChatCore.setMessageReaction([message], message.message_id, reaction);
+  window._chatDirty = true;
+  updateMessageReactionBadge(wrapper, message);
+  const saved = await autoSaveCurrentChat();
+  if (saved && saved.ok === false && !saved.conflict) {
+    showToast('Reaction could not be saved.', 3000);
+  }
+}
+
+function storeDesktopModelReaction(reaction, sourceMessageId) {
+  if (!sourceMessageId || !Array.isArray(window.loadedChat)) return;
+  HwuiChatCore.setMessageReaction(window.loadedChat, sourceMessageId, reaction);
+}
+
+function applyDesktopModelReaction(reaction, sourceMessageId) {
+  if (!reaction || !sourceMessageId || !Array.isArray(window.loadedChat)) return false;
+  storeDesktopModelReaction(reaction, sourceMessageId);
+  const target = window.loadedChat.find(message => message.message_id === sourceMessageId);
+  const wrapper = target && typeof document.querySelector === 'function'
+    ? document.querySelector(`.message-wrapper[data-message-id="${sourceMessageId}"]`)
+    : null;
+  if (!target || !wrapper) return false;
+  updateMessageReactionBadge(wrapper, target);
+  return true;
+}
+
+// The reply's final say on its source message's reaction: set it, or clear
+// it when this reply carried none. Unlike applyDesktopModelReaction, the
+// visible badge follows a CLEAR too — regenerate keeps the user bubble in the
+// DOM, so without this a reaction from the discarded reply stayed on screen
+// after the data had already dropped it.
+function syncDesktopModelReaction(reaction, sourceMessageId) {
+  storeDesktopModelReaction(reaction, sourceMessageId);
+  if (!sourceMessageId || !Array.isArray(window.loadedChat)) return;
+  const target = window.loadedChat.find(message => message.message_id === sourceMessageId);
+  const wrapper = target && typeof document.querySelector === 'function'
+    ? document.querySelector(`.message-wrapper[data-message-id="${sourceMessageId}"]`)
+    : null;
+  if (target && wrapper) updateMessageReactionBadge(wrapper, target);
+}
+
+function createMessageReactionControl(message, wrapper) {
+  const holder = document.createElement('span');
+  holder.className = 'reaction-control-wrap';
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.title = 'React';
+  button.setAttribute('aria-label', 'React to message');
+  button.innerHTML = '<svg class="reaction-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">' +
+    '<circle cx="10.5" cy="11.5" r="7.5"></circle>' +
+    '<path d="M7.2 13.8c.8 1.2 1.9 1.8 3.3 1.8s2.5-.6 3.3-1.8"></path>' +
+    '<path d="M8.1 9.5h.01M12.9 9.5h.01M18.5 4.5v5M16 7h5"></path>' +
+    '</svg>';
+  const picker = document.createElement('span');
+  picker.className = 'reaction-picker';
+  HwuiChatCore.REACTION_EMOJIS.forEach(emoji => {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.textContent = emoji;
+    option.title = `React ${emoji}`;
+    option.setAttribute('aria-label', `React ${emoji}`);
+    option.onclick = async event => {
+      event.stopPropagation();
+      picker.classList.remove('is-open');
+      await setDesktopMessageReaction(message, wrapper, emoji);
+    };
+    picker.appendChild(option);
+  });
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'reaction-remove';
+  remove.textContent = '×';
+  remove.title = 'Remove reaction';
+  remove.setAttribute('aria-label', 'Remove reaction');
+  remove.onclick = async event => {
+    event.stopPropagation();
+    picker.classList.remove('is-open');
+    await setDesktopMessageReaction(message, wrapper, null);
+  };
+  picker.appendChild(remove);
+  button.onclick = event => {
+    event.stopPropagation();
+    document.querySelectorAll('.reaction-picker').forEach(other => {
+      if (other !== picker) other.classList.remove('is-open');
+    });
+    picker.classList.toggle('is-open');
+  };
+  holder.addEventListener('mouseleave', () => picker.classList.remove('is-open'));
+  holder.appendChild(button);
+  holder.appendChild(picker);
+  return holder;
+}
+
 // Lazily build + update a collapsible thinking panel inside a model message,
 // inserted directly above the answer element. Plain-text body (reasoning shown
 // verbatim, pre-wrap CSS keeps newlines) — never parsed as HTML/markdown, so it
@@ -2395,8 +2388,10 @@ function renderThinkingPanel(msgDiv, answerEl, text, chatEl) {
 if (typeof marked === "undefined") {
   console.warn("⚠️ Marked.js not found — using custom parser.");
   window.marked = {
-    parse: function(txt) {
+    parse: function(txt, options) {
       if (!txt) return '';
+      // Tokenize CRLF and CR like LF; leave the stored response untouched.
+      txt = String(txt).replace(/\r\n?/g, '\n');
 
       function parseInline(text) {
         // Markdown links FIRST (before emphasis) so URL contents (underscores/
@@ -2521,7 +2516,7 @@ if (typeof marked === "undefined") {
 
         // Blockquote block (> lines)
         if (lines.every(l => /^>\s?/.test(l))) {
-          const inner = lines.map(l => l.replace(/^>\s?/, '')).join(' ');
+          const inner = lines.map(l => l.replace(/^>\s?/, '')).join(options && options.breaks ? '<br>' : ' ');
           html += `<blockquote>${parseInline(inner)}</blockquote>`;
           return;
         }
@@ -2574,7 +2569,8 @@ if (typeof marked === "undefined") {
         // Regular paragraph — join lines, no space before punctuation-only lines
         const para = lines.reduce((acc, line, i) => {
           if (i === 0) return line;
-          return /^[.,!?;:]/.test(line) ? acc + line : acc + ' ' + line;
+          if (/^[.,!?;:]/.test(line)) return acc + line;
+          return acc + (options && options.breaks ? '\n' : ' ') + line;
         }, '');
         html += `<p>${parseInline(para)}</p>`;
       });
@@ -3959,7 +3955,7 @@ async function loadChatHistory() {
       
       const spanText = document.createElement('div');
       spanText.className = 'model-text';
-      let html = marked.parse(sanitizeMarkdown(entry.model));
+      let html = marked.parse(sanitizeMarkdown(entry.model), { breaks: true });
       html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
       // NOTE: renderModelHTML called after span is in DOM (see modelDiv.appendChild below)
       spanText._pendingHtml = html;
@@ -5626,6 +5622,8 @@ async function _openChatInternal(filename, loadGeneration) {
           var userMessageStack = document.createElement("div");
           userMessageStack.className = "message-stack";
           userMessageStack.appendChild(div);
+          var userReactionBadge = createMessageReactionBadge(msg);
+          if (userReactionBadge) userMessageStack.appendChild(userReactionBadge);
           userMessageStack.appendChild(userActionBar);
 
           wrapper.appendChild(userAvatar);
@@ -5652,7 +5650,7 @@ async function _openChatInternal(filename, loadGeneration) {
 
           // Use Marked.js for consistent formatting (same as live streaming)
           if (typeof marked !== "undefined") {
-            let html = marked.parse(sanitizeMarkdown(content));
+            let html = marked.parse(sanitizeMarkdown(content), { breaks: true });
             html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
             modelSpan._pendingHtml = html;
           } else {
@@ -5741,6 +5739,7 @@ async function _openChatInternal(filename, loadGeneration) {
           modelActionBar.appendChild(modelContextBtn);
           modelActionBar.appendChild(modelDeleteBtn);
           modelActionBar.appendChild(modelBranchBtn);
+          modelActionBar.appendChild(createMessageReactionControl(msg, wrapper));
           if (modelShardExportBtn) modelActionBar.appendChild(modelShardExportBtn);
 
           var generatedImageDisplay = makeGeneratedImageDisplay(generatedImageUrlsForAssistant);
@@ -5768,6 +5767,8 @@ async function _openChatInternal(filename, loadGeneration) {
           var modelMessageStack = document.createElement("div");
           modelMessageStack.className = "message-stack";
           modelMessageStack.appendChild(div);
+          var modelReactionBadge = createMessageReactionBadge(msg);
+          if (modelReactionBadge) modelMessageStack.appendChild(modelReactionBadge);
           modelMessageStack.appendChild(modelActionBar);
 
           wrapper.appendChild(modelAvatar);
@@ -6493,22 +6494,35 @@ async function sendPrompt() {
         conversationHistory: chatToSend,
         currentTurnHasImage: currentTurnHasImage,
         genuineUserSend: options.genuineUserSend === true,
+        diagnosticHistoryIds: (window.loadedChat || []).map(message => message?.message_id || null),
         // The Author's Note is resolved server-side from this chat, so desktop
         // and mobile get the same one. Only a one-turn override is sent: the
         // memory-confirm instruction, or a legacy local note not yet migrated.
         authorNoteOverride: memoryConfirmOverride || HwuiChatCore.pendingLegacyAuthorNote(localStorage, requestChatFilename),
-        extra: automaticCheckin ? {
-          automatic_event: 'random_checkin',
-          automatic_event_text: options.triggerText,
-          checkin_id: options.checkinId,
-          fire_id: options.fireId
-        } : null,
+        extra: {
+          generation_kind: automaticCheckin ? 'automatic_checkin' :
+            isRegenerate === true ? 'regeneration' :
+            isRegenerate === 'retry' ? 'retry' : 'normal',
+          ...(automaticCheckin ? {
+            automatic_event: 'random_checkin',
+            automatic_event_text: options.triggerText,
+            checkin_id: options.checkinId,
+            fire_id: options.fireId
+          } : {})
+        },
       });
       const response = await fetch("/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(chatRequestBody)
       });
+      const reactionDiagnosticId = response.headers.get('X-HWUI-Reaction-Diagnostic');
+      if (reactionDiagnosticId) {
+        console.info('🧪 REACTION DIAGNOSTIC response identified', {
+          request_id: reactionDiagnosticId,
+          source_message_id: replySourceUserMessageId
+        });
+      }
       
       if (!response.ok) {
         // Surface the server's actual message (e.g. the vision-capability
@@ -6557,11 +6571,14 @@ async function sendPrompt() {
           }), 0);
           return;
         }
-        const message = data.text || "⚠️ Unknown response";
+        const reactionOutput = HwuiChatCore.parseAssistantReaction(data.text || '', { final: true });
+        const message = reactionOutput.text || "⚠️ Unknown response";
         const assistantMessageId = createHwuiMessageId();
-        const assistantCompleted = typeof data.text === 'string' && data.text.trim().length > 0;
+        const assistantCompleted = message.trim().length > 0 && message !== "⚠️ Unknown response";
         const assistantStatus = assistantCompleted ? 'completed' : 'error';
         const generationCompletedAt = new Date().toISOString();
+
+        syncDesktopModelReaction(reactionOutput.reaction, replySourceUserMessageId);
 
         const modelWrapper = document.createElement("div");
         modelWrapper.className = "message-wrapper model-wrapper";
@@ -6679,6 +6696,7 @@ async function sendPrompt() {
       
       const msgDiv = document.createElement("div");
       msgDiv.className = "message model-msg";
+      msgDiv.classList.add('streaming-pending');
       msgDiv.dataset.id = chat.children.length;
 
       const spanText = document.createElement("div");
@@ -6710,12 +6728,27 @@ async function sendPrompt() {
       modelWrapper.appendChild(modelMessageStack);
       
       console.log('📍 STREAMING: Appending wrapper to DOM');
-      chat.appendChild(modelWrapper);
+      // Hidden BEFORE it enters the document: an empty bubble still carries the
+      // message padding, border, background and timestamp, so it paints as a
+      // bare horizontal bar the moment anything forces layout between the
+      // append and the hide.
       modelWrapper.style.display = 'none'; // reveal only after ruling out an internal action prefix
+      chat.appendChild(modelWrapper);
       chat.scrollTop = chat.scrollHeight;
 
       const streamEl = spanText;
-      
+
+      // The SINGLE authority for making the in-flight assistant turn visible.
+      // Both gates lift together — the wrapper (avatar + action row) and the
+      // bubble itself, which keeps its padding/border even with no text — and
+      // it is only ever called once there is something to SEE: a rendered
+      // answer slice, a reasoning panel, or a status notice. Never on chunk
+      // receipt; see consumeDecodedChunk().
+      const revealStreamingMessage = () => {
+        msgDiv.classList.remove('streaming-pending');
+        modelWrapper.style.display = '';
+      };
+
       streamEl.style.wordWrap = 'break-word';
       streamEl.style.overflowWrap = 'break-word';
 
@@ -6729,6 +6762,11 @@ async function sendPrompt() {
       let cleanedMessage = "";    // final cleaned text — set when the drip finishes.
       let rawAll = "";            // raw stream incl. thinking sentinels (pre-demux)
       let prevAnswerLen = 0;      // answer chars already routed to TTS
+      // How much of the CLEANED answer has already been handed to TTS.
+      let ttsSpokenLen = 0;
+      let latestModelReaction = null;
+      let modelReactionAttached = false;
+      let reactionDiagnosticParserLogged = false;
       let streamReadFailed = false;
       let hwuiActionState = 'pending'; // forming action prefixes stay out of display/TTS
 
@@ -6743,8 +6781,9 @@ async function sendPrompt() {
       // upstream API behaviour, not something we can fix at source). The reader
       // loop is a pure PRODUCER (appends raw chunks + buffers TTS, no rendering);
       // this rAF loop is the CONSUMER that reveals characters at an adaptive rate.
-      // marked.parse() runs on the ACCUMULATED revealed text (not the single drip
-      // char), so markdown formatting renders correctly as the text grows.
+      // Ordinary prose follows the accumulated source text. Fenced replies use
+      // the live Markdown path from the working build so code blocks appear
+      // while the model writes them.
       let cleanedFull   = "";     // stripChatML(fullMessage) — refreshed per chunk by the reader
       let revealedCount = 0;      // chars of cleanedFull currently shown
       let streamDone    = false;  // reader loop finished (done / error / cancel)
@@ -6754,18 +6793,43 @@ async function sendPrompt() {
       // in the finally block. See changes.md (June 6 2026 — pagehide beacon).
       window._streamingPartial = "";
 
+      let renderedFenceMarkdown = false;
+
       function renderRevealed(isFinal) {
         const slice = cleanedFull.slice(0, revealedCount);
-        let html = marked.parse(sanitizeMarkdown(slice));
-        html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
         if (isFinal) {
           cleanedMessage = cleanedFull;   // hand the full cleaned text to post-stream logic
+          HwuiChatCore.finishStreamingAssistantText(streamEl);
+          let html = marked.parse(sanitizeMarkdown(slice), { breaks: true });
+          html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
           renderModelHTML(streamEl, html);
           addCodeCopyButtons(streamEl.parentNode || streamEl);
-        } else {
+        } else if (/^ {0,3}(?:`{3,}|~{3,})/m.test(slice)) {
+          // The working build parsed each revealed prefix as Markdown. Scope
+          // that behaviour to fenced replies; plain prose keeps its stable
+          // source-backed stream layout.
+          HwuiChatCore.finishStreamingAssistantText(streamEl);
+          let html = marked.parse(sanitizeMarkdown(slice));
+          html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
           renderLiveModelHTML(streamEl, html);
+          renderedFenceMarkdown = true;
+        } else {
+          if (renderedFenceMarkdown) {
+            renderModelHTML(streamEl, '');
+            renderedFenceMarkdown = false;
+          }
+          HwuiChatCore.renderStreamingAssistantText(streamEl, slice);
         }
-        chat.scrollTop = chat.scrollHeight;
+        // A leading reaction is attached as soon as its marker is parsed, but
+        // keep the empty assistant bubble collapsed until the first visible
+        // answer slice has actually been rendered.
+        if (slice.trim()) revealStreamingMessage();
+        // On desktop #chat grows with the page; it is often not the scrolling
+        // element. Follow the latest streamed text on whichever element owns
+        // vertical scrolling, leaving the fixed composer in view.
+        const scrollRoot = chat.scrollHeight > chat.clientHeight + 1
+          ? chat : (document.scrollingElement || document.documentElement);
+        scrollRoot.scrollTop = scrollRoot.scrollHeight;
       }
 
       // Hidden pages (minimized/covered window) get NO animation frames, so the
@@ -6855,12 +6919,29 @@ async function sendPrompt() {
         const _parts = splitThinking(rawAll);
         const answerDelta = _parts.answer.slice(prevAnswerLen);
         fullMessage = _parts.answer;
+        const reactionAnswer = HwuiChatCore.parseAssistantReaction(_parts.answer, { final: false });
+        if (reactionAnswer.reaction) {
+          latestModelReaction = reactionAnswer.reaction;
+          if (!modelReactionAttached) {
+            modelReactionAttached = applyDesktopModelReaction(
+              reactionAnswer.reaction,
+              replySourceUserMessageId,
+            );
+          }
+        }
+        if (reactionDiagnosticId && reactionAnswer.reaction && !reactionDiagnosticParserLogged) {
+          reactionDiagnosticParserLogged = true;
+          console.info('🧪 REACTION DIAGNOSTIC streaming parser detected marker', {
+            request_id: reactionDiagnosticId,
+            reaction: reactionAnswer.reaction
+          });
+        }
 
         // Reasoning can arrive before the first answer token. Render it before
         // the image-action prefix guard (which deliberately waits while the
         // answer is empty) so the shared panel updates live during thinking.
         if (_parts.thinking) {
-          modelWrapper.style.display = '';
+          revealStreamingMessage();
           renderThinkingPanel(msgDiv, streamEl, _parts.thinking, chat);
         }
 
@@ -6881,28 +6962,45 @@ async function sendPrompt() {
           window._streamingPartial = '';
           return;
         }
-        modelWrapper.style.display = '';
+        // Deliberately NO reveal here — this function is the PRODUCER. A chunk
+        // has arrived but nothing has been rendered into the bubble yet, so
+        // revealing from here paints the empty bubble as a horizontal bar
+        // until the typewriter's first frame lands. renderRevealed() owns
+        // visibility for streamed text (it reveals on the first rendered
+        // slice) and the reasoning branch above owns it for a thinking-first
+        // reply, so one rule covers every backend with and without a leading
+        // reaction marker.
         prevAnswerLen = _parts.answer.length;
 
         // Buffer text for TTS on RECEIPT (not on the drip) so audio isn't delayed
         // by the typewriter. Only the answer delta is spoken (never the reasoning).
-        if (answerDelta && typeof bufferTextForTTS === 'function') {
-          const ttsChunk = answerDelta
-            .replace(/<\|im_start\|>(assistant|user|system)[^\n]*/gi, '')
-            .replace(/<\|im_start\|>/gi, '')
-            .replace(/<\|im_end\|>/gi, '')
-            .replace(/<\/?\|im_end\|?>/gi, '')
-            .replace(/\bim_end\|?>/gi, '')
-            .replace(/_end\|?>/gi, '')
-            .replace(/\n(?:user|assistant|system)(?:\n|:)[\s\S]*$/i, '')  // only match actual ChatML turn headers
-            .replace(new RegExp(charName + ':\\s*', 'gim'), '')
-            .replace(/^User:\s*/gim, '')
-            .replace(/^Assistant:\s*/gim, '');
-          bufferTextForTTS(ttsChunk);
+        // Speech takes the SAME cleaned text as the display, through the
+        // shared core. This block used to do its own partial cleanup —
+        // ChatML tokens and role prefixes only — so every guard that lives in
+        // stripChatMLOutsideCodeBlocks (memory scaffolding, MEMORY_ADD,
+        // Author's Note, STYLE REMINDER, fenced code) governed what was shown
+        // and saved but never what was said. On 2026-09-19 a reply that
+        // rendered completely clean audibly spoke internal <STORED_FACTS>
+        // memory content. ttsSpeakableDelta also withholds any tail that is
+        // still an unresolved control construct, because audio cannot be
+        // un-spoken the way a rendered character can be re-rendered.
+        if (typeof bufferTextForTTS === 'function') {
+          const speakable = HwuiChatCore.ttsSpeakableDelta(
+            reactionAnswer.text, ttsSpokenLen, { charName: charName, userName: userName }
+          );
+          ttsSpokenLen = speakable.spokenLength;
+          if (speakable.text) bufferTextForTTS(speakable.text);
         }
 
         // Refresh the cleaned text the drip reveals from (same cleaning as before).
-        cleanedFull = stripChatMLOutsideCodeBlocks(fullMessage, charName, userName).trim();
+        // streaming: the partial-opener holdback may truncate the tail, and
+        // must, so a tag cannot flash. The whole answer is re-cleaned on the
+        // next chunk and the final pass below runs WITHOUT streaming.
+        cleanedFull = stripChatMLOutsideCodeBlocks(
+          reactionAnswer.text, charName, userName, {
+            streaming: true,
+          }
+        );
         window._streamingPartial = cleanedFull;   // expose for the pagehide beacon
       }
 
@@ -6929,6 +7027,14 @@ async function sendPrompt() {
       // observe the flag, so freeze here too before marking the stream complete.
       if (window._generationCancelled) {
         cleanedFull = freezeCancelledGenerationText(cleanedFull, revealedCount);
+      }
+      const finalReactionOutput = HwuiChatCore.parseAssistantReaction(fullMessage, { final: true });
+      if (finalReactionOutput.reaction) latestModelReaction = finalReactionOutput.reaction;
+      const reactionFreeFullMessage = finalReactionOutput.text;
+      if (!window._generationCancelled) {
+        cleanedFull = stripChatMLOutsideCodeBlocks(
+          finalReactionOutput.text, charName, userName
+        );
       }
 
       // Signal the drip we're done; normal completion flushes the remainder.
@@ -6967,7 +7073,7 @@ async function sendPrompt() {
         }), 0);
         return;
       }
-      modelWrapper.style.display = '';
+      if (cleanedMessage.trim() || (msgDiv && msgDiv._thinkPanel)) revealStreamingMessage();
 
       // Collapse the thinking panel once the answer is complete (claude.ai-style:
       // reasoning stays available behind the disclosure, out of the way).
@@ -6978,10 +7084,15 @@ async function sendPrompt() {
       // Only retry if model sent nothing at all (fullMessage empty).
       // Checking cleanedMessage caused retries when stripping ate the content,
       // firing a 2nd /chat POST → browser drops 1st connection → srv stop: cancel task.
-      if (!window._generationCancelled && (!fullMessage || fullMessage.trim().length < 2)) {
+      if (!window._generationCancelled && (!reactionFreeFullMessage || reactionFreeFullMessage.trim().length < 2)) {
         if (isRegenerate === 'retry') {
           console.error('❌ Empty response on retry too — giving up.');
           streamEl.innerHTML = '<em style="color:#e07070; font-size:0.9em;">⚠️ Model returned empty response twice. Try regenerating manually.</em>';
+          // The bubble is still collapsed from the start of the stream, so the
+          // notice has to lift the gate itself — otherwise a reaction-only or
+          // empty reply leaves an invisible, empty assistant element behind and
+          // the user is told nothing at all.
+          revealStreamingMessage();
           if (replySourceUserMessageId) {
             await updateBenchGenerationState(replySourceUserMessageId, 'error');
           }
@@ -6989,6 +7100,7 @@ async function sendPrompt() {
         } else {
           console.warn('⚠️ Empty response detected (model sent nothing) — retrying once...');
           streamEl.innerHTML = '<em style="color:#888; font-size:0.9em;">⟳ Empty response, retrying…</em>';
+          revealStreamingMessage();   // same reason as the give-up branch above
           try { if (window._activeReader) await window._activeReader.cancel(); } catch(e) {}
           window._activeReader = null;
           await new Promise(r => setTimeout(r, 900));
@@ -7001,12 +7113,23 @@ async function sendPrompt() {
       if (!window._generationCancelled && (!cleanedMessage || cleanedMessage.trim().length < 2)) {
         console.warn('⚠️ cleanedMessage empty after stripping — raw fallback');
         // Same fallback mobile uses via HwuiChatCore.finalizeAssistantText().
-        cleanedMessage = HwuiChatCore.rawAssistantFallback(fullMessage);
+          cleanedMessage = HwuiChatCore.rawAssistantFallback(reactionFreeFullMessage);
       }
       // ─────────────────────────────────────────────────────────────────
 
       // Flush remaining TTS buffer after streaming ends
       if (typeof flushTTSBuffer === 'function') {
+        // Final release: hand over anything the streaming holdback was still
+        // sitting on, then flush. Without this the reply's last character can
+        // be withheld forever.
+        if (typeof bufferTextForTTS === 'function') {
+          const lastSpeakable = HwuiChatCore.ttsSpeakableDelta(
+            reactionFreeFullMessage, ttsSpokenLen,
+            { charName: charName, userName: userName, final: true }
+          );
+          ttsSpokenLen = lastSpeakable.spokenLength;
+          if (lastSpeakable.text) bufferTextForTTS(lastSpeakable.text);
+        }
         flushTTSBuffer();
       }
 
@@ -7023,8 +7146,26 @@ async function sendPrompt() {
         : streamReadFailed
         ? 'error'
         : 'completed';
-      // Keep raw pre-strip text for memory tag detection (tags are stripped from display but needed for parsing)
+      // Keep the provider text for existing memory-tag detection, then remove
+      // the reaction control marker before it reaches memory processing.
       const rawFullMessage = fullMessage || cleanedMessage;
+      const rawMemoryMessage = HwuiChatCore.parseAssistantReaction(
+        rawFullMessage, { final: true }
+      ).text;
+      syncDesktopModelReaction(latestModelReaction, replySourceUserMessageId);
+      if (reactionDiagnosticId) {
+        const reactionTarget = window.loadedChat?.find(
+          message => message.message_id === replySourceUserMessageId
+        );
+        window._reactionDiagnosticSave = {
+          request_id: reactionDiagnosticId,
+          source_message_id: replySourceUserMessageId,
+          expected_reaction: '😂',
+          parser_reaction: latestModelReaction,
+          attached_reaction: reactionTarget?.reaction || null
+        };
+        console.info('🧪 REACTION DIAGNOSTIC attachment result', window._reactionDiagnosticSave);
+      }
 
       if (!window.loadedChat) window.loadedChat = [];
       
@@ -7090,7 +7231,7 @@ async function sendPrompt() {
       // Save trained memory output immediately. The server uses the model's
       // title, keywords, and summary directly; its classifier is only a
       // fallback when an explicit request produced no valid memory object/tag.
-      const autoMemoryHandled = automaticCheckin ? false : await captureAutomaticMemory(input, rawFullMessage);
+      const autoMemoryHandled = automaticCheckin ? false : await captureAutomaticMemory(input, rawMemoryMessage);
 
       // Auto-name if still a "New Chat" — filename guard is the sole trigger
       if (currentChatFilename && currentChatFilename.includes('New Chat')) {
@@ -7109,15 +7250,15 @@ async function sendPrompt() {
 
       // ── Memory command detection ──────────────────────────────────────
       // Runs AFTER renderChatMessages so the bubble is in the live DOM
-      // Uses rawFullMessage (pre-strip) so MEMORY ADD tags are still detectable
+      // Uses the reaction-free provider text so MEMORY ADD tags are still detectable
       // even though they've been stripped from the displayed cleanedMessage
       if (window._suppressMemoryDetection) {
         window._suppressMemoryDetection = false;
       } else if (autoMemoryHandled) {
         console.log('Trained memory tag saved automatically; approval UI suppressed.');
       } else {
-        const hadMemoryOutput = /\[?MEMORY[_ ]ADD:/i.test(rawFullMessage) ||
-          /^\s*Title\s*:/im.test(rawFullMessage);
+        const hadMemoryOutput = /\[?MEMORY[_ ]ADD:/i.test(rawMemoryMessage) ||
+          /^\s*Title\s*:/im.test(rawMemoryMessage);
         if (hadMemoryOutput && memoryIntentGate(input)) {
           console.error('Trained memory output was produced but could not be saved automatically.');
           showToast('Memory could not be saved.', 5000);
@@ -7287,7 +7428,8 @@ async function sendPrompt() {
           messages: messages,
           character: charName,
           base_count: window._chatBaseCount,
-          allow_empty: Boolean(options.allowEmpty)
+          allow_empty: Boolean(options.allowEmpty),
+          reaction_diagnostic: window._reactionDiagnosticSave || null
         })
       });
 
@@ -7295,6 +7437,10 @@ async function sendPrompt() {
         let savedPayload = {};
         try { savedPayload = await res.json(); } catch (error) {}
         if (savedPayload.chat_id) currentChatId = savedPayload.chat_id;
+        if (savedPayload.reaction_diagnostic) {
+          console.info('🧪 REACTION DIAGNOSTIC persistence result', savedPayload.reaction_diagnostic);
+          window._reactionDiagnosticSave = null;
+        }
         console.log('✅ Messages auto-saved');
         // What we just wrote IS the disk copy now — tab is clean.
         // (messages.length, not loadedChat.length: hidden turns are filtered
@@ -7373,8 +7519,10 @@ async function sendPrompt() {
           userName: activeUserName,
           chatFilename: currentChatFilename,
           conversationHistory: chatToSend,
+          diagnosticHistoryIds: continueRequest.diagnosticHistoryIds,
           continuePrefix: continuePrefix,
           authorNoteOverride: HwuiChatCore.pendingLegacyAuthorNote(localStorage, currentChatFilename),
+          extra: { generation_kind: 'continuation' },
         }))
       });
 
@@ -7429,7 +7577,8 @@ async function sendPrompt() {
       // persists head + prefix + new tokens — i.e. the original text is never lost.
       let rawFull = retainedHead + continuePrefix;
       const userName = activeUserName || 'User';
-      renderLiveModelHTML(streamEl, typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(rawFull)) : rawFull);
+      if (existingStreamEl) renderModelHTML(streamEl, ''); // discard old code-block siblings
+      HwuiChatCore.renderStreamingAssistantText(streamEl, rawFull);
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder('utf-8');
@@ -7443,23 +7592,35 @@ async function sendPrompt() {
         // Continue extends an existing message, so any thinking is peeled off and
         // not shown (no panel here) — only the answer text is rendered/saved.
         const _ans = splitThinking(rawFull).answer;
-        const cleaned = stripChatMLOutsideCodeBlocks(_ans, charLabel, userName).trim();
+        const cleaned = stripChatMLOutsideCodeBlocks(
+          HwuiChatCore.parseAssistantReaction(_ans, { final: false }).text,
+          charLabel, userName, { streaming: true }
+        );
 
-        renderLiveModelHTML(streamEl, typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(cleaned)) : cleaned);
+        HwuiChatCore.renderStreamingAssistantText(streamEl, cleaned);
         chat.scrollTop = chat.scrollHeight;
       }
       // Preserve any final multibyte character held by the stateful decoder.
       const decoderTail = decoder.decode();
       if (decoderTail) rawFull += decoderTail;
 
-      // Same stored-text rule as mobile.html's continue.
-      let finalText = HwuiChatCore.finalizeContinuedText(splitThinking(rawFull).answer, charLabel, userName);
-
-      renderModelHTML(streamEl, typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(finalText)) : finalText);
-      addCodeCopyButtons(streamEl.parentNode || streamEl);
       const continuedSource = [...window.loadedChat].reverse().find(message =>
         message.role === 'user' && !message.hidden
       );
+
+      // Same stored-text rule as mobile.html's continue.
+      const continueReactionOutput = HwuiChatCore.parseAssistantReaction(
+        splitThinking(rawFull).answer, { final: true }
+      );
+      // A continuation extends the same reply and never opens with a marker, so
+      // it may add a reaction but must not clear the one the reply already gave.
+      if (continueReactionOutput.reaction) {
+        syncDesktopModelReaction(continueReactionOutput.reaction, continuedSource?.message_id || null);
+      }
+      let finalText = HwuiChatCore.finalizeContinuedText(continueReactionOutput.text, charLabel, userName);
+      HwuiChatCore.finishStreamingAssistantText(streamEl);
+      renderModelHTML(streamEl, typeof marked !== 'undefined' ? marked.parse(sanitizeMarkdown(finalText), { breaks: true }) : finalText);
+      addCodeCopyButtons(streamEl.parentNode || streamEl);
       const continuedAt = new Date().toISOString();
       const continuedAssistantId = createHwuiMessageId();
       window.loadedChat.push({
@@ -8608,189 +8769,6 @@ async function stopGeneration() {
       }
   }
 
-  // ── Shard generator ──────────────────────────────────────────────────
-  // Model-direct shard batches: sends format/count/brief to /shards/generate,
-  // which prompts the active backend for a raw JSON array and writes one .txt
-  // per shard. No code-fence parsing, so shards containing nested fences
-  // (ChatML samples, code snippets) can't break. Coexists with the per-message
-  // "export code blocks as shard files" button above.
-  function openShardGeneratorModal() {
-      const prevFocus = document.activeElement;
-      const backdrop = document.createElement('div');
-      backdrop.style.cssText = 'position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.62);';
-
-      const panel = document.createElement('div');
-      panel.style.cssText = 'background:var(--modal-bg,#1a1f2a);border:1px solid var(--modal-border,#444);border-radius:10px;padding:18px 20px;max-width:520px;width:calc(100% - 48px);max-height:calc(100vh - 80px);overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,0.6);color:var(--modal-text,#ddd);font-size:14px;';
-
-      const title = document.createElement('div');
-      title.textContent = 'Generate shards';
-      title.style.cssText = 'font-weight:700;font-size:15px;margin-bottom:8px;color:#fff;';
-
-      const help = document.createElement('div');
-      help.textContent = 'Asks the model for a JSON batch and writes one .txt per shard — no code-fence parsing, so nested code inside shards is safe.';
-      help.style.cssText = 'color:#aaa;line-height:1.45;margin-bottom:14px;';
-
-      const fieldCss = 'width:100%;box-sizing:border-box;background:var(--field-bg,#111);border:1px solid var(--field-border,#333);color:#eee;border-radius:7px;padding:9px 10px;font-size:14px;';
-      const labelCss = 'display:block;font-size:12px;color:#8ab4d4;margin:0 0 4px 1px;';
-
-      function labelled(text, el) {
-          const wrap = document.createElement('div');
-          wrap.style.marginBottom = '12px';
-          const lab = document.createElement('label');
-          lab.textContent = text;
-          lab.style.cssText = labelCss;
-          wrap.append(lab, el);
-          return wrap;
-      }
-
-      const formatSel = document.createElement('select');
-      formatSel.style.cssText = fieldCss;
-      [['cx', 'CX'], ['dpo', 'DPO'], ['chatml', 'ChatML teaching']].forEach(([val, lab]) => {
-          const opt = document.createElement('option');
-          opt.value = val;
-          opt.textContent = lab;
-          formatSel.appendChild(opt);
-      });
-
-      const countInput = document.createElement('input');
-      countInput.type = 'number';
-      countInput.min = '1';
-      countInput.max = '25';
-      countInput.value = '5';
-      countInput.style.cssText = fieldCss;
-
-      const briefInput = document.createElement('textarea');
-      briefInput.rows = 4;
-      briefInput.placeholder = 'Topic/theme for this batch, e.g. "Ableton sidechain compression setups, real device names and settings"';
-      briefInput.style.cssText = fieldCss + 'resize:vertical;min-height:70px;font-family:inherit;';
-
-      const folderInput = document.createElement('input');
-      folderInput.type = 'text';
-      folderInput.value = 'shards';
-      folderInput.autocomplete = 'off';
-      folderInput.style.cssText = fieldCss;
-
-      // Status area: progress text, written-file list, or raw model output on failure
-      const statusBox = document.createElement('div');
-      statusBox.style.cssText = 'display:none;margin-bottom:12px;line-height:1.5;';
-
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;justify-content:flex-end;gap:10px;';
-
-      const cancelBtn = document.createElement('button');
-      cancelBtn.textContent = 'Close';
-      cancelBtn.style.cssText = 'background:#2a2a38;border:1px solid #555;color:#ccc;border-radius:6px;padding:7px 16px;font-size:13px;cursor:pointer;';
-
-      const genBtn = document.createElement('button');
-      genBtn.textContent = 'Generate';
-      genBtn.style.cssText = 'background:#1f5a3a;border:1px solid #248050;color:#fff;border-radius:6px;padding:7px 16px;font-size:13px;font-weight:600;cursor:pointer;';
-
-      row.append(cancelBtn, genBtn);
-      panel.append(
-          title, help,
-          labelled('Format', formatSel),
-          labelled('Count', countInput),
-          labelled('Brief', briefInput),
-          labelled('Output folder', folderInput),
-          statusBox, row
-      );
-      backdrop.appendChild(panel);
-      document.body.appendChild(backdrop);
-
-      let busy = false;
-      function cleanup() {
-          if (busy) return; // don't tear down mid-generation
-          document.removeEventListener('keydown', onKey, true);
-          backdrop.remove();
-          try { if (prevFocus && prevFocus.focus) prevFocus.focus(); } catch (_) {}
-      }
-      function onKey(e) {
-          if (e.key === 'Escape') {
-              e.preventDefault();
-              e.stopImmediatePropagation();
-              cleanup();
-          }
-      }
-      function showStatus(html, color) {
-          statusBox.style.display = 'block';
-          statusBox.style.color = color || '#aaa';
-          statusBox.innerHTML = html;
-      }
-      function escapeHtml(s) {
-          return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      }
-
-      async function generate() {
-          const count = parseInt(countInput.value, 10);
-          const brief = briefInput.value.trim();
-          if (!brief) {
-              briefInput.style.borderColor = '#8a2424';
-              briefInput.focus();
-              return;
-          }
-          if (!count || count < 1 || count > 25) {
-              countInput.style.borderColor = '#8a2424';
-              countInput.focus();
-              return;
-          }
-          briefInput.style.borderColor = '';
-          countInput.style.borderColor = '';
-
-          busy = true;
-          genBtn.disabled = true;
-          cancelBtn.disabled = true;
-          genBtn.textContent = 'Generating…';
-          showStatus('Waiting on the model — this can take a while for larger batches.');
-
-          try {
-              const res = await fetch('/shards/generate', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                      format: formatSel.value,
-                      count: count,
-                      brief: brief,
-                      folder: folderInput.value.trim()
-                  })
-              });
-              const data = await res.json().catch(() => ({}));
-              if (!res.ok || data.status !== 'ok') {
-                  // Show the raw model output so the user can see what went
-                  // wrong rather than a silent/generic error.
-                  let html = '<div style="color:#e88;">' + escapeHtml(data.error || ('Request failed (' + res.status + ')')) + '</div>';
-                  if (data.raw) {
-                      html += '<div style="color:#8ab4d4;margin-top:8px;font-size:12px;">Raw model output:</div>'
-                           + '<pre style="max-height:220px;overflow:auto;background:var(--field-bg,#111);border:1px solid var(--field-border,#333);border-radius:7px;padding:8px 10px;font-size:11px;white-space:pre-wrap;word-break:break-word;color:#ccc;margin:4px 0 0;">'
-                           + escapeHtml(data.raw) + '</pre>';
-                  }
-                  showStatus(html);
-                  hwuiToast('Shard generation failed: ' + (data.error || res.status), 'error', 5000);
-                  return;
-              }
-              const fileList = (data.files || []).map(f => '<li style="margin:2px 0;">' + escapeHtml(f) + '</li>').join('');
-              showStatus(
-                  '<div style="color:#4dffaa;">Wrote ' + data.count + ' shard file' + (data.count === 1 ? '' : 's') + ' to ' + escapeHtml(data.folder) + '</div>'
-                  + '<ul style="margin:6px 0 0;padding-left:18px;font-size:12px;color:#ccc;max-height:180px;overflow:auto;">' + fileList + '</ul>'
-              );
-              hwuiToast('Generated ' + data.count + ' shard file' + (data.count === 1 ? '' : 's'), 'success', 3800);
-          } catch (err) {
-              console.error('Shard generation failed:', err);
-              showStatus('<div style="color:#e88;">' + escapeHtml(err.message) + '</div>');
-              hwuiToast('Shard generation failed: ' + err.message, 'error', 5000);
-          } finally {
-              busy = false;
-              genBtn.disabled = false;
-              cancelBtn.disabled = false;
-              genBtn.textContent = 'Generate';
-          }
-      }
-
-      document.addEventListener('keydown', onKey, true);
-      cancelBtn.addEventListener('click', cleanup);
-      genBtn.addEventListener('click', generate);
-      setTimeout(() => briefInput.focus(), 0);
-  }
-
   function hwuiExportTextContent(content) {
       if (Array.isArray(content)) {
           return content
@@ -9713,6 +9691,7 @@ function showAutoMemoryToast(character, title, undoToken) {
       });
     }
     
+
     // Load user and character data
     await loadActiveUser();
     await loadCharacterList();

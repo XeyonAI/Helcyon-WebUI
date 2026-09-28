@@ -256,7 +256,7 @@
       display: none;
       align-items: flex-start;
       justify-content: center;
-      padding: 72px 64px 32px;
+      padding: 28px 64px 24px;
       background: rgba(0, 0, 0, 0.58);
       z-index: 1200;
       box-sizing: border-box;
@@ -354,9 +354,9 @@
     #advanced-settings-btn {
       width: 100%;
       margin-top: 10px;
-      background: #1f3a5a;
+      background: var(--advanced-settings-btn-bg);
       border: 1px solid #245080;
-      color: #eaf3ff;
+      color: var(--advanced-settings-btn-text);
       border-radius: 5px;
       cursor: pointer;
       font-weight: 700;
@@ -386,6 +386,287 @@
       .advanced-settings-grid {
         grid-template-columns: 1fr;
       }
+    }
+    #sampling-settings-overlay {
+      position: fixed;
+      inset: 60px 0 0 260px;
+      display: none;
+      align-items: flex-start;
+      justify-content: center;
+      padding: 72px 20px 24px;
+      background: rgba(0, 0, 0, 0.58);
+      z-index: 1200;
+      box-sizing: border-box;
+      overflow-y: auto;
+    }
+    #sampling-settings-overlay.open { display: flex; }
+    #sampling-settings-modal {
+      width: min(900px, 100%);
+      max-height: calc(100vh - 92px);
+      overflow-y: auto;
+      background: var(--modal-bg, #1a1f2a);
+      border: 1px solid var(--modal-border, #333);
+      border-radius: 10px;
+      box-shadow: 0 14px 42px rgba(0, 0, 0, 0.58);
+      padding: 14px;
+      box-sizing: border-box;
+    }
+    #sampling-settings-modal .advanced-settings-header {
+      padding-bottom: 8px;
+      margin-bottom: 8px;
+    }
+    #sampling-settings-modal .advanced-settings-title { font-size: 18px; }
+    .sampling-settings-card {
+      margin-bottom: 8px;
+      background: var(--config-box-bg, var(--modal-bg, #202020));
+      border: 1px solid var(--config-box-border, var(--field-border, #383838));
+      border-radius: 7px;
+      padding: 11px 12px;
+      box-sizing: border-box;
+    }
+    .sampling-card-heading,
+    .sampling-presets-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 7px;
+    }
+    .sampling-card-heading h3,
+    .sampling-presets-heading h3 {
+      margin: 0 0 4px;
+      color: var(--modal-text, #eee);
+      font-size: 14px;
+    }
+    .sampling-card-heading p,
+    .sampling-presets-heading p {
+      margin: 0;
+      color: var(--text-muted, #999);
+      font-size: 10px;
+      line-height: 1.3;
+    }
+    .sampling-info-icon {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 20px;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      color: #7ab4f5;
+      font-size: 13px;
+      cursor: help;
+      opacity: 0.8;
+    }
+    .sampling-info-icon:hover,
+    .sampling-info-icon:focus { opacity: 1; outline: none; }
+    .sampling-info-tip {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      z-index: 20;
+      width: min(340px, 72vw);
+      padding: 10px 12px;
+      border: 1px solid var(--config-box-border, var(--field-border, #383838));
+      border-radius: 6px;
+      background: var(--config-box-bg, var(--modal-bg, #202020));
+      color: var(--modal-text, #ddd);
+      box-shadow: 0 6px 22px rgba(0,0,0,0.55);
+      font-size: 11px;
+      line-height: 1.5;
+      font-weight: normal;
+      white-space: normal;
+      text-transform: none;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: opacity .15s ease, visibility .15s ease;
+    }
+    .sampling-info-icon:hover .sampling-info-tip,
+    .sampling-info-icon:focus .sampling-info-tip { opacity: 1; visibility: visible; }
+    .sampling-control-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 4px 14px;
+      align-items: center;
+    }
+    #local-only-params { display: contents; }
+    #local-only-params .sampling-field-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(76px, 0.65fr);
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+    }
+    #local-only-params.is-cloud-disabled .sampling-field-row {
+      opacity: 0.3;
+      pointer-events: none;
+    }
+    .sampling-field-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(76px, 0.65fr);
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+    }
+    .sampling-field-label {
+      display: block;
+      min-width: 0;
+      margin: 0;
+      color: var(--text-muted, #aaa);
+      font-size: 11px;
+      line-height: 1.2;
+    }
+    #sampling-settings-modal input[type="number"],
+    #sampling-settings-modal input[type="text"] {
+      width: 100%;
+      min-width: 0;
+      height: 30px;
+      padding: 0 8px;
+      border: 1px solid var(--field-border, #383838);
+      border-radius: 4px;
+      background: var(--field-bg, #111);
+      color: var(--modal-text, #eee);
+      box-sizing: border-box;
+      font-size: 12px;
+    }
+    .sampling-local-only-note {
+      grid-column: 1 / -1;
+      padding: 5px 8px;
+      border: 1px solid var(--config-box-border, var(--field-border, #383838));
+      border-radius: 5px;
+      background: var(--config-box-bg, var(--modal-bg, #202020));
+      color: var(--text-muted, #999);
+      font-size: 10px;
+    }
+    .sampling-presets-card { margin-bottom: 0; }
+    .sampling-presets-heading { align-items: center; }
+    #sampling-preset-status {
+      min-height: 14px;
+      color: var(--text-muted, #999);
+      font-size: 10px;
+      text-align: right;
+    }
+    .sampling-presets-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      align-items: start;
+    }
+    .sampling-preset-group { min-width: 0; }
+    .sampling-preset-group-label {
+      display: block;
+      margin: 0 0 5px;
+      color: var(--text-muted, #999);
+      font-size: 10px;
+      line-height: 1.2;
+    }
+    .sampling-preset-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 66px 34px;
+      gap: 5px;
+      align-items: stretch;
+    }
+    #sampling-settings-modal .sampling-preset-row select {
+      min-width: 0;
+      height: 30px;
+      padding: 0 7px;
+      border: 1px solid var(--field-border, #383838);
+      border-radius: 4px;
+      background: var(--field-bg, #111);
+      color: var(--modal-text, #eee);
+    }
+    #sampling-settings-modal .sampling-preset-row > select,
+    #sampling-settings-modal .sampling-preset-row > button,
+    #sampling-settings-modal .sampling-preset-action-row > button,
+    #sampling-settings-modal .sampling-memory-save-group > button {
+      height: 30px !important;
+      min-height: 30px !important;
+      margin: 0 !important;
+      box-sizing: border-box;
+    }
+    #sampling-settings-modal button:not(.advanced-settings-close) {
+      min-width: 0;
+      min-height: 30px;
+      padding: 5px 9px;
+      border: 1px solid #315777;
+      border-radius: 4px;
+      background: #1f3a5a;
+      color: #eaf3ff;
+      cursor: pointer;
+      font-size: 11px;
+      line-height: 1.2;
+      white-space: nowrap;
+    }
+    #sampling-settings-modal button:not(.advanced-settings-close):hover { filter: brightness(1.12); }
+    #sampling-settings-modal .sampling-preset-row .sampling-preset-delete {
+      padding: 4px;
+      border-color: #8a3030;
+      background: #4a2024;
+      color: #ffdcdc;
+    }
+    .sampling-preset-action-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      align-items: end;
+      margin-top: 6px;
+    }
+    .sampling-memory-save-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+    .sampling-memory-save-toggle {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      min-height: 16px;
+      margin: 0;
+      color: var(--text-muted, #999);
+      font-size: 10px;
+      line-height: 1.2;
+      cursor: pointer;
+    }
+    .sampling-memory-save-toggle input[type="checkbox"] {
+      flex: 0 0 auto;
+      width: 14px;
+      height: 14px;
+      margin: 0;
+    }
+    #sampling-settings-modal .sampling-preset-group > input {
+      display: block;
+      width: 100%;
+      height: 30px !important;
+      min-height: 30px !important;
+      margin: 0 !important;
+      box-sizing: border-box;
+    }
+    #sampling-settings-modal #update-sampling-preset-btn {
+      border-color: var(--memory-tab-active-border, var(--field-border-focus, #4a6a2a));
+      background: var(--memory-tab-active-bg, #2a3a1a);
+      color: var(--new-chat-btn-text, #e8f5e9);
+    }
+    #sampling-settings-modal #saveSettingsBtn {
+      border-color: #248050;
+      background: #1f5a3a;
+      color: #fff;
+    }
+    @media (max-width: 1400px) { #sampling-settings-overlay { left: 220px; } }
+    @media (max-width: 1024px) {
+      #sampling-settings-overlay { left: 180px; }
+      #sampling-settings-modal { padding: 12px; }
+      .sampling-control-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 768px) {
+      #sampling-settings-overlay { inset: 60px 0 0; padding: 12px; }
+      #sampling-settings-modal { max-height: calc(100vh - 84px); padding: 10px; }
+      .sampling-control-grid { grid-template-columns: 1fr; gap: 4px; }
+      .sampling-presets-grid { grid-template-columns: 1fr; gap: 10px; }
+      .sampling-presets-heading { flex-direction: column; align-items: flex-start; }
+      #sampling-preset-status { text-align: left; }
     }
 
     /* ---- Config density refinement ----
@@ -697,7 +978,7 @@
          browser (no frameless chrome there, and F5 already works). Marked
          no-drag so it stays clickable regardless of any title-bar drag region. -->
     <button id="electron-reload-btn" onclick="location.reload()" title="Reload HWUI"
-      style="display:none; position:fixed; top:173px; right:12px; z-index:1001;
+      style="display:none; position:fixed; top:120px; right:12px; z-index:1001;
              width:26px; height:26px; align-items:center; justify-content:center;
              border-radius:6px; border:1px solid var(--modal-border,#2d394b);
              background:rgba(255,255,255,0.06); color:#e8e8e8; cursor:pointer;
@@ -711,7 +992,7 @@
 
     <button id="advanced-settings-shortcut" type="button" onclick="openAdvancedSettings()"
       title="Advanced Settings" aria-label="Open Advanced Settings"
-      style="position:fixed; top:211px; right:12px; z-index:1001;
+      style="position:fixed; top:155px; right:12px; z-index:1001;
              width:26px; height:26px; display:flex; align-items:center; justify-content:center;
              border-radius:6px; border:1px solid var(--modal-border,#2d394b);
              background:rgba(255,255,255,0.06); color:#e8e8e8; cursor:pointer;
@@ -729,17 +1010,27 @@
       }
     </script>
 
-    <a id="settings-link" href="/" style="position:fixed; top:135px; right:12px; z-index:1001; margin:0;">
+    <a id="settings-link" href="/" style="position:fixed; top:82px; right:12px; z-index:1001; margin:0;">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
         <polyline points="9 22 9 12 15 12 15 22"></polyline>
       </svg>
     </a>
 
-    <!-- Model selector — ported from index.html so config matches it. Fixed,
-         right-aligned at top:72px so it sits directly above the home/refresh
-         stack (135/173) and fills the gap. Same ids/behaviour as index. -->
-    <div style="position:fixed; top:72px; right:12px; z-index:999; display:flex; align-items:center; gap:8px;">
+    <!-- Model selector — ported from index.html so config matches it. Keep the
+         model first, with the backend indicator immediately to its right. -->
+    <div style="position:fixed; top:72px; left:286px; z-index:999; display:flex; align-items:center; gap:8px;">
+      <button id="model-display" onclick="toggleModelPicker()" title="Switch model" style="
+        background: rgba(74, 106, 138, 0.18); border: 1px solid rgba(74, 106, 138, 0.75);
+        border-radius: 20px; padding: 7px 16px 7px 14px; font-size: 14px; color: #e7edf4;
+        cursor: pointer; display: flex; align-items: center; gap: 7px; white-space: nowrap;
+        max-width: 280px; transition: border-color 0.15s, background 0.15s;
+        position: relative; overflow: hidden;
+      " onmouseover="this.style.borderColor='#4a6a8a'; this.style.background='rgba(74,106,138,0.28)'" onmouseout="this.style.borderColor='rgba(74,106,138,0.75)'; this.style.background='rgba(74,106,138,0.18)'">
+        <span id="model-load-progress" aria-hidden="true" style="position:absolute; inset:0 auto 0 0; width:0; background:rgba(74,106,138,0.35); pointer-events:none;"></span>
+        <span id="model-display-name" style="position:relative; z-index:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Loading...</span>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="position:relative; z-index:1; flex-shrink:0; opacity:0.45;"><polyline points="6 9 12 15 18 9"></polyline></svg>
+      </button>
       <div id="openai-indicator" title="OpenAI backend active" style="display:none; align-items:center; gap:7px; background:rgba(0,180,100,0.12); border:1px solid rgba(0,200,100,0.35); border-radius:20px; padding:6px 14px; white-space:nowrap;">
         <span style="width:8px; height:8px; border-radius:50%; background:#00e87a; display:inline-block; box-shadow:0 0 6px #00e87a; flex-shrink:0;"></span>
         <div style="display:flex; flex-direction:column; line-height:1.3;">
@@ -754,21 +1045,10 @@
           <span id="anthropic-indicator-model" style="font-size:10px; color:#2aaa66;">claude</span>
         </div>
       </div>
-      <button id="model-display" onclick="toggleModelPicker()" title="Switch model" style="
-        background: rgba(210, 130, 20, 0.18); border: 1px solid rgba(255, 175, 55, 0.55);
-        border-radius: 20px; padding: 7px 16px 7px 14px; font-size: 14px; color: #fff0cf;
-        cursor: pointer; display: flex; align-items: center; gap: 7px; white-space: nowrap;
-        max-width: 190px; transition: border-color 0.15s, background 0.15s;
-        position: relative; overflow: hidden;
-      " onmouseover="this.style.borderColor='#ffb347'; this.style.background='rgba(220,140,20,0.28)'" onmouseout="this.style.borderColor='rgba(255,175,55,0.55)'; this.style.background='rgba(210,130,20,0.18)'">
-        <span id="model-load-progress" aria-hidden="true" style="position:absolute; inset:0 auto 0 0; width:0; background:rgba(235,145,25,0.42); pointer-events:none;"></span>
-        <span id="model-display-name" style="position:relative; z-index:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Loading...</span>
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="position:relative; z-index:1; flex-shrink:0; opacity:0.45;"><polyline points="6 9 12 15 18 9"></polyline></svg>
-      </button>
     </div>
 
     <!-- Model Picker Dropdown -->
-    <div id="model-picker" style="display: none; position: fixed; top: 110px; right: 12px;
+    <div id="model-picker" style="display: none; position: fixed; top: 110px; left: 286px;
       background: var(--modal-bg, #1a1f2a); border: 1px solid var(--modal-border, #2d394b);
       border-radius: 10px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); z-index: 2000; width: 220px; overflow: hidden;">
       <div id="model-picker-list" style="padding: 6px 0; overflow-y: auto; max-height: 70vh;"></div>
@@ -783,131 +1063,151 @@
   </div>
 
   <div id="main">
-    <!-- Left Sidebar: Sampling Settings -->
+    <!-- Compact access to the sampling controls. -->
     <div id="sampling-sidebar">
-      <style>
-        /* Hover/focus info bubble — replaces the old always-on sampling banner. */
-        #sampling-sidebar h3 { position: relative; }
-        .sampling-info-icon {
-          position: static; display: inline-flex; align-items: center; justify-content: center;
-          width: 16px; height: 16px; border-radius: 50%; font-size: 12px; line-height: 1;
-          color: #7ab4f5; cursor: help; font-style: normal; font-weight: normal; opacity: 0.75;
-          transition: opacity .15s ease;
-        }
-        .sampling-info-icon:hover, .sampling-info-icon:focus { opacity: 1; outline: none; }
-        .sampling-info-tip {
-          position: absolute; top: calc(100% + 8px); left: 0; z-index: 60;
-          width: 100%; box-sizing: border-box; padding: 9px 11px; font-size: 11px; line-height: 1.5;
-          font-weight: normal; letter-spacing: 0.2px; text-transform: none;
-          color: #cdd6e0; background: #141b27; border: 1px solid #245080; border-radius: 6px;
-          box-shadow: 0 6px 22px rgba(0,0,0,0.55);
-          opacity: 0; visibility: hidden; transform: translateY(-4px);
-          transition: opacity .15s ease, transform .15s ease, visibility .15s;
-          pointer-events: none; white-space: normal;
-        }
-        .sampling-info-icon:hover .sampling-info-tip,
-        .sampling-info-icon:focus .sampling-info-tip {
-          opacity: 1; visibility: visible; transform: translateY(0);
-        }
-      </style>
-      <h3 style="display:flex; align-items:center; gap:6px;">
-        Sampling Settings
-        <span class="sampling-info-icon" tabindex="0" role="button" aria-label="About sampling parameters">ⓘ<span class="sampling-info-tip">Some cloud reasoning models ignore sampling parameters and filter them out automatically — Anthropic Opus 4.7+ and OpenAI's o-series / GPT-5-class models. Use prompting and the effort / reasoning setting instead.</span></span>
-      </h3>
+      <button id="sampling-settings-btn" type="button" onclick="openSamplingSettings()" aria-haspopup="dialog" aria-controls="sampling-settings-overlay">Sampling Settings</button>
+      <button id="advanced-settings-btn" type="button" onclick="openAdvancedSettings()" aria-haspopup="dialog" aria-controls="advanced-settings-overlay">Advanced Settings</button>
+    </div>
 
-      <div class="sampling-field-row">
-        <label class="sampling-field-label">Temperature:</label>
-        <input type="number" id="temperature" step="0.05" min="0" max="2" />
-      </div>
-
-      <div class="sampling-field-row">
-        <label class="sampling-field-label">Max Tokens:</label>
-        <input type="number" id="max_tokens" step="50" min="50" max="8192" />
-      </div>
-
-      <div class="sampling-field-row">
-        <label class="sampling-field-label">Top P:</label>
-        <input type="number" id="top_p" step="0.05" min="0" max="1" />
-      </div>
-
-      <div id="local-only-params">
-        <div class="sampling-field-row">
-          <label class="sampling-field-label">Min P:</label>
-          <input type="number" id="min_p" step="0.01" min="0" max="1" />
+    <div id="sampling-settings-overlay" aria-hidden="true">
+      <div id="sampling-settings-modal" role="dialog" aria-modal="true" aria-labelledby="sampling-settings-title">
+        <div class="advanced-settings-header">
+          <div>
+            <h2 id="sampling-settings-title" class="advanced-settings-title">Sampling Settings</h2>
+            <p class="advanced-settings-subtitle">Tune generation and manage reusable presets.</p>
+          </div>
+          <button class="advanced-settings-close" type="button" onclick="closeSamplingSettings()" aria-label="Close Sampling Settings">&times;</button>
         </div>
 
-        <div class="sampling-field-row">
-          <label class="sampling-field-label">Top K:</label>
-          <input type="number" id="top_k" step="1" min="0" max="100" />
-        </div>
+        <section class="advanced-settings-card sampling-settings-card sampling-controls-card">
+          <div class="sampling-card-heading">
+            <div>
+              <h3>Sampler controls</h3>
+              <p>Some cloud reasoning models ignore sampling values and apply their own defaults.</p>
+            </div>
+            <span class="sampling-info-icon" tabindex="0" role="button" aria-label="About sampling parameters">ⓘ<span class="sampling-info-tip">Some cloud reasoning models ignore sampling parameters and filter them out automatically — Anthropic Opus 4.7+ and OpenAI's o-series / GPT-5-class models. Use prompting and the effort / reasoning setting instead.</span></span>
+          </div>
 
-        <div class="sampling-field-row">
-          <label class="sampling-field-label">Repeat Penalty:</label>
-          <input type="number" id="repeat_penalty" step="0.01" min="0.8" max="2" />
-        </div>
+          <div class="sampling-control-grid">
+            <div class="sampling-field-row">
+              <label class="sampling-field-label" for="temperature">Temperature</label>
+              <input type="number" id="temperature" step="0.05" min="0" max="2" />
+            </div>
+            <div class="sampling-field-row">
+              <label class="sampling-field-label" for="max_tokens">Max Tokens</label>
+              <input type="number" id="max_tokens" step="50" min="50" max="8192" />
+            </div>
+            <div class="sampling-field-row">
+              <label class="sampling-field-label" for="top_p">Top P</label>
+              <input type="number" id="top_p" step="0.05" min="0" max="1" />
+            </div>
 
-        <div class="sampling-field-row">
-          <label class="sampling-field-label">DRY Multiplier:</label>
-          <input type="number" id="dry_multiplier" step="0.05" min="0" />
-        </div>
+            <div id="local-only-params">
+              <div class="sampling-field-row">
+                <label class="sampling-field-label" for="min_p">Min P</label>
+                <input type="number" id="min_p" step="0.01" min="0" max="1" />
+              </div>
+              <div class="sampling-field-row">
+                <label class="sampling-field-label" for="top_k">Top K</label>
+                <input type="number" id="top_k" step="1" min="0" max="100" />
+              </div>
+              <div class="sampling-field-row">
+                <label class="sampling-field-label" for="repeat_penalty">Repeat Penalty</label>
+                <input type="number" id="repeat_penalty" step="0.01" min="0.8" max="2" />
+              </div>
+              <div class="sampling-field-row">
+                <label class="sampling-field-label" for="dry_multiplier">DRY Multiplier</label>
+                <input type="number" id="dry_multiplier" step="0.05" min="0" />
+              </div>
+              <div class="sampling-field-row">
+                <label class="sampling-field-label" for="dry_base">DRY Base</label>
+                <input type="number" id="dry_base" step="0.05" min="0" />
+              </div>
+              <div class="sampling-field-row">
+                <label class="sampling-field-label" for="dry_allowed_length">DRY Allowed Length</label>
+                <input type="number" id="dry_allowed_length" step="1" min="0" />
+              </div>
+              <div class="sampling-field-row">
+                <label class="sampling-field-label" for="dry_penalty_last_n">DRY Penalty Last N</label>
+                <input type="number" id="dry_penalty_last_n" step="1" min="0" />
+              </div>
+              <div class="sampling-field-row">
+                <label class="sampling-field-label" for="typical_p">Typical-P</label>
+                <input type="number" id="typical_p" step="0.01" min="0" max="1" />
+              </div>
+              <div class="sampling-field-row">
+                <label class="sampling-field-label" for="top_n_sigma">Top-N-Sigma</label>
+                <input type="number" id="top_n_sigma" step="0.1" />
+              </div>
+              <div class="sampling-field-row">
+                <label class="sampling-field-label" for="dynatemp_range">Dynamic Temperature Range</label>
+                <input type="number" id="dynatemp_range" step="0.01" min="0" />
+              </div>
+              <div class="sampling-field-row">
+                <label class="sampling-field-label" for="dynatemp_exponent">Dynamic Temperature Exponent</label>
+                <input type="number" id="dynatemp_exponent" step="0.01" min="0" />
+              </div>
+              <div class="sampling-field-row">
+                <label class="sampling-field-label" for="xtc_probability">XTC Probability</label>
+                <input type="number" id="xtc_probability" step="0.01" min="0" max="1" />
+              </div>
+              <div class="sampling-field-row">
+                <label class="sampling-field-label" for="xtc_threshold">XTC Threshold</label>
+                <input type="number" id="xtc_threshold" step="0.01" min="0" max="1" />
+              </div>
+            </div>
 
-        <div class="sampling-field-row">
-          <label class="sampling-field-label">DRY Base:</label>
-          <input type="number" id="dry_base" step="0.05" min="0" />
-        </div>
+            <div id="local-only-note" class="sampling-local-only-note" style="display:none;">
+              ⚠️ These llama.cpp-only sampling controls are not sent to cloud backends.
+            </div>
 
-        <div class="sampling-field-row">
-          <label class="sampling-field-label">DRY Allowed Length:</label>
-          <input type="number" id="dry_allowed_length" step="1" min="0" />
-        </div>
+            <div class="sampling-field-row">
+              <label class="sampling-field-label" for="frequency_penalty">Frequency Penalty</label>
+              <input type="number" id="frequency_penalty" step="0.01" min="0" max="2" />
+            </div>
+            <div class="sampling-field-row">
+              <label class="sampling-field-label" for="presence_penalty">Presence Penalty</label>
+              <input type="number" id="presence_penalty" step="0.01" min="0" max="2" />
+            </div>
+          </div>
+        </section>
 
-        <div class="sampling-field-row">
-          <label class="sampling-field-label">DRY Penalty Last N:</label>
-          <input type="number" id="dry_penalty_last_n" step="1" min="-1" />
-        </div>
+        <section class="advanced-settings-card sampling-settings-card sampling-presets-card">
+          <div class="sampling-presets-heading">
+            <div>
+              <h3>Sampling presets</h3>
+              <p>Save and reuse sampler configurations.</p>
+            </div>
+            <div id="sampling-preset-status" role="status" aria-live="polite"></div>
+          </div>
+          <div class="sampling-presets-grid">
+            <div class="sampling-preset-group">
+              <label class="sampling-preset-group-label" for="sampling-preset-select">Load a preset</label>
+              <div class="sampling-preset-row">
+                <select id="sampling-preset-select" class="sampling-preset-select" onchange="onSamplingPresetSelect()" aria-label="Saved sampling preset">
+                  <option value="">— select preset —</option>
+                </select>
+                <button type="button" onclick="loadSamplingPreset()">Load</button>
+                <button type="button" onclick="deleteSamplingPreset()" class="sampling-preset-delete" aria-label="Delete selected preset" title="Delete selected preset">🗑️</button>
+              </div>
+            </div>
+            <div class="sampling-preset-group">
+              <label class="sampling-preset-group-label" for="sampling-preset-name">Save current settings</label>
+              <input id="sampling-preset-name" type="text" placeholder="Preset name..." oninput="syncSamplingUpdateBtn()" aria-label="Sampling preset name">
+              <div class="sampling-preset-action-row">
+                <button id="update-sampling-preset-btn" type="button" onclick="saveOrUpdateSamplingPreset()">💾 Save Preset</button>
+                <div class="sampling-memory-save-group">
+                  <label class="sampling-memory-save-toggle" for="auto-memory-enabled">
+                    <input type="checkbox" id="auto-memory-enabled">
+                    <span>Automatic local memory</span>
+                  </label>
+                  <button id="saveSettingsBtn" type="button">💾 Save &amp; Apply</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
-      <div id="local-only-note" style="display:none; font-size:11px; color:#666; margin-bottom:10px; padding:5px 8px; background:rgba(255,255,255,0.03); border-radius:4px; border:1px solid #2a2a2a;">
-        ⚠️ Min P, Top K, Repeat Penalty and DRY controls are not used by OpenAI
-      </div>
-
-      <div class="sampling-field-row">
-        <label class="sampling-field-label">Frequency Penalty:</label>
-        <input type="number" id="frequency_penalty" step="0.01" min="0" max="2" />
-      </div>
-
-      <div class="sampling-field-row">
-        <label class="sampling-field-label">Presence Penalty:</label>
-        <input type="number" id="presence_penalty" step="0.01" min="0" max="2" />
-      </div>
-
-      <label style="display:flex;align-items:center;gap:8px;margin:10px 0 4px;cursor:pointer;">
-        <input type="checkbox" id="auto-memory-enabled" style="width:15px;height:15px;">
-        Automatic local memory
-      </label>
-      <div style="font-size:11px;color:#777;line-height:1.4;margin-bottom:10px;">
-        Uses a short local-model pass after suitable turns. Saves conservatively and shows an Undo notice.
-      </div>
-
-      <!-- Sampling Presets -->
-      <div style="border-top:1px solid #2a2a2a; padding-top:8px; margin-top:4px;">
-        <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:#666; margin-bottom:6px;">Sampling Presets</div>
-        <div class="sampling-preset-row">
-          <select id="sampling-preset-select" class="sampling-preset-select" onchange="onSamplingPresetSelect()">
-            <option value="">— select preset —</option>
-          </select>
-          <button onclick="loadSamplingPreset()" style="background:#1f3a5a; border:1px solid #245080; color:white; border-radius:3px; padding:3px 7px; font-size:12px; cursor:pointer; align-self:stretch;">Load</button>
-          <button onclick="deleteSamplingPreset()" style="background:#5a1f1f; border:1px solid #8a2424; color:white; border-radius:3px; padding:3px 7px; font-size:12px; cursor:pointer; align-self:stretch;">🗑️</button>
-        </div>
-        <input id="sampling-preset-name" type="text" placeholder="Preset name..." style="background:#111; border:1px solid #333; color:#ccc; border-radius:3px; font-size:12px; padding:3px 6px; width:100%; box-sizing:border-box; margin-bottom:4px;">
-        <button id="update-sampling-preset-btn" onclick="updateSamplingPreset()" style="display:none; background:#2a3a1a; border:1px solid #4a6a2a; color:#afa; border-radius:3px; padding:4px 7px; font-size:12px; cursor:pointer; width:100%; margin-bottom:4px;">🔄 Update Preset</button>
-        <div class="sampling-preset-actions">
-          <button onclick="saveSamplingPreset()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; border-radius:3px; padding:4px 7px; font-size:12px; cursor:pointer; width:100%;">💾 Save Preset</button>
-          <button id="saveSettingsBtn" style="background-color: #1f5a3a; border-color: #248050; color: white;">💾 Save &amp; Apply</button>
-        </div>
-        <div id="sampling-preset-status" style="font-size:11px; color:#aaa; min-height:14px;"></div>
-      </div>
-
-      <button id="advanced-settings-btn" type="button" onclick="openAdvancedSettings()">Advanced Settings</button>
     </div>
 
     <div id="advanced-settings-overlay" aria-hidden="true">
@@ -1550,9 +1850,9 @@
         <!-- Background Mode Toggle -->
         <h4 style="color:#aaa; font-size:12px; text-transform:uppercase; letter-spacing:1px; margin-bottom:10px; margin-top:0;">Background Mode</h4>
         <div class="config-appearance-choice-row">
-          <button id="bg-mode-colour-btn" onclick="setBgMode('colour')" style="flex:1; padding:7px 0; border-radius:5px; font-size:13px; cursor:pointer; border:1px solid #444; background:#1a3a2a; color:#6f6; font-weight:600;">🎨 Theme Colour</button>
-          <button id="bg-mode-image-btn" onclick="setBgMode('image')" style="flex:1; padding:7px 0; border-radius:5px; font-size:13px; cursor:pointer; border:1px solid #333; background:#2a2a2a; color:#aaa;">🖼️ Background Image</button>
-          <button class="config-action-button" onclick="openThemeModal()" style="background:#1e3a4a; border:1px solid #2a5068; color:#a0c8d8; width:100%; font-size:13px; padding:10px 0; border-radius:6px; cursor:pointer;">🎨 Open Theme Editor</button>
+          <button id="bg-mode-colour-btn" onclick="setBgMode('colour')" style="flex:1; padding:7px 0; border-radius:5px; font-size:13px; cursor:pointer; border:1px solid #444; background:var(--theme-colour-btn-bg); color:var(--theme-colour-btn-text); font-weight:600;">🎨 Theme Colour</button>
+          <button id="bg-mode-image-btn" onclick="setBgMode('image')" style="flex:1; padding:7px 0; border-radius:5px; font-size:13px; cursor:pointer; border:1px solid #333; background:var(--background-image-btn-bg); color:var(--background-image-btn-text);">🖼️ Background Image</button>
+          <button id="open-theme-editor-btn" class="config-action-button" onclick="openThemeModal()" style="background:var(--theme-editor-btn-bg); border:1px solid #2a5068; color:var(--theme-editor-btn-text); width:100%; font-size:13px; padding:10px 0; border-radius:6px; cursor:pointer;">🎨 Open Theme Editor</button>
         </div>
 
         <!-- Colour mode hook retained for mode-switching behavior. -->
@@ -1796,7 +2096,7 @@
           <aside class="bench-nav-rail">
             <div class="bench-brand">
               <span class="bench-brand-mark">HB</span>
-                <div><strong>Helcyon-Bench</strong><small>Free tools, Pro automation</small></div>
+              <div><strong>Helcyon-Bench</strong><small>Free tools, Pro automation</small></div>
             </div>
 
             <section class="bench-rail-section">
@@ -2486,47 +2786,7 @@
     updateVoiceForgeSourceControls(slot);
   }
 
-  async function deleteVoiceForgeExisting(slot) {
-    showHwuiProModal('Voice Forge', 'Voice creation and management are available in HWUI Pro.');
-    return;
-    const elements = voiceForgeSlotElements(slot);
-    const voice = elements.select.value;
-    if (!voice) return;
-    const confirmed = await hwuiConfirm(
-      `Permanently delete the HWUI voice “${voice}”?\n\n` +
-      `This removes both ${voice}.wav and ${voice}.txt from the shared voices directory. ` +
-      `The voice will disappear from every HWUI voice selector, and characters using it will need another voice.\n\n` +
-      `This cannot be undone.`
-    );
-    if (!confirmed) return;
-
-    ['A', 'B'].forEach(otherSlot => {
-      const other = voiceForgeSlotElements(otherSlot);
-      if (other.select.value === voice && other.deleteButton) other.deleteButton.disabled = true;
-    });
-    setVoiceForgeStatus(`Deleting “${voice}”...`);
-    try {
-      const response = await fetch(`/api/tts/voice-forge/voice?voice=${encodeURIComponent(voice)}`, {
-        method: 'DELETE'
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Could not delete the voice');
-      ['A', 'B'].forEach(otherSlot => {
-        const other = voiceForgeSlotElements(otherSlot);
-        if (other.select.value === voice) {
-          stopVoiceForgePreview(otherSlot);
-          other.select.value = '';
-        }
-        updateVoiceForgeSourceControls(otherSlot);
-      });
-      await initialiseVoiceForge(true);
-      setVoiceForgeStatus(`Deleted “${data.voice}” and its matching transcript.`, 'success');
-    } catch (error) {
-      updateVoiceForgeSourceControls('A');
-      updateVoiceForgeSourceControls('B');
-      setVoiceForgeStatus(error.message, 'error');
-    }
-  }
+  async function deleteVoiceForgeExisting(slot) { showHwuiProModal("Voice Forge", "Creating and managing voices is available in HWUI Pro."); return; }
 
   function normaliseVoiceForgeSource(slot) {
     const elements = voiceForgeSlotElements(slot);
@@ -2536,49 +2796,7 @@
     updateVoiceForgeSourceControls(slot);
   }
 
-  async function toggleVoiceForgePreview(slot) {
-    showHwuiProModal('Voice Forge', 'Voice preview and blending are available in HWUI Pro.');
-    return;
-    const state = voiceForgePreviews[slot];
-    if (state.audio && !state.audio.paused) {
-      stopVoiceForgePreview(slot);
-      return;
-    }
-
-    normaliseVoiceForgeSource(slot);
-    const elements = voiceForgeSlotElements(slot);
-    const upload = elements.upload.files[0];
-    const existing = elements.select.value;
-    if (!upload && !existing) return;
-
-    stopVoiceForgePreview(slot === 'A' ? 'B' : 'A');
-    stopVoiceForgePreview(slot);
-    let source;
-    if (upload) {
-      state.objectUrl = URL.createObjectURL(upload);
-      source = state.objectUrl;
-    } else {
-      source = `/api/tts/voice-forge/reference?voice=${encodeURIComponent(existing)}`;
-    }
-
-    const audio = new Audio(source);
-    state.audio = audio;
-    elements.preview.textContent = `■ Stop ${slot}`;
-    audio.onended = () => stopVoiceForgePreview(slot);
-    audio.onerror = () => {
-      if (state.audio !== audio) return;
-      stopVoiceForgePreview(slot);
-      setVoiceForgeStatus(`Could not preview Voice ${slot}.`, 'error');
-    };
-    try {
-      await audio.play();
-    } catch (error) {
-      if (state.audio === audio) {
-        stopVoiceForgePreview(slot);
-        setVoiceForgeStatus(`Could not preview Voice ${slot}.`, 'error');
-      }
-    }
-  }
+  async function toggleVoiceForgePreview(slot) { showHwuiProModal("Voice Forge", "Voice preview is available in HWUI Pro."); return; }
 
   function setVoiceForgeStatus(message, kind = '') {
     const status = document.getElementById('voice-forge-status');
@@ -2620,31 +2838,7 @@
     }
   }
 
-  async function saveVoiceForgeTestText() {
-    showHwuiProModal('Voice Forge', 'Voice Forge is available in HWUI Pro.');
-    return;
-    const textarea = document.getElementById('voice-forge-text');
-    const text = textarea.value.trim();
-    if (!text) return setVoiceForgeStatus('Test text cannot be empty.', 'error');
-    const button = document.getElementById('voice-forge-save-text');
-    button.disabled = true;
-    try {
-      const response = await fetch('/api/tts/voice-forge/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ test_text: text })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Could not save test text');
-      textarea.value = data.test_text;
-      voiceForgeSettingsLoaded = true;
-      setVoiceForgeStatus('Voice Forge test text saved.', 'success');
-    } catch (error) {
-      setVoiceForgeStatus(error.message, 'error');
-    } finally {
-      button.disabled = false;
-    }
-  }
+  async function saveVoiceForgeTestText() { showHwuiProModal("Voice Forge", "Voice Forge settings are available in HWUI Pro."); return; }
 
   async function initialiseVoiceForge(force = false) {
     await loadVoiceForgeTestText();
@@ -2677,81 +2871,9 @@
     }
   }
 
-  async function generateVoiceForgeBlend() {
-    showHwuiProModal('Voice Forge', 'Voice blending is available in HWUI Pro.');
-    return;
-    normaliseVoiceForgeSource('A');
-    normaliseVoiceForgeSource('B');
-    const sourceA = document.getElementById('voice-forge-a-select').value;
-    const sourceB = document.getElementById('voice-forge-b-select').value;
-    const uploadA = document.getElementById('voice-forge-a-upload').files[0];
-    const uploadB = document.getElementById('voice-forge-b-upload').files[0];
-    const text = document.getElementById('voice-forge-text').value.trim();
-    if (!sourceA && !uploadA) return setVoiceForgeStatus('Choose or upload Voice A.', 'error');
-    if (!sourceB && !uploadB) return setVoiceForgeStatus('Choose or upload Voice B.', 'error');
-    if (!text) return setVoiceForgeStatus('Enter some test text.', 'error');
+  async function generateVoiceForgeBlend() { showHwuiProModal("Voice Forge", "Blending voices is available in HWUI Pro."); return; }
 
-    const form = new FormData();
-    form.append('text', text);
-    form.append('blend_ratio', document.getElementById('voice-forge-ratio').value);
-    form.append('expression', document.getElementById('voice-forge-expression').value);
-    form.append('speed', document.getElementById('voice-forge-speed').value);
-    if (sourceA) form.append('voice_a', sourceA);
-    if (sourceB) form.append('voice_b', sourceB);
-    if (uploadA) form.append('voice_a_audio', uploadA, uploadA.name);
-    if (uploadB) form.append('voice_b_audio', uploadB, uploadB.name);
-    const seed = document.getElementById('voice-forge-seed').value.trim();
-    if (seed) form.append('seed', seed);
-
-    const generateButton = document.getElementById('voice-forge-generate');
-    const saveButton = document.getElementById('voice-forge-save');
-    generateButton.disabled = true;
-    saveButton.disabled = true;
-    voiceForgeResultId = '';
-    setVoiceForgeStatus('Extracting speaker embeddings and generating the blend...');
-    try {
-      const response = await fetch('/api/tts/voice-forge/blend', { method: 'POST', body: form });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Voice Forge generation failed');
-      voiceForgeResultId = data.result_id;
-      voiceForgeResultTranscript = text;
-      const audio = document.getElementById('voice-forge-audio');
-      audio.src = `${data.audio_url}?v=${Date.now()}`;
-      document.getElementById('voice-forge-result').hidden = false;
-      saveButton.disabled = false;
-      setVoiceForgeStatus(`Blend generated at expression ${Number(data.expression).toFixed(2)} and ${Number(data.speed).toFixed(2)}× speed, with seed ${data.seed}.`, 'success');
-      audio.load();
-    } catch (error) {
-      setVoiceForgeStatus(error.message, 'error');
-    } finally {
-      generateButton.disabled = false;
-    }
-  }
-
-  async function saveVoiceForgeVoice() {
-    showHwuiProModal('Voice Forge', 'Saving new voices is available in HWUI Pro.');
-    return;
-    const voiceName = document.getElementById('voice-forge-save-name').value.trim();
-    if (!voiceForgeResultId) return setVoiceForgeStatus('Generate a blend before saving it.', 'error');
-    if (!voiceName) return setVoiceForgeStatus('Enter a name for the new HWUI voice.', 'error');
-    const form = new FormData();
-    form.append('result_id', voiceForgeResultId);
-    form.append('voice_name', voiceName);
-    form.append('transcript', voiceForgeResultTranscript);
-    const saveButton = document.getElementById('voice-forge-save');
-    saveButton.disabled = true;
-    setVoiceForgeStatus('Saving the WAV and matching transcript...');
-    try {
-      const response = await fetch('/api/tts/voice-forge/save', { method: 'POST', body: form });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Could not save the HWUI voice');
-      await initialiseVoiceForge(true);
-      setVoiceForgeStatus(`Saved “${data.voice}” to the shared HWUI voices directory.`, 'success');
-    } catch (error) {
-      setVoiceForgeStatus(error.message, 'error');
-      saveButton.disabled = false;
-    }
-  }
+  async function saveVoiceForgeVoice() { showHwuiProModal("Voice Forge", "Saving generated voices is available in HWUI Pro."); return; }
 
   const BENCH_FORM_STATE_KEY = HelcyonBenchPromptTransfer.FORM_STATE_KEY;
   let helcyonBenchPacks = [];
@@ -3200,25 +3322,7 @@
     return data.session;
   }
 
-  async function saveBenchSession() {
-    showHwuiProModal('Benchmark Sessions', 'Benchmark session automation is available in HWUI Pro.');
-    return;
-    saveBenchFormState();
-    let pack;
-    let items;
-    try {
-      ({ pack, items } = collectBenchSessionItems());
-    } catch (error) {
-      setBenchSessionMessage(error.message, 'error');
-      return;
-    }
-    try {
-      const session = await postBenchSession(pack, items, false);
-      setBenchSessionMessage(`Saved ${session.filename}.`, 'success');
-    } catch (error) {
-      setBenchSessionMessage(error.message, 'error');
-    }
-  }
+  async function saveBenchSession() { showHwuiProModal("Helcyon-Bench", "Saving benchmark sessions is available in HWUI Pro."); return; }
 
   // Runs automatically once a judge run completes, so a set of captured test
   // answers is never lost to a forgotten manual save, a browser reset, or the
@@ -3285,27 +3389,7 @@
     persistBenchSessionState();
   }
 
-  async function loadSelectedBenchSession() {
-    showHwuiProModal('Benchmark Sessions', 'Benchmark session automation is available in HWUI Pro.');
-    return;
-    const filename = document.getElementById('bench-session-select')?.value;
-    if (!filename) {
-      setBenchSessionMessage('Select a saved session to load first.', 'error');
-      return;
-    }
-    try {
-      const response = await fetch(`/api/helcyon-bench/saved-sessions/${encodeURIComponent(filename)}`, {
-        cache: 'no-store'
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Could not load the saved session.');
-      applyLoadedBenchSession(data.session);
-      setBenchSessionMessage(`Loaded ${filename}.`, 'success');
-      setBenchStatus(`Loaded full benchmark session ${filename}.`, 'success');
-    } catch (error) {
-      setBenchSessionMessage(error.message, 'error');
-    }
-  }
+  async function loadSelectedBenchSession() { showHwuiProModal("Helcyon-Bench", "Loading benchmark sessions is available in HWUI Pro."); return; }
 
   let helcyonBenchSessionDeleteTarget = '';
 
@@ -3330,26 +3414,7 @@
     document.getElementById('bench-session-delete-confirm').hidden = true;
   }
 
-  async function confirmBenchSessionDelete() {
-    showHwuiProModal('Benchmark Sessions', 'Benchmark session automation is available in HWUI Pro.');
-    return;
-    const filename = helcyonBenchSessionDeleteTarget;
-    if (!filename) return;
-    try {
-      const response = await fetch(`/api/helcyon-bench/saved-sessions/${encodeURIComponent(filename)}`, {
-        method: 'DELETE'
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Could not delete the saved session.');
-      cancelBenchSessionDelete();
-      await refreshBenchSavedSessionsList();
-      setBenchSessionMessage(`Deleted ${filename}.`, 'success');
-      setBenchStatus(`Deleted saved benchmark session ${filename}.`, 'success');
-    } catch (error) {
-      setBenchSessionMessage(error.message, 'error');
-      cancelBenchSessionDelete();
-    }
-  }
+  async function confirmBenchSessionDelete() { showHwuiProModal("Helcyon-Bench", "Deleting benchmark sessions is available in HWUI Pro."); return; }
 
   function updateBenchRunProgress() {
     const fields = [...document.querySelectorAll('.bench-response-area')];
@@ -3384,15 +3449,11 @@
       (labels[status] || status.replaceAll('_', ' ')) +
       (inactiveOriginalChat ? ' · original chat inactive' : '');
     statusElement.dataset.captureStatus = status;
-    button.disabled = status !== 'ready_to_capture';
+    button.disabled = false;
     button.textContent = status === 'captured'
       ? 'Captured'
       : 'Capture response';
-    button.title = association?.error || (
-      status === 'ready_to_capture'
-        ? 'Capture the exact completed assistant reply linked to this submitted turn'
-        : 'Capture becomes available after the exact linked assistant reply is saved as completed'
-    );
+    button.title = 'Capturing live chat responses is available in HWUI Pro.';
     if (nextButton && status === 'captured') nextButton.hidden = false;
   }
 
@@ -3463,76 +3524,7 @@
     }));
   }
 
-  async function captureBenchResponse(pack, item, slot, area, button, statusElement) {
-    showHwuiProModal('Benchmark Response Capture', 'Benchmark response capture is available in HWUI Pro.');
-    return;
-    const runId = currentBenchRunId(pack.id);
-    const association = HelcyonBenchPromptTransfer.getAssociation(
-      localStorage,
-      runId,
-      pack.id,
-      item.test_id,
-      slot
-    );
-    if (!association) {
-      setBenchStatus(`Model ${slot} has no submitted prompt association to capture.`, 'error');
-      return;
-    }
-    if (area.value.trim() && !window.confirm(
-      `Model ${slot}'s response field already contains text. Replace it with the exact captured HWUI response?`
-    )) {
-      setBenchStatus(`Model ${slot} capture cancelled; the existing response was preserved.`, '');
-      return;
-    }
-    button.disabled = true;
-    try {
-      const response = await fetch(
-        `/api/helcyon-bench/capture-associations/${encodeURIComponent(association.association_id)}/capture`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ candidate_model_slot: slot })
-        }
-      );
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'The exact response could not be captured.');
-      area.value = result.response_text;
-      const state = {
-        ...readBenchFormState(),
-        ...(result.session || {})
-      };
-      state.responses = state.responses || {};
-      state.response_meta = state.response_meta || {};
-      const key = benchResponseKey(pack.id, item.test_id, slot);
-      state.responses[key] = result.response_text;
-      state.response_meta[key] = {
-        origin: 'captured',
-        association_id: association.association_id,
-        assistant_message_id: result.assistant_message_id,
-        captured_at: result.association?.captured_at || new Date().toISOString()
-      };
-      state.selected_view = 'test';
-      state.selected_category = pack.category || item.category || '';
-      state.selected_pack = pack.id;
-      state.active_prompt_test_id = item.test_id;
-      state.current_candidate_slot = slot;
-      state.last_focused_response_key = key;
-      localStorage.setItem(BENCH_FORM_STATE_KEY, JSON.stringify(state));
-      const updated = HelcyonBenchPromptTransfer.updateAssociation(
-        localStorage,
-        association.association_id,
-        { ...(result.association || {}), status: 'captured' }
-      );
-      const nextButton = button.closest('.bench-response-actions')?.querySelector('[data-next-button="true"]');
-      applyBenchCaptureState(button, statusElement, updated || { ...association, status: 'captured' }, nextButton);
-      configureBenchContinuation(nextButton, pack, item, button.closest('.bench-prompt-card'));
-      updateBenchRunProgress();
-      setBenchStatus(`Captured the exact Model ${slot} assistant reply from ${result.assistant_metadata?.source_chat || 'its bound chat'}.`, 'success');
-    } catch (error) {
-      setBenchStatus(error.message, 'error');
-      await refreshBenchCaptureStates();
-    }
-  }
+  async function captureBenchResponse(pack, item, slot, area, button, statusElement) { showHwuiProModal("Helcyon-Bench", "Capturing live chat responses is available in HWUI Pro."); return; }
 
   function advanceBenchPrompt(currentCard) {
     const cards = [...document.querySelectorAll('.bench-prompt-card')];
@@ -4197,50 +4189,7 @@
     });
   }
 
-  async function startBenchJudgeRun() {
-    showHwuiProModal('Helcyon-Bench Judge', 'Automated benchmark judging is available in HWUI Pro.');
-    return;
-    updateBenchJudgeAvailability();
-    const buttons = [...document.querySelectorAll('[data-bench-judge-run]')];
-    if (!buttons.length || buttons[0].disabled) {
-      setBenchStatus(buttons[0]?.title || 'The benchmark is not ready to judge.', 'error');
-      return;
-    }
-    const state = saveBenchFormState();
-    await persistBenchSessionState(state);
-    setBenchStatus('Starting judge preflight...', '');
-    setBenchRawResponse(null);
-    buttons.forEach(button => { button.disabled = true; });
-    renderBenchJudgingOverlay({
-      status: 'queued',
-      message: 'Starting judge preflight...',
-      passes_completed: 0,
-      passes_total: document.querySelectorAll('.bench-response-area').length
-    });
-    try {
-      const response = await fetch('/api/helcyon-bench/judge/runs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          endpoint: selectedBenchJudgeEndpoint(),
-          model: selectedBenchJudgeModel()
-        })
-      });
-      const result = await response.json();
-      if (!response.ok) {
-        setBenchRawResponse(result.raw_response);
-        throw new Error(result.error || 'Judge run could not start.');
-      }
-      helcyonBenchJudgeJob = result.job;
-      renderBenchJudgeJob(result.job);
-      pollBenchJudgeRun();
-    } catch (error) {
-      helcyonBenchJudgeJob = null;
-      renderBenchJudgingOverlay(null);
-      setBenchStatus(error.message, 'error');
-      updateBenchJudgeAvailability();
-    }
-  }
+  async function startBenchJudgeRun() { showHwuiProModal("Helcyon-Bench", "Automated judging is available in HWUI Pro."); return; }
 
   function renderBenchJudgingOverlay(job) {
     const overlay = document.getElementById('bench-judging-overlay');
@@ -4807,78 +4756,7 @@
     return { target: preparedTarget, created: true };
   }
 
-  async function sendBenchPrompt(pack, item, slot) {
-    showHwuiProModal('Benchmark Prompt Transfer', 'Sending benchmark prompts into chat is available in HWUI Pro.');
-    return;
-    let target = await refreshHelcyonBenchTarget();
-    if (!target.chat) {
-      setBenchStatus('No active chat is selected. Open Chat, choose or create a chat, then return here.', 'error');
-      return;
-    }
-    if (!target.model) {
-      setBenchStatus('No active model is selected or connected.', 'error');
-      return;
-    }
-    try {
-      const draft = JSON.parse(
-        localStorage.getItem(HelcyonBenchPromptTransfer.DRAFT_KEY) || 'null'
-      );
-      if (draft && String(draft.text || '').trim()) {
-        setBenchStatus(
-          'The chat input already contains a draft. It has been preserved; send or clear it before transferring a benchmark prompt.',
-          'error'
-        );
-        return;
-      }
-    } catch (error) {}
-    const runId = currentBenchRunId(pack.id);
-    let prepared;
-    try {
-      prepared = await prepareBenchCandidateChat(target, pack, runId, slot);
-      target = prepared.target;
-    } catch (error) {
-      setBenchStatus(error.message, 'error');
-      return;
-    }
-    const candidateName = document.getElementById(`bench-model-${slot.toLowerCase()}`)?.value.trim();
-    const queued = HelcyonBenchPromptTransfer.queue(localStorage, {
-      benchmark_id: pack.id,
-      benchmark_name: pack.name,
-      test_id: item.test_id,
-      test_title: item.title,
-      prompt_number: pack.prompts.findIndex(prompt => prompt.test_id === item.test_id) + 1,
-      category: item.category || pack.category,
-      prompt_text: item.prompt,
-      original_prompt: item.prompt,
-      run_id: runId,
-      candidate_model_slot: slot,
-      candidate_model_name: candidateName || `Model ${slot}`
-    }, target);
-    if (!queued.ok) {
-      const messages = {
-        'no-chat': 'No active chat is selected. Open Chat, choose or create a chat, then return here.',
-        'no-model': 'No active model is selected or connected.',
-        'draft-exists': 'The chat input already contains a draft. It has been preserved; send or clear it before transferring a benchmark prompt.'
-      };
-      setBenchStatus(messages[queued.reason] || 'The prompt could not be transferred.', 'error');
-      return;
-    }
-    const state = saveBenchFormState();
-    state.selected_view = 'test';
-    state.selected_category = pack.category || item.category || '';
-    state.selected_pack = pack.id;
-    state.active_prompt_test_id = item.test_id;
-    state.current_candidate_slot = slot;
-    localStorage.setItem(BENCH_FORM_STATE_KEY, JSON.stringify(state));
-    await persistBenchSessionState(state);
-    setBenchStatus(
-      prepared.created
-        ? `Fresh chat prepared for candidate ${slot}. Opening it with the benchmark prompt...`
-        : `Prompt queued for candidate ${slot}. Opening its bound HWUI chat...`,
-      'success'
-    );
-    window.location.href = '/';
-  }
+  async function sendBenchPrompt(pack, item, slot) { showHwuiProModal("Helcyon-Bench", "Sending benchmark prompts to chat is available in HWUI Pro."); return; }
 
   function renderBenchHistory() {
     const host = document.getElementById('bench-history-list');
@@ -5544,6 +5422,7 @@
 
   document.addEventListener('DOMContentLoaded', () => {
     const params = new URLSearchParams(window.location.search);
+    if (params.get('advanced') === '1') openAdvancedSettings();
     const requestedTab = params.get('tab');
     if (!['helcyon-bench', 'voice-forge', 'random-checkins'].includes(requestedTab)) return;
     const button = [...document.querySelectorAll('.config-tab')].find(
@@ -5553,6 +5432,8 @@
   });
 
   function openAdvancedSettings() {
+    const samplingOverlay = document.getElementById('sampling-settings-overlay');
+    if (samplingOverlay && samplingOverlay.classList.contains('open')) closeSamplingSettings();
     const overlay = document.getElementById('advanced-settings-overlay');
     if (!overlay) return;
     overlay.classList.add('open');
@@ -5572,6 +5453,28 @@
     if (trigger) trigger.focus({ preventScroll: true });
   }
 
+  function openSamplingSettings() {
+    const advancedOverlay = document.getElementById('advanced-settings-overlay');
+    if (advancedOverlay && advancedOverlay.classList.contains('open')) closeAdvancedSettings();
+    const overlay = document.getElementById('sampling-settings-overlay');
+    if (!overlay) return;
+    overlay.classList.add('open');
+    overlay.setAttribute('aria-hidden', 'false');
+    const modal = document.getElementById('sampling-settings-modal');
+    if (modal) modal.scrollTop = 0;
+    const closeBtn = overlay.querySelector('.advanced-settings-close');
+    if (closeBtn) closeBtn.focus({ preventScroll: true });
+  }
+
+  function closeSamplingSettings() {
+    const overlay = document.getElementById('sampling-settings-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('open');
+    overlay.setAttribute('aria-hidden', 'true');
+    const trigger = document.getElementById('sampling-settings-btn');
+    if (trigger) trigger.focus({ preventScroll: true });
+  }
+
   document.addEventListener('keydown', function(event) {
     if (event.key === 'Escape') {
       const cloudConfirm = document.getElementById('cloud-confirm-modal');
@@ -5586,6 +5489,13 @@
         event.preventDefault();
         event.stopImmediatePropagation();
         closeThemeModal();
+        return;
+      }
+      const samplingOverlay = document.getElementById('sampling-settings-overlay');
+      if (samplingOverlay && samplingOverlay.classList.contains('open')) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        closeSamplingSettings();
         return;
       }
       const overlay = document.getElementById('advanced-settings-overlay');
@@ -6699,7 +6609,13 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       document.getElementById('dry_multiplier').value    = settings.dry_multiplier    ?? 0.8;
       document.getElementById('dry_base').value          = settings.dry_base          ?? 1.75;
       document.getElementById('dry_allowed_length').value = settings.dry_allowed_length ?? 2;
-      document.getElementById('dry_penalty_last_n').value = settings.dry_penalty_last_n ?? -1;
+      document.getElementById('dry_penalty_last_n').value = settings.dry_penalty_last_n ?? 0;
+      document.getElementById('typical_p').value = settings.typical_p ?? 1.0;
+      document.getElementById('top_n_sigma').value = settings.top_n_sigma ?? -1.0;
+      document.getElementById('dynatemp_range').value = settings.dynatemp_range ?? 0.0;
+      document.getElementById('dynatemp_exponent').value = settings.dynatemp_exponent ?? 1.0;
+      document.getElementById('xtc_probability').value = settings.xtc_probability ?? 0.0;
+      document.getElementById('xtc_threshold').value = settings.xtc_threshold ?? 0.1;
       document.getElementById('frequency_penalty').value = settings.frequency_penalty ?? 0.0;
       document.getElementById('presence_penalty').value  = settings.presence_penalty  ?? 0.0;
       document.getElementById('auto-memory-enabled').checked = settings.auto_memory?.enabled === true;
@@ -6717,6 +6633,8 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       // `|| default` idiom, which coerces a legitimate 0 (e.g. top_p:0) to its
       // fallback. See the CHANGES.md "DO NOT revert" note.
       const settings = buildSamplingPresetFromFields();
+      localStorage.removeItem('hwui_active_sampling_preset');
+      localStorage.removeItem('hwui_sampling_preset_baseline');
       settings.auto_memory = {
         enabled: document.getElementById('auto-memory-enabled').checked,
         local_only: true
@@ -6742,16 +6660,17 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
   // --- INITIALIZATION ---
   document.addEventListener("DOMContentLoaded", () => {
     loadUserList();
-    loadSettings();
+    const settingsReady = loadSettings();
     loadCurrentSituation();
     loadTTSEngine();
     loadLlamaConfig();
     console.log('hydrating presets');
-    loadSamplingPresetsFromServer();  // hydrate sampling presets from disk — MUST be
+    const samplingPresetsReady = loadSamplingPresetsFromServer();  // hydrate sampling presets from disk — MUST be
                                       // independent of loadLlamaConfig (which early-returns
                                       // on a llama-config error and would otherwise skip this)
     loadBindCharacterList();
     loadCharacterModelPairingToggle();
+    Promise.all([settingsReady, samplingPresetsReady]).then(reconcileSamplingPresetState);
 
     // ⚠️ The three SP fields (#global-system-prompt / -example-dialog /
     // -post-history) are written by BOTH loadGlobalSystemPrompt (the globally
@@ -7269,29 +7188,7 @@ async function saveTTSEngine() {
 // short URL is kept in localStorage. ⚠️ DO NOT go back to storing the image
 // as a base64 data URL in localStorage — large images blow the ~5MB quota,
 // setItem throws, and the wallpaper silently fails to save.
-function handleBgImageChange(input) {
-  showHwuiProModal('Theme Editor', 'Background image editing is available in HWUI Pro.');
-  if (input) input.value = '';
-  return;
-  const file = input.files[0];
-  if (!file) return;
-  const formData = new FormData();
-  formData.append('file', file);
-  fetch('/save_bg', { method: 'POST', body: formData })
-    .then(r => r.json())
-    .then(data => {
-      if (data.error || !data.url) {
-        hwuiToast('Background upload failed: ' + (data.error || 'unknown error'), 'error');
-        return;
-      }
-      const url = data.url + '?v=' + Date.now();  // cache-bust so a replaced image refreshes
-      localStorage.setItem('hwui_bg_image', url);
-      localStorage.setItem('hwui_bg_mode', 'image');
-      applyBackground(url);
-    })
-    .catch(e => hwuiToast('Background upload failed: ' + e.message, 'error'));
-  input.value = '';
-}
+function handleBgImageChange(input) { showHwuiProModal("Theme Editor", "Custom background images are available in HWUI Pro."); return; }
 
 function applyBackground(dataUrl) {
   let tag = document.getElementById('hwui-bg-style');
@@ -7329,13 +7226,7 @@ function applyBackground(dataUrl) {
   }
 }
 
-function clearBackground() {
-  showHwuiProModal('Theme Editor', 'Background image editing is available in HWUI Pro.');
-  return;
-  fetch('/clear_bg', { method: 'POST' }).catch(() => {});
-  localStorage.removeItem('hwui_bg_image');
-  applyBackground(null);
-}
+function clearBackground() { showHwuiProModal("Theme Editor", "Editing theme backgrounds is available in HWUI Pro."); return; }
 
 function setBgMode(mode) {
   localStorage.setItem('hwui_bg_mode', mode);
@@ -7345,14 +7236,14 @@ function setBgMode(mode) {
   const imageSection = document.getElementById('bg-image-section');
 
   if (mode === 'colour') {
-    colourBtn.style.background = '#1a3a2a'; colourBtn.style.color = '#6f6'; colourBtn.style.borderColor = '#444'; colourBtn.style.fontWeight = '600';
-    imageBtn.style.background = '#2a2a2a'; imageBtn.style.color = '#aaa'; imageBtn.style.borderColor = '#333'; imageBtn.style.fontWeight = '';
+    colourBtn.style.fontWeight = '600';
+    imageBtn.style.fontWeight = '';
     colourSection.style.display = 'block';
     imageSection.style.display = 'none';
     applyBackground(null); // clears the !important style tag
   } else {
-    imageBtn.style.background = '#1a3a2a'; imageBtn.style.color = '#6f6'; imageBtn.style.borderColor = '#444'; imageBtn.style.fontWeight = '600';
-    colourBtn.style.background = '#2a2a2a'; colourBtn.style.color = '#aaa'; colourBtn.style.borderColor = '#333'; colourBtn.style.fontWeight = '';
+    imageBtn.style.fontWeight = '600';
+    colourBtn.style.fontWeight = '';
     colourSection.style.display = 'none';
     imageSection.style.display = 'block';
     const saved = localStorage.getItem('hwui_bg_image');
@@ -7385,8 +7276,21 @@ const THEME_VARS = [
   { group: 'Top Bar', vars: [
     { key: '--topbar-bg', label: 'Top Bar BG' },
   ]},
+  { group: 'Settings Buttons', vars: [
+    { key: '--sampling-settings-btn-bg', label: 'Sampling Settings BG' },
+    { key: '--sampling-settings-btn-text', label: 'Sampling Settings Text' },
+    { key: '--advanced-settings-btn-bg', label: 'Advanced Settings BG' },
+    { key: '--advanced-settings-btn-text', label: 'Advanced Settings Text' },
+    { key: '--theme-colour-btn-bg', label: 'Theme Colour BG' },
+    { key: '--theme-colour-btn-text', label: 'Theme Colour Text' },
+    { key: '--background-image-btn-bg', label: 'Background Image BG' },
+    { key: '--background-image-btn-text', label: 'Background Image Text' },
+    { key: '--theme-editor-btn-bg', label: 'Open Theme Editor BG' },
+    { key: '--theme-editor-btn-text', label: 'Open Theme Editor Text' },
+  ]},
   { group: 'Background & Container', vars: [
-    { key: '--container-bg',      label: 'Main Area BG' },
+    { key: '--main-bg',           label: 'Main BG' },
+    { key: '--container-bg',      label: 'Text Box BG' },
     { key: '--chat-bg',           label: 'Chat Panel BG' },
     { key: '--project-header-bg', label: 'Project Bar (top of chat)' },
   ]},
@@ -7575,10 +7479,24 @@ async function populateFontDropdown(select, currentStack) {
   if (select.selectedIndex < 0 && select.options.length) select.selectedIndex = 0;
 }
 
+function withLegacyMainBg(theme) {
+  if (theme['--main-bg']) {
+    document.documentElement.style.removeProperty('--main-bg');
+    return theme;
+  }
+  const file = (document.getElementById('active-theme-link')?.getAttribute('href') || '')
+    .split('?')[0].split('/').pop().toLowerCase();
+  const flatThemes = ['chatgpt.css', 'chatgpt-dark.css', 'claude.css',
+    'gemini.css', 'grok.css', 'codex.css', 'moonlight.css'];
+  const mainBg = flatThemes.includes(file) ? theme['--chat-bg'] : theme['--container-bg'];
+  document.documentElement.style.setProperty('--main-bg', mainBg);
+  return { ...theme, '--main-bg': mainBg };
+}
+
 async function loadTheme() {
   try {
     const res = await fetch('/get_theme');
-    const data = await res.json();
+    const data = withLegacyMainBg(await res.json());
     originalTheme = { ...data };
     renderThemeEditor(data);
   } catch(e) {
@@ -7608,105 +7526,13 @@ function refreshPresetDropdown() {
   if (current && themePresets[current]) sel.value = current;
 }
 
-async function loadPreset() {
-  showHwuiProModal('Theme Editor', 'Theme editing is available in HWUI Pro.');
-  return;
-  const name = document.getElementById('theme-preset-select').value;
-  if (!name || !themePresets[name]) { hwuiToast('Pick a preset first.', 'info'); return; }
-  const colours = themePresets[name];
-  const currentFont = getComputedStyle(document.documentElement).getPropertyValue('--app-font-family').trim();
-  const updates = { '--app-font-family': currentFont, ...colours };
-  renderThemeEditor({ ...originalTheme, ...updates });
-  // Live preview
-  Object.entries(updates).forEach(([k, v]) => {
-    document.documentElement.style.setProperty(k, v);
-  });
-  // Persist selection and write to style.css
-  localStorage.setItem('hwui_last_preset', name);
-  try {
-    const res = await fetch('/save_theme', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates)
-    });
-    const data = await res.json();
-    if (data.status !== 'ok') {
-      hwuiToast('Preset loaded but failed to save to CSS: ' + (data.error || 'Unknown error'), 'error');
-    }
-  } catch(e) {
-    hwuiToast('Preset loaded but failed to save to CSS: ' + e, 'error');
-  }
-}
+async function loadPreset() { showHwuiProModal("Theme Editor", "Applying custom theme presets is available in HWUI Pro."); return; }
 
-async function updatePreset() {
-  showHwuiProModal('Theme Editor', 'Theme editing is available in HWUI Pro.');
-  return;
-  const name = document.getElementById('theme-preset-select').value;
-  if (!name) { hwuiToast('Pick a preset first.', 'info'); return; }
-  const colours = collectThemeUpdates();
-  try {
-    const res = await fetch('/theme_presets/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, colours })
-    });
-    const data = await res.json();
-    if (data.status === 'ok') {
-      themePresets[name] = colours;
-      // Also write to style.css
-      await fetch('/save_theme', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(colours)
-      });
-      const btn = document.querySelector('button[onclick="updatePreset()"]');
-      if (btn) { btn.textContent = '✓ Saved'; setTimeout(() => btn.textContent = 'Update', 1500); }
-    } else {
-      hwuiToast('Failed: ' + (data.error || 'Unknown error'), 'error');
-    }
-  } catch(e) { hwuiToast('Failed: ' + e, 'error'); }
-}
+async function updatePreset() { showHwuiProModal("Theme Editor", "Updating theme presets is available in HWUI Pro."); return; }
 
-async function saveAsPreset() {
-  showHwuiProModal('Theme Editor', 'Theme editing is available in HWUI Pro.');
-  return;
-  const name = await hwuiPrompt('Preset name:');
-  if (!name || !name.trim()) return;
-  const colours = collectThemeUpdates();
-  try {
-    const res = await fetch('/theme_presets/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name.trim(), colours })
-    });
-    const data = await res.json();
-    if (data.status === 'ok') {
-      themePresets[name.trim()] = colours;
-      refreshPresetDropdown();
-      document.getElementById('theme-preset-select').value = name.trim();
-      localStorage.setItem('hwui_last_preset', name.trim());
-    } else {
-      hwuiToast('Failed: ' + (data.error || 'Unknown error'), 'error');
-    }
-  } catch(e) { hwuiToast('Failed: ' + e, 'error'); }
-}
+async function saveAsPreset() { showHwuiProModal("Theme Editor", "Saving theme presets is available in HWUI Pro."); return; }
 
-async function deletePreset() {
-  showHwuiProModal('Theme Editor', 'Theme editing is available in HWUI Pro.');
-  return;
-  const name = document.getElementById('theme-preset-select').value;
-  if (!name) { hwuiToast('Pick a preset first.', 'info'); return; }
-  if (!await hwuiConfirm(`Delete preset "${name}"?`)) return;
-  try {
-    await fetch('/theme_presets/delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name })
-    });
-    delete themePresets[name];
-    refreshPresetDropdown();
-  } catch(e) { hwuiToast('Failed: ' + e, 'error'); }
-}
+async function deletePreset() { showHwuiProModal("Theme Editor", "Deleting theme presets is available in HWUI Pro."); return; }
 
 function renderThemeEditor(data) {
   renderThemeModal(data);
@@ -7861,30 +7687,7 @@ function hwuiPrompt(message, defaultValue = '', opts = {}) {
   });
 }
 
-async function saveTheme() {
-  showHwuiProModal('Theme Editor', 'Theme editing is available in HWUI Pro.');
-  return;
-  // Read from live CSS vars — authoritative source, never stale
-  const updates = collectThemeUpdates();
-  try {
-    const res = await fetch('/save_theme', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates)
-    });
-    const result = await res.json();
-    if (result.status === 'ok') {
-      const link = document.getElementById('active-theme-link');
-      const themeName = (document.getElementById('theme-file-select') || {}).value || _activeThemeName || 'midnight';
-      if (link) link.href = '/theme-files/' + themeName + '.css?v=' + Date.now();
-      hwuiToast('✅ Theme saved! Refresh the chat page to see changes.', 'success');
-    } else {
-      hwuiToast('❌ Save failed: ' + (result.error || 'Unknown error'), 'error');
-    }
-  } catch(e) {
-    hwuiToast('❌ Save failed: ' + e, 'error');
-  }
-}
+async function saveTheme() { showHwuiProModal("Theme Editor", "Editing theme colours is available in HWUI Pro."); return; }
 
 async function resetTheme() {
   if (!await hwuiConfirm('Reset all colours to the last saved values?')) return;
@@ -7951,7 +7754,10 @@ async function saveLlamaConfig() {
       ctx_size: parseInt(document.getElementById('llama-ctx-size').value) || 16384,
       cache_type_k: 'q8_0',
       cache_type_v: 'q8_0',
-      timeout: 0,
+      // Seconds. NOT a "no limit" sentinel: llama-server hands this straight to
+      // cpp-httplib's socket poll, so 0 makes every read non-blocking and the
+      // server answers slow/segmented requests with an empty-body HTTP 400.
+      timeout: 600,
       chat_template: document.getElementById('llama-chat-template').value.trim() || 'chatml',
       ministral_template_mode: document.getElementById('llama-ministral-template-mode').value || 'native',
       parallel: 1,
@@ -8140,7 +7946,13 @@ function buildSamplingPresetFromFields() {
     dry_multiplier:    readNum('dry_multiplier', 0.8),
     dry_base:          readNum('dry_base', 1.75),
     dry_allowed_length: readNum('dry_allowed_length', 2, true),
-    dry_penalty_last_n: readNum('dry_penalty_last_n', -1, true),
+    dry_penalty_last_n: readNum('dry_penalty_last_n', 0, true),
+    typical_p: readNum('typical_p', 1.0),
+    top_n_sigma: readNum('top_n_sigma', -1.0),
+    dynatemp_range: readNum('dynatemp_range', 0.0),
+    dynatemp_exponent: readNum('dynatemp_exponent', 1.0),
+    xtc_probability: readNum('xtc_probability', 0.0),
+    xtc_threshold: readNum('xtc_threshold', 0.1),
     frequency_penalty: readNum('frequency_penalty', 0.0),
     presence_penalty:  readNum('presence_penalty', 0.0),
   };
@@ -8220,13 +8032,14 @@ async function loadSamplingPresetsFromServer() {
   populateSamplingPresetDropdown();
 }
 
-// Show the "Update Preset" button only when a preset is actually selected in
-// the dropdown — single source of truth, callable after any selection change
-// (user-driven or programmatic) so the button state never drifts.
+// One action creates a named preset or updates the selected preset. The label
+// tracks whether the dropdown currently names an existing preset.
 function syncSamplingUpdateBtn() {
   const name = document.getElementById('sampling-preset-select').value;
+  const enteredName = document.getElementById('sampling-preset-name').value.trim();
+  const isUpdate = Boolean(name && (!enteredName || enteredName === name));
   const updateBtn = document.getElementById('update-sampling-preset-btn');
-  if (updateBtn) updateBtn.style.display = name ? 'block' : 'none';
+  if (updateBtn) updateBtn.textContent = isUpdate ? '🔄 Update Preset' : '💾 Save Preset';
 }
 
 function populateSamplingPresetDropdown() {
@@ -8251,26 +8064,91 @@ function onSamplingPresetSelect() {
   syncSamplingUpdateBtn();
 }
 
-async function updateSamplingPreset() {
-  const name = document.getElementById('sampling-preset-select').value;
-  const status = document.getElementById('sampling-preset-status');
-  console.log(`[SP] updateSamplingPreset() clicked — selected preset = ${JSON.stringify(name)}`);
-  if (!name) { status.style.color = '#e88'; status.textContent = '❌ Select a preset first'; setTimeout(() => status.textContent = '', 2000); return; }
-  try {
-    await persistSamplingPreset(name, buildSamplingPresetFromFields());
-  } catch (e) {
-    status.style.color = '#e88'; status.textContent = '❌ Save failed: ' + e.message; setTimeout(() => status.textContent = '', 3000); return;
-  }
-  populateSamplingPresetDropdown();
-  document.getElementById('sampling-preset-select').value = name;
-  status.style.color = '#6dbf8a';
-  status.textContent = `✅ Preset "${name}" updated`;
-  setTimeout(() => status.textContent = '', 2500);
+const SAMPLING_FIELD_IDS = [
+  'temperature', 'max_tokens', 'top_p', 'min_p', 'top_k', 'repeat_penalty',
+  'dry_multiplier', 'dry_base', 'dry_allowed_length', 'dry_penalty_last_n',
+  'typical_p', 'top_n_sigma', 'dynatemp_range', 'dynatemp_exponent',
+  'xtc_probability', 'xtc_threshold',
+  'frequency_penalty', 'presence_penalty',
+];
+
+function readSamplingFields() {
+  return Object.fromEntries(SAMPLING_FIELD_IDS.map(id => [id, document.getElementById(id).value]));
 }
 
-async function saveSamplingPreset() {
-  const name = document.getElementById('sampling-preset-name').value.trim();
+function writeSamplingFields(values) {
+  for (const id of SAMPLING_FIELD_IDS) {
+    if (values[id] !== undefined && values[id] !== null) document.getElementById(id).value = values[id];
+  }
+}
+
+async function persistSamplingFields() {
+  const res = await fetch('/save_sampling_settings', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(buildSamplingPresetFromFields()),
+  });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+}
+
+async function reconcileSamplingPresetState() {
+  const names = Object.keys(samplingPresets);
+  let activeName = localStorage.getItem('hwui_active_sampling_preset');
+  if (activeName && !samplingPresets[activeName]) {
+    let baseline = null;
+    try { baseline = JSON.parse(localStorage.getItem('hwui_sampling_preset_baseline') || 'null'); } catch (_) {}
+    if (baseline) {
+      writeSamplingFields(baseline);
+      try { await persistSamplingFields(); } catch (e) { console.error('Failed to restore settings after preset deletion:', e); }
+    }
+    localStorage.removeItem('hwui_active_sampling_preset');
+    localStorage.removeItem('hwui_sampling_preset_baseline');
+    activeName = null;
+  }
+  const sel = document.getElementById('sampling-preset-select');
+  if (activeName && samplingPresets[activeName] && names.length > 1) {
+    sel.value = activeName;
+    onSamplingPresetSelect();
+    return;
+  }
+  const matchingName = findUniqueSamplingPresetForCurrentSettings();
+  if (matchingName) {
+    sel.value = matchingName;
+    onSamplingPresetSelect();
+    localStorage.setItem('hwui_active_sampling_preset', matchingName);
+    return;
+  }
+  if (names.length === 1) {
+    sel.value = names[0];
+    onSamplingPresetSelect();
+    await loadSamplingPreset();
+  }
+}
+
+function findUniqueSamplingPresetForCurrentSettings() {
+  const current = buildSamplingPresetFromFields();
+  const defaults = {
+    temperature: 0.8, max_tokens: 4096, top_p: 0.95, min_p: 0.05,
+    top_k: 40, repeat_penalty: 1.1, dry_multiplier: 0, dry_base: 1.75,
+    dry_allowed_length: 2, dry_penalty_last_n: 0, typical_p: 1.0,
+    top_n_sigma: -1.0, dynatemp_range: 0.0, dynatemp_exponent: 1.0,
+    xtc_probability: 0.0, xtc_threshold: 0.1,
+    frequency_penalty: 0.0, presence_penalty: 0.0,
+  };
+  const matches = Object.entries(samplingPresets).filter(([, preset]) =>
+    SAMPLING_FIELD_IDS.every(id =>
+      Number(current[id]) === Number(preset[id] ?? defaults[id])
+    )
+  );
+  return matches.length === 1 ? matches[0][0] : null;
+}
+
+async function saveOrUpdateSamplingPreset() {
+  const selectedName = document.getElementById('sampling-preset-select').value;
+  const enteredName = document.getElementById('sampling-preset-name').value.trim();
+  const isUpdate = Boolean(selectedName && (!enteredName || enteredName === selectedName));
+  const name = isUpdate ? selectedName : enteredName;
   const status = document.getElementById('sampling-preset-status');
+  console.log(`[SP] ${isUpdate ? 'update' : 'save'} preset clicked — name = ${JSON.stringify(name)}`);
   if (!name) { status.style.color = '#e88'; status.textContent = '❌ Enter a preset name first'; setTimeout(() => status.textContent = '', 2000); return; }
   try {
     await persistSamplingPreset(name, buildSamplingPresetFromFields());
@@ -8279,12 +8157,10 @@ async function saveSamplingPreset() {
   }
   populateSamplingPresetDropdown();
   document.getElementById('sampling-preset-select').value = name;
-  document.getElementById('sampling-preset-name').value = '';
-  // The just-saved preset is now the selected one, so the Update button should
-  // be available (it overwrites this same preset on click).
+  document.getElementById('sampling-preset-name').value = name;
   syncSamplingUpdateBtn();
   status.style.color = '#6dbf8a';
-  status.textContent = `✅ Preset "${name}" saved`;
+  status.textContent = `✅ Preset "${name}" ${isUpdate ? 'updated' : 'saved'}`;
   setTimeout(() => status.textContent = '', 2500);
 }
 
@@ -8296,16 +8172,33 @@ async function loadSamplingPreset() {
   const p = presets[name];
   console.log(`[SP] loadSamplingPreset('${name}') — cached preset =`, JSON.stringify(p), `(top_p=${p ? p.top_p : 'n/a'})`);
   if (!p) return;
+  if (!localStorage.getItem('hwui_active_sampling_preset')) {
+    localStorage.setItem('hwui_sampling_preset_baseline', JSON.stringify(readSamplingFields()));
+  }
   document.getElementById('temperature').value        = p.temperature       ?? 0.8;
   document.getElementById('max_tokens').value         = p.max_tokens        ?? 4096;
   document.getElementById('top_p').value              = p.top_p             ?? 0.95;
   document.getElementById('min_p').value              = p.min_p             ?? 0.05;
   document.getElementById('top_k').value              = p.top_k             ?? 40;
   document.getElementById('repeat_penalty').value     = p.repeat_penalty    ?? 1.1;
-  document.getElementById('dry_multiplier').value     = p.dry_multiplier    ?? 0.8;
+  // ⚠️ Fallback is 0, NOT llama.cpp's 0.8 default. None of the shipped presets
+  // define dry_multiplier, so a non-zero fallback here silently re-enabled the
+  // DRY sampler on every preset Load — and this handler persists straight to
+  // settings.json, so it took effect without the user pressing Save. DRY at
+  // dry_allowed_length 2 over a full-context window was the root cause of the
+  // intermittent malformed-prose bug (see changes.md, 2026-09-20). A preset that
+  // explicitly sets dry_multiplier still keeps its own value; ?? only falls
+  // through on null/undefined, so an explicit 0 stays 0.
+  document.getElementById('dry_multiplier').value     = p.dry_multiplier    ?? 0;
   document.getElementById('dry_base').value           = p.dry_base          ?? 1.75;
   document.getElementById('dry_allowed_length').value = p.dry_allowed_length ?? 2;
-  document.getElementById('dry_penalty_last_n').value = p.dry_penalty_last_n ?? -1;
+  document.getElementById('dry_penalty_last_n').value = p.dry_penalty_last_n ?? 0;
+  document.getElementById('typical_p').value = p.typical_p ?? 1.0;
+  document.getElementById('top_n_sigma').value = p.top_n_sigma ?? -1.0;
+  document.getElementById('dynatemp_range').value = p.dynatemp_range ?? 0.0;
+  document.getElementById('dynatemp_exponent').value = p.dynatemp_exponent ?? 1.0;
+  document.getElementById('xtc_probability').value = p.xtc_probability ?? 0.0;
+  document.getElementById('xtc_threshold').value = p.xtc_threshold ?? 0.1;
   document.getElementById('frequency_penalty').value  = p.frequency_penalty ?? 0.0;
   document.getElementById('presence_penalty').value   = p.presence_penalty  ?? 0.0;
 
@@ -8323,6 +8216,7 @@ async function loadSamplingPreset() {
     });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     console.log(`[SP] loadSamplingPreset applied '${name}' to settings.json:`, JSON.stringify(applied));
+    localStorage.setItem('hwui_active_sampling_preset', name);
     status.style.color = '#6dbf8a';
     status.textContent = `✅ Loaded & applied "${name}"`;
   } catch (e) {
@@ -8350,6 +8244,7 @@ async function deleteSamplingPreset() {
   }
   delete samplingPresets[name];
   populateSamplingPresetDropdown();
+  await reconcileSamplingPresetState();
   status.style.color = '#aaa';
   status.textContent = `🗑 Preset "${name}" deleted`;
   setTimeout(() => status.textContent = '', 2000);
@@ -8856,48 +8751,15 @@ async function switchThemeFile(name) {
     }
     // Reload theme vars and re-render
     const res = await fetch('/get_theme');
-    const data = await res.json();
+    const data = withLegacyMainBg(await res.json());
     originalTheme = { ...data };
     renderThemeModal(data);
   } catch(e) { hwuiToast('Failed to switch theme: ' + e, 'error'); }
 }
 
-async function newThemeFile() {
-  showHwuiProModal('Theme Editor', 'Custom themes are available in HWUI Pro.');
-  return;
-  const name = await hwuiPrompt('New theme name (e.g. "dark-blue"):');
-  if (!name || !name.trim()) return;
-  try {
-    const res = await fetch('/themes/create', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ name: name.trim() })
-    });
-    const data = await res.json();
-    if (data.error) { hwuiToast('Error: ' + data.error, 'error'); return; }
-    await loadThemeFileList();
-    await switchThemeFile(name.trim());
-  } catch(e) { hwuiToast('Failed to create theme: ' + e, 'error'); }
-}
+async function newThemeFile() { showHwuiProModal("Theme Editor", "Creating themes is available in HWUI Pro."); return; }
 
-async function deleteThemeFile() {
-  showHwuiProModal('Theme Editor', 'Custom themes are available in HWUI Pro.');
-  return;
-  const name = _activeThemeName;
-  if (!await hwuiConfirm(`Delete theme "${name}"? This cannot be undone.`)) return;
-  try {
-    const res = await fetch('/themes/delete', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ name })
-    });
-    const data = await res.json();
-    if (data.error) { hwuiToast('Error: ' + data.error, 'error'); return; }
-    await loadThemeFileList();
-    // Switch to whatever is now active
-    const listRes = await fetch('/themes/list');
-    const listData = await listRes.json();
-    await switchThemeFile(listData.active);
-  } catch(e) { hwuiToast('Failed to delete theme: ' + e, 'error'); }
-}
+async function deleteThemeFile() { showHwuiProModal("Theme Editor", "Deleting themes is available in HWUI Pro."); return; }
 
 function openThemeModal() {
   loadThemeFileList();
@@ -8967,23 +8829,49 @@ const THEME_SECTIONS = [
         </div>`;
     }
   },
+  {
+    title: 'Settings Buttons',
+    vars: [
+      { key: '--sampling-settings-btn-bg', label: 'Sampling Settings BG' },
+      { key: '--sampling-settings-btn-text', label: 'Sampling Settings Text' },
+      { key: '--advanced-settings-btn-bg', label: 'Advanced Settings BG' },
+      { key: '--advanced-settings-btn-text', label: 'Advanced Settings Text' },
+      { key: '--theme-colour-btn-bg', label: 'Theme Colour BG' },
+      { key: '--theme-colour-btn-text', label: 'Theme Colour Text' },
+      { key: '--background-image-btn-bg', label: 'Background Image BG' },
+      { key: '--background-image-btn-text', label: 'Background Image Text' },
+      { key: '--theme-editor-btn-bg', label: 'Open Theme Editor BG' },
+      { key: '--theme-editor-btn-text', label: 'Open Theme Editor Text' },
+    ],
+    preview: (el) => {
+      el.innerHTML = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:8px 0;">
+        <button style="background:var(--sampling-settings-btn-bg);color:var(--sampling-settings-btn-text);">Sampling Settings</button>
+        <button style="background:var(--advanced-settings-btn-bg);color:var(--advanced-settings-btn-text);">Advanced Settings</button>
+        <button style="background:var(--theme-colour-btn-bg);color:var(--theme-colour-btn-text);">Theme Colour</button>
+        <button style="background:var(--background-image-btn-bg);color:var(--background-image-btn-text);">Background Image</button>
+        <button style="background:var(--theme-editor-btn-bg);color:var(--theme-editor-btn-text);">Open Theme Editor</button>
+      </div>`;
+    }
+  },
 
   {
     title: 'Background & Chat Container',
     vars: [
-      { key: '--container-bg',      label: 'Main Area BG' },
+      { key: '--main-bg',           label: 'Main BG' },
+      { key: '--container-bg',      label: 'Text Box BG' },
       { key: '--chat-bg',           label: 'Chat Panel BG' },
       { key: '--project-header-bg', label: 'Project Bar' },
     ],
     preview: (el) => {
       el.innerHTML = `
-        <div style="border-radius:6px; overflow:hidden; border:1px solid #222; background:var(--container-bg); padding:10px;">
+        <div style="border-radius:6px; overflow:hidden; border:1px solid #222; background:var(--main-bg); padding:10px;">
           <div style="background:var(--project-header-bg); border-radius:6px 6px 0 0; padding:8px 14px; font-size:13px; color:#ccc; display:flex; align-items:center; gap:8px;">
             <span>📁</span><span style="font-weight:600;">General</span>
           </div>
           <div style="background:var(--chat-bg); border-radius:0 0 6px 6px; padding:12px; min-height:48px;">
             <span style="font-size:11px; color:var(--theme-preview-muted-text);">← Chat messages appear here</span>
           </div>
+          <div style="background:var(--container-bg); border-radius:8px; margin-top:8px; padding:6px 10px; font-size:11px; color:var(--theme-preview-muted-text);">Text box</div>
         </div>`;
     }
   },
@@ -8997,8 +8885,8 @@ const THEME_SECTIONS = [
     ],
     preview: (el) => {
       el.innerHTML = `
-        <div style="background:var(--container-bg); border:1px solid var(--field-border); border-radius:10px; padding:14px; color:var(--model-msg-text);">
-          <div style="font-size:10px; text-transform:uppercase; letter-spacing:.6px; color:var(--theme-preview-muted-text); margin-bottom:10px;">Main Area BG · surrounding surface</div>
+        <div style="background:var(--main-bg); border:1px solid var(--field-border); border-radius:10px; padding:14px; color:var(--model-msg-text);">
+          <div style="font-size:10px; text-transform:uppercase; letter-spacing:.6px; color:var(--theme-preview-muted-text); margin-bottom:10px;">Main BG · surrounding surface</div>
           <div style="background:var(--config-box-bg); border:1px solid var(--config-box-border); border-radius:10px; padding:18px;">
             <div style="font-size:15px; font-weight:700; margin-bottom:12px;">Settings section</div>
             <div style="display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:10px;">
@@ -9494,7 +9382,7 @@ function previewThemeVar(varName, value) {
 
     // Local-only sampling params dim whenever ANY cloud backend is active.
     const _cloud = (mode !== 'local');
-    if (localParams) { localParams.style.opacity = _cloud ? '0.3' : '1'; localParams.style.pointerEvents = _cloud ? 'none' : 'auto'; }
+    if (localParams) localParams.classList.toggle('is-cloud-disabled', _cloud);
     if (localNote)   { localNote.style.display = _cloud ? 'block' : 'none'; }
 
     // Show the Connect button only for cloud providers; refresh its state.

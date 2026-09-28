@@ -206,6 +206,20 @@ def save_session_summary(character_name, new_entry):
           f"({len(existing)} entries stored, newest timestamped {now_iso})")
 
 
+def summary_input_messages(messages, limit=30):
+    """The chat messages an End Session summary is written from.
+
+    User/assistant turns only, the last `limit` of them. Replies the user
+    excluded from context are left out too: the summary becomes session memory
+    for new chats, which would bring the excluded text straight back.
+    """
+    return [
+        m for m in (messages or [])
+        if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+        and not (m.get("role") == "assistant" and m.get("exclude_from_context") is True)
+    ][-limit:]
+
+
 @session_summary_bp.route("/generate_session_summary", methods=["POST"])
 def generate_session_summary():
     """
@@ -313,8 +327,7 @@ def generate_session_summary():
             + ex_style
         )
 
-        # Filter to user/assistant only, cap at last 30 messages
-        conv_messages = [m for m in messages if m.get("role") in ("user", "assistant")][-30:]
+        conv_messages = summary_input_messages(messages)
 
         import datetime as _dt
         timestamp = _dt.datetime.now().strftime("%Y-%m-%d %H:%M")

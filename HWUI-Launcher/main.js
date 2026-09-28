@@ -24,7 +24,8 @@
  * spawned console (Flask / F5-TTS / llama-server). Tray Quit does the same.
  */
 
-const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, dialog, session } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, dialog, session, Notification } = require('electron');
+const { createCheckinNotifier, registerWindowsToastIdentity } = require('./checkin-notifications');
 const path  = require('path');
 const fs    = require('fs');
 const os    = require('os');
@@ -56,6 +57,7 @@ const OMNIVOICE_CACHE  = path.join(OMNIVOICE_ROOT, 'hf_cache');
 const READY_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 300;
 const TRAY_ICON_PATH   = path.join(__dirname, 'assets', 'icon.png');
+const NOTIFICATION_APP_ID = 'HWUI';   // Windows AppUserModelID for toasts
 const LOG_PATH         = path.join(__dirname, 'electron-flask.log');
 const BUILDS_CONFIG    = path.join(__dirname, 'builds.json');
 const DEFAULT_SERVICES = ['f5', 'whisper'];
@@ -583,6 +585,19 @@ function registerIpc() {
       cb('closed');
     }
   });
+
+  // Random Check-in delivered while HWUI is not in front of the user.
+  const checkinNotifier = createCheckinNotifier({
+    Notification,
+    getMainWindow: () => mainWindow,
+    getFlaskPort:  () => selectedFlaskPort,
+    focusMain:     () => forceFocusMain(),
+    icon:          TRAY_ICON_PATH,
+    logLine,
+  });
+  ipcMain.on('hwui-desktop:checkin-notify', (event, payload) => {
+    checkinNotifier.handleNotifyRequest(event, payload);
+  });
 }
 
 // --------------------------------------------------------------------------
@@ -687,6 +702,8 @@ function createMainWindow() {
     maximizable: true,
     autoHideMenuBar: true,
     webPreferences: {
+      // Narrow bridge for Random Check-in desktop notifications only.
+      preload: path.join(__dirname, 'main-preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       spellcheck: true,   // built-in spellchecker (default on; explicit for clarity)
@@ -699,6 +716,11 @@ function createMainWindow() {
   // other languages.)
   try { mainWindow.webContents.session.setSpellCheckerLanguages(['en-US']); }
   catch (e) { logLine(`setSpellCheckerLanguages failed: ${e.message}`); }
+
+  // A failing bridge preload would otherwise silently disable desktop toasts.
+  mainWindow.webContents.on('preload-error', (_e, preloadPath, error) => {
+    logLine(`Main window preload failed (${preloadPath}): ${error && error.message}`);
+  });
 
   mainWindow.loadFile(path.join(__dirname, 'loading.html'));
   mainWindow.once('ready-to-show', () => mainWindow.show());
@@ -941,6 +963,18 @@ if (!gotSingleInstanceLock) {
 // Boot
 // --------------------------------------------------------------------------
 app.whenReady().then(async () => {
+  // Windows toast identity: check-in notifications are attributed to "HWUI"
+  // (not Electron's default), registered with a display name and icon so the
+  // notification centre / Settings / Do Not Disturb priority list show HWUI.
+  // Keep the ID stable: Windows keys per-app notification settings on it.
+  if (process.platform === 'win32') {
+    registerWindowsToastIdentity({
+      platform: process.platform, execFileSync, appId: NOTIFICATION_APP_ID,
+      displayName: 'HWUI', iconPath: TRAY_ICON_PATH,
+      logLine,
+    });
+    app.setAppUserModelId(NOTIFICATION_APP_ID);
+  }
   installLocalCertBypass(session.defaultSession);
   registerIpc();
   createTray();

@@ -39,6 +39,16 @@
   --button-border-dark: #771010;
   --sidebar-footer-btn-bg: #1f3340;
   --sidebar-footer-btn-border: #000000;
+  --sampling-settings-btn-bg: #1f3a5a;
+  --sampling-settings-btn-text: #eaf3ff;
+  --advanced-settings-btn-bg: #1f3a5a;
+  --advanced-settings-btn-text: #eaf3ff;
+  --theme-colour-btn-bg: #1a3a2a;
+  --theme-colour-btn-text: #66ff66;
+  --background-image-btn-bg: #2a2a2a;
+  --background-image-btn-text: #aaaaaa;
+  --theme-editor-btn-bg: #1e3a4a;
+  --theme-editor-btn-text: #a0c8d8;
   --project-header-bg: #040506;
   --project-item-bg: #131c27;
   --project-item-hover: #21323f;
@@ -59,6 +69,10 @@
   --text-dim: #666666;
   --theme-editor-heading-text: #666666;
   --theme-preview-muted-text: #555555;
+  /* Settings/Config cards use their own theme controls; defaults preserve
+     the existing Random Check-ins box treatment. */
+  --config-box-bg: var(--bench-box, #242424);
+  --config-box-border: var(--field-border, #293238);
   --msg-timestamp-text: var(--text-dim);
   --bench-bg: #141414;
   --bench-box: #242424;
@@ -68,7 +82,7 @@
      Change this ONE value to resize the chat column on every theme.
      The chat #container, all theme files, midnight/evening, and the
      config page (via calc) all reference this. Nothing else to touch. */
-  --chat-width: 820px;
+  --chat-width: 860px;
 }
 
 body {
@@ -78,6 +92,17 @@ body {
   padding: 0;
   font-size: 15px;
   line-height: 1.5;
+  background: var(--main-bg, var(--chat-bg));
+}
+/* Keep older, user-owned theme files compatible with the separate Main BG
+   picker. In wallpaper mode the existing image override stays authoritative. */
+html:root:not(:has(#hwui-bg-style:not(:empty))),
+html:root:not(:has(#hwui-bg-style:not(:empty))) body,
+html:root:not(:has(#hwui-bg-style:not(:empty))) body #app {
+  background-color: var(--main-bg, var(--chat-bg)) !important;
+}
+html:root:not(:has(#hwui-bg-style:not(:empty))) .chat-page #chat {
+  background-color: var(--chat-bg) !important;
 }
 .chat-page #main {
   margin-top: 0;
@@ -169,6 +194,16 @@ body {
   line-height: 1.6;
 }
 
+/* The in-flight streaming bubble keeps its padding, border, background and
+   timestamp before its first text character exists, so on its own it paints as
+   a bare horizontal bar. It stays collapsed until revealStreamingMessage()
+   lifts this class together with the wrapper, which only happens once there is
+   something to see (a rendered answer slice, a reasoning panel or a status
+   notice) — never merely because a chunk arrived. */
+.model-msg.streaming-pending {
+  display: none !important;
+}
+
 
 .model-msg br + br {
   display: none;
@@ -206,6 +241,7 @@ body {
 /* ---- Sampling sidebar compact overrides ---- */
 #sampling-sidebar {
   padding: 0.7rem 0.75rem;
+  border-bottom-left-radius: 42px;
 }
 #sampling-sidebar * {
   font-size: 12px !important;
@@ -260,7 +296,7 @@ body {
 #sampling-sidebar select {
   font-size: 12px !important;
   padding: 3px 4px !important;
-  height: 26px !important;
+  height: 34px !important;
   box-sizing: border-box !important;
 }
 #sampling-sidebar .sampling-preset-row {
@@ -286,7 +322,7 @@ body {
   align-items: center;
   justify-content: center;
   margin: 0 !important;
-  padding: 0 6px !important;
+  padding: 0 8px !important;
 }
 #sampling-sidebar .sampling-preset-row button[onclick="loadSamplingPreset()"] {
   background: #1f3a5a !important;
@@ -302,11 +338,36 @@ body {
   border-radius: 3px !important;
   cursor: pointer;
 }
+#sampling-sidebar .sampling-preset-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+#sampling-sidebar .sampling-preset-actions button {
+  width: 100% !important;
+  min-width: 0;
+  margin: 0 !important;
+  background: #1f5a3a !important;
+  border: 1px solid #248050 !important;
+  color: white !important;
+}
+#sampling-sidebar .sampling-preset-actions #saveSettingsBtn {
+  height: 30px !important;
+  min-height: 30px !important;
+  padding: 0 5px !important;
+  font-size: 10px !important;
+  line-height: 1.2 !important;
+  white-space: nowrap;
+}
 #sampling-sidebar button {
   margin-top: 0;
-  padding: 4px 8px !important;
+  padding: 0 8px !important;
   font-size: 12px !important;
-  height: 26px !important;
+  height: 30px !important;
+  min-height: 30px !important;
+  border-radius: 3px !important;
   box-sizing: border-box !important;
 }
 #sampling-sidebar hr {
@@ -314,16 +375,87 @@ body {
   border-color: #2a2a2a !important;
 }
 #saveSettingsBtn {
-  margin-top: 6px !important;
-  height: 28px !important;
+  margin-top: 0 !important;
+  height: 30px !important;
+  min-height: 30px !important;
   width: 100% !important;
+}
+/* The detailed sampler and preset controls live in their own modal now. */
+#sampling-sidebar {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding: 0.8rem 0.75rem;
+}
+#sampling-sidebar #sampling-settings-btn {
+  width: 100%;
+  min-height: 38px;
+  height: auto !important;
+  margin: 0 !important;
+  padding: 7px 10px !important;
+  border: 1px solid #315777;
+  border-radius: 5px !important;
+  background: var(--sampling-settings-btn-bg);
+  color: var(--sampling-settings-btn-text);
+  cursor: pointer;
+  font-size: 13px !important;
+  font-weight: 700;
+  line-height: 1.25 !important;
+  box-sizing: border-box !important;
+}
+#sampling-sidebar #sampling-settings-btn:hover { filter: brightness(1.12); }
+#sampling-sidebar #advanced-settings-btn {
+  width: 100%;
+  min-height: 38px;
+  height: auto !important;
+  margin: 0 !important;
+  padding: 7px 10px !important;
+  border: 1px solid #245080;
+  border-radius: 5px !important;
+  background: var(--advanced-settings-btn-bg);
+  color: var(--advanced-settings-btn-text);
+  cursor: pointer;
+  font-size: 13px !important;
+  font-weight: 700;
+  line-height: 1.25 !important;
+  box-sizing: border-box !important;
+}
+#sampling-sidebar #advanced-settings-btn:hover { filter: brightness(1.12); }
+#bg-mode-colour-btn {
+  background: var(--theme-colour-btn-bg) !important;
+  color: var(--theme-colour-btn-text) !important;
+}
+#bg-mode-image-btn {
+  background: var(--background-image-btn-bg) !important;
+  color: var(--background-image-btn-text) !important;
+}
+#open-theme-editor-btn {
+  background: var(--theme-editor-btn-bg) !important;
+  color: var(--theme-editor-btn-text) !important;
+}
+#sampling-sidebar .sampling-memory-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0;
+  color: var(--text-muted, #aaa);
+  font-size: 12px !important;
+  line-height: 1.3 !important;
+  cursor: pointer;
+}
+#sampling-sidebar .sampling-memory-toggle input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 0;
 }
 #container,
 #center-column {
   flex: 1;
   max-width: var(--chat-width);
   min-width: 480px;
-  background-color: var(--container-bg);
+  background-color: var(--main-bg, var(--container-bg));
   padding: 1.5rem;
   border-radius: 12px;
   box-shadow: 0 0 30px rgba(0, 0, 0, 0.6);
@@ -539,6 +671,133 @@ body {
   font-size: 15px;
   color: #ccc;
   font-style: italic;
+}
+
+#character-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  transform: translateY(-7px);
+}
+
+#character-info #character-name {
+  display: block;
+  line-height: 1.15;
+}
+
+#character-info #system-prompt {
+  display: block;
+  margin-top: 3px;
+}
+
+#character-thoughts-btn {
+  margin-top: 11px;
+  padding: 6px 12px;
+  border: 1px solid var(--modal-border, #444);
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--modal-bg-hover, #29313a), var(--modal-bg, #161a1f));
+  color: var(--modal-text, #eee);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.15px;
+  cursor: pointer;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.22);
+  transition: border-color 0.15s, background 0.15s, transform 0.15s;
+}
+
+#character-thoughts-btn:hover {
+  border-color: var(--field-border-focus, #555);
+  background: var(--modal-bg-hover, #29313a);
+  transform: translateY(-1px);
+}
+
+#character-thoughts-btn:focus-visible {
+  outline: 2px solid var(--field-border-focus, #555);
+  outline-offset: 2px;
+}
+
+#character-thoughts-btn:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+#character-thoughts-toast {
+  position: fixed;
+  top: 96px;
+  z-index: 99999;
+  width: min(520px, calc(100vw - 32px));
+  box-sizing: border-box;
+  padding: 14px 16px;
+  background: var(--modal-bg, #161a1f);
+  border: 1px solid var(--modal-border, #444);
+  border-radius: 10px;
+  color: var(--modal-text, #eee);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+
+#character-thoughts-toast .character-thoughts-toast-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  color: var(--modal-text, #eee);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+#character-thoughts-toast .character-thoughts-toast-close {
+  border: 0;
+  padding: 0 3px;
+  background: transparent;
+  color: var(--text-muted, #aaa);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+#character-thoughts-toast .character-thoughts-toast-close:hover {
+  color: var(--modal-text, #fff);
+}
+
+#character-thoughts-toast .character-thoughts-toast-note {
+  max-height: 34vh;
+  overflow-y: auto;
+  padding: 10px 12px;
+  background: var(--memory-entry-bg, #1b1b1b);
+  border: 1px solid var(--modal-border, #444);
+  border-radius: 7px;
+  color: var(--memory-entry-text, #ccc);
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#character-thoughts-toast .character-thoughts-toast-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+#character-thoughts-toast .character-thoughts-edit {
+  padding: 6px 12px;
+  border: 1px solid var(--modal-border, #444);
+  border-radius: 6px;
+  background: var(--modal-bg-hover, #29313a);
+  color: var(--modal-text, #eee);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#character-thoughts-toast .character-thoughts-edit:hover {
+  background: var(--modal-bg, #161a1f);
 }
 
 /* ------------------ Character & Voice Selectors ------------------ */
@@ -918,6 +1177,58 @@ textarea {
   min-height: 80px;
   font-size: 15px;
   line-height: 1.4;
+}
+
+/* Prompt editors use one editable layout; the hidden textarea remains the
+   source of truth so saved text and model payloads stay unchanged. */
+.hwui-prompt-editor-shell {
+  position: relative;
+  box-sizing: border-box;
+}
+.hwui-prompt-editor-editor {
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+.hwui-prompt-editor-editor:focus {
+  outline: none;
+  border-color: var(--field-border-focus, #555);
+}
+.hwui-prompt-editor-editor.is-empty::before {
+  content: attr(data-placeholder);
+  opacity: 0.6;
+  pointer-events: none;
+}
+.hwui-prompt-editor-editor.is-empty .hwui-prompt-editor-line {
+  display: none;
+}
+.hwui-prompt-editor-editor .hwui-prompt-editor-line {
+  display: block;
+  min-height: 1em;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+.hwui-prompt-editor-editor .hwui-prompt-editor-bullet-line {
+  padding-left: var(--hwui-hanging-indent);
+  text-indent: calc(var(--hwui-hanging-indent) * -1);
+}
+.hwui-prompt-editor-editor::selection {
+  background-color: rgba(90, 140, 210, 0.78);
+  color: #fff !important;
+  -webkit-text-fill-color: #fff !important;
+}
+.hwui-prompt-editor-source {
+  position: absolute !important;
+  z-index: -1 !important;
+  width: 1px !important;
+  height: 1px !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  overflow: hidden !important;
 }
 input,
 textarea,
@@ -2840,6 +3151,99 @@ body {
   color: rgba(255, 255, 255, 0.9) !important;
 }
 
+.message-reaction-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 23px;
+  height: 21px;
+  margin-top: 4px;
+  padding: 0 6px;
+  border: 1px solid var(--msg-border, rgba(255,255,255,0.16));
+  border-radius: 999px;
+  background: var(--surface-2, rgba(255,255,255,0.07));
+  font-size: 13px;
+  line-height: 1;
+  user-select: none;
+}
+
+.reaction-control-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.reaction-control-wrap > button .reaction-icon {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.reaction-control-wrap::after {
+  content: 'React';
+  position: absolute;
+  z-index: 21;
+  top: calc(100% + 7px);
+  left: 50%;
+  padding: 5px 10px;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 999px;
+  background: #1d1f22;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.28);
+  color: rgba(255,255,255,0.92);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, -2px);
+  transition: opacity 0.12s, transform 0.12s;
+}
+
+.reaction-control-wrap:hover::after,
+.reaction-control-wrap:focus-within::after {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.reaction-picker {
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 4px);
+  left: 0;
+  display: none;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--modal-border, rgba(255,255,255,0.18));
+  border-radius: 8px;
+  background: var(--modal-bg, #20242a);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+  white-space: nowrap;
+}
+
+/* Only the dedicated reaction control owns the picker. The parent remains
+   hovered while the pointer travels from the icon onto the emoji strip. */
+.reaction-control-wrap:hover > .reaction-picker,
+.reaction-control-wrap:focus-within > .reaction-picker,
+.reaction-picker.is-open {
+  display: flex;
+}
+
+.reaction-picker button {
+  min-width: 27px;
+  height: 27px;
+  padding: 2px !important;
+  font-size: 15px !important;
+}
+
+.reaction-picker button.reaction-remove {
+  color: rgba(255, 130, 130, 0.75) !important;
+  font-size: 14px !important;
+}
+
 .msg-action-bar button.action-delete:hover {
   background: rgba(255, 80, 80, 0.15) !important;
   color: rgba(255, 100, 100, 1) !important;
@@ -3471,7 +3875,59 @@ hr.msg-separator {
 
 /* Memory Modal - Centered positioning */
 #author-note-modal .modal-content {
-  /* inherits global */
+  /* Give the two Response Intent fields the wider, taller workspace shown by
+     the red guide without changing the shared sizing of other modals. */
+  width: min(840px, calc(100vw - 310px));
+  height: min(510px, calc(100vh - 100px));
+  max-width: none;
+  max-height: none;
+}
+
+#author-note-modal .modal-body {
+  padding: 16px 18px;
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+#author-note-modal .modal-body > label,
+#author-note-modal .modal-body > small,
+#author-note-modal .modal-body > textarea,
+#author-note-modal .modal-body > .hwui-prompt-editor-shell {
+  width: min(780px, calc(100% - 24px)) !important;
+  max-width: 780px;
+  box-sizing: border-box;
+}
+
+#author-note-modal .modal-body textarea,
+#author-note-modal .hwui-prompt-editor-editor {
+  min-height: 135px !important;
+  height: 135px;
+  max-height: none !important;
+  background-color: var(--memory-entry-bg, var(--field-bg, #111)) !important;
+  border: 1px solid var(--modal-border, #444) !important;
+  font-family: inherit !important;
+  font-size: 15px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+/* text_scale.js replaces these textareas with contenteditable editors. Keep
+   the visible editor matched to the field width, font, and dimensions after
+   that enhancement as well. */
+#author-note-modal .hwui-prompt-editor-editor {
+  width: 100%;
+  overflow: auto;
+  font-family: inherit !important;
+  font-size: 15px !important;
+  line-height: 1.5 !important;
+  resize: vertical;
+}
+
+#author-note-modal .modal-body textarea:focus,
+#author-note-modal .hwui-prompt-editor-editor:focus {
+  border-color: var(--modal-border, #444) !important;
 }
 
 #memory-modal .modal-content {
@@ -3587,6 +4043,8 @@ hr.msg-separator {
   max-width: 1200px;
   height: calc(100vh - 130px);
   max-height: 900px;
+  /* Match the Config tab workspace behind the raised folder cards. */
+  background-color: var(--container-bg, var(--modal-bg, #161A1F));
   display: flex;
   flex-direction: column;
 }
@@ -3680,8 +4138,8 @@ hr.msg-separator {
 
 /* Card */
 .project-item {
-  background: var(--project-item-bg);
-  border: 1px solid var(--project-item-border);
+  background: var(--config-box-bg, var(--project-item-bg));
+  border: 1px solid var(--config-box-border, var(--project-item-border));
   border-radius: 8px;
   padding: 12px 10px 8px;
   display: flex;
@@ -3858,7 +4316,7 @@ hr.msg-separator {
   flex: 1;
   overflow-y: auto;
   min-height: 0;
-  background: var(--project-edit-workspace-bg, var(--modal-bg));
+  background: var(--container-bg, var(--project-edit-workspace-bg, var(--modal-bg)));
   align-items: center;
   padding: 24px 20px 20px;
 }
@@ -4181,8 +4639,9 @@ button#stop-btn {
 
 /* Add breathing room to streamed text */
 .model-text p {
-  margin: 0 0 1.1em 0 !important;
+  margin: 0 0 1.6em 0 !important;
   line-height: 1.6;
+  white-space: pre-wrap;
 }
 
 .model-text p:last-child {
@@ -4646,7 +5105,7 @@ button#stop-btn {
   background: var(--container-bg);
   border: 1px solid var(--sidebar-border);
   border-radius: 16px;
-  padding: 5px 10px;
+  padding: 7px 12px;
   box-shadow: 0 4px 24px rgba(0,0,0,0.5);
   width: 100%;
   max-width: 760px !important;
@@ -4880,7 +5339,6 @@ button.code-copy-btn:hover,
   padding: 0 !important;
   font-size: 13px !important;
 }
-
 
 /* === Extended-thinking panel (Anthropic reasoning display) ============== */
 /* Inserted live above a model reply when "Show extended thinking" is on.    */

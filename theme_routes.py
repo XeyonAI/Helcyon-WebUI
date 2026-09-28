@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 import os, json, re
+from user_config import load_user_config_section, save_user_config_section
 
 theme_bp = Blueprint('theme', __name__)
 
@@ -7,18 +8,6 @@ theme_bp = Blueprint('theme', __name__)
 SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "settings.json")
 
 THEMES_DIR = os.path.join(os.path.dirname(__file__), "themes")
-
-# This is the free (GitHub) build of HWUI. Users may switch between the two
-# included themes, but creating/editing/saving/deleting themes or presets
-# (the Theme Editor) is Pro-only.
-FREE_THEMES = {"claude", "gemini"}
-
-
-def _pro_only():
-    return jsonify({
-        "error": "The Theme Editor is available in HWUI Pro.",
-        "pro_required": True,
-    }), 403
 
 def get_active_theme_name():
     """Get active theme name from settings.json, default to 'midnight'."""
@@ -139,10 +128,10 @@ def delete_theme():
 THEME_PRESETS_FILE = "theme_presets.json"
 
 def load_theme_presets():
-    if os.path.exists(THEME_PRESETS_FILE):
-        with open(THEME_PRESETS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+    return load_user_config_section("theme_presets")
+
+def save_theme_presets(presets):
+    save_user_config_section("theme_presets", presets)
 
 @theme_bp.route("/theme_presets", methods=["GET"])
 def get_theme_presets():

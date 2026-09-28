@@ -36,9 +36,12 @@ BENCHMARKS = ROOT / "benchmarks"
 OFFICIAL_OUTPUTS = OUTPUTS / "official"
 FASTER_OUTPUTS = OUTPUTS / "faster"
 STREAM_OUTPUTS = OUTPUTS / "streaming-captured"
+VOICE_FORGE_OUTPUTS = OUTPUTS / "voice-forge"
 PORT = 8767
 HWUI_VOICE_TEMPERATURE = 0.8
-for folder in (VOICES, OUTPUTS, BENCHMARKS, OFFICIAL_OUTPUTS, FASTER_OUTPUTS, STREAM_OUTPUTS):
+VOICE_FORGE_DEFAULT_TEXT = "Hello. This is a test of a newly blended voice."
+VOICE_FORGE_TEST_TEXT = SHARED_VOICES / "_voice_forge_test_text.txt"
+for folder in (VOICES, OUTPUTS, BENCHMARKS, OFFICIAL_OUTPUTS, FASTER_OUTPUTS, STREAM_OUTPUTS, VOICE_FORGE_OUTPUTS):
     folder.mkdir(parents=True, exist_ok=True)
 
 
@@ -196,6 +199,18 @@ def reference_audio_with_headroom(audio: np.ndarray, target_peak: float = 0.5) -
     return prepared
 
 
+def voice_forge_time_stretch(audio: np.ndarray, speed: float) -> np.ndarray:
+    """Change only the merged WAV tempo while preserving its pitch."""
+    prepared = np.asarray(audio, dtype=np.float32).reshape(-1)
+    if prepared.size == 0 or abs(speed - 1.0) < 1e-6:
+        return prepared
+    try:
+        import librosa
+        return np.asarray(librosa.effects.time_stretch(prepared, rate=speed), dtype=np.float32)
+    except Exception as exc:
+        raise RuntimeError(f"Voice Forge speed adjustment failed: {exc}") from exc
+
+
 def output_name(text: str, suffix: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:45] or "speech"
     return f"{datetime.now():%Y%m%d-%H%M%S-%f}_{slug}_{suffix}.wav"
@@ -232,6 +247,55 @@ async def reference_file(upload: UploadFile | None, path: str | None) -> Path | 
             raise HTTPException(400, f"Reference WAV not found: {candidate}")
         return candidate
     return None
+
+
+def xvector_from_reference(model: FasterQwen3TTS, audio: Path) -> torch.Tensor:
+    """Extract one speaker embedding without retaining reference codec tokens."""
+    try:
+        reference_audio, sample_rate = model._load_ref_audio_with_silence(audio, silence_secs=0.0)
+        reference_audio = reference_audio_with_headroom(reference_audio)
+        items = model.model.create_voice_clone_prompt(
+            ref_audio=(reference_audio, sample_rate),
+            ref_text="",
+            x_vector_only_mode=True,
+        )
+        prompt = model.model._prompt_items_to_voice_clone_prompt(items)
+        embeddings = prompt.get("ref_spk_embedding") if isinstance(prompt, dict) else None
+        if not embeddings or embeddings[0] is None:
+            raise RuntimeError(
+                "Voice Forge is unsupported by this installed Qwen backend: "
+                "x-vector-only prompting did not return a speaker embedding."
+            )
+        embedding = embeddings[0]
+        if not isinstance(embedding, torch.Tensor) or not embedding.is_floating_point():
+            raise RuntimeError(
+                "Voice Forge is unsupported by this installed Qwen backend: "
+                "the speaker embedding is not an interpolatable tensor."
+            )
+        return embedding
+    except (AttributeError, TypeError, NotImplementedError) as exc:
+        raise RuntimeError(
+            "Voice Forge is unsupported by this installed Qwen backend: "
+            "x-vector-only speaker embedding extraction is unavailable."
+        ) from exc
+
+
+def voice_forge_reference(upload: UploadFile | None, voice: str | None, slot: str) -> tuple[Path, bool]:
+    if upload and upload.filename:
+        suffix = Path(upload.filename).suffix.lower()
+        if suffix not in {".wav", ".mp3"}:
+            raise HTTPException(400, f"Voice {slot} upload must be a WAV or MP3 file")
+        target = VOICES / f"voice_forge_{uuid.uuid4().hex}{suffix}"
+        with target.open("wb") as stream:
+            shutil.copyfileobj(upload.file, stream)
+        return target, True
+    if voice:
+        try:
+            wav, _transcript = shared_voice(voice)
+            return wav, False
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+    raise HTTPException(400, f"Choose or upload Voice {slot}")
 
 
 def resolve_prompt(model: FasterQwen3TTS, ref: Path | None, transcript: str, prompt_id: str | None,
@@ -315,11 +379,25 @@ def hwui_voices() -> dict[str, Any]:
     return {"voices": shared_voice_names(), "voices_dir": str(SHARED_VOICES)}
 
 
+
+
+
+
+
+
+
+
 @app.get("/status")
 def hwui_status() -> dict[str, Any]:
     return {"status": "online", "engine": "qwen-fast", "gpu": torch.cuda.get_device_name(0),
             "model_loaded": runtime.model is not None, "cuda_graphs_captured": runtime.cuda_graphs_captured,
             "voices_dir": str(SHARED_VOICES)}
+
+
+
+
+
+
 
 
 @app.post("/warmup")

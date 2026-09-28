@@ -15,6 +15,140 @@ CHARACTERS_DIR = os.path.join(os.path.dirname(__file__), "characters")
 
 
 # --------------------------------------------------
+# Character storage keys
+# A card's storage key is its filename stem (characters/<key>.json) and is its
+# ONLY persistent identifier. The list, index.json, every route that loads or
+# writes a card, its chats ("<key> - <title>.txt"), its image (<key>.png),
+# memories/session summaries, opening lines, group assignment and the active
+# character are all keyed by it. The editable "name" field is model/display
+# identity only — two cards may share a Name, and changing a Name never
+# changes which card is loaded, saved, renamed or deleted.
+# --------------------------------------------------
+CHARACTER_STATE_FILES = ("_active_character.json", "_character_groups.json", "index.json")
+
+_INVALID_KEY_CHARS = set('<>:"/\\|?*')
+_RESERVED_KEYS = {"con", "prn", "aux", "nul"} \
+    | {f"com{i}" for i in range(1, 10)} | {f"lpt{i}" for i in range(1, 10)}
+_STATE_KEYS = {state_file[:-5].casefold() for state_file in CHARACTER_STATE_FILES}
+
+
+def valid_character_key(key):
+    """True when `key` is safe as characters/<key>.json on Windows and POSIX."""
+    if not isinstance(key, str) or not key or key != key.strip() or len(key) > 120:
+        return False
+    if key.endswith(".") or key in (".", ".."):
+        return False
+    if any(char in _INVALID_KEY_CHARS or ord(char) < 32 for char in key):
+        return False
+    stem = key.split(".")[0].casefold()
+    return stem not in _RESERVED_KEYS and key.casefold() not in _STATE_KEYS
+
+
+def character_keys(char_dir=None):
+    """Storage keys of every card on disk."""
+    try:
+        filenames = os.listdir(char_dir or CHARACTERS_DIR)
+    except FileNotFoundError:
+        return []
+    return [
+        filename[:-5] for filename in filenames
+        if filename.endswith(".json") and filename not in CHARACTER_STATE_FILES
+    ]
+
+
+def find_character_key(key, char_dir=None):
+    """The existing key matching `key` case-insensitively, or None. Keys are
+    case-insensitive because the Windows filesystem is."""
+    wanted = str(key or "").strip().casefold()
+    if not wanted:
+        return None
+    return next((k for k in character_keys(char_dir) if k.casefold() == wanted), None)
+
+
+def known_character_keys(char_dir=None):
+    """Keys used to decide which character a chat filename belongs to: every
+    card on disk plus any index.json entry (a stale entry can only make chat
+    ownership more conservative, never hand a chat to a shorter key)."""
+    char_dir = char_dir or CHARACTERS_DIR
+    keys = character_keys(char_dir)
+    try:
+        with open(os.path.join(char_dir, "index.json"), "r", encoding="utf-8") as f:
+            indexed = json.load(f)
+    except Exception:
+        indexed = []
+    if isinstance(indexed, list):
+        seen = {k.casefold() for k in keys}
+        for entry in indexed:
+            if isinstance(entry, str) and entry.strip() and entry.casefold() not in seen:
+                keys.append(entry)
+                seen.add(entry.casefold())
+    return keys
+
+
+def chat_owner_key(filename, keys):
+    """Return the key (spelled as in `keys`) that owns a chat filename, or None.
+
+    Chat files are "<key> - <title>.txt" (legacy: "<key>.txt" and
+    "<key>_chat_<id>.txt"). " - " also appears inside keys ("Gemma - GPT-5")
+    and titles, so a bare prefix test is ambiguous: "Gemma - GPT-5 - Hi.txt"
+    starts with "Gemma - " but belongs to the "Gemma - GPT-5" card. The
+    LONGEST matching key owns the file. Matching is case-insensitive, like
+    the keys themselves.
+    """
+    if not isinstance(filename, str) or not filename.lower().endswith(".txt"):
+        return None
+    stem = filename[:-4].casefold()
+    owner, owner_len = None, 0
+    for key in keys:
+        folded = str(key or "").strip().casefold()
+        if len(folded) <= owner_len:
+            continue
+        if stem == folded or stem.startswith(folded + " - ") or stem.startswith(folded + "_chat_"):
+            owner, owner_len = str(key).strip(), len(folded)
+    return owner
+
+
+def character_display_name(key, char_dir=None):
+    """The card's model/display Name for `key`, falling back to the key."""
+    try:
+        with open(os.path.join(char_dir or CHARACTERS_DIR, f"{key}.json"), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        name = data.get("name") if isinstance(data, dict) else None
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    except Exception:
+        pass
+    return key
+
+
+def write_character_index(char_dir=None, keys=None):
+    """Rewrite characters/index.json as the sorted storage keys. index.json is a
+    derived cache — the directory is the source of truth."""
+    char_dir = char_dir or CHARACTERS_DIR
+    keys = character_keys(char_dir) if keys is None else keys
+    with open(os.path.join(char_dir, "index.json"), "w", encoding="utf-8") as f:
+        json.dump(sorted(set(keys)), f, indent=2, ensure_ascii=False)
+
+
+def migrate_character_key_state(old_key, new_key):
+    """Carry the group assignment and the shared active character from
+    `old_key` to `new_key` after a rename. Never raises."""
+    try:
+        groups = load_user_config_section("character_groups")
+        assignments = groups.get("assignments") if isinstance(groups, dict) else None
+        if isinstance(assignments, dict) and old_key in assignments:
+            assignments[new_key] = assignments.pop(old_key)
+            save_user_config_section("character_groups", groups)
+    except Exception as e:
+        print(f"⚠️ Could not move character group assignment {old_key} -> {new_key}: {e}")
+    try:
+        if get_active_character() == old_key:
+            set_active_character(new_key)
+    except Exception as e:
+        print(f"⚠️ Could not move active character {old_key} -> {new_key}: {e}")
+
+
+# --------------------------------------------------
 # Active Character — server-side shared state (desktop ↔ mobile)
 # Mirrors the active-project pattern (projects/_active_project.json) so the
 # last-used character follows the user across devices instead of living in
@@ -143,7 +277,7 @@ def list_characters():
 
     images_dir = os.path.join(os.path.dirname(__file__), "static", "images")
     for file in os.listdir(char_dir):
-        if file in ("_active_character.json", "_character_groups.json", "index.json"):
+        if file in CHARACTER_STATE_FILES:
             continue  # internal state files / derived index, not characters
         if file.endswith(".json"):
             path = os.path.join(char_dir, file)
@@ -152,7 +286,9 @@ def list_characters():
                     data = json.load(f)
                 if not isinstance(data, dict):
                     continue
-                name = data.get("name", file.replace(".json", ""))
+                # The storage key (filename stem), never the editable Name:
+                # two cards with the same Name must stay two list entries.
+                name = file[:-5]
                 chars.append(name)
 
                 # Self-heal slideshow dangling refs: prune images[] entries
@@ -182,16 +318,13 @@ def list_characters():
 
     # Self-heal: rewrite characters/index.json from the directory scan so the
     # on-disk index always converges to reality. The directory is the single
-    # source of truth; index.json is a derived cache that other readers still
-    # consume as a JSON array of names (chat_routes.py: /chats/open ~175,
-    # auto_name_chat ~491, branch_chat ~746). This subsumes the May-21 desync
-    # fragility — a character present on disk but missing from the index (e.g.
-    # Andromeda) is reconciled on every call.
+    # source of truth; index.json is a derived cache of storage keys that
+    # chat_routes.py still reads (chat parsing, auto-name, branch). This
+    # subsumes the May-21 desync fragility — a character present on disk but
+    # missing from the index (e.g. Andromeda) is reconciled on every call.
     unique_sorted = sorted(set(chars))
     try:
-        index_path = os.path.join(char_dir, "index.json")
-        with open(index_path, "w", encoding="utf-8") as f:
-            json.dump(unique_sorted, f, indent=2, ensure_ascii=False)
+        write_character_index(char_dir, unique_sorted)
     except Exception as e:
         print(f"⚠️ Could not rewrite characters/index.json: {e}")
 
@@ -208,9 +341,17 @@ def create_character():
         name = data.get("name", "").strip()
         if not name:
             return jsonify({"status": "error", "error": "Character name required"}), 400
-
         char_dir = CHARACTERS_DIR
         os.makedirs(char_dir, exist_ok=True)
+        # The typed name becomes both the storage key and the initial Name. It
+        # must be a safe filename, not an existing key (case-insensitive), and
+        # not take over another card's chats. Imported lazily: extra_routes
+        # imports this module.
+        from extra_routes import CharacterKeyError, _require_unused_key
+        try:
+            _require_unused_key(name, app_root=os.path.dirname(char_dir))
+        except CharacterKeyError as e:
+            return jsonify({"status": "error", "error": str(e)}), e.status
 
         # Save the individual character file
         char_path = os.path.join(char_dir, f"{name}.json")
@@ -228,18 +369,7 @@ def create_character():
         with open(char_path, "w", encoding="utf-8") as f:
             json.dump(char_data, f, indent=2, ensure_ascii=False)
 
-        # Update the characters index list
-        index_path = os.path.join(char_dir, "index.json")
-        if os.path.exists(index_path):
-            with open(index_path, "r", encoding="utf-8") as f:
-                characters = json.load(f)
-            if name not in characters:
-                characters.append(name)
-        else:
-            characters = [name]
-
-        with open(index_path, "w", encoding="utf-8") as f:
-            json.dump(sorted(characters), f, indent=2, ensure_ascii=False)
+        write_character_index(char_dir)
 
         print(f"✅ Created new character: {name}")
         return jsonify({"status": "ok", "name": name})
@@ -262,6 +392,12 @@ def save_character(n):
     try:
         data = request.get_json()
         path = os.path.join(CHARACTERS_DIR, f"{n}.json")
+        # Saving edits an existing card identified by its key; it never creates
+        # one. A stale editor (card renamed or deleted meanwhile) must not
+        # resurrect the old key, and the "name" in the body is only the card's
+        # display Name — it never selects or creates a file.
+        if not valid_character_key(n) or not os.path.isfile(path):
+            return jsonify({"success": False, "error": f"Character '{n}' not found"}), 404
         # Preserve fields the config editor doesn't own, so they don't get wiped
         # on every character save:
         #   • tts_voice      — set via /character_voice, not the editor form.
@@ -270,41 +406,37 @@ def save_character(n):
         #     field, so when it omits the key we MUST keep the on-disk binding —
         #     otherwise an editor save reverts an explicit bind (e.g. a
         #     Nebula-bound character snapping back to GPT-4o). (changes.md.)
-        if os.path.exists(path):
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    existing = json.load(f)
-                preserved_keys = ["tts_voice", "system_prompt", "preferred_model_id", "sentinel_integration"]
-                for key in preserved_keys:
-                    if key in existing and key not in data:
-                        data[key] = existing[key]
-            except Exception:
-                pass  # If we can't read existing, just save what we have
+        existing = {}
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+            #   • persistent_author_note — owned by /character_author_note.
+            preserved_keys = ["tts_voice", "system_prompt", "preferred_model_id", "sentinel_integration",
+                              PERSISTENT_AUTHOR_NOTE_FIELD]
+            for key in preserved_keys:
+                if key in existing and key not in data:
+                    data[key] = existing[key]
+        except Exception:
+            pass  # If we can't read existing, just save what we have
+        if isinstance(existing, dict) and data.get("name") != existing.get("name"):
+            # The editable Name is also a legacy transcript speaker label.
+            # Persist roles before replacing it, including project chats.
+            from chat_routes import stabilize_chat_roles
+            from chat_message_metadata import chat_directories
+            keys = known_character_keys(CHARACTERS_DIR)
+            for chat_dir in chat_directories(os.path.dirname(CHARACTERS_DIR)):
+                if not chat_dir.is_dir():
+                    continue
+                for filename in os.listdir(chat_dir):
+                    if chat_owner_key(filename, keys) == n:
+                        try:
+                            stabilize_chat_roles(str(chat_dir), filename)
+                        except ValueError as exc:
+                            return jsonify({"success": False, "error": str(exc)}), 409
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         print(f"✅ Character saved: {path}")
-
-        # Keep characters/index.json in sync — the editor-save path must never
-        # land a .json without registering it (mirrors create_character ~5862).
-        # list_characters also reconciles the index on each scan, but updating
-        # here keeps it correct between scans.
-        index_name = ((data.get("name") if isinstance(data, dict) else None) or n).strip()
-        try:
-            index_path = os.path.join(CHARACTERS_DIR, "index.json")
-            if os.path.exists(index_path):
-                with open(index_path, "r", encoding="utf-8") as f:
-                    characters = json.load(f)
-                if not isinstance(characters, list):
-                    characters = []
-            else:
-                characters = []
-            if index_name and index_name not in characters:
-                characters.append(index_name)
-                with open(index_path, "w", encoding="utf-8") as f:
-                    json.dump(sorted(set(characters)), f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            print(f"⚠️ Could not update characters/index.json on save: {e}")
-
+        # The key didn't change, so index.json (a list of keys) is unaffected.
         return jsonify({"success": True})
     except Exception as e:
         print(f"❌ Failed to save character {n}: {e}")
@@ -358,6 +490,60 @@ def get_character_system_prompt(n):
         return jsonify({"system_prompt": data.get("system_prompt", None)})
     except Exception as e:
         return jsonify({"system_prompt": None})
+
+# ── Persistent Author's Note (per character) ────────────────────────────────
+# Optional. When set, /chat applies it to every chat with this character that
+# has no chat-only note of its own (resolved server-side, so desktop and mobile
+# agree). Stored on the card like the other per-character settings above, and
+# written only through this route — the card editor preserves it untouched.
+PERSISTENT_AUTHOR_NOTE_FIELD = "persistent_author_note"
+PERSISTENT_AUTHOR_NOTE_MAX_CHARS = 20000
+
+
+def get_character_persistent_author_note(key, char_dir=None):
+    """The character's persistent Author's Note ("" when none or unknown)."""
+    if not valid_character_key(key):
+        return ""
+    path = os.path.join(char_dir or CHARACTERS_DIR, f"{key}.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            note = json.load(f).get(PERSISTENT_AUTHOR_NOTE_FIELD, "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return note if isinstance(note, str) else ""
+
+
+@character_bp.route('/character_author_note/<n>', methods=['GET', 'POST'])
+def character_author_note(n):
+    """Read, set or (blank → remove) a character's persistent Author's Note."""
+    path = os.path.join(CHARACTERS_DIR, f"{n}.json")
+    if not valid_character_key(n) or not os.path.isfile(path):
+        return jsonify({"success": False, "error": "Character not found"}), 404
+    if request.method == "GET":
+        return jsonify({"character": n, "author_note": get_character_persistent_author_note(n)})
+    data = request.get_json(silent=True) or {}
+    note = data.get("author_note", "")
+    if not isinstance(note, str):
+        return jsonify({"success": False, "error": "author_note must be a string"}), 400
+    if len(note) > PERSISTENT_AUTHOR_NOTE_MAX_CHARS:
+        return jsonify({"success": False,
+                        "error": f"Author's Note is longer than {PERSISTENT_AUTHOR_NOTE_MAX_CHARS} characters"}), 400
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            char_data = json.load(f)
+        if note.strip():
+            char_data[PERSISTENT_AUTHOR_NOTE_FIELD] = note
+        else:
+            char_data.pop(PERSISTENT_AUTHOR_NOTE_FIELD, None)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(char_data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"Failed to save persistent Author's Note for {n}: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+    stored = char_data.get(PERSISTENT_AUTHOR_NOTE_FIELD, "")
+    print(f"📝 Persistent Author's Note {'saved' if stored else 'removed'} for {n} ({len(stored)} chars)")
+    return jsonify({"success": True, "character": n, "author_note": stored})
+
 
 @character_bp.route('/character_preferred_model/<n>', methods=['POST'])
 def set_character_preferred_model(n):

@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 from typing import Any, Callable
@@ -22,7 +23,16 @@ from typing import Any, Callable
 
 META_DIRNAME = ".hwui_chat_meta"
 CHAT_IMAGES_DIRNAME = "chat_images"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+# Chat-level (not per-message) settings stored in the sidecar. They are carried
+# across every message save, which otherwise rebuilds the sidecar from the
+# incoming message list. author_note: the chat's Author's Note, resolved
+# server-side by /chat so desktop and mobile apply the same note.
+_CHAT_LEVEL_FIELDS = ("author_note",)
+AUTHOR_NOTE_MAX_CHARS = 20000
+# Serialises sidecar read-modify-write: a message save and an Author's Note
+# write racing on the same chat must not drop each other's changes.
+_METADATA_LOCK = threading.RLock()
 _COPIED_FIELDS = (
     "message_id",
     "reply_to_message_id",
@@ -33,6 +43,14 @@ _COPIED_FIELDS = (
     "is_opening_line",
     "hasImage",
     "previewUrls",
+    "message_kind",
+    "checkin_id",
+    # User-set: the message stays in the transcript and on screen but is not
+    # sent back to the model (app.py _exclude_flagged_history).
+    "exclude_from_context",
+    # A single emoji reaction attached to this message. Reactions are kept out
+    # of transcript text and prompt history.
+    "reaction",
 )
 
 _IMAGE_DATA_URL_RE = re.compile(
@@ -245,6 +263,11 @@ def message_fingerprint(message: dict[str, Any]) -> str:
 
 
 def load_chat_metadata(chats_dir: str | Path, filename: str) -> dict[str, Any] | None:
+    with _METADATA_LOCK:
+        return _load_chat_metadata_locked(chats_dir, filename)
+
+
+def _load_chat_metadata_locked(chats_dir: str | Path, filename: str) -> dict[str, Any] | None:
     path = _metadata_path(chats_dir, filename)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -289,7 +312,18 @@ def save_chat_metadata(
     *,
     chat_id: str | None = None,
 ) -> dict[str, Any]:
-    existing = load_chat_metadata(chats_dir, filename) or {}
+    with _METADATA_LOCK:
+        return _save_chat_metadata_locked(chats_dir, filename, messages, chat_id=chat_id)
+
+
+def _save_chat_metadata_locked(
+    chats_dir: str | Path,
+    filename: str,
+    messages: list[dict[str, Any]],
+    *,
+    chat_id: str | None = None,
+) -> dict[str, Any]:
+    existing = _load_chat_metadata_locked(chats_dir, filename) or {}
     stable_chat_id = str(chat_id or existing.get("chat_id") or uuid.uuid4())
     existing_records = existing.get("messages") or []
     records = []
@@ -312,6 +346,12 @@ def save_chat_metadata(
         record = {
             "fingerprint": message_fingerprint(message),
             "message_id": str(message.get("message_id") or uuid.uuid4()),
+            # Roles and turn boundaries are persisted independently of the
+            # mutable card/character display name in the legacy transcript.
+            "role": message.get("role"),
+            "speaker": message.get("speaker"),
+            "timestamp": message.get("timestamp"),
+            "content": _message_text(message),
         }
         for field in _COPIED_FIELDS:
             value = metadata_message.get(field)
@@ -325,8 +365,94 @@ def save_chat_metadata(
         "chat_sha256": _chat_sha256(chats_dir, filename),
         "messages": records,
     }
+    # Chat-level settings are not part of the incoming message list; keep them.
+    for field in _CHAT_LEVEL_FIELDS:
+        value = existing.get(field)
+        if isinstance(value, str) and value.strip():
+            payload[field] = value
     _atomic_write_json(_metadata_path(chats_dir, filename), payload)
     return payload
+
+
+def verified_role_snapshot(chats_dir: str | Path, filename: str) -> list[dict[str, Any]] | None:
+    """Return complete v2 turns only when the sidecar matches the exact chat bytes."""
+    payload = load_chat_metadata(chats_dir, filename)
+    if not payload or payload.get("schema_version", 0) < 2:
+        return None
+    try:
+        if payload.get("chat_sha256") != _chat_sha256(chats_dir, filename):
+            return None
+    except OSError:
+        return None
+    records = payload.get("messages")
+    if not isinstance(records, list):
+        return None
+    messages = []
+    for record in records:
+        if not isinstance(record, dict) or record.get("role") not in ("user", "assistant") or not isinstance(record.get("content"), (str, list)):
+            return None
+        message = {key: record[key] for key in ("role", "speaker", "timestamp", "content") if key in record}
+        if record.get("fingerprint") != message_fingerprint(message):
+            return None
+        messages.append(message)
+    return messages
+
+
+def verified_legacy_turns(chats_dir: str | Path, filename: str, messages: list[dict[str, Any]]) -> bool:
+    """A v1 sidecar's hashes can prove a recovered legacy speaker split."""
+    payload = load_chat_metadata(chats_dir, filename)
+    if not payload or payload.get("schema_version", 0) != 1:
+        return False
+    try:
+        if payload.get("chat_sha256") != _chat_sha256(chats_dir, filename):
+            return False
+    except OSError:
+        return False
+    records = payload.get("messages")
+    return (isinstance(records, list) and len(records) == len(messages)
+            and all(isinstance(record, dict) and record.get("fingerprint") == message_fingerprint(message)
+                    for record, message in zip(records, messages)))
+
+
+def get_chat_author_note(chats_dir: str | Path, filename: str) -> str:
+    """The chat's stored Author's Note ("" when none)."""
+    payload = load_chat_metadata(chats_dir, filename) or {}
+    note = payload.get("author_note")
+    return note if isinstance(note, str) else ""
+
+
+def set_chat_author_note(
+    chats_dir: str | Path,
+    filename: str,
+    note: str,
+    *,
+    bootstrap_messages: list[dict[str, Any]] | None = None,
+    only_if_empty: bool = False,
+) -> str:
+    """Store (or clear, when blank) the chat's Author's Note; return the stored note.
+
+    The chat file itself is untouched, so chat_sha256 and every per-message
+    record stay valid. A chat without a sidecar yet is bootstrapped from
+    ``bootstrap_messages`` (the parsed transcript) first. only_if_empty leaves an
+    existing note alone — used to migrate a legacy browser-local note without
+    overwriting one already set from another device.
+    """
+    text = "" if note is None else str(note)
+    if len(text) > AUTHOR_NOTE_MAX_CHARS:
+        raise ValueError(f"Author's Note is longer than {AUTHOR_NOTE_MAX_CHARS} characters")
+    with _METADATA_LOCK:
+        payload = _load_chat_metadata_locked(chats_dir, filename)
+        if not payload:
+            payload = _save_chat_metadata_locked(chats_dir, filename, bootstrap_messages or [])
+        current = payload.get("author_note") if isinstance(payload.get("author_note"), str) else ""
+        if only_if_empty and current.strip():
+            return current
+        if text.strip():
+            payload["author_note"] = text
+        else:
+            payload.pop("author_note", None)
+        _atomic_write_json(_metadata_path(chats_dir, filename), payload)
+        return payload.get("author_note", "")
 
 
 def ensure_chat_metadata(
@@ -370,10 +496,24 @@ def merge_verified_message_metadata(
             if field in record:
                 enriched[field] = record[field]
         merged.append(enriched)
+    if payload.get("schema_version", 0) < SCHEMA_VERSION:
+        payload = save_chat_metadata(chats_dir, filename, merged, chat_id=payload.get("chat_id"))
     return merged, payload, None
 
 
 def move_chat_metadata(
+    source_dir: str | Path,
+    source_filename: str,
+    target_dir: str | Path,
+    target_filename: str,
+) -> None:
+    # The whole payload — including chat-level fields such as author_note —
+    # follows the chat to its new name/folder.
+    with _METADATA_LOCK:
+        _move_chat_metadata_locked(source_dir, source_filename, target_dir, target_filename)
+
+
+def _move_chat_metadata_locked(
     source_dir: str | Path,
     source_filename: str,
     target_dir: str | Path,
@@ -407,8 +547,86 @@ def move_chat_metadata(
     source.unlink(missing_ok=True)
 
 
+def copy_chat_metadata(
+    source_dir: str | Path,
+    source_filename: str,
+    target_dir: str | Path,
+    target_filename: str,
+) -> None:
+    """Duplicate a chat's metadata sidecar under a fresh chat_id.
+
+    Carries chat-level fields (including author_note) and per-message metadata
+    (thinking, exclude_from_context, is_opening_line, etc.) to the new chat.
+    Assigns a fresh chat_id and message_ids so the copy remains distinct and
+    isolated from the source chat.
+    """
+    with _METADATA_LOCK:
+        _copy_chat_metadata_locked(source_dir, source_filename, target_dir, target_filename)
+
+
+def _copy_chat_metadata_locked(
+    source_dir: str | Path,
+    source_filename: str,
+    target_dir: str | Path,
+    target_filename: str,
+) -> None:
+    source = _metadata_path(source_dir, source_filename)
+    if not source.exists():
+        return
+    payload = _load_chat_metadata_locked(source_dir, source_filename)
+    if not payload:
+        return
+
+    # Deep copy so loaded cache/dict is not mutated in-place
+    copied_payload = json.loads(json.dumps(payload))
+    old_chat_id = str(copied_payload.get("chat_id") or "")
+    new_chat_id = str(uuid.uuid4())
+    copied_payload["chat_id"] = new_chat_id
+    copied_payload["filename"] = target_filename
+
+    # Calculate SHA256 of the target chat file
+    try:
+        copied_payload["chat_sha256"] = _chat_sha256(target_dir, target_filename)
+    except OSError:
+        pass
+
+    # Remap message IDs to fresh UUIDs to keep identity isolated across copies
+    id_map = {}
+    messages = copied_payload.get("messages") or []
+    for record in messages:
+        if not isinstance(record, dict):
+            continue
+        old_mid = record.get("message_id")
+        new_mid = str(uuid.uuid4())
+        if old_mid:
+            id_map[str(old_mid)] = new_mid
+        record["message_id"] = new_mid
+
+        urls = record.get("previewUrls")
+        if isinstance(urls, list) and old_chat_id:
+            record["previewUrls"] = [
+                url.replace(f"/chats/image/{old_chat_id}/", f"/chats/image/{new_chat_id}/")
+                if isinstance(url, str) else url
+                for url in urls
+            ]
+
+    for record in messages:
+        if isinstance(record, dict) and "reply_to_message_id" in record:
+            old_reply_to = str(record["reply_to_message_id"])
+            if old_reply_to in id_map:
+                record["reply_to_message_id"] = id_map[old_reply_to]
+
+    target = _metadata_path(target_dir, target_filename)
+    _atomic_write_json(target, copied_payload)
+
+
 def delete_chat_metadata(chats_dir: str | Path, filename: str) -> None:
-    payload = load_chat_metadata(chats_dir, filename) or {}
+    with _METADATA_LOCK:
+        _delete_chat_metadata_locked(chats_dir, filename)
+
+
+def _delete_chat_metadata_locked(chats_dir: str | Path, filename: str) -> None:
+    payload = _load_chat_metadata_locked(chats_dir, filename) or {}
     _metadata_path(chats_dir, filename).unlink(missing_ok=True)
     chat_id = str(payload.get("chat_id") or "")
     if chat_id:

@@ -1,16 +1,24 @@
 # chat_routes.py
 import os, json, re, shutil, subprocess
 from pathlib import Path
-from flask import Blueprint, jsonify, request, send_from_directory
+from flask import Blueprint, current_app, jsonify, request, send_from_directory
 from datetime import datetime
 from chat_message_metadata import (
+    AUTHOR_NOTE_MAX_CHARS,
     CHAT_IMAGES_DIRNAME,
     chat_directories,
+    copy_chat_metadata,
     delete_chat_metadata,
+    get_chat_author_note,
+    load_chat_metadata,
     merge_verified_message_metadata,
     move_chat_metadata,
     save_chat_metadata,
+    set_chat_author_note,
+    verified_legacy_turns,
+    verified_role_snapshot,
 )
+from character_routes import character_display_name, chat_owner_key, known_character_keys
 
 print("✅ chat_routes blueprint loaded")
 
@@ -298,7 +306,32 @@ def check_chat_exists():
     return jsonify({"error": "Chat not found"}), 404
 
 
-def _parse_chat_file(filepath, filename, verbose=True):
+def _character_speaker_labels(filename, char_dir=None):
+    """Speaker labels that mark assistant turns in this chat file.
+
+    Every registered character key, plus — for the chat's own character (the
+    longest key owning the filename, case-insensitive) — the key as spelled in
+    the filename and the card's Name. Assistant turns are written with the
+    card's Name, which may differ from its storage key (e.g. key "Astra",
+    Name "GPT-6 Astra"). A prefix matching no registered key falls back to
+    the first " - " segment, as before.
+    """
+    char_dir = char_dir or os.path.join(os.getcwd(), "characters")
+    keys = known_character_keys(char_dir)
+    labels = list(keys)
+    stem = filename[:-4] if filename.endswith(".txt") else filename
+    owner = chat_owner_key(stem + ".txt", keys)
+    if owner:
+        own_labels = [stem[:len(owner)], owner, character_display_name(owner, char_dir)]
+    else:
+        own_labels = [stem.split(" - ")[0]] if stem else []
+    for label in own_labels:
+        if label and label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _parse_chat_file(filepath, filename, verbose=True, extra_assistant_labels=()):
     """Parse an on-disk chat file into the message list /chats/open returns.
 
     Extracted from open_chat() so the /chats/save and /chats/update
@@ -307,47 +340,28 @@ def _parse_chat_file(filepath, filename, verbose=True):
     would make the count comparison meaningless. verbose=False silences the
     per-line speaker logging (the guard runs on every autosave).
     """
+    chats_dir = os.path.dirname(filepath)
+    if not extra_assistant_labels:
+        stable = verified_role_snapshot(chats_dir, filename)
+        if stable is not None:
+            return stable
+        sidecar = load_chat_metadata(chats_dir, filename)
+        if sidecar and sidecar.get("schema_version", 0) >= 2:
+            raise ValueError(f"Stored chat roles cannot be verified for {filename}; transcript left untouched")
     with open(filepath, "r", encoding="utf-8") as f:
         raw_text = f.read()
 
-    # Load list of known characters
-    available_characters = []
-    try:
-        char_index_path = os.path.join(os.getcwd(), "characters", "index.json")
-        with open(char_index_path, "r", encoding="utf-8") as f:
-            available_characters = json.load(f)
-            if verbose:
-                print(f"📋 Known characters: {available_characters}")
-    except Exception as e:
-        if verbose:
-            print(f"⚠️ Could not load character list: {e}")
-
     # ✅ The chat filename prefix is the authoritative source for which
     # character this chat belongs to (save side uses the same prefix: see
-    # /chats/save). characters/index.json can be incomplete — manual import,
-    # partial registration, characters added via file copy — and when it is,
-    # every line spoken by that character fails the speaker check and either
-    # gets dropped (untimestamped opener) or absorbed into the wrong turn
-    # (timestamped replies). Seed the filename-derived character into the
-    # list so the parser recognises this chat's character regardless of the
-    # global index's state. Mirrors the prefix-walking logic in
-    # auto_name_chat (chat_routes.py) and the frontend's
-    # extractCharacterFromFilename. (changes.md.)
-    name_no_ext = filename[:-4] if filename.endswith(".txt") else filename
-    parts = name_no_ext.split(" - ")
-    filename_char = None
-    for i in range(len(parts), 0, -1):
-        candidate = " - ".join(parts[:i])
-        if candidate in available_characters:
-            filename_char = candidate
-            break
-    if not filename_char and parts:
-        filename_char = parts[0]
-    if filename_char and filename_char not in available_characters:
-        available_characters = list(available_characters) + [filename_char]
-        if verbose:
-            print(f"📋 Added filename-derived character to recognition list: {filename_char!r}")
-    
+    # /chats/save). Registered keys come from the characters folder as well as
+    # index.json, so a card missing from the index is still recognised, and
+    # the chat's own card contributes its Name (the label its turns are
+    # written with). See _character_speaker_labels. (changes.md.)
+    available_characters = _character_speaker_labels(filename)
+    available_characters.extend(label for label in extra_assistant_labels if label not in available_characters)
+    if verbose:
+        print(f"📋 Known characters: {available_characters}")
+
     # ✅ Load list of valid user personas dynamically
     valid_users = []
     try:
@@ -486,7 +500,43 @@ def _parse_chat_file(filepath, filename, verbose=True):
             entry["timestamp"] = current_timestamp
         messages.append(entry)
     
+    metadata = load_chat_metadata(chats_dir, filename) if not extra_assistant_labels else None
+    if not extra_assistant_labels and not verified_legacy_turns(chats_dir, filename, messages):
+        # A renamed card can leave an old speaker label unknown to the legacy
+        # parser. Only restore candidate boundaries when the old sidecar's
+        # full-chat hash and *every* original turn fingerprint prove the split.
+        candidate_labels = set()
+        inside_candidate_doc = False
+        for raw_line in lines:
+            candidate = _TS_PREFIX_RE.sub("", raw_line, count=1)
+            if ((metadata or _TS_PREFIX_RE.match(raw_line)) and not inside_candidate_doc
+                    and candidate and not candidate.startswith((" ", "\t"))
+                    and ":" in candidate):
+                label = candidate.split(":", 1)[0].strip()
+                if 0 < len(label) < 30 and label not in available_characters and label not in valid_users and label.lower() != "user":
+                    candidate_labels.add(label)
+            if "[ATTACHED DOCUMENT:" in candidate:
+                inside_candidate_doc = True
+            if "[END ATTACHED DOCUMENT]" in candidate:
+                inside_candidate_doc = False
+        if candidate_labels:
+            recovered = _parse_chat_file(filepath, filename, verbose=False,
+                                         extra_assistant_labels=candidate_labels)
+            if verified_legacy_turns(chats_dir, filename, recovered):
+                return recovered
+        if metadata and metadata.get("schema_version") == 1:
+            raise ValueError(f"Legacy chat roles cannot be verified for {filename}; transcript left untouched")
+        if not metadata and candidate_labels:
+            raise ValueError(f"Unrecognized chat speaker in {filename}; transcript left untouched")
     return messages
+
+
+def stabilize_chat_roles(chats_dir, filename):
+    """Persist verified roles before a card or chat rename changes its labels."""
+    messages = _parse_chat_file(os.path.join(chats_dir, filename), filename, verbose=False)
+    _, _, error = merge_verified_message_metadata(chats_dir, filename, messages)
+    if error:
+        raise ValueError(f"Cannot safely preserve roles in {filename}: {error}")
 
 
 def _check_stale_save(filepath, filename, incoming_count, base_count):
@@ -569,7 +619,10 @@ def open_chat(filename):
     print(f"   From: {chats_dir}")
     print(f"{'='*60}\n")
 
-    messages = _parse_chat_file(filepath, filename)
+    try:
+        messages = _parse_chat_file(filepath, filename)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
     messages, chat_meta, metadata_error = merge_verified_message_metadata(
         chats_dir,
         filename,
@@ -584,7 +637,73 @@ def open_chat(filename):
         "chat_id": chat_meta.get("chat_id") if chat_meta else None,
         "message_identity_status": "verified" if not metadata_error else "invalid",
         "messages": messages,
+        # Chat-level, not message-level: read even when message identity
+        # verification failed, so the note never silently disappears.
+        "author_note": get_chat_author_note(chats_dir, filename),
     })
+
+
+def _author_note_chat_path(filename):
+    """Resolve a chat filename for /chats/author_note, or None when invalid.
+
+    A bare .txt name inside the active chats folder only — never a path.
+    """
+    if not isinstance(filename, str) or not filename or len(filename) > 255:
+        return None
+    if os.path.basename(filename) != filename or filename in (".", ".."):
+        return None
+    if "/" in filename or "\\" in filename or not filename.lower().endswith(".txt"):
+        return None
+    chats_dir = get_chats_dir()
+    filepath = os.path.join(chats_dir, filename)
+    if not os.path.isfile(filepath):
+        return None
+    return chats_dir, filepath
+
+
+@chat_bp.route("/chats/author_note", methods=["GET", "POST"])
+def chat_author_note():
+    """Read or store a chat's Author's Note (kept in the metadata sidecar).
+
+    /chat resolves the stored note server-side, so the desktop and mobile
+    pages apply the same one. POST {filename, author_note, only_if_empty};
+    a blank note clears it. only_if_empty is the one-time migration of a
+    legacy browser-local note: it never overwrites a note already stored.
+    """
+    if request.method == "GET":
+        filename = request.args.get("filename", "")
+        resolved = _author_note_chat_path(filename)
+        if not resolved:
+            return jsonify({"error": "Chat not found"}), 404
+        chats_dir, _filepath = resolved
+        return jsonify({"filename": filename, "author_note": get_chat_author_note(chats_dir, filename)})
+
+    data = request.get_json(silent=True) or {}
+    filename = data.get("filename", "")
+    note = data.get("author_note", "")
+    if not isinstance(note, str):
+        return jsonify({"error": "author_note must be a string"}), 400
+    if len(note) > AUTHOR_NOTE_MAX_CHARS:
+        return jsonify({"error": f"Author's Note is longer than {AUTHOR_NOTE_MAX_CHARS} characters"}), 400
+    resolved = _author_note_chat_path(filename)
+    if not resolved:
+        return jsonify({"error": "Chat not found"}), 404
+    chats_dir, filepath = resolved
+
+    bootstrap = None
+    if load_chat_metadata(chats_dir, filename) is None:
+        # Legacy chat with no sidecar yet: seed it from the transcript so its
+        # per-message records stay verifiable.
+        bootstrap = _parse_chat_file(filepath, filename, verbose=False)
+    stored = set_chat_author_note(
+        chats_dir,
+        filename,
+        note,
+        bootstrap_messages=bootstrap,
+        only_if_empty=data.get("only_if_empty") is True,
+    )
+    print(f"📝 Author's Note {'saved' if stored.strip() else 'cleared'} for {filename} ({len(stored)} chars)")
+    return jsonify({"success": True, "filename": filename, "author_note": stored})
 
 
 @chat_bp.route("/chats/image/<chat_id>/<image_name>")
@@ -638,6 +757,11 @@ def rename_chat():
     
     if os.path.exists(new_path) and old_path != new_path:
         return jsonify({"error": "A chat with that name already exists"}), 409
+
+    try:
+        stabilize_chat_roles(chats_dir, old_filename)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
     
     os.rename(old_path, new_path)
     move_chat_metadata(chats_dir, old_filename, chats_dir, new_filename)
@@ -681,10 +805,10 @@ def new_chat():
     print(f"📝 Created new chat: {filename}")
     return jsonify({"filename": filename, "chat_id": chat_meta["chat_id"]})
 # --------------------------------------------------
-# Auto-name Chat (from first user message — model-generated title)
+# Auto-name Chat (from first user message)
 # --------------------------------------------------
 def _deterministic_chat_title(first_message):
-    """Existing five-word fallback, isolated so naming never consumes slot 0."""
+    """Five-word fallback when the coordinated model call is unavailable."""
     import re as _re
     text = _re.sub(r'[*_#`>]', '', str(first_message or ''))
     sentence = _re.split(r'[.!?]', text)[0].strip() or text
@@ -708,9 +832,12 @@ def auto_name_chat():
     if not os.path.exists(old_path):
         return jsonify({"error": "Chat not found"}), 404
 
-    # Naming must never replace the active conversation's single-slot KV
-    # prefix. Keep the established deterministic five-word fallback locally.
-    raw_name = _deterministic_chat_title(first_message)
+    # The app callback checks the live model, chat lifetime, model swap and
+    # local slot lease together. Only a failed/unavailable call uses word-chop.
+    title_generator = current_app.extensions.get("hwui_semantic_chat_title")
+    raw_name = title_generator(first_message) if title_generator else None
+    if not raw_name:
+        raw_name = _deterministic_chat_title(first_message)
 
     # Capitalise + strip illegal filename chars
     raw_name = raw_name[:1].upper() + raw_name[1:] if raw_name else 'New Chat'
@@ -722,18 +849,13 @@ def auto_name_chat():
     name_no_ext = old_filename.replace(".txt", "")
     parts = name_no_ext.split(" - ")
 
-    # Load known characters to find the correct prefix length
+    # The owning key (longest registered key, case-insensitive), kept exactly
+    # as spelled in the filename.
     char_prefix = None
     try:
-        char_index_path = os.path.join(os.getcwd(), "characters", "index.json")
-        with open(char_index_path, "r", encoding="utf-8") as _cf:
-            known_chars = json.load(_cf)
-        # Try progressively longer prefixes until one matches a known character
-        for i in range(len(parts), 0, -1):
-            candidate = " - ".join(parts[:i])
-            if candidate in known_chars:
-                char_prefix = candidate
-                break
+        owner = chat_owner_key(old_filename, known_character_keys(os.path.join(os.getcwd(), "characters")))
+        if owner:
+            char_prefix = name_no_ext[:len(owner)]
     except Exception as _ce:
         print(f"⚠️ Could not load character list for prefix detection: {_ce}")
 
@@ -888,6 +1010,12 @@ def save_chat_messages():
         chats_dir = get_chats_dir()
         filepath = os.path.join(chats_dir, filename)
 
+        if os.path.exists(filepath):
+            try:
+                _parse_chat_file(filepath, filename, verbose=False)
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 409
+
         # Stale-write guard — see _check_stale_save. Clients send base_count
         # (the count they believe is on disk); legacy callers omit it and
         # write as before.
@@ -915,7 +1043,52 @@ def save_chat_messages():
         _atomic_write_text(filepath, text)
         chat_meta = save_chat_metadata(chats_dir, filename, messages)
         print(f"💾 Saved {len(messages)} messages to {filename} ({len(text)} chars)")
-        return jsonify({"success": True, "chat_id": chat_meta["chat_id"]})
+        reaction_diagnostic = None
+        diagnostic_request = data.get("reaction_diagnostic")
+        if isinstance(diagnostic_request, dict):
+            source_message_id = str(diagnostic_request.get("source_message_id") or "")
+            expected_reaction = str(diagnostic_request.get("expected_reaction") or "")
+            persisted_meta = load_chat_metadata(chats_dir, filename) or {}
+            source_message = next(
+                (
+                    message for message in messages
+                    if str(message.get("message_id") or "") == source_message_id
+                ),
+                None,
+            )
+            persisted_message = next(
+                (
+                    message for message in (persisted_meta.get("messages") or [])
+                    if str(message.get("message_id") or "") == source_message_id
+                ),
+                None,
+            )
+            persisted_reaction = (
+                persisted_message.get("reaction") if isinstance(persisted_message, dict) else None
+            )
+            reaction_diagnostic = {
+                "request_id": str(diagnostic_request.get("request_id") or ""),
+                "source_message_id": source_message_id,
+                "parser_reaction": diagnostic_request.get("parser_reaction"),
+                "attached_reaction": diagnostic_request.get("attached_reaction"),
+                "persisted_reaction": persisted_reaction,
+                "correct_user_message": bool(
+                    source_message
+                    and source_message.get("role") == "user"
+                    and persisted_message
+                    and persisted_reaction == expected_reaction
+                ),
+            }
+            print(
+                "🧪 REACTION DIAGNOSTIC PERSISTENCE — "
+                + json.dumps(reaction_diagnostic, ensure_ascii=False),
+                flush=True,
+            )
+        return jsonify({
+            "success": True,
+            "chat_id": chat_meta["chat_id"],
+            **({"reaction_diagnostic": reaction_diagnostic} if reaction_diagnostic else {}),
+        })
 
     except Exception as e:
         print(f"❌ Failed to save chat: {e}")
@@ -941,13 +1114,26 @@ def append_chat_turn():
         chats_dir = get_chats_dir()
         filepath = os.path.join(chats_dir, filename)
         
-        # Append messages with timestamp
+        # Load verified existing roles before changing the transcript hash.
+        existing = []
+        if os.path.exists(filepath):
+            try:
+                existing = _parse_chat_file(filepath, filename, verbose=False)
+                existing, _, error = merge_verified_message_metadata(chats_dir, filename, existing)
+                if error:
+                    return jsonify({"error": error}), 409
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 409
+
+        # Append messages with timestamp, then save the full stable role map.
         now_ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        appended = [
+            {"role": "user", "speaker": "User", "content": user_msg, "timestamp": now_ts},
+            {"role": "assistant", "speaker": character, "content": model_msg, "timestamp": now_ts},
+        ]
         with open(filepath, "a", encoding="utf-8") as f:
-            f.write(f"[{now_ts}] User: {user_msg}\n\n")
-            f.write(f"[{now_ts}] {character}: {model_msg}\n\n")
-        parsed_messages = _parse_chat_file(filepath, filename, verbose=False)
-        save_chat_metadata(chats_dir, filename, parsed_messages)
+            f.write(_format_chat_messages(appended, character))
+        save_chat_metadata(chats_dir, filename, existing + appended)
         
         print(f"💾 Appended turn to {filename}")
         return jsonify({"status": "ok"})
@@ -972,6 +1158,12 @@ def update_chat():
 
         chats_dir = get_chats_dir()
         filepath = os.path.join(chats_dir, filename)
+
+        if os.path.exists(filepath):
+            try:
+                _parse_chat_file(filepath, filename, verbose=False)
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 409
 
         # Stale-write guard — same as /chats/save (see _check_stale_save).
         protected_disk_count = _check_unintentional_empty_overwrite(
@@ -1051,6 +1243,7 @@ def copy_chat():
         new_path = os.path.join(chats_dir, new_filename)
         
         shutil.copy2(source_path, new_path)
+        copy_chat_metadata(chats_dir, source_filename, chats_dir, new_filename)
         print(f"📋 Copied: {source_filename} → {new_filename}")
         
         return jsonify({"success": True, "new_filename": new_filename})
@@ -1101,28 +1294,7 @@ def branch_chat():
 
         # Speaker detection mirrors /chats/open so the branched file is parsed
         # back into exactly the same turns the source chat renders.
-        available_characters = []
-        try:
-            with open(os.path.join(os.getcwd(), "characters", "index.json"), "r", encoding="utf-8") as f:
-                available_characters = json.load(f)
-        except Exception as e:
-            print(f"⚠️ Branch: could not load character list: {e}")
-        # Seed the filename-derived character into the recognition list —
-        # see /chats/open for the rationale. Without this, branching a chat
-        # whose character is missing from characters/index.json would split
-        # the wrong way and the branched file would re-parse incorrectly.
-        _name_no_ext = source_filename[:-4] if source_filename.endswith(".txt") else source_filename
-        _parts = _name_no_ext.split(" - ")
-        _filename_char = None
-        for _i in range(len(_parts), 0, -1):
-            _candidate = " - ".join(_parts[:_i])
-            if _candidate in available_characters:
-                _filename_char = _candidate
-                break
-        if not _filename_char and _parts:
-            _filename_char = _parts[0]
-        if _filename_char and _filename_char not in available_characters:
-            available_characters = list(available_characters) + [_filename_char]
+        available_characters = _character_speaker_labels(source_filename)
         valid_users = []
         try:
             with open(os.path.join(os.getcwd(), "users", "index.json"), "r", encoding="utf-8") as f:

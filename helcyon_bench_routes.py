@@ -47,6 +47,7 @@ from helcyon_bench_judge import (
 
 helcyon_bench_bp = Blueprint("helcyon_bench", __name__)
 
+
 def _pro_only():
     return jsonify({"error": "This feature is available in HWUI Pro.", "pro_required": True}), 403
 
@@ -174,11 +175,7 @@ def get_integrated_benchmark_session():
 
 @helcyon_bench_bp.route("/api/helcyon-bench/session", methods=["PUT"])
 def save_integrated_benchmark_session():
-    try:
-        session = save_integrated_session(request.get_json(silent=True) or {})
-        return jsonify({"session": session})
-    except CaptureError as error:
-        return jsonify({"error": str(error), "code": error.code}), 422
+    return _pro_only()
 
 
 @helcyon_bench_bp.route("/api/helcyon-bench/saved-sessions", methods=["GET"])
@@ -188,44 +185,22 @@ def get_saved_benchmark_sessions():
 
 @helcyon_bench_bp.route("/api/helcyon-bench/saved-sessions", methods=["POST"])
 def create_saved_benchmark_session():
-    try:
-        session = save_benchmark_session(request.get_json(silent=True) or {})
-        return jsonify({"session": session, "sessions": list_benchmark_sessions()}), 201
-    except CaptureError as error:
-        return jsonify({"error": str(error), "code": error.code}), 422
-    except OSError as error:
-        return jsonify({"error": f"Could not save the benchmark session: {error}"}), 500
+    return _pro_only()
 
 
 @helcyon_bench_bp.route("/api/helcyon-bench/saved-sessions/<filename>", methods=["GET"])
 def get_saved_benchmark_session(filename: str):
-    try:
-        return jsonify({"session": load_benchmark_session(filename)})
-    except CaptureError as error:
-        status = 404 if error.code == "session_missing" else 422
-        return jsonify({"error": str(error), "code": error.code}), status
+    return _pro_only()
 
 
 @helcyon_bench_bp.route("/api/helcyon-bench/saved-sessions/<filename>", methods=["DELETE"])
 def delete_saved_benchmark_session(filename: str):
-    try:
-        deleted_name = delete_benchmark_session(filename)
-        return jsonify({"deleted": deleted_name, "sessions": list_benchmark_sessions()})
-    except CaptureError as error:
-        status = 404 if error.code == "session_missing" else 422
-        return jsonify({"error": str(error), "code": error.code}), status
-    except OSError as error:
-        return jsonify({"error": f"Could not delete the benchmark session: {error}"}), 500
+    return _pro_only()
 
 
 @helcyon_bench_bp.route("/api/helcyon-bench/capture-associations", methods=["POST"])
 def create_capture_association():
     return _pro_only()
-    try:
-        association = register_association(request.get_json(silent=True) or {}, _parse_chat_file)
-        return jsonify({"association": association}), 201
-    except CaptureError as error:
-        return jsonify({"error": str(error), "code": error.code, "status": error.status}), 422
 
 
 @helcyon_bench_bp.route(
@@ -233,16 +208,7 @@ def create_capture_association():
     methods=["PATCH"],
 )
 def set_capture_association_status(association_id):
-    data = request.get_json(silent=True) or {}
-    try:
-        association = update_association_status(
-            association_id,
-            str(data.get("status") or ""),
-            assistant_message_id=data.get("assistant_message_id"),
-        )
-        return jsonify({"association": association})
-    except CaptureError as error:
-        return jsonify({"error": str(error), "code": error.code, "status": error.status}), 422
+    return _pro_only()
 
 
 @helcyon_bench_bp.route(
@@ -250,11 +216,7 @@ def set_capture_association_status(association_id):
     methods=["GET"],
 )
 def get_capture_association_status(association_id):
-    try:
-        resolved = resolve_association(association_id, _parse_chat_file)
-        return jsonify(resolved)
-    except CaptureError as error:
-        return jsonify({"error": str(error), "code": error.code, "status": error.status})
+    return _pro_only()
 
 
 @helcyon_bench_bp.route(
@@ -263,17 +225,6 @@ def get_capture_association_status(association_id):
 )
 def capture_benchmark_response(association_id):
     return _pro_only()
-    data = request.get_json(silent=True) or {}
-    try:
-        captured = capture_association(
-            association_id,
-            _parse_chat_file,
-            candidate_model_slot=data.get("candidate_model_slot"),
-        )
-        captured["session"] = persist_captured_response(captured)
-        return jsonify(captured)
-    except CaptureError as error:
-        return jsonify({"error": str(error), "code": error.code, "status": error.status}), 409
 
 
 @helcyon_bench_bp.route("/api/helcyon-bench/judge/settings", methods=["GET"])
@@ -336,21 +287,7 @@ def test_integrated_judge_connection():
 
 @helcyon_bench_bp.route("/api/helcyon-bench/judge/runs", methods=["POST"])
 def start_integrated_judge_run():
-    data = request.get_json(silent=True) or {}
-    try:
-        job = judge_run_manager.start(
-            str(data.get("endpoint") or ""),
-            str(data.get("model") or ""),
-        )
-        return jsonify({"job": job}), 202
-    except (ApiError, ConfigError, JudgeError, IntegratedJudgeError, OSError) as error:
-        return jsonify(
-            {
-                "error": str(error),
-                "raw_response": getattr(error, "raw_response", None),
-                "status_code": getattr(error, "status_code", None),
-            }
-        ), 422
+    return _pro_only()
 
 
 @helcyon_bench_bp.route(
