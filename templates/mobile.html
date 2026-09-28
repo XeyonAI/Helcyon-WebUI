@@ -976,8 +976,7 @@ async function handleStream(res,requestId=null,options={}){
 
   // Shown text gets the same ChatML/role-leak cleaning desktop applies (shared).
   function renderAnswer(text,final=false){
-    if(!final){HwuiChatCore.renderStreamingAssistantText(textSpan,text);return;}
-    HwuiChatCore.finishStreamingAssistantText(textSpan);
+    if(final)HwuiChatCore.finishStreamingAssistantText(textSpan);
     if(typeof marked!=='undefined')textSpan.innerHTML=marked.parse(text);
     else textSpan.textContent=text;
   }

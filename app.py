@@ -245,39 +245,21 @@ os.makedirs(_LLAMA_SLOT_SAVE_PATH, exist_ok=True)
 _LLAMA_SLOT_TRACE_LOCK = threading.Lock()
 _LLAMA_SLOT_TRACE_LAST = {}
 
-# Free does not ship the optional Dev-only GPU stall telemetry module.
+# Free omits the optional Dev-only GPU stall telemetry module.
 class _NoopStallWatch:
-    def mark(self, *args, **kwargs):
-        pass
-
-    def finish(self, *args, **kwargs):
-        pass
-
-    def note_non_json(self, *args, **kwargs):
-        pass
-
+    def mark(self, *args, **kwargs): pass
+    def finish(self, *args, **kwargs): pass
+    def note_non_json(self, *args, **kwargs): pass
 
 class _NoopStallDiagnostics:
-    def start_watch(self, *args, **kwargs):
-        return _NoopStallWatch()
+    def start_watch(self, *args, **kwargs): return _NoopStallWatch()
+    def attach_response(self, *args, **kwargs): pass
+    def new_launch(self, *args, **kwargs): return globals().get("_LLAMA_SERVER_LOG_PATH", "")
+    def launch_pre_spawn(self, *args, **kwargs): pass
+    def launch_ready(self, *args, **kwargs): pass
+    def on_stop(self, *args, **kwargs): pass
 
-    def attach_response(self, *args, **kwargs):
-        pass
-
-    def new_launch(self, *args, **kwargs):
-        return globals().get("_LLAMA_SERVER_LOG_PATH", "")
-
-    def launch_pre_spawn(self, *args, **kwargs):
-        pass
-
-    def launch_ready(self, *args, **kwargs):
-        pass
-
-    def on_stop(self, *args, **kwargs):
-        pass
-
-
-# The Dev-only stall telemetry module is not shipped in Free.
+# Free excludes optional Dev-only GPU stall telemetry.
 _STALL_DIAG = _NoopStallDiagnostics()
 
 
@@ -9979,8 +9961,14 @@ def stream_ministral_web_search_response(
 # --------------------------------------------------
 # Stream OpenAI API response (cloud backend)
 # --------------------------------------------------
+# TEMPORARY: capture exactly one successful GPT-4o OpenAI stream, then remove
+# this block and the matching capture code below after the provider check.
+_OPENAI_RAW_CAPTURE_LOCK = threading.Lock()
+_OPENAI_RAW_CAPTURE_CLAIMED = False
+
 def stream_openai_response(messages, api_key, model, temperature, max_tokens, top_p, frequency_penalty=0.0, presence_penalty=0.0):
     global abort_generation
+    global _OPENAI_RAW_CAPTURE_CLAIMED
     abort_generation = False
 
     import sys
@@ -10021,8 +10009,17 @@ def stream_openai_response(messages, api_key, model, temperature, max_tokens, to
         yield f"[OpenAI error {response.status_code}: {err}]"
         return
 
+    capture_raw = False
+    if str(model).strip().lower().startswith("gpt-4o"):
+        with _OPENAI_RAW_CAPTURE_LOCK:
+            if not _OPENAI_RAW_CAPTURE_CLAIMED:
+                _OPENAI_RAW_CAPTURE_CLAIMED = True
+                capture_raw = True
+
     total_chunks = 0
     all_text = []
+    capture_delta_index = 0
+    capture_saw_done = False
     for line in response.iter_lines(chunk_size=1):
         if abort_generation:
             print("🛑 OpenAI generation aborted", flush=True)
@@ -10035,11 +10032,20 @@ def stream_openai_response(messages, api_key, model, temperature, max_tokens, to
             if line_str.startswith("data:"):
                 line_str = line_str[5:].strip()
             if line_str == "[DONE]":
+                capture_saw_done = True
                 break
             j = json.loads(line_str)
             delta = j.get("choices", [{}])[0].get("delta", {})
-            chunk = delta.get("content") or ""
+            raw_delta_content = delta.get("content")
+            chunk = raw_delta_content or ""
             total_chunks += 1
+            if capture_raw and raw_delta_content is not None:
+                print(
+                    f"HWUI_OPENAI_RAW_CAPTURE_DELTA index={capture_delta_index} "
+                    f"{json.dumps(raw_delta_content, ensure_ascii=False)}",
+                    flush=True,
+                )
+                capture_delta_index += 1
             if chunk:
                 all_text.append(chunk)
                 yield chunk
@@ -10048,6 +10054,13 @@ def stream_openai_response(messages, api_key, model, temperature, max_tokens, to
             print(f"❌ OpenAI parse error: {e}", flush=True)
             continue
 
+    if capture_raw:
+        print(
+            "HWUI_OPENAI_RAW_CAPTURE_FINAL "
+            f"complete={capture_saw_done} aborted={bool(abort_generation)} "
+            f"{json.dumps(''.join(all_text), ensure_ascii=False)}",
+            flush=True,
+        )
     print(f"\n☁️ OpenAI DONE: {total_chunks} chunks, {len(''.join(all_text))} chars total", flush=True)
 
 

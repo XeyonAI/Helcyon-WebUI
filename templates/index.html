@@ -6793,8 +6793,6 @@ async function sendPrompt() {
       // in the finally block. See changes.md (June 6 2026 — pagehide beacon).
       window._streamingPartial = "";
 
-      let renderedFenceMarkdown = false;
-
       function renderRevealed(isFinal) {
         const slice = cleanedFull.slice(0, revealedCount);
         if (isFinal) {
@@ -6804,21 +6802,13 @@ async function sendPrompt() {
           html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
           renderModelHTML(streamEl, html);
           addCodeCopyButtons(streamEl.parentNode || streamEl);
-        } else if (/^ {0,3}(?:`{3,}|~{3,})/m.test(slice)) {
-          // The working build parsed each revealed prefix as Markdown. Scope
-          // that behaviour to fenced replies; plain prose keeps its stable
-          // source-backed stream layout.
-          HwuiChatCore.finishStreamingAssistantText(streamEl);
-          let html = marked.parse(sanitizeMarkdown(slice));
+        } else {
+          // Render the accumulated source prefix through the same Markdown
+          // path as the finalized message. Parsing a prefix keeps streaming
+          // incremental while preserving its source in cleanedFull.
+          let html = marked.parse(sanitizeMarkdown(slice), { breaks: true });
           html = html.replace(/<li><p>/g, '<li>').replace(/<\/p><\/li>/g, '</li>');
           renderLiveModelHTML(streamEl, html);
-          renderedFenceMarkdown = true;
-        } else {
-          if (renderedFenceMarkdown) {
-            renderModelHTML(streamEl, '');
-            renderedFenceMarkdown = false;
-          }
-          HwuiChatCore.renderStreamingAssistantText(streamEl, slice);
         }
         // A leading reaction is attached as soon as its marker is parsed, but
         // keep the empty assistant bubble collapsed until the first visible
