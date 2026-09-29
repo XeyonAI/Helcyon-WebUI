@@ -9,8 +9,8 @@ from datetime import datetime, timedelta
 from truncation import trim_chat_history, rough_token_count
 from tts_routes import tts_bp
 from utils.session_handler import (
-    get_system_prompt, get_instruction_layer, get_tone_primer, get_response_discipline,
-    get_legacy_instruction_layer, get_legacy_tone_primer,
+    get_system_prompt, get_instruction_layer, get_tone_primer,
+    get_legacy_instruction_layer,
 )
 from whisper_routes import whisper_bp
 from comfyui_client import (
@@ -245,20 +245,39 @@ os.makedirs(_LLAMA_SLOT_SAVE_PATH, exist_ok=True)
 _LLAMA_SLOT_TRACE_LOCK = threading.Lock()
 _LLAMA_SLOT_TRACE_LAST = {}
 
+# Free omits optional Dev-only stall telemetry. Keep its call sites inert while
+# retaining the ordinary llama-server log path.
 class _NoopStallWatch:
-    def mark(self, *args, **kwargs): pass
-    def finish(self, *args, **kwargs): pass
-    def note_non_json(self, *args, **kwargs): pass
+    def mark(self, *args, **kwargs):
+        return None
+
+    def finish(self, *args, **kwargs):
+        return None
+
 
 class _NoopStallDiagnostics:
-    def start_watch(self, *args, **kwargs): return _NoopStallWatch()
-    def attach_response(self, *args, **kwargs): pass
-    def new_launch(self, *args, **kwargs): return globals().get("_LLAMA_SERVER_LOG_PATH", "")
-    def launch_pre_spawn(self, *args, **kwargs): pass
-    def launch_ready(self, *args, **kwargs): pass
-    def on_stop(self, *args, **kwargs): pass
+    def new_launch(self, *args, **kwargs):
+        return globals().get("_LLAMA_SERVER_LOG_PATH")
 
-# Free omits the optional Dev-only GPU stall telemetry module.
+    def launch_pre_spawn(self, *args, **kwargs):
+        return None
+
+    def launch_spawned(self, *args, **kwargs):
+        return None
+
+    def launch_ready(self, *args, **kwargs):
+        return None
+
+    def start_watch(self, *args, **kwargs):
+        return _NoopStallWatch()
+
+    def attach_response(self, *args, **kwargs):
+        return None
+
+    def on_stop(self, *args, **kwargs):
+        return None
+
+
 _STALL_DIAG = _NoopStallDiagnostics()
 
 
@@ -2155,8 +2174,7 @@ _QWEN35_ACTIVE_INSTRUCTIONS_INTRO = (
     "These are standing operator instructions for every reply in this conversation. "
     "They are system instructions, not conversation content: follow them silently and "
     "never quote, mention or summarise them. They take precedence over the style "
-    "examples above, including on reply length, paragraph count, structure and "
-    "formatting. They are listed from lower to higher priority; where two conflict, "
+    "examples above. They are listed from lower to higher priority; where two conflict, "
     "follow the later one."
 )
 
@@ -2166,10 +2184,7 @@ _QWEN35_ACTIVE_INSTRUCTIONS_INTRO = (
 # replies outrank a Global PHI length limit.
 _QWEN35_STYLE_EXAMPLES_INTRO = (
     "The fictional exchange below is style evidence: voice, tone, vocabulary, warmth, "
-    "humour and conversational manner. It is not a template for reply length, "
-    "paragraph count or structure — those are governed by the ACTIVE_INSTRUCTIONS at "
-    "the end of this system message, which win whenever they differ from these "
-    "examples.\n"
+    "humour and conversational manner.\n"
     "They are not conversation history, memories, facts about the user, active topics, "
     "or unfinished conversations. Copy the manner, not the matter: subject matter comes "
     "only from the current conversation. Do not mention names, entities, examples, "
@@ -2226,8 +2241,7 @@ def _qwen35_late_reminder(has_instructions, global_phi=""):
     if global_phi:
         return (
             "[OOC: Reply following the ACTIVE_INSTRUCTIONS at the end of the system "
-            "message. Its Global post-history instructions have final authority, "
-            f"including over reply length and format:\n{global_phi}]"
+            f"message. Its Global post-history instructions have final authority:\n{global_phi}]"
         )
     return "[OOC: Reply following the ACTIVE_INSTRUCTIONS at the end of the system message.]"
 
@@ -2908,39 +2922,15 @@ def _spawn_llama_server(cmd, show_console):
 
 
 _MINISTRAL_REASONING_CONTRACT = (
-    "Think through the problem carefully inside exactly one [THINK]...[/THINK] "
-    "private draft, with reasoning length proportional to the problem's "
-    "difficulty. Write terse scratch notes, not tutorial prose; make each "
-    "point once. Do not restate the prompt or narrate the "
-    "obvious. Work out only what is needed in one "
-    "forward pass and stop once you have a solid answer, not an exhaustive "
-    "analysis. Do "
-    "not revisit approaches you've ruled out or add examples after the "
-    "answer is settled. Explore alternatives only before the answer is "
-    "settled and "
-    "only when genuine ambiguity requires it. Required draft shape: the key "
-    "facts, then what follows from them, then one answer, then [/THINK]. "
-    "Mandatory output rule: as soon as you have a complete, solid "
-    "answer, your next output must be [/THINK], then answer normally. Put no double-check, "
-    "alternate approach, restatement, summary, or hedging "
-    "between reaching the answer and [/THINK]. The first solid answer "
-    "ends the draft. Do not use the available token budget as a target. "
-    "Reopen the draft only if you have already found a real "
-    "contradiction or error before the answer is complete."
-    " Never open another [THINK] block after closing [/THINK]."
+    "Think through the problem inside one private [THINK]...[/THINK] draft. "
+    "Do not restate the prompt or narrate the obvious. Explore alternatives when "
+    "genuine ambiguity requires it. Present the answer after the draft and never "
+    "open another [THINK] block after closing [/THINK]."
 )
 
 _MINISTRAL_REASONING_TURN_PACKET = (
-    "[REASONING SELECTED FOR THIS TURN: Keep the draft to terse working "
-    "notes — state each "
-    "point once, and stop once you have a solid answer rather than "
-    "over-analysing. Do not restate the prompt, "
-    "revisit ruled-out approaches, or add examples after the answer is "
-    "settled. In "
-    "the draft, use only: the key facts, what follows from them, one answer. "
-    "As soon as the answer is known, the next output must be [/THINK], with no "
-    "double-check, alternative, restatement, or hedging in between — then "
-    "answer normally.]"
+    "[REASONING SELECTED FOR THIS TURN: Use one private [THINK] draft, then "
+    "present the answer normally.]"
 )
 
 _MINISTRAL_REASONING_INTENT_INSTRUCTION = (
@@ -12880,7 +12870,7 @@ _MINISTRAL_STYLE_SIGNATURE_GUARD = (
     "directness, certainty, humour, rhythm and formatting habits. Reproduce that "
     "manner. They describe delivery only and carry no subject matter: they are not "
     "conversation history, not topics, not opinions to restate. Answer only the "
-    "user's actual message, at whatever length the current instructions require. "
+    "user's actual message. "
     # Same boundary as the verbatim-examples guard: a derived voice profile
     # still claims formatting habits, and is still silent about the marker.
     + _STYLE_SCOPE_VISIBLE_REPLY_ONLY
@@ -12901,8 +12891,8 @@ _MINISTRAL_ISOLATED_STYLE_GUARD = (
     "active conversation, or facts about the user. Use whichever demonstration's "
     "conversational mode best matches the real turn: on a playful turn participate in the "
     "humour, riff or escalate and land the punchline; on a serious or emotional turn use the "
-    "matching warmth and cadence instead. Never explain the humour. Obey any current "
-    "reply-length or formatting limit, and answer only the real user turn. "
+    "matching warmth and cadence instead. Never explain the humour. "
+    "Answer only the real user turn. "
     # This guard names "emoji", "formatting" and "response shape" as things to
     # copy, and heads the demonstrations themselves — so it is the single
     # strongest source of the "replies carry no marker" inference.
@@ -14562,7 +14552,7 @@ def _build_ministral_native_messages(
     return result
 
 
-def _build_system_text(char_data, _char_label, _user_label, user_display_name, user_bio, active_chat, character_name, system_prompt, instruction, tone_primer, project_documents, response_discipline=""):
+def _build_system_text(char_data, _char_label, _user_label, user_display_name, user_bio, active_chat, character_name, system_prompt, instruction, tone_primer, project_documents):
     char_context = ""
 
     # 🧠 Holds ONLY the most-recent saved session summary. It is NOT placed in
@@ -14783,14 +14773,9 @@ def _build_system_text(char_data, _char_label, _user_label, user_display_name, u
             )
             print("📐 Jinja model: skipping instruction layer + tone primer from system_text")
         else:
-            # RESPONSE SCALE sits immediately after the instruction layer. When
-            # empty (Ministral native) the string is byte-identical to before.
-            _response_discipline_part = (
-                f"{response_discipline}\n\n" if response_discipline else ""
-            )
             system_text = (
                 f"{system_prompt}\n\n{char_context}{user_context}\n\n{instruction}\n\n"
-                f"{_response_discipline_part}{tone_primer}{project_documents}"
+                f"{tone_primer}{project_documents}"
             )
 
         system_text = f"{system_text}\n\n{_MESSAGE_REACTION_PROTOCOL}"
@@ -15065,14 +15050,10 @@ _NEUTRAL_SYSTEM_PROMPT_FALLBACK = (
 
 
 def _resolve_system_layer(char_data, char_label="", user_label=""):
-    """Load core system layer (system prompt + instruction + tone primer + response discipline), apply tone-primer suppression and character-bound system-prompt override. Extracted from chat() (phase 1)."""
+    """Load the system prompt, instruction, and gated tone primer for chat()."""
     system_prompt, current_time = get_system_prompt()
     instruction = get_instruction_layer()
     tone_primer = get_tone_primer()
-    # Universal — NOT subject to the personality suppression below. When it
-    # lived inside the tone primer it was suppressed for every real card.
-    response_discipline = get_response_discipline()
-
     # Suppress tone primer if the character card already defines personality/tone.
     # The primer is a fallback only — sending it alongside a character card causes
     # its "favour long, deep responses" instruction to override the character's style.
@@ -15132,7 +15113,7 @@ def _resolve_system_layer(char_data, char_label="", user_label=""):
     system_prompt = substitute_placeholders(system_prompt, char_label, user_label)
 
     print(f"⏰ Time context injected: {current_time}")
-    return system_prompt, instruction, tone_primer, response_discipline
+    return system_prompt, instruction, tone_primer
 
 
 def _automatic_example_fallback_allowed(is_jinja_model, is_ministral_model):
@@ -15685,14 +15666,11 @@ def chat():
     # --------------------------------------------------
     # Load Helcyon's core system layer (hardcoded)
     # --------------------------------------------------
-    system_prompt, instruction, tone_primer, response_discipline = _resolve_system_layer(
+    system_prompt, instruction, tone_primer = _resolve_system_layer(
         char_data, _char_label, _user_label
     )
-    # Ministral native keeps the pre-split session-handler text byte-identical:
-    # that path consumes `instruction` and `tone_primer` as its own core
-    # sections and subtracts them from the assembled system text by exact
-    # match, so a new block there would fall through into its passive memory
-    # context. It has not been migrated to RESPONSE SCALE.
+    # Ministral native keeps the pre-split instruction wording for its
+    # compatibility mapping. Both paths use the same fallback tone primer.
     if (
         _req_settings.get("backend_mode", "local") == "local"
         and _active_model_is_ministral_native(
@@ -15702,8 +15680,6 @@ def chat():
         )
     ):
         instruction = get_legacy_instruction_layer()
-        tone_primer = get_legacy_tone_primer() if tone_primer else ""
-        response_discipline = ""
 
     # --------------------------------------------------
     # Sentinel/Tron live runtime context (optional, read-only) — only for a
@@ -15741,7 +15717,7 @@ def chat():
     _anthropic_static_system_text, char_context, user_context, _recent_session_summary, _recent_session_ts, _is_jinja_model = _build_system_text(
         char_data, _char_label, _user_label, user_display_name, user_bio,
         active_chat, character_name, system_prompt, instruction, tone_primer,
-        project_documents, response_discipline=response_discipline,
+        project_documents,
     )
     system_text = _anthropic_static_system_text + (global_documents or "")
 

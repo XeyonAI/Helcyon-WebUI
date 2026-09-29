@@ -2264,6 +2264,7 @@ function updateMessageReactionBadge(wrapper, message) {
 }
 
 async function setDesktopMessageReaction(message, wrapper, reaction) {
+  await waitForPostStreamActionSetup();
   if (!message) return;
   HwuiChatCore.setMessageReaction([message], message.message_id, reaction);
   window._chatDirty = true;
@@ -4486,6 +4487,7 @@ function persistChatState() {
     saveBtn.onclick = async function() {
       const newContent = textarea.value.trim();
       if (!newContent) return;
+      await waitForPostStreamActionSetup();
 
       // Capture the edited message's role BEFORE touching history.
       const editedRole = (window.loadedChat && window.loadedChat[messageIndex])
@@ -6357,6 +6359,13 @@ async function sendPrompt() {
     }
   }
 
+  async function waitForPostStreamActionSetup() {
+    const pending = window._postStreamActionSetup;
+    if (!pending) return;
+    hwuiToast('Finishing the current reply before applying that action.', 'info');
+    await pending;
+  }
+
 // ==================================================
 // FETCH AND DISPLAY RESPONSE (WITH DEBUG LOGS)
 // ==================================================
@@ -6372,6 +6381,8 @@ async function sendPrompt() {
     let replySourceUserMessageId = sourceUserMessageId;
     let generationStartedAt = null;
     let responseReader = null;
+    let postStreamActionSetup = null;
+    let releasePostStreamActionSetup = null;
     const automaticCheckin = Boolean(options.automaticCheckin);
     // A check-in that lost its claim snapshot or the generation race never
     // owns the shared sending lock, so it must not enter the shared cleanup.
@@ -7218,6 +7229,17 @@ async function sendPrompt() {
         );
       }
 
+      // The chat save and Bench update are complete, so render controls against
+      // the final saved history before automatic-memory work can take seconds.
+      // Actions invoked during that remaining work wait on this request's barrier.
+      postStreamActionSetup = new Promise(resolve => {
+        releasePostStreamActionSetup = resolve;
+      });
+      window._postStreamActionSetup = postStreamActionSetup;
+      if (!window._suppressMemoryDetection && currentCharacter && currentCharacter.name) {
+        renderChatMessages(window.loadedChat);
+      }
+
       // Save trained memory output immediately. The server uses the model's
       // title, keywords, and summary directly; its classifier is only a
       // fallback when an explicit request produced no valid memory object/tag.
@@ -7228,14 +7250,6 @@ async function sendPrompt() {
         const firstUserMsg = window.loadedChat.find(m => m.role === 'user' && !m.is_opening_line);
         const firstText = firstUserMsg && typeof firstUserMsg.content === 'string' ? firstUserMsg.content : lastPrompt;
         autoNameChat(firstText);
-      }
-
-      // Re-render so edit/delete buttons appear on live messages
-      // Guard: skip re-render for memory confirmation responses — the live bubble is already
-      // correctly in the DOM, and a full re-render risks clearing it if currentCharacter
-      // is briefly stale (which causes renderChatMessages to bail and leave the DOM empty)
-      if (!window._suppressMemoryDetection && currentCharacter && currentCharacter.name) {
-        renderChatMessages(window.loadedChat);
       }
 
       // ── Memory command detection ──────────────────────────────────────
@@ -7273,6 +7287,12 @@ async function sendPrompt() {
       if (stopBtn) stopBtn.style.display = 'none';
       if (window._activeReader === responseReader) window._activeReader = null;
       window.isSending = false;
+      if (postStreamActionSetup) {
+        if (window._postStreamActionSetup === postStreamActionSetup) {
+          window._postStreamActionSetup = null;
+        }
+        if (releasePostStreamActionSetup) releasePostStreamActionSetup();
+      }
       // Stream is over (completed, errored, or aborted) — the assistant turn is
       // now in window.loadedChat (or was empty), so drop the partial mirror so a
       // later pagehide doesn't re-append stale text.
@@ -7464,6 +7484,7 @@ async function sendPrompt() {
   // CONTINUE LAST RESPONSE
   // ==================================================
   async function continueLast() {
+    await waitForPostStreamActionSetup();
     if (window.isSending) return;
 
     const chat = document.getElementById('chat');
@@ -7649,6 +7670,7 @@ async function sendPrompt() {
 // REGENERATE LAST RESPONSE (FIXED - NO RENDER)
 // ==================================================
   async function regenerate() {
+    await waitForPostStreamActionSetup();
     // 🔒 WAIT if a save is already in progress
     if (window.isSaving) {
       console.log('⏳ Save in progress, waiting...');
@@ -8895,6 +8917,7 @@ async function stopGeneration() {
   // Session leaves it out of the summary. The flag is saved in the chat's
   // metadata sidecar, so it is restored when the chat is reopened.
   async function toggleContextExclusion(messageIndex) {
+    await waitForPostStreamActionSetup();
     const msg = window.loadedChat && window.loadedChat[messageIndex];
     if (!msg || msg.role !== 'assistant') return;
     if (window.isSending) {
@@ -8932,6 +8955,9 @@ async function stopGeneration() {
   if (!await hwuiConfirm('Delete this message?')) {
     return;
   }
+
+  await waitForPostStreamActionSetup();
+  if (!window.loadedChat || !Array.isArray(window.loadedChat)) return;
 
   // 🔒 Wait if a save is already in progress
   if (window.isSaving) {
@@ -8974,6 +9000,7 @@ async function branchMessage(assistantIndex) {
   }
   const confirmed = await hwuiConfirm('Branch from here? A new chat will be created up to this point. The original is untouched.');
   if (!confirmed) return;
+  await waitForPostStreamActionSetup();
   try {
     const res = await fetch('/chats/branch', {
       method: 'POST',

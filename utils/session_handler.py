@@ -86,14 +86,10 @@ def get_instruction_layer():
         "When fields conflict, follow the higher-priority instruction for that specific point. "
         "Otherwise preserve the character naturally while following the user's current request.\n\n"
 
-        # Voice and manner only. The earlier wording said to extract "response
-        # shape", which let long multi-paragraph examples set reply length and
-        # the number of conversational moves, against RESPONSE SCALE and
-        # Global PHI. The Ministral native path keeps the earlier sentence —
-        # see get_legacy_instruction_layer().
+        # Voice and manner guidance. Native Ministral retains its compatibility
+        # sentence through get_legacy_instruction_layer().
         "EXAMPLE DIALOGUE:\n"
         "Example dialogue shows speaking style only — take its conversational voice and manner: tone, rhythm, warmth, humour, pacing, paragraph count, structure, and visible formatting habits. "
-        "It does not set reply length or how many conversational moves a reply makes. "
         "Copy the conversational manner, not the subject matter. "
         "Do not treat example topics as memories, active conversation threads, or facts about the user.\n\n"
 
@@ -138,43 +134,24 @@ def get_tone_primer():
     Returns the fallback personality/tone primer.
     Used only when a character card doesn't define tone or personality.
 
-    Personality only. Its former response-discipline sentences (scale,
-    concision, stopping once the point is answered) now live in
-    get_response_discipline(), which every character receives: gated here they
-    reached no real card at all, because every card defines a personality.
+    Personality only. The primer remains a fallback for cards without their own
+    personality or tone.
     """
     tone_primer = (
         "When no specific tone is defined in the character card, use this default style:\n\n"
 
         "Be warm, conversational, perceptive, relaxed, and slightly irreverent. "
         "Meet the user's tone naturally. "
+        "Default to concise responses unless depth is genuinely needed. "
         "Use humour when it fits, and take genuine concerns seriously without over-interpreting them."
     )
     return tone_primer
 
 
-def get_response_discipline():
-    """
-    Returns universal response discipline, sent regardless of the character card.
-
-    Phrased positively on purpose: naming the unwanted moves (advice, follow-up
-    questions, offers, encouragement…) risks priming them — see the
-    INJECTED MEMORY note in get_instruction_layer().
-    """
-    return (
-        "RESPONSE SCALE:\n"
-        "Match the scale of the user's message: a short or casual message gets a short reply; "
-        "a substantial question gets the fuller answer it needs. "
-        "Be concise by default and expand when the subject genuinely benefits. "
-        "Make your point in your own voice, and once it has landed, end the reply there — "
-        "the user will carry the conversation on when they want to."
-    )
-
-
-# ── Ministral native: pre-split text, kept byte-identical ────────────────────
-# The Ministral native path consumes the instruction layer and tone primer
-# directly and subtracts them from the assembled system text by exact match,
-# so it keeps the wording it was tuned on until it is deliberately migrated.
+# ── Ministral native: pre-split instruction compatibility ───────────────────
+# Ministral native consumes the instruction layer directly and subtracts it
+# from assembled system text by exact match. Keep this example wording mapping
+# separate; all paths share get_tone_primer().
 
 _LEGACY_EXAMPLE_DIALOGUE_SENTENCE = (
     "Example dialogue shows speaking style only — extract tone, rhythm, response shape, "
@@ -183,7 +160,6 @@ _LEGACY_EXAMPLE_DIALOGUE_SENTENCE = (
 _CURRENT_EXAMPLE_DIALOGUE_SENTENCES = (
     "Example dialogue shows speaking style only — take its conversational voice and manner: "
     "tone, rhythm, warmth, humour, pacing, paragraph count, structure, and visible formatting habits. "
-    "It does not set reply length or how many conversational moves a reply makes. "
 )
 
 
@@ -193,21 +169,3 @@ def get_legacy_instruction_layer():
     if _CURRENT_EXAMPLE_DIALOGUE_SENTENCES not in layer:
         raise RuntimeError("EXAMPLE DIALOGUE wording changed; update the legacy mapping")
     return layer.replace(_CURRENT_EXAMPLE_DIALOGUE_SENTENCES, _LEGACY_EXAMPLE_DIALOGUE_SENTENCE)
-
-
-def get_legacy_tone_primer():
-    """The pre-split tone primer: personality plus response discipline."""
-    return (
-        "When no specific tone is defined in the character card, use this default style:\n\n"
-
-        "Be warm, conversational, perceptive, relaxed, and slightly irreverent. "
-        "Meet the user's tone naturally and respond at the scale the moment calls for. "
-        "Use humour when it fits, and take genuine concerns seriously without over-interpreting them.\n\n"
-
-        "Address every meaningful point the user raises so nothing important is ignored. "
-        "Do this efficiently: be concise by default, and only expand when the user asks for more detail "
-        "or when the subject genuinely needs fuller explanation. "
-        "Do not add extra analysis, framing, examples, or broader meaning once the user's points have been answered clearly.\n\n"
-
-        "Above all, aim for natural, attentive conversation that feels complete without becoming unnecessarily long."
-    )

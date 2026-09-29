@@ -15,13 +15,13 @@ def _pro_only():
     return jsonify({"error": "This feature is available in HWUI Pro.", "pro_required": True}), 403
 
 def get_active_theme_name():
-    """Get active theme name from settings.json, default to 'midnight'."""
+    """Get active theme name from settings.json, default to 'claude'."""
     try:
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
             s = json.load(f)
-        return s.get("active_theme", "midnight")
+        return s.get("active_theme", "claude")
     except:
-        return "midnight"
+        return "claude"
 
 def set_active_theme_name(name):
     """Write active theme name to settings.json."""

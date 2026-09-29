@@ -20,23 +20,13 @@ from helcyon_bench_adapter import (
 from chat_routes import _parse_chat_file
 from helcyon_bench_capture import (
     CaptureError,
-    capture_association,
-    delete_benchmark_session,
     list_benchmark_sessions,
-    load_benchmark_session,
     load_integrated_session,
-    persist_captured_response,
-    register_association,
-    resolve_association,
-    save_benchmark_session,
-    save_integrated_session,
-    update_association_status,
 )
 from helcyon_bench_judge import (
     ApiError,
     ConfigError,
     IntegratedJudgeError,
-    JudgeError,
     judge_run_manager,
     load_judge_settings,
     refresh_judge_models,
