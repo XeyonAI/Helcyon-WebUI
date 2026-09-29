@@ -1116,6 +1116,10 @@
                 <input type="number" id="repeat_penalty" step="0.01" min="0.8" max="2" />
               </div>
               <div class="sampling-field-row">
+                <label class="sampling-field-label" for="repeat_last_n">Repeat Penalty Last N</label>
+                <input type="number" id="repeat_last_n" step="1" min="0" />
+              </div>
+              <div class="sampling-field-row">
                 <label class="sampling-field-label" for="dry_multiplier">DRY Multiplier</label>
                 <input type="number" id="dry_multiplier" step="0.05" min="0" />
               </div>
@@ -6606,6 +6610,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       document.getElementById('min_p').value          = settings.min_p             ?? 0.05;
       document.getElementById('top_k').value          = settings.top_k             ?? 40;
       document.getElementById('repeat_penalty').value    = settings.repeat_penalty    ?? 1.1;
+      document.getElementById('repeat_last_n').value       = settings.repeat_last_n       ?? 256;
       document.getElementById('dry_multiplier').value    = settings.dry_multiplier    ?? 0.8;
       document.getElementById('dry_base').value          = settings.dry_base          ?? 1.75;
       document.getElementById('dry_allowed_length').value = settings.dry_allowed_length ?? 2;
@@ -7943,6 +7948,7 @@ function buildSamplingPresetFromFields() {
     min_p:             readNum('min_p', 0.05),
     top_k:             readNum('top_k', 40, true),
     repeat_penalty:    readNum('repeat_penalty', 1.1),
+    repeat_last_n:     readNum('repeat_last_n', 256, true),
     dry_multiplier:    readNum('dry_multiplier', 0.8),
     dry_base:          readNum('dry_base', 1.75),
     dry_allowed_length: readNum('dry_allowed_length', 2, true),
@@ -8065,7 +8071,7 @@ function onSamplingPresetSelect() {
 }
 
 const SAMPLING_FIELD_IDS = [
-  'temperature', 'max_tokens', 'top_p', 'min_p', 'top_k', 'repeat_penalty',
+  'temperature', 'max_tokens', 'top_p', 'min_p', 'top_k', 'repeat_penalty', 'repeat_last_n',
   'dry_multiplier', 'dry_base', 'dry_allowed_length', 'dry_penalty_last_n',
   'typical_p', 'top_n_sigma', 'dynatemp_range', 'dynatemp_exponent',
   'xtc_probability', 'xtc_threshold',
@@ -8128,7 +8134,7 @@ function findUniqueSamplingPresetForCurrentSettings() {
   const current = buildSamplingPresetFromFields();
   const defaults = {
     temperature: 0.8, max_tokens: 4096, top_p: 0.95, min_p: 0.05,
-    top_k: 40, repeat_penalty: 1.1, dry_multiplier: 0, dry_base: 1.75,
+    top_k: 40, repeat_penalty: 1.1, repeat_last_n: 256, dry_multiplier: 0, dry_base: 1.75,
     dry_allowed_length: 2, dry_penalty_last_n: 0, typical_p: 1.0,
     top_n_sigma: -1.0, dynatemp_range: 0.0, dynatemp_exponent: 1.0,
     xtc_probability: 0.0, xtc_threshold: 0.1,
@@ -8181,6 +8187,7 @@ async function loadSamplingPreset() {
   document.getElementById('min_p').value              = p.min_p             ?? 0.05;
   document.getElementById('top_k').value              = p.top_k             ?? 40;
   document.getElementById('repeat_penalty').value     = p.repeat_penalty    ?? 1.1;
+  document.getElementById('repeat_last_n').value      = p.repeat_last_n     ?? 256;
   // ⚠️ Fallback is 0, NOT llama.cpp's 0.8 default. None of the shipped presets
   // define dry_multiplier, so a non-zero fallback here silently re-enabled the
   // DRY sampler on every preset Load — and this handler persists straight to

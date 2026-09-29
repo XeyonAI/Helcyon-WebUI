@@ -92,8 +92,8 @@ def get_instruction_layer():
         # Global PHI. The Ministral native path keeps the earlier sentence —
         # see get_legacy_instruction_layer().
         "EXAMPLE DIALOGUE:\n"
-        "Example dialogue shows speaking style only — take its conversational voice and manner: tone, rhythm, warmth, humour, pacing, and visible formatting habits. "
-        "It does not set reply length, paragraph count, structure, or how many conversational moves a reply makes. "
+        "Example dialogue shows speaking style only — take its conversational voice and manner: tone, rhythm, warmth, humour, pacing, paragraph count, structure, and visible formatting habits. "
+        "It does not set reply length or how many conversational moves a reply makes. "
         "Copy the conversational manner, not the subject matter. "
         "Do not treat example topics as memories, active conversation threads, or facts about the user.\n\n"
 
@@ -182,9 +182,8 @@ _LEGACY_EXAMPLE_DIALOGUE_SENTENCE = (
 )
 _CURRENT_EXAMPLE_DIALOGUE_SENTENCES = (
     "Example dialogue shows speaking style only — take its conversational voice and manner: "
-    "tone, rhythm, warmth, humour, pacing, and visible formatting habits. "
-    "It does not set reply length, paragraph count, structure, or how many conversational "
-    "moves a reply makes. "
+    "tone, rhythm, warmth, humour, pacing, paragraph count, structure, and visible formatting habits. "
+    "It does not set reply length or how many conversational moves a reply makes. "
 )
 
 
