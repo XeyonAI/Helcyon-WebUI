@@ -4,18 +4,18 @@ from user_config import load_user_config_section, save_user_config_section
 
 theme_bp = Blueprint('theme', __name__)
 
-# settings.json lives in the project root next to this module (same dir as app.py)
-SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "settings.json")
-
-THEMES_DIR = os.path.join(os.path.dirname(__file__), "themes")
-
 FREE_THEMES = {"claude", "gemini"}
 
 def _pro_only():
     return jsonify({"error": "This feature is available in HWUI Pro.", "pro_required": True}), 403
 
+# settings.json lives in the project root next to this module (same dir as app.py)
+SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "settings.json")
+
+THEMES_DIR = os.path.join(os.path.dirname(__file__), "themes")
+
 def get_active_theme_name():
-    """Get active theme name from settings.json, default to 'claude'."""
+    """Get active theme name from settings.json, default to 'midnight'."""
     try:
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
             s = json.load(f)
@@ -74,37 +74,33 @@ def get_theme():
 
 @theme_bp.route("/save_theme", methods=["POST"])
 def save_theme():
-    """Custom theme colour editing is Pro-only in the free build."""
     return _pro_only()
 
 @theme_bp.route("/save_bg", methods=["POST"])
 def save_bg():
-    """Custom theme editing (background image) is Pro-only in the free build."""
     return _pro_only()
 
 @theme_bp.route("/clear_bg", methods=["POST"])
 def clear_bg():
-    """Custom theme editing (background image) is Pro-only in the free build."""
     return _pro_only()
 
 @theme_bp.route("/themes/list", methods=["GET"])
 def list_themes():
-    """List the themes available to switch between. Restricted to the two
-    included free themes even if extra theme files are present on disk."""
+    """List all available theme files."""
     try:
         os.makedirs(THEMES_DIR, exist_ok=True)
         on_disk = {f[:-4] for f in os.listdir(THEMES_DIR) if f.endswith('.css')}
         themes = sorted(on_disk & FREE_THEMES)
         active = get_active_theme_name()
         if active not in FREE_THEMES:
-            active = themes[0] if themes else active
+            active = themes[0] if themes else 'claude'
         return jsonify({"themes": themes, "active": active})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @theme_bp.route("/themes/switch", methods=["POST"])
 def switch_theme():
-    """Switch active theme. Free build: limited to the two included themes."""
+    """Switch active theme."""
     try:
         name = request.get_json().get("name", "").strip()
         if not name or not re.match(r'^[\w\- ]+$', name):
@@ -122,12 +118,10 @@ def switch_theme():
 
 @theme_bp.route("/themes/create", methods=["POST"])
 def create_theme():
-    """Creating custom themes is Pro-only in the free build."""
     return _pro_only()
 
 @theme_bp.route("/themes/delete", methods=["POST"])
 def delete_theme():
-    """Deleting themes is Pro-only in the free build."""
     return _pro_only()
 
 THEME_PRESETS_FILE = "theme_presets.json"
@@ -144,10 +138,8 @@ def get_theme_presets():
 
 @theme_bp.route("/theme_presets/save", methods=["POST"])
 def save_theme_preset():
-    """Saving/exporting custom colour presets is Pro-only in the free build."""
     return _pro_only()
 
 @theme_bp.route("/theme_presets/delete", methods=["POST"])
 def delete_theme_preset():
-    """Managing custom colour presets is Pro-only in the free build."""
     return _pro_only()

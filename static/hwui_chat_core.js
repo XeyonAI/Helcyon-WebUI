@@ -72,12 +72,18 @@
     const sourceText = String(text || '');
     let source = sourceText;
     let reaction = null;
+    let reactionDecided = false;
     // A valid leading marker owns its immediately following line ending. Keep
     // that syntax out of the visible answer, but do not use trim() here: every
     // character after the marker belongs to the assistant's reply verbatim.
     const leadingMarker = /^[ \t]*<!--[ \t]*HWUI_REACTION[ \t]*:[ \t]*[\s\S]*?[ \t]*-->/iu.exec(sourceText);
     source = source.replace(REACTION_MARKER_RE, function(match, emoji) {
-      if (!reaction) reaction = normalizeReaction(emoji);
+      if (!reactionDecided) {
+        reaction = normalizeReaction(emoji);
+        // The independent preflight can explicitly abstain. Later optional
+        // markers in the main reply must not override that decision.
+        reactionDecided = !!reaction || emoji.trim().toLowerCase() === 'none';
+      }
       return '';
     });
     // A syntactically complete but invalid marker is still control syntax and
@@ -100,7 +106,9 @@
       if (partialLength) source = source.slice(0, -partialLength);
     }
     if (leadingMarker) source = source.replace(/^\s+/, '');
-    return { text: source, reaction };
+    return reactionDecided && !reaction
+      ? { text: source, reaction, decided: true }
+      : { text: source, reaction };
   }
 
   // ── Internal memory-scaffolding guard ───────────────────────────────────
@@ -1112,6 +1120,22 @@
     delete element._hwuiStreamingSource;
   }
 
+  function waitForReactionPaint() {
+    // Two frames give the newly attached badge a paint before answer rendering,
+    // including when transport coalesces the prelude and first text chunk.
+    // Hidden pages cannot paint; don't block streaming while frames are paused.
+    if (!root.requestAnimationFrame || root.document.hidden) return Promise.resolve();
+    return new Promise(resolve => {
+      const finish = () => {
+        root.document.removeEventListener('visibilitychange', onVisibility);
+        resolve();
+      };
+      const onVisibility = () => { if (root.document.hidden) finish(); };
+      root.document.addEventListener('visibilitychange', onVisibility);
+      root.requestAnimationFrame(() => root.requestAnimationFrame(finish));
+    });
+  }
+
   const api = {
     CONTINUE_PREFIX_CHARS,
     LEGACY_AUTHOR_NOTE_PREFIX,
@@ -1143,6 +1167,7 @@
     pendingLegacyAuthorNote,
     renderStreamingAssistantText,
     finishStreamingAssistantText,
+    waitForReactionPaint,
   };
 
   root.HwuiChatCore = api;

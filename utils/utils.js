@@ -1042,18 +1042,18 @@ function bufferTextForTTS(chunk) {
   // Fix contractions FIRST before apostrophes get stripped
   chunk = normaliseDecimalsForTTS(fixContractionsForTTS(chunk));
 
-  // Normalise dashes, strip ellipsis to single pause, no stacking dots
-  chunk = chunk.replace(/\.{3}/g, '. ').replace(/\u2026/g, '. ').replace(/\.{2}/g, '. ');
-  chunk = chunk.replace(/\s*\(\s*/g, '. ').replace(/\s*\)\s*/g, '. ');
-  chunk = chunk.replace(/^>\s*/gm, '').replace(/\s*>\s*/g, '. ');  // strip > list markers
+  // Parentheses, mid-line ">" and emoji are deliberately NOT turned into ". " here:
+  // that would create a sentence boundary (a separate TTS request with its own
+  // intonation reset) inside one sentence. prepareTTSSentence turns them into commas.
+  chunk = chunk.replace(/^>\s*/gm, '');  // strip leading > list markers only
   // Replace specific emojis with spoken words before catch-all strips them
   chunk = chunk.replace(/\u{1F4AF}/gu, 'one hundred percent');
-  // Replace remaining emojis with full stop tight to preceding word — \s* eats the space
-  chunk = chunk.replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '$1.');
-  chunk = chunk.replace(/(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '');
 
   ttsSentenceBuffer += chunk;
-  ttsSentenceBuffer = normaliseDecimalsForTTS(ttsSentenceBuffer);
+  // "..." / ".." become one ellipsis character (not a sentence terminator), and an
+  // emoji only ends a sentence once the text after it shows a new sentence starting.
+  ttsSentenceBuffer = normaliseDecimalsForTTS(normaliseEllipsesForTTS(ttsSentenceBuffer));
+  ttsSentenceBuffer = resolveTTSEmojiBoundaries(ttsSentenceBuffer);
 
   // Split on newlines first — each line is a reliable boundary
   const lines = ttsSentenceBuffer.split('\n');
@@ -1065,26 +1065,14 @@ function bufferTextForTTS(chunk) {
   }
 
   // Also check the current incomplete line for sentence endings
-  // so we don't wait for a newline to start playing
-  // Emoji counted as sentence terminator — model often ends a sentence with an emoji
-  // instead of punctuation; without this the sentence stays in the buffer unqueued,
-  // gets merged with the next line, and F5 gets a run-on chunk with no prosody break.
-  const sentenceRegex = /[^.!?]+(?:[.!?]+|(?:[\u{1F000}-\u{1FFFF}\u{1F300}-\u{1FAFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}\u2600-\u27BF])+)[)"'*_]*\s*/gu;
-  // A streamed token can end at "5." before the following "6" arrives.
-  // Hold that ambiguous trailing dot for one more chunk instead of treating it
-  // as a sentence ending; the next pass will produce "5 point 6".
-  const sentenceScanBuffer = /\d\.$/.test(ttsSentenceBuffer)
-    ? ttsSentenceBuffer.slice(0, -1)
-    : ttsSentenceBuffer;
-  let match;
-  let lastIndex = 0;
-  while ((match = sentenceRegex.exec(sentenceScanBuffer)) !== null) {
-    splitAndQueue(match[0]);
-    lastIndex = match.index + match[0].length;
+  // so we don't wait for a newline to start playing. A trailing "." with nothing after
+  // it yet is held back one chunk: it may be the "5." of "5.6", an abbreviation
+  // ("Dr."), or the start of an ellipsis. flushTTSBuffer releases it at stream end.
+  const scan = splitTTSSentences(ttsSentenceBuffer, false);
+  for (const sentence of scan.sentences) {
+    splitAndQueue(sentence);
   }
-  if (lastIndex > 0) {
-    ttsSentenceBuffer = ttsSentenceBuffer.substring(lastIndex);
-  }
+  ttsSentenceBuffer = scan.rest;
 }
 
 
@@ -1099,7 +1087,10 @@ async function initTTSEngine() {
     const data = await res.json();
     const engine = data.engine || 'f5';
     ttsEngine = engine;
-    TTS_MAX_CHUNK_LENGTH = (engine === 'chatterbox') ? 150 : ((engine === 'qwen-fast' || engine === 'omnivoice') ? 220 : 300);
+    // qwen-fast: sentences up to 320 chars stay in ONE request so the model can plan the
+    // whole contour (~22 s of speech, well inside the 768-position talker cache for
+    // normal 8-10 s reference clips). Longer ones are cut at clause boundaries.
+    TTS_MAX_CHUNK_LENGTH = (engine === 'chatterbox') ? 150 : (engine === 'qwen-fast' ? 320 : (engine === 'omnivoice' ? 220 : 300));
     if ((engine === 'qwen-fast' || engine === 'qwentts-cpp' || engine === 'omnivoice') && (document.getElementById('tts-voice-select')?.options.length || 0) <= 1) {
       loadTTSVoices();
     }
@@ -1109,7 +1100,229 @@ async function initTTSEngine() {
   }
 }
 
-function splitAndQueue(text) {
+// ============================================================================
+// TTS SEGMENTATION - pure helpers (no DOM / queue access).
+// templates/mobile.html carries a verbatim copy of everything between the
+// "BEGIN TTS SEGMENTATION" and "END TTS SEGMENTATION" markers;
+// tests/test_tts_segmentation.js fails if the two copies drift apart.
+//
+// Every chunk handed to the TTS model is one independent utterance with its own
+// intonation plan, so a boundary created here is an intonation reset. Rules:
+//  - boundaries come only from real sentence terminators (abbreviation-aware);
+//  - ellipses, parentheses, ">" and mid-sentence emoji become commas, never ". ";
+//  - only sentences longer than the engine limit are cut, at clause boundaries;
+//  - a fragment that is not the end of its sentence never gets a "." appended.
+// ============================================================================
+// BEGIN TTS SEGMENTATION
+const TTS_EMOJI_SRC = '(?:[\\u{1F000}-\\u{1FFFF}\\u{2600}-\\u{27BF}][\\uFE0F\\u200D]*)+';
+const TTS_NO_BREAK_ABBREVIATIONS = new Set([
+  'mr', 'mrs', 'ms', 'mx', 'dr', 'prof', 'sr', 'jr', 'st', 'mt', 'vs', 'cf',
+  'fig', 'figs', 'approx', 'dept', 'inc', 'ltd', 'corp', 'vol'
+]);
+const TTS_CLAUSE_CONJUNCTIONS = new Set([
+  'and', 'but', 'or', 'so', 'yet', 'which', 'who', 'whom', 'whose', 'where', 'when',
+  'while', 'because', 'although', 'though', 'since', 'if', 'unless', 'until', 'that',
+  'then', 'as', 'before', 'after', 'whereas', 'whether'
+]);
+const TTS_CLAUSE_PREPOSITIONS = new Set([
+  'with', 'without', 'for', 'to', 'from', 'into', 'of', 'in', 'on', 'at', 'by', 'about'
+]);
+
+// "..." / ".." -> one ellipsis character, which is NOT a sentence terminator.
+function normaliseEllipsesForTTS(text) {
+  return text.replace(/\.{2,}/g, '…').replace(/…[.…]+/g, '…');
+}
+
+// An emoji only ends a sentence when the text after it starts a new one (uppercase,
+// digit or opening quote). Followed by anything else it is dropped without a boundary.
+// An emoji with nothing after it yet is left alone until more text (or a flush) arrives.
+function resolveTTSEmojiBoundaries(text) {
+  return text.replace(new RegExp('(\\w)?[ \\t]*' + TTS_EMOJI_SRC + '[ \\t]*(?=(\\S))', 'gu'), (all, prev, next) => {
+    if (prev && /[A-Z0-9"'“(\[]/.test(next)) return prev + '. ';
+    return (prev || '') + ' ';
+  });
+}
+
+// True when the "." that ends `before` (text since the start of the sentence) is an
+// abbreviation / initial rather than a sentence end. `after` is the text following it.
+function ttsIsNoBreakDot(before, after) {
+  const m = before.match(/(?:^|[^A-Za-z.])((?:[A-Za-z]\.)*[A-Za-z]+)$/);
+  if (!m) return false;
+  const tok = m[1];
+  if (tok.includes('.')) return true;                          // e.g.  i.e.  U.S.  a.m.  p.m.
+  if (TTS_NO_BREAK_ABBREVIATIONS.has(tok.toLowerCase())) return true;  // Dr. Mr. vs. ...
+  if (/^etc$/i.test(tok)) return !/^\s+["'“(\[]?[A-Z0-9]/.test(after);
+  return tok.length === 1 && /[B-HJ-Z]/.test(tok);             // single initial: "J. Smith"
+}
+
+// Split text into complete sentences. Returns { sentences, rest }. With isFinal=false a
+// trailing "." that has nothing after it yet is held in `rest` (it may be "5." of
+// "5.6", "Dr.", or the start of an ellipsis); isFinal=true treats `rest` as the last
+// sentence for the caller to take.
+function splitTTSSentences(text, isFinal) {
+  const sentences = [];
+  let start = 0;
+  const re = /[.!?]+/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    let end = m.index + m[0].length;
+    end += text.slice(end).match(/^[)\]"'”’*_]*/)[0].length;
+    const after = text.slice(end);
+    if (after && !/^\s/.test(after)) { re.lastIndex = end; continue; }   // "e.g.," "openai.com"
+    if (!after && !isFinal && m[0].endsWith('.')) break;
+    const before = text.slice(start, m.index);
+    const dotOnly = m[0] === '.';
+    if (dotOnly && /^\s*\d{1,2}$/.test(before)) { re.lastIndex = end; continue; }   // list marker "1."
+    if (dotOnly && ttsIsNoBreakDot(before, after)) { re.lastIndex = end; continue; }
+    const sentence = text.slice(start, end).trim();
+    if (sentence) sentences.push(sentence);
+    start = end + after.match(/^\s*/)[0].length;
+    re.lastIndex = start;
+  }
+  return { sentences, rest: text.slice(start) };
+}
+
+// Make one sentence speakable. Ellipses, parentheses, ">" and dashes turn into commas
+// (or a full stop only where a new sentence visibly starts) inside the SAME request,
+// so no ". " boundary is invented in the middle of a sentence.
+function prepareTTSSentence(raw) {
+  const s = raw.trim()
+    .replace(/\u{1F4AF}/gu, 'one hundred percent')
+    .replace(/\s*—\s*/g, ', ')
+    .replace(/\s*(?:–|--)\s*/g, ', ')
+    .replace(/\s*…\s*(?=[.!?])/g, '')
+    .replace(/\s*…\s*(?=["'“(\[]?[A-Z0-9])/g, '. ')
+    .replace(/\s*…\s*$/, '.')
+    .replace(/\s*…\s*/g, ', ')
+    .replace(new RegExp('(\\w)\\s*' + TTS_EMOJI_SRC + '\\s*$', 'u'), '$1.')
+    .replace(new RegExp(TTS_EMOJI_SRC, 'gu'), ' ')
+    .replace(/\*\*/g, '').replace(/\*/g, '').replace(/_/g, '')
+    .replace(/(?:^|\s+)x{1,4}(?=\s*[.!?]*\s*$)/g, '').replace(/\s+([.!?])/g, '$1')
+    .replace(/^[-*•>]\s+/, '').replace(/^\d+\.\s+/, '')
+    .replace(/\s*>\s*/g, ', ')
+    .replace(/\s*\(\s*/g, ', ').replace(/\s*\)\s*/g, ', ');
+  return s
+    .replace(/\s+/g, ' ')
+    .replace(/(?:,\s*){2,}/g, ', ')
+    .replace(/\s*,\s*(?=[.!?])/g, '')
+    .replace(/([!?])\s*\.+/g, '$1')
+    .replace(/\s+([,;:.!?])/g, '$1')
+    .replace(/^[,;:\s]+/, '')
+    .trim();
+}
+
+// Final fragment of a sentence: drop dangling commas, add "." only if it has no terminator.
+function ttsEnsureTerminal(s) {
+  s = s.trimEnd();
+  // A trailing colon introduces what follows. Keep it as that cue; turning it into "."
+  // would give an introduction ("Here's the thing:") a final, falling cadence.
+  if (/:["'”’)\]*]*$/.test(s)) return s;
+  s = s.replace(/[\s,;:]+$/, '');
+  return /[.!?]["'”’)\]*]*$/.test(s) ? s : s + '.';
+}
+
+// Pick where to cut an over-long sentence. Prefers ; : then ", <conjunction>", then any
+// comma, then a conjunction / preposition, then any space; among equals it picks the cut
+// nearest an even split so no tiny fragment is left. Never cuts inside a word unless the
+// text has no spaces at all.
+function ttsFindClauseCut(text, maxLen) {
+  const minPiece = 40;
+  const target = text.length / Math.ceil(text.length / maxLen);
+  let best = null;
+  for (let i = 1; i < text.length - 1; i++) {
+    if (text[i] !== ' ' || text[i - 1] === ' ') continue;
+    if (i < minPiece || text.length - i < minPiece || i > maxLen) continue;
+    const prev = text[i - 1];
+    const word = (text.slice(i + 1).match(/^[A-Za-z']+/) || [''])[0].toLowerCase();
+    let kind, penalty;
+    if (prev === ';') { kind = 'semicolon'; penalty = 0; }
+    else if (prev === ':') { kind = 'colon'; penalty = 0; }
+    else if (prev === ',' && TTS_CLAUSE_CONJUNCTIONS.has(word)) { kind = 'comma-conjunction'; penalty = 15; }
+    else if (prev === ',') { kind = 'comma'; penalty = 30; }
+    else if (TTS_CLAUSE_CONJUNCTIONS.has(word)) { kind = 'conjunction'; penalty = 60; }
+    else if (TTS_CLAUSE_PREPOSITIONS.has(word)) { kind = 'preposition'; penalty = 90; }
+    else { kind = 'word'; penalty = 130; }
+    const cost = Math.abs(i - target) + penalty;
+    if (!best || cost < best.cost) best = { index: i, kind, cost };
+  }
+  if (best) return best;
+  const space = text.lastIndexOf(' ', maxLen);
+  return space > 0 ? { index: space, kind: 'word', cost: 0 } : { index: maxLen, kind: 'hard-cut', cost: 0 };
+}
+
+// End of a deliberate non-final fragment (e.g. an early-start opening cut from a long
+// sentence that is still streaming): a comma-class mark, never a "." we invent.
+function ttsEnsureFragmentEnd(s) {
+  s = s.replace(/[\s;:]+$/, '');
+  return /[,.!?]$/.test(s) ? s : s + ',';
+}
+
+// Cut a sentence longer than maxLen into clause-sized pieces. Every piece except the
+// last ends in a comma-class mark (never a "." added by us); the last carries the
+// sentence's own ending (or a comma-class mark when isFragment says more text follows).
+function segmentTTSSentence(text, maxLen, isFragment) {
+  const pieces = [];
+  let rest = text.trim();
+  while (rest.length > maxLen) {
+    const cut = ttsFindClauseCut(rest, maxLen);
+    let head = rest.slice(0, cut.index).trim();
+    rest = rest.slice(cut.index).trim();
+    if (!/[,;:.!?]$/.test(head)) head += ',';
+    pieces.push({ text: head, reason: 'clause-split:' + cut.kind });
+  }
+  pieces.push({
+    text: isFragment ? ttsEnsureFragmentEnd(rest) : ttsEnsureTerminal(rest),
+    reason: pieces.length ? 'clause-tail' : (isFragment ? 'fragment' : 'sentence')
+  });
+  return pieces;
+}
+
+// Raw text (one line, one sentence, or several) -> chunks to send to the TTS model:
+// [{ text, reason, original }]. Sentences that fit are kept whole; consecutive short
+// sentences are packed up to maxLen (more context per request); a sentence longer than
+// maxLen is cut at clause boundaries. isFragment=true marks `text` as an unfinished
+// piece of a longer sentence: its last chunk then ends in a comma, not a ".".
+function buildTTSChunks(text, maxLen, isFragment) {
+  const parts = splitTTSSentences(normaliseEllipsesForTTS(text).trim(), true);
+  const rawSentences = parts.rest.trim() ? parts.sentences.concat(parts.rest.trim()) : parts.sentences;
+  const units = [];
+  let current = null;
+  for (const raw of rawSentences) {
+    const prepared = prepareTTSSentence(raw);
+    if (!prepared) continue;
+    if (prepared.length > maxLen) {
+      current = null;
+      units.push({ text: prepared, original: raw, count: 1, long: true });
+    } else if (current && current.text.length + 1 + prepared.length <= maxLen) {
+      current.text += ' ' + prepared;
+      current.original += ' ' + raw;
+      current.count++;
+    } else {
+      current = { text: prepared, original: raw, count: 1, long: false };
+      units.push(current);
+    }
+  }
+  const chunks = [];
+  units.forEach((unit, index) => {
+    const fragment = !!isFragment && index === units.length - 1;
+    if (unit.long) {
+      for (const piece of segmentTTSSentence(unit.text, maxLen, fragment)) {
+        chunks.push({ text: piece.text, reason: piece.reason, original: unit.original });
+      }
+    } else {
+      chunks.push({
+        text: fragment ? ttsEnsureFragmentEnd(unit.text) : ttsEnsureTerminal(unit.text),
+        reason: unit.count > 1 ? 'packed-sentences' : (fragment ? 'fragment' : 'sentence'),
+        original: unit.original
+      });
+    }
+  });
+  return chunks.filter(chunk => chunk.text.length > 2);
+}
+// END TTS SEGMENTATION
+
+// `origin` tags where the text came from (e.g. 'flush') for the per-chunk diagnostics.
+function splitAndQueue(text, origin) {
   // Strip links and source lines before any TTS processing. stripLinksForTTS runs
   // FIRST so wrapped citations / bare-domain link text never reach speech.
   text = stripLinksForTTS(text)                                 // links via shared helper
@@ -1118,72 +1331,19 @@ function splitAndQueue(text) {
              .replace(/https?:\/\/\S+/g, '')                 // bare URLs
              .replace(/[\u{1F517}]/gu, '');                    // link emoji
   text = stripKissTokensForTTS(text);
-  const cleaned = normaliseDecimalsForTTS(text).trim()
-    .replace(/\s*\u2014\s*/g, ', ')
-    .replace(/\u{1F4AF}/gu, 'one hundred percent')
-    .replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '$1.')
-    .replace(/(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '')
-    .replace(/\*\*/g, '').replace(/\*/g, '').replace(/_/g, '')
-    .replace(/(?:^|\s+)x{1,4}(?=\s*[.!?]*\s*$)/g, '').replace(/\s+([.!?])/g, '$1')
-    .replace(/^[-*•>]\s+/, '').replace(/^\d+\.\s+/, '').replace(/\s*>\s*/g, '. ')
-    .replace(/\s*\(\s*/g, '. ').replace(/\s*\)\s*/g, '. ')
-    .trim();
+  text = resolveTTSEmojiBoundaries(normaliseDecimalsForTTS(text));
 
-  if (cleaned.length === 0) return;
-
-  // Ensure every sentence ends with punctuation
-  const withPunct = /[.!?]$/.test(cleaned) ? cleaned : cleaned + '.';
-
-  // If chunk is within limit, queue it directly
-  if (withPunct.length <= TTS_MAX_CHUNK_LENGTH) {
-    if (withPunct.length > 2) {
-      ttsQueue.push(withPunct);
-      console.log(`📝 Queued: "${withPunct.substring(0, 50)}"`);
-      if (!ttsProcessing && ttsQueue.length >= TTS_START_THRESHOLD) {
-        console.log('🎬 Threshold reached, starting playback');
-        processQueue();
-      }
-    }
-    return;
+  // Sentence split (abbreviation-aware), per-sentence cleanup, and clause-boundary
+  // cuts only for sentences longer than TTS_MAX_CHUNK_LENGTH. See buildTTSChunks.
+  const chunks = buildTTSChunks(text, TTS_MAX_CHUNK_LENGTH);
+  for (const chunk of chunks) {
+    const reason = origin ? `${origin}+${chunk.reason}` : chunk.reason;
+    // meta rides along to /api/tts/generate, which logs it next to the audio result.
+    ttsQueue.push({ text: chunk.text, meta: { original: chunk.original, reason, chars: chunk.text.length } });
+    console.log(`📝 TTS chunk [${reason}] ${chunk.text.length} chars: "${chunk.text.substring(0, 60)}"`);
   }
 
-  // Chunk is too long — split at commas/dashes first, then word boundaries
-  const subChunks = [];
-  let remaining = withPunct;
-
-  while (remaining.length > TTS_MAX_CHUNK_LENGTH) {
-    // Try to split at last comma or dash before the limit
-    let splitAt = -1;
-    const searchStr = remaining.substring(0, TTS_MAX_CHUNK_LENGTH);
-    const commaIdx = searchStr.lastIndexOf(',');
-    const dashIdx  = searchStr.lastIndexOf(' — ');
-    const spaceIdx = searchStr.lastIndexOf(' ');
-
-    if (commaIdx > TTS_MAX_CHUNK_LENGTH * 0.4) {
-      splitAt = commaIdx + 1; // include the comma
-    } else if (dashIdx > TTS_MAX_CHUNK_LENGTH * 0.4) {
-      splitAt = dashIdx + 3;
-    } else if (spaceIdx > TTS_MAX_CHUNK_LENGTH * 0.4) {
-      splitAt = spaceIdx;
-    } else {
-      splitAt = TTS_MAX_CHUNK_LENGTH; // hard cut as last resort
-    }
-
-    subChunks.push(remaining.substring(0, splitAt).trim());
-    remaining = remaining.substring(splitAt).trim();
-  }
-
-  if (remaining.length > 2) subChunks.push(remaining);
-
-  // Queue each sub-chunk
-  for (const sub of subChunks) {
-    if (sub.length <= 2) continue;
-    const subWithPunct = /[.!?]$/.test(sub) ? sub : sub + '.';
-    ttsQueue.push(subWithPunct);
-    console.log(`📝 Queued (sub): "${subWithPunct.substring(0, 50)}"`);
-  }
-
-  if (!ttsProcessing && ttsQueue.length >= TTS_START_THRESHOLD) {
+  if (chunks.length > 0 && !ttsProcessing && ttsQueue.length >= TTS_START_THRESHOLD) {
     console.log('🎬 Threshold reached, starting playback');
     processQueue();
   }
@@ -1194,19 +1354,12 @@ function splitAndQueue(text) {
 function flushTTSBuffer() {
   if (!ttsEnabled) return;
 
-  // Flush anything left in the buffer (no newline at end, no punctuation)
+  // Flush anything left in the buffer (no newline at end, no punctuation). It goes
+  // through splitAndQueue so it gets the same abbreviation-aware split, cleanup and
+  // clause-boundary cuts as every other sentence.
   const remaining = ttsSentenceBuffer.trim();
-  const speechRemaining = stripKissTokensForTTS(remaining)
-    .replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '$1.')
-    .replace(/(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '')
-    .replace(/\*\*/g, '').replace(/\*/g, '').replace(/_/g, '')
-    .trim();
-
-  if (speechRemaining.length > 2) {
-    const withPunct = /[.!?]$/.test(speechRemaining) ? speechRemaining : speechRemaining + '.';
-    ttsQueue.push(withPunct);
-    console.log(`📝 Flushed: "${withPunct.substring(0, 50)}"`);
-  }
+  ttsSentenceBuffer = '';
+  if (remaining.length > 2) splitAndQueue(remaining, 'flush');
   ttsSentenceBuffer = '';
   // Drop any held-back backtick fragments — never spoken aloud regardless
   // of whether the closing ``` ever arrived.
@@ -1239,13 +1392,15 @@ async function processQueue() {
 
   // Fetch a sentence from TTS server, return a blob URL or null.
   // Retries once on transient failure so a single F5 hiccup doesn't drop a sentence.
-  async function fetchAudio(sentence, firstChunk = false) {
+  async function fetchAudio(item, firstChunk = false) {
+    const sentence = typeof item === 'string' ? item : item.text;
+    const meta = typeof item === 'string' ? undefined : item.meta;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const response = await fetch('/api/tts/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: sentence, voice: ttsVoice, first_chunk: firstChunk })
+          body: JSON.stringify({ text: sentence, voice: ttsVoice, first_chunk: firstChunk, meta })
         });
         if (response.ok) {
           const blob = await response.blob();
@@ -1691,15 +1846,12 @@ function replayLastAudio() {
 
   replayTimeout = setTimeout(() => {
     replayTimeout = null;
-    const text = stripKissTokensForTTS(stripLinksForTTS(lastAssistant.content))   // strip links/kiss tokens BEFORE the "(" → ". " conversion below
+    // Only links / kiss tokens / markdown are stripped here. Ellipses, dashes, parentheses
+    // and emoji are resolved per sentence by splitAndQueue -> prepareTTSSentence so they
+    // never become extra sentence boundaries.
+    const text = stripKissTokensForTTS(stripLinksForTTS(lastAssistant.content))
       .replace(/\u{1F4AF}/gu, 'one hundred percent')
-      .replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '$1.')
-      .replace(/(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu, '')
-      .replace(/\*\*/g, '').replace(/\*/g, '').replace(/_/g, '')
-      .replace(/\s*\u2014\s*/g, ', ').replace(/\s*\u2013\s*/g, '. ').replace(/\s*--\s*/g, '. ')
-      .replace(/\.{3}/g, '. ').replace(/\u2026/g, '. ')
-      .replace(/\s*\(\s*/g, '. ').replace(/\s*\)\s*/g, '. ')
-      ;
+      .replace(/\*\*/g, '').replace(/\*/g, '').replace(/_/g, '');
 
     const lines = text.split('\n');
     for (const line of lines) {

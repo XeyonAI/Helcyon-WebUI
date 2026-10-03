@@ -1320,6 +1320,12 @@ def _looks_like_character_voice_leak(text, user_name):
 
 def _request_document_completion(prompt, n_predict):
     from app_runtime_helpers import get_api_url, get_stop_tokens
+    from providers import runtime as provider_runtime
+
+    if provider_runtime.is_provider_mode():
+        # The ChatML prompt is re-expressed as chat messages for the active provider.
+        return provider_runtime.complete_chatml(
+            prompt, {"temperature": 0.3, "top_p": 0.9, "max_tokens": n_predict})
 
     payload = {
         "prompt": prompt,

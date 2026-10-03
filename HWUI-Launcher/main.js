@@ -146,11 +146,8 @@ function detectScheme(buildPath) {
 // This also performs the normal first-run assignment before Flask is spawned,
 // keeping launcher probes and app.py on one source of truth.
 function resolveBuildFlaskPort(buildPath, buildSettings) {
-  const configured = Number(buildSettings && buildSettings.port);
-  if (Number.isInteger(configured) && configured > 0 && configured <= 65535) {
-    return configured;
-  }
-
+  // Always ask the resolver: it repairs a port duplicated by a sibling install,
+  // which a raw settings.json read would miss.
   const python = path.join(buildPath, 'venv', 'Scripts', 'python.exe');
   if (!fs.existsSync(python)) throw new Error(`Python not found at ${python}`);
 
@@ -1031,6 +1028,21 @@ app.whenReady().then(async () => {
   // is created, so its teardown can't steal foreground focus back from it.
   if (pickerWindow && !pickerWindow.isDestroyed()) pickerWindow.destroy();
   pickerWindow = null;
+
+  // Point the stable Tailscale/mobile URL at this build's resolved port.
+  // Best-effort: a failure here must never block HWUI itself starting.
+  try {
+    const tsScript = path.join(selectedBuild.path, 'tailscale_serve.py');
+    const tsPython = path.join(selectedBuild.path, 'venv', 'Scripts', 'python.exe');
+    if (fs.existsSync(tsScript) && fs.existsSync(tsPython)) {
+      const tsOut = execFileSync(tsPython, [tsScript], {
+        cwd: selectedBuild.path, encoding: 'utf8', windowsHide: true, timeout: 30000,
+      });
+      tsOut.split(/\r?\n/).filter(Boolean).forEach((l) => logLine(l));
+    }
+  } catch (e) {
+    logLine(`Tailscale routing sync failed (non-fatal): ${e.message}`);
+  }
 
   createMainWindow();
   rebuildTrayMenu();           // "Show HWUI" now enabled

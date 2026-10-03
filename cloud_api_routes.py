@@ -108,7 +108,7 @@ def set_cloud_api_enabled():
     _mode = data.get("backend_mode")
     if _mode is not None:
         _mode = str(_mode).strip().lower()
-        if _mode not in ("local", "openai", "anthropic"):
+        if _mode not in ("local", "openai", "anthropic", "provider"):
             return jsonify({"status": "error", "error": f"invalid backend_mode {_mode!r}"}), 400
     # Read existing settings first. If we CAN'T, do not write — writing a
     # stripped dict would wipe backend_mode/keys/etc. Surface the error so the
@@ -411,7 +411,7 @@ def save_backend_mode_route():
     """
     data = request.get_json(silent=True) or {}
     mode = (data.get("backend_mode") or "local").strip().lower()
-    if mode not in ("local", "openai", "anthropic"):
+    if mode not in ("local", "openai", "anthropic", "provider"):
         return jsonify({"status": "error", "error": f"invalid backend_mode {mode!r}"}), 400
     try:
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:

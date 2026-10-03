@@ -47,6 +47,215 @@
     .config-tab-panel.active {
       display: block;
     }
+    /* Hugging Face workspace. Visual language is shared with Helcyon-Bench: it reuses the
+       .bench-app-shell / .bench-nav-rail / .bench-view-tab / .bench-page-header classes from
+       style.css and the same HWUI-derived colour tokens; only HF-specific layout lives here. */
+    #tab-hf-models, #advanced-settings-modal {
+      --bench-page-bg: var(--bench-bg);
+      --bench-panel-bg: var(--sidebar-bg);
+      --bench-card-bg: var(--bench-box);
+      --bench-elevated-bg: var(--model-msg-bg);
+      --bench-input-bg: var(--field-bg);
+      --bench-text: var(--model-msg-text, var(--modal-text));
+      --bench-muted: var(--text-muted);
+      --bench-dim: var(--text-dim);
+      --bench-border: var(--field-border);
+      --bench-focus: var(--field-border-focus);
+      --bench-accent: var(--new-chat-btn-bg);
+      --bench-accent-text: var(--new-chat-btn-text);
+      --bench-success: var(--memory-tab-active-bg);
+      --bench-error: var(--button-border-dark);
+      color: var(--bench-text);
+    }
+    /* Config/global rules give bare span/a/summary a 15px size; inside the workspace they inherit from their component. */
+    #tab-hf-models span, #tab-hf-models a, #tab-hf-models summary { font-size: inherit; }
+    #tab-hf-models .hf-view { display: none; }
+    #tab-hf-models .hf-view.active { display: block; }
+    #tab-hf-models .bench-app-shell { min-height: calc(100vh - 150px); }
+    #tab-hf-models h2 { margin: 2.5px 0 4px; color: var(--bench-text); font-size: clamp(19px, 2.2vw, 25px); line-height: 1.1; }
+    #tab-hf-models h4 { margin: 0 0 2.5px; color: var(--bench-muted); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
+    #tab-hf-models .bench-page-header p { color: var(--bench-muted); margin: 0; max-width: 593px; }
+    #tab-hf-models button {
+      width: auto; min-height: 26.5px; margin: 0; padding: 5.5px 9.5px; border: 1px solid var(--bench-border);
+      border-radius: 4.5px; background: var(--icon-button-bg); color: var(--bench-text); cursor: pointer;
+    }
+    #tab-hf-models button:hover:not(:disabled) { border-color: var(--bench-focus); background: var(--icon-button-hover); }
+    #tab-hf-models button:disabled { cursor: not-allowed; opacity: .5; }
+    #tab-hf-models button:focus-visible, #tab-hf-models input:focus, #tab-hf-models select:focus {
+      outline: 2px solid var(--bench-focus); outline-offset: 1px;
+    }
+    #tab-hf-models .hf-primary { background: var(--bench-accent); border-color: var(--bench-focus); color: var(--bench-accent-text); font-weight: 700; }
+    #tab-hf-models .hf-go { background: #1f6a3b; border-color: #35a85d; color: #f2fff5; font-weight: 700; }
+    #tab-hf-models .hf-go:hover:not(:disabled) { background: #27804a; border-color: #48bd70; }
+    #tab-hf-models .hf-danger { border-color: #6a2a2a; color: #e88; }
+    #tab-hf-models input[type="text"], #tab-hf-models input[type="password"], #tab-hf-models select {
+      box-sizing: border-box; width: 100%; margin: 0; background: var(--bench-input-bg);
+      border: 1px solid var(--bench-border); color: var(--bench-text); border-radius: 4.5px;
+    }
+    #tab-hf-models .bench-view-tab { position: relative; width: 100%; text-align: left; background: transparent; border-color: transparent; color: var(--bench-muted); }
+    #tab-hf-models .bench-view-tab:hover:not(:disabled) { background: var(--sidebar-button-hover); border-color: transparent; color: var(--bench-text); }
+    #tab-hf-models .bench-view-tab.active, #tab-hf-models .bench-view-tab.active:hover:not(:disabled) { background: var(--bench-accent); border-color: var(--bench-focus); color: var(--bench-accent-text); }
+    #tab-hf-models .hf-count {
+      position: absolute; top: 6px; right: 7px; min-width: 14px; padding: 0 4.5px; border-radius: 7px;
+      background: #1f6a3b; color: #f2fff5; font-size: 10px; font-weight: 700; text-align: center; line-height: 14px;
+    }
+    #tab-hf-models .hf-count[hidden] { display: none; }
+    #tab-hf-models details.bench-rail-section > summary { cursor: pointer; list-style: none; }
+    #tab-hf-models details.bench-rail-section > summary::-webkit-details-marker { display: none; }
+    #tab-hf-models .hf-rail-path { overflow-wrap: anywhere; font-size: 10px; color: var(--bench-text); }
+    #tab-hf-models .hf-note { font-size: 10px; color: var(--bench-muted); line-height: 1.5; margin: 3px 0 0; }
+    #tab-hf-models .hf-note.error { color: #f66; }
+    #tab-hf-models a { color: #7ab4f5; }
+    #tab-hf-models a:hover { color: #a8cdfa; }
+
+    /* Search */
+    #tab-hf-models .hf-searchbar { display: flex; gap: 8px; align-items: stretch; margin-bottom: 9.5px; }
+    #tab-hf-models .hf-searchbar input { flex: 1; min-width: 0; height: 36px; font-size: 12.5px; padding: 0 11px; border-radius: 6px; }
+    #tab-hf-models .hf-searchbar button { height: 36px; min-width: 93.5px; font-size: 12px; border-radius: 6px; }
+    #tab-hf-models .hf-filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12.5px; }
+    #tab-hf-models .hf-filters select { width: auto; min-height: 25px; height: 25px; padding: 0 6px; font-size: 10px; }
+    #tab-hf-models .hf-chip {
+      min-height: 23.5px !important; padding: 3px 8.5px !important; border-radius: 11.5px !important; font-size: 10px;
+      background: transparent !important; color: var(--bench-muted) !important;
+    }
+    #tab-hf-models .hf-chip[aria-pressed="true"] { background: var(--bench-accent) !important; color: var(--bench-accent-text) !important; border-color: var(--bench-focus) !important; }
+    #tab-hf-models .hf-spacer { flex: 1; }
+
+    /* Discover layout: result list and detail side by side; each scrolls inside its own pane */
+    #tab-hf-models .hf-discover-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 12.5px; align-items: start; }
+    #tab-hf-models .hf-pane { min-width: 0; border: 1px solid var(--bench-border); border-radius: 7px; background: var(--bench-panel-bg); }
+    #tab-hf-models .hf-pane-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 11px; border-bottom: 1px solid var(--bench-border); }
+    #tab-hf-models .hf-scroll { max-height: calc(100vh - 285px); min-height: 281px; overflow-y: auto; padding: 6px; }
+    #tab-hf-models .hf-detail-pane { position: sticky; top: 6px; }
+    #tab-hf-models .hf-results { display: flex; flex-direction: column; gap: 4.5px; }
+    #tab-hf-models .hf-card {
+      display: block; width: 100%; height: 76px; min-height: 76px !important; overflow: hidden; text-align: left;
+      padding: 6px 9.5px !important; border-radius: 6px !important; flex: 0 0 auto;
+      background: var(--bench-card-bg) !important; border: 1px solid var(--bench-border); border-left: 3px solid transparent;
+    }
+    #tab-hf-models .hf-card:hover { border-color: var(--bench-focus); }
+    #tab-hf-models .hf-card.selected { border-color: var(--bench-focus); border-left-color: #35a85d; background: var(--bench-elevated-bg) !important; }
+    #tab-hf-models .hf-card-author { display: block; font-size: 10px; line-height: 1.25; color: var(--bench-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #tab-hf-models .hf-card-name { display: block; font-size: 12px; line-height: 1.3; font-weight: 700; color: var(--bench-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #tab-hf-models .hf-pills { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5.5px; }
+    #tab-hf-models .hf-card .hf-pills { flex-wrap: nowrap; overflow: hidden; gap: 3px; margin-top: 4px; }
+    #tab-hf-models .hf-card .hf-pill { flex: 0 0 auto; padding: 0 5.5px; font-size: 10px; line-height: 12.5px; }
+    #tab-hf-models .hf-pill {
+      display: inline-block; max-width: 100%; padding: 1px 6px; border-radius: 8px; font-size: 10px; line-height: 14px;
+      border: 1px solid var(--bench-border); color: var(--bench-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    #tab-hf-models .hf-pill.gguf { border-color: #2a6a4a; color: #6f6; }
+    #tab-hf-models .hf-pill.vision { border-color: #3a5a8a; color: #7ab4f5; }
+    #tab-hf-models .hf-pill.warn { border-color: #6a4a1a; color: #e0a060; }
+    #tab-hf-models .hf-stats { display: flex; flex-wrap: wrap; gap: 2.5px 11px; margin-top: 5.5px; font-size: 10px; color: var(--bench-muted); }
+    #tab-hf-models .hf-card .hf-stats { flex-wrap: nowrap; overflow: hidden; gap: 0 8.5px; margin-top: 4px; font-size: 10px; line-height: 11px; height: 11.5px; white-space: nowrap; }
+    #tab-hf-models .hf-card .hf-stats span { display: block; height: 11.5px; line-height: 11px; overflow: hidden; }
+    #tab-hf-models .hf-empty { padding: 28px 14px; text-align: center; color: var(--bench-muted); line-height: 1.6; }
+    #tab-hf-models .hf-empty strong { display: block; color: var(--bench-text); font-size: 12.5px; margin-bottom: 3px; }
+    #tab-hf-models .hf-skeleton { height: 64px; border-radius: 7px; background: linear-gradient(90deg, var(--bench-card-bg), var(--bench-elevated-bg), var(--bench-card-bg)); background-size: 200% 100%; animation: hf-shimmer 1.2s infinite; }
+    @keyframes hf-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+    /* Detail */
+    #tab-hf-models .hf-detail { padding: 12.5px; }
+    #tab-hf-models .hf-detail h3 { margin: 2px 0 0; font-size: 17px; color: var(--bench-text); overflow-wrap: anywhere; }
+    #tab-hf-models .hf-detail-links { display: flex; gap: 9.5px; margin: 4.5px 0 0; font-size: 10px; }
+    #tab-hf-models .hf-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(93.5px, 1fr)); gap: 6px; margin: 11px 0; }
+    #tab-hf-models .hf-fact { padding: 6px 8px; border: 1px solid var(--bench-border); border-radius: 6px; background: var(--bench-card-bg); min-width: 0; }
+    #tab-hf-models .hf-fact span { display: block; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--bench-muted); }
+    #tab-hf-models .hf-fact strong { display: block; font-size: 11px; color: var(--bench-text); overflow-wrap: anywhere; }
+    #tab-hf-models .hf-section-title { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin: 12.5px 0 4.5px; }
+    /* Every quant/file row is the same height; columns are fixed so size and Download line up. */
+    #tab-hf-models .hf-file {
+      display: grid; grid-template-columns: 87.5px minmax(0, 1fr) 53px 64px; column-gap: 8px; align-items: center;
+      height: 37.5px; box-sizing: border-box; padding: 0 8px; margin-bottom: 4px; overflow: hidden;
+      border: 1px solid var(--bench-border); border-radius: 6px; background: var(--bench-card-bg);
+    }
+    #tab-hf-models .hf-file.installed { border-color: #2a6a4a; }
+    #tab-hf-models .hf-quant { display: flex; flex-direction: column; justify-content: center; min-width: 0; font-weight: 800; font-size: 12px; line-height: 1.2; letter-spacing: -.01em; color: var(--bench-text); }
+    #tab-hf-models .hf-quant-text, #tab-hf-models .hf-file-name-text { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #tab-hf-models .hf-quant small { display: block; font-size: 9.5px !important; line-height: 1.2; font-weight: 500; color: var(--bench-muted); letter-spacing: 0; white-space: nowrap; }
+    #tab-hf-models .hf-file-name { display: flex; align-items: center; gap: 4.5px; min-width: 0; font-size: 10px; color: var(--bench-muted); }
+    #tab-hf-models .hf-file-name-text { flex: 1 1 auto; }
+    #tab-hf-models .hf-file-name .hf-pill { flex: 0 0 auto; padding: 0 5.5px; font-size: 10px; line-height: 12.5px; }
+    #tab-hf-models .hf-file-size { font-weight: 700; font-size: 11px; color: var(--bench-text); white-space: nowrap; text-align: right; }
+    #tab-hf-models .hf-file button { width: 64px; height: 22px; min-height: 22px; padding: 0; font-size: 10px; white-space: nowrap; }
+    /* HWUI-style tooltip for truncated names (one shared element, positioned by script) */
+    .hf-tip {
+      position: fixed; z-index: 10000; max-width: min(380px, calc(100vw - 24px)); box-sizing: border-box; padding: 5.5px 8px;
+      color: var(--model-msg-text, #cdd6e0); background: var(--config-box-bg, var(--bench-box, #242424));
+      border: 1px solid var(--config-box-border, var(--field-border, #3a4650)); border-radius: 4.5px;
+      box-shadow: 0 6px 22px rgba(0,0,0,.55); font-size: 10px; line-height: 1.4; overflow-wrap: anywhere;
+      opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(-3px);
+      transition: opacity .12s ease, transform .12s ease, visibility .12s;
+    }
+    .hf-tip.show { opacity: 1; visibility: visible; transform: translateY(0); }
+    #tab-hf-models .hf-quant-guide { margin-top: 9.5px; font-size: 10px; color: var(--bench-muted); }
+    #tab-hf-models .hf-quant-guide summary { cursor: pointer; color: var(--bench-text); }
+    #tab-hf-models .hf-check { display: flex; align-items: center; gap: 4.5px; font-size: 10px; color: var(--bench-muted); margin: 0; }
+    #tab-hf-models .hf-check input { width: auto; }
+
+    /* Downloads and Installed */
+    #tab-hf-models .hf-job { padding: 11px 12.5px; border: 1px solid var(--bench-border); border-radius: 7px; background: var(--bench-card-bg); margin-bottom: 8px; }
+    #tab-hf-models .hf-job-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 9.5px; }
+    #tab-hf-models .hf-job-title { min-width: 0; overflow-wrap: anywhere; }
+    #tab-hf-models .hf-job-title strong { display: block; color: var(--bench-text); }
+    #tab-hf-models .hf-job-title small { color: var(--bench-muted); }
+    #tab-hf-models .hf-job-actions { display: flex; gap: 4.5px; flex: 0 0 auto; }
+    #tab-hf-models .hf-progress { height: 8px; border-radius: 4px; background: var(--bench-input-bg); overflow: hidden; margin: 8px 0 4.5px; }
+    #tab-hf-models .hf-progress > div { height: 100%; background: #2a9a5a; width: 0; transition: width .3s; }
+    #tab-hf-models .hf-progress > div.err { background: #a33; }
+    #tab-hf-models .hf-progress > div.pulse { animation: hf-shimmer 1.2s infinite; background: linear-gradient(90deg,#2a9a5a,#48bd70,#2a9a5a); background-size: 200% 100%; }
+    #tab-hf-models .hf-status-line { display: flex; flex-wrap: wrap; gap: 3px 11px; font-size: 10px; color: var(--bench-muted); }
+    #tab-hf-models .hf-status-line .ok { color: #6f6; }
+    #tab-hf-models .hf-status-line .bad { color: #f66; }
+    #tab-hf-models .hf-folder { border: 1px solid var(--bench-border); border-radius: 7px; background: var(--bench-card-bg); margin-bottom: 8px; }
+    #tab-hf-models .hf-folder-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 11px; border-bottom: 1px solid var(--bench-border); }
+    #tab-hf-models .hf-folder-head strong { overflow-wrap: anywhere; }
+    #tab-hf-models .hf-folder-file { padding: 5.5px 11px; font-size: 11px; color: var(--bench-text); overflow-wrap: anywhere; border-top: 1px solid var(--bench-border); }
+    #tab-hf-models .hf-folder-file:first-of-type { border-top: 0; }
+
+    @media (max-width: 1250px) {
+      #tab-hf-models .hf-discover-grid { grid-template-columns: minmax(0, 1fr); }
+      #tab-hf-models .hf-scroll { max-height: 327.5px; min-height: 0; }
+      #tab-hf-models .hf-detail-pane { position: static; }
+    }
+    @media (max-width: 780px) {
+      #tab-hf-models .hf-searchbar { flex-direction: column; }
+      #tab-hf-models .hf-searchbar button { width: 100%; }
+      #tab-hf-models .hf-file { grid-template-columns: minmax(0, 1fr) 50px 62.5px; grid-template-areas: 'q s b' 'n n n'; height: 54.5px; row-gap: 3px; align-content: center; }
+      #tab-hf-models .hf-file .hf-quant { grid-area: q; }
+      #tab-hf-models .hf-file .hf-file-size { grid-area: s; }
+      #tab-hf-models .hf-file button { grid-area: b; width: 62.5px; }
+      #tab-hf-models .hf-file .hf-file-name { grid-area: n; }
+      #tab-hf-models .hf-job-head { flex-direction: column; }
+    }
+    /* Compact scale for the Bench-derived shell. Scoped to the HF workspace only: style.css's Bench
+       rules (and the surrounding Config page) are untouched. Geometry ~0.78x, type ~0.84x with a 10px floor. */
+    /* Inner navigation rail: identical sizing to Helcyon-Bench's rail (only the content area is compact).
+       Several Bench rail rules are scoped to #tab-helcyon-bench, so the same values are restated here. */
+    #tab-hf-models .bench-app-shell { grid-template-columns: 238px minmax(0, 1fr); border-radius: 12px; }
+    #tab-hf-models .bench-nav-rail { gap: 18px; padding: 20px 14px; }
+    #tab-hf-models .bench-brand { gap: 10px; padding: 0 4px 10px; }
+    #tab-hf-models .bench-brand-mark { width: 38px; height: 38px; flex: 0 0 38px; border-radius: 10px; font-size: 15px; }
+    #tab-hf-models .bench-brand strong { font-size: 15px; line-height: 1.5; }
+    #tab-hf-models .bench-nav-rail small { font-size: 11px !important; line-height: 1.5; }
+    #tab-hf-models .bench-rail-section { gap: 7px; padding-top: 14px; }
+    #tab-hf-models .bench-rail-section h4 { margin: 0 0 3px; font-size: 11px; }
+    #tab-hf-models .bench-view-tab { padding: 4px 10px; border-radius: 6px; }
+    #tab-hf-models .bench-view-tab span { font-size: 15px; font-weight: 400; line-height: 1.5; }
+    #tab-hf-models .bench-view-tab small { font-size: 11px !important; line-height: 1.5; }
+    #tab-hf-models .bench-nav-rail input { height: 40px; font-size: 15px; padding: 0 10px; border-radius: 6px; }
+    #tab-hf-models .bench-nav-rail button:not(.bench-view-tab) { font-size: 14px; min-height: 34px; padding: 7px 11px; border-radius: 6px; }
+    #tab-hf-models .hf-rail-path { font-size: 12px; }
+    #tab-hf-models .hf-count { top: 8px; right: 9px; min-width: 18px; padding: 0 6px; border-radius: 9px; font-size: 11px; line-height: 18px; }
+    #tab-hf-models .bench-workspace { padding: clamp(12px, 1.6vw, 22px); }
+    #tab-hf-models .bench-page-header { margin-bottom: 14px; }
+    #tab-hf-models .bench-eyebrow { font-size: 9.5px; }
+    #tab-hf-models .bench-page-header p { font-size: 11.5px; line-height: 1.45; }
+    #tab-hf-models .hf-pane-head strong, #tab-hf-models .hf-job-title strong, #tab-hf-models .hf-folder-head strong { font-size: 11.5px; }
+    #tab-hf-models .hf-job-title small, #tab-hf-models .hf-pane-head small { font-size: 10px !important; }
+    #tab-hf-models .hf-detail small, #tab-hf-models .hf-filters small { font-size: 10px !important; }
+    #tab-hf-models .bench-page-header button { min-height: 26px; font-size: 11px; }
     /* Shared Config section surface, matching Random Check-ins panels. */
     .config-box-surface {
       border: 1px solid var(--config-box-border, var(--field-border, #293238));
@@ -61,7 +270,7 @@
        their Config field surface tied to the live theme picker instead of
        freezing the initial background colour. Benchmark editors retain their
        separate styling. */
-    #config-page #container .config-tab-panel:not(#tab-helcyon-bench) .hwui-prompt-editor-editor {
+    #config-page #container .config-tab-panel:not(#tab-helcyon-bench):not(#tab-hf-models) .hwui-prompt-editor-editor {
       background-color: var(--field-bg, #111) !important;
       border-color: var(--field-border, #333) !important;
     }
@@ -69,34 +278,40 @@
     .config-box-surface > h4:first-child {
       margin-top: 0 !important;
     }
-    /* Random Check-ins — scoped presentation only; IDs and handlers stay intact. */
-    #tab-random-checkins { max-width: 1180px; background: var(--container-bg, #171717); }
-#tab-random-checkins .random-checkin-intro {
-  max-width: 980px; margin: 0 0 24px; color: var(--text-muted, #aeb8c5); line-height: 1.5;
-}
-    #tab-random-checkins .random-checkin-top-grid {
-      display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; margin-bottom: 24px;
+    /* Random Check-ins: same card vocabulary as Voice Forge (bordered config-box cards,
+       h4 card titles, compact 12px labels, muted 11px hints). Ids and handlers are untouched. */
+    #tab-random-checkins .random-checkin-intro {
+      padding: 10px 12px; margin: 0 0 16px; border: 1px solid var(--config-box-border, var(--field-border, #293238));
+      border-radius: 6px; background: var(--config-box-bg, var(--bench-box, #242424));
+      color: var(--text-muted, #aeb8c5); font-size: 12px; line-height: 1.5;
     }
-#tab-random-checkins .random-checkin-panel,
-#tab-random-checkins .random-checkin-quiet-panel {
-  border: 1px solid var(--config-box-border, var(--field-border, #293238)); border-radius: 10px; background: var(--config-box-bg, var(--bench-box, #242424));
-      box-shadow: inset 0 1px rgba(255,255,255,0.025); box-sizing: border-box;
+    #tab-random-checkins .random-checkin-profile-bar,
+    #tab-random-checkins .random-checkin-panel,
+    #tab-random-checkins .random-checkin-quiet-panel,
+    #tab-random-checkins .random-checkin-form-grid {
+      border: 1px solid var(--config-box-border, var(--field-border, #293238)); border-radius: 10px;
+      background: var(--config-box-bg, var(--bench-box, #242424)); box-shadow: inset 0 1px rgba(255,255,255,0.025);
+      box-sizing: border-box; padding: 16px 18px;
     }
-    #tab-random-checkins .random-checkin-panel { min-height: 116px; padding: 18px 20px; }
-#tab-random-checkins .random-checkin-panel h4,
-#tab-random-checkins .random-checkin-quiet-panel h4 {
-  margin: 0 0 5px; color: var(--model-msg-text, #eef2f5); font-size: 18px; font-weight: 650;
-}
+    #tab-random-checkins .random-checkin-top-grid,
+    #tab-random-checkins .random-checkin-notify-grid {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px;
+    }
+    #tab-random-checkins .random-checkin-panel h4,
+    #tab-random-checkins .random-checkin-quiet-panel h4,
+    #tab-random-checkins .random-checkin-card-title {
+      margin: 0 0 4px; color: #ddd; font-size: 15px; font-weight: 600;
+    }
+    #tab-random-checkins .random-checkin-card-title { grid-column: 1 / -1; margin: 0; }
     #tab-random-checkins .random-checkin-panel small,
     #tab-random-checkins .random-checkin-quiet-panel small,
     #tab-random-checkins .random-checkin-field small {
-  display: block; color: var(--text-muted, #9da9b7); font-size: 14px; line-height: 1.35; font-weight: 400;
+      display: block; color: #777; font-size: 11px; line-height: 1.4; font-weight: 400;
     }
-    #tab-random-checkins .random-checkin-enabled-row {
-      display: flex; align-items: center; justify-content: space-between; gap: 20px; height: 100%;
-    }
-    #tab-random-checkins .random-checkin-field { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
-    #tab-random-checkins .random-checkin-field > span { color: var(--model-msg-text, #eef2f5); font-size: 17px; font-weight: 600; }
+    #tab-random-checkins .random-checkin-enabled-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; height: 100%; }
+    #tab-random-checkins .random-checkin-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+    #tab-random-checkins .random-checkin-field > span { color: #ccc; font-size: 13px; font-weight: 600; }
+    #tab-random-checkins .random-checkin-form-grid label { color: #ccc; font-size: 13px; font-weight: 600; }
     #tab-random-checkins .random-checkin-info {
       position: relative; display: inline-flex; align-items: center; justify-content: center;
       width: 15px; height: 15px; margin-left: 4px; vertical-align: 1px;
@@ -122,46 +337,49 @@
       opacity: 1; visibility: visible; transform: translate(-50%, 0); pointer-events: auto;
     }
     #tab-random-checkins .random-checkin-form-grid {
-      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 26px 28px; margin-bottom: 24px;
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 18px; margin-bottom: 14px;
     }
     #tab-random-checkins .random-checkin-form-grid > label { margin: 0; }
     #tab-random-checkins .random-checkin-full { grid-column: 1 / -1; }
-    #tab-random-checkins .random-checkin-quiet-panel {
-      display: grid; grid-template-columns: minmax(220px, 1fr) 1px minmax(0, 2.15fr); gap: 28px; align-items: center; padding: 18px 24px; margin-bottom: 26px;
+    #tab-random-checkins #random-checkins-schedule-fields {
+      border: 1px solid var(--field-border, #333) !important; border-radius: 8px !important; padding: 12px 14px !important;
+      background: rgba(255,255,255,0.02);
     }
-    #tab-random-checkins .random-checkin-quiet-copy { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
-#tab-random-checkins .random-checkin-quiet-divider { width: 1px; height: 64px; background: var(--field-border, #293238); }
-    #tab-random-checkins .random-checkin-time-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+    #tab-random-checkins .random-checkin-quiet-panel {
+      display: grid; grid-template-columns: minmax(220px, 1fr) 1px minmax(0, 2fr); gap: 20px; align-items: center; margin-bottom: 14px;
+    }
+    #tab-random-checkins .random-checkin-quiet-copy { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    #tab-random-checkins .random-checkin-quiet-divider { width: 1px; height: 48px; background: var(--field-border, #293238); }
+    #tab-random-checkins .random-checkin-time-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
     #tab-random-checkins input:not([type="checkbox"]),
     #tab-random-checkins select,
     #tab-random-checkins textarea { width: 100%; box-sizing: border-box; }
-    #tab-random-checkins textarea { min-height: 112px; resize: vertical; }
-#tab-random-checkins .random-checkin-toggle { position: relative; display: inline-flex; flex: 0 0 auto; width: 68px; height: 36px; cursor: pointer; }
+    #tab-random-checkins textarea { min-height: 96px; resize: vertical; }
+    #tab-random-checkins .random-checkin-toggle { position: relative; display: inline-flex; flex: 0 0 auto; width: 48px; height: 26px; cursor: pointer; margin: 0; }
     #tab-random-checkins .random-checkin-toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-#tab-random-checkins .random-checkin-toggle-track { position: absolute; inset: 0; border-radius: 999px; background: var(--sidebar-button-hover, #303b45); transition: background .18s ease, box-shadow .18s ease; }
-#tab-random-checkins .random-checkin-toggle-track::after { content: ""; position: absolute; width: 28px; height: 28px; left: 4px; top: 4px; border-radius: 50%; background: var(--modal-text, #f6f7f8); box-shadow: 0 2px 6px rgba(0,0,0,.35); transition: transform .18s ease; }
-#tab-random-checkins .random-checkin-toggle input:checked + .random-checkin-toggle-track { background: var(--memory-tab-active-bg, #20b968); box-shadow: 0 0 0 2px color-mix(in srgb, var(--memory-tab-active-bg, #20b968) 20%, transparent); }
-#tab-random-checkins .random-checkin-toggle input:checked + .random-checkin-toggle-track::after { transform: translateX(32px); }
-#tab-random-checkins .random-checkin-toggle input:focus-visible + .random-checkin-toggle-track { outline: 2px solid var(--field-border-focus, #8fd9ad); outline-offset: 3px; }
-    #tab-random-checkins .random-checkin-notify-panel { min-height: 0; margin-bottom: 26px; }
+    #tab-random-checkins .random-checkin-toggle-track { position: absolute; inset: 0; border-radius: 999px; background: var(--sidebar-button-hover, #303b45); transition: background .18s ease, box-shadow .18s ease; }
+    #tab-random-checkins .random-checkin-toggle-track::after { content: ""; position: absolute; width: 20px; height: 20px; left: 3px; top: 3px; border-radius: 50%; background: var(--modal-text, #f6f7f8); box-shadow: 0 2px 6px rgba(0,0,0,.35); transition: transform .18s ease; }
+    #tab-random-checkins .random-checkin-toggle input:checked + .random-checkin-toggle-track { background: var(--memory-tab-active-bg, #20b968); box-shadow: 0 0 0 2px color-mix(in srgb, var(--memory-tab-active-bg, #20b968) 20%, transparent); }
+    #tab-random-checkins .random-checkin-toggle input:checked + .random-checkin-toggle-track::after { transform: translateX(22px); }
+    #tab-random-checkins .random-checkin-toggle input:focus-visible + .random-checkin-toggle-track { outline: 2px solid var(--field-border-focus, #8fd9ad); outline-offset: 3px; }
+    #tab-random-checkins .random-checkin-notify-panel { min-height: 0; }
     #tab-random-checkins .random-checkin-mobile-devices { display: block; margin-top: 6px; }
-    #tab-random-checkins .random-checkin-mobile-actions { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+    #tab-random-checkins .random-checkin-mobile-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
     #tab-random-checkins .random-checkin-profile-bar {
-      display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 18px; padding: 12px 16px;
-      border: 1px solid var(--field-border, #293238); border-radius: 10px; box-sizing: border-box;
-      background: linear-gradient(145deg, var(--sidebar-bg, #171d20), var(--container-bg, #13181b));
+      display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 14px; padding: 12px 18px;
     }
-    #tab-random-checkins .random-checkin-profile-bar label { color: var(--model-msg-text, #eef2f5); font-size: 15px; font-weight: 600; }
+    #tab-random-checkins .random-checkin-profile-bar label { margin: 0; color: #ccc; font-size: 13px; font-weight: 600; }
     #tab-random-checkins .random-checkin-profile-bar select { flex: 1 1 200px; width: auto; min-width: 0; }
-    #tab-random-checkins .random-checkin-profile-btn { padding: 7px 14px; border-radius: 7px; font-size: 14px; font-weight: 600; cursor: pointer; }
-    #tab-random-checkins .random-checkin-profile-save { background: var(--memory-tab-active-bg, #20a85f); border-color: var(--field-border-focus, #31c977); color: var(--new-chat-btn-text, #fff); }
-    #tab-random-checkins .random-checkin-profile-delete { background: #5a1f1f; border-color: #8a2424; color: #fff; }
+    #tab-random-checkins .random-checkin-profile-btn { padding: 7px 11px; border-radius: 5px; font-size: 12px; cursor: pointer; }
+    #tab-random-checkins .random-checkin-profile-save { background: #1a3a2a; border-color: #2a6a4a; color: #fff; }
+    #tab-random-checkins .random-checkin-profile-delete { background: #3a1a1a; border-color: #6a2a2a; color: #e88; }
     #tab-random-checkins .random-checkin-profile-btn:disabled { opacity: .45; cursor: not-allowed; }
-    #tab-random-checkins .random-checkin-actions { display: flex; align-items: center; gap: 12px; }
-#tab-random-checkins .random-checkin-save { padding: 10px 18px; border-radius: 7px; background: var(--memory-tab-active-bg, #20a85f); border-color: var(--field-border-focus, #31c977); color: var(--new-chat-btn-text, #fff); font-size: 15px; font-weight: 600; }
-#tab-random-checkins .random-checkin-save:hover { background: var(--memory-tab-active-bg, #26bd6d); }
+    #tab-random-checkins .random-checkin-actions { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
+    #tab-random-checkins .random-checkin-save { padding: 8px 16px; border-radius: 5px; background: #1a3a2a; border-color: #2a6a4a; color: #fff; font-size: 13px; font-weight: 600; }
+    #tab-random-checkins .random-checkin-save:hover { background: #20472f; }
     @media (max-width: 760px) {
       #tab-random-checkins .random-checkin-top-grid,
+      #tab-random-checkins .random-checkin-notify-grid,
       #tab-random-checkins .random-checkin-form-grid { grid-template-columns: 1fr; }
       #tab-random-checkins .random-checkin-full { grid-column: auto; }
       #tab-random-checkins .random-checkin-quiet-panel { grid-template-columns: 1fr; gap: 14px; }
@@ -252,7 +470,7 @@
     }
     #advanced-settings-overlay {
       position: fixed;
-      inset: 60px 0 0 260px;
+      inset: 60px 0 0 330px;
       display: none;
       align-items: flex-start;
       justify-content: center;
@@ -351,6 +569,140 @@
     .advanced-settings-card hr {
       border-color: rgba(255,255,255,0.08) !important;
     }
+    /* ── Advanced Settings: Bench-style rail + workspace ─────────────── */
+    .adv-shell {
+      display: grid;
+      grid-template-columns: 244px minmax(0, 1fr);
+      border: 1px solid var(--bench-border, #293238);
+      border-radius: 12px;
+      overflow: hidden;
+      background: var(--bench-page-bg, #141414);
+      min-height: 420px;
+    }
+    .adv-rail {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 14px 12px;
+      background: var(--bench-panel-bg, #1a1a1a);
+      border-right: 1px solid var(--bench-border, #293238);
+    }
+    .adv-content { min-width: 0; padding: clamp(14px, 2vw, 26px); }
+    #config-page #advanced-settings-modal .adv-rail button.adv-tab {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 2px;
+      width: 100%;
+      margin: 0 !important;
+      height: auto !important;
+      min-height: 50px !important;
+      padding: 9px 12px !important;
+      text-align: left;
+      background: rgba(255,255,255,0.035);
+      border: 1px solid var(--bench-border, #293238);
+      border-radius: 8px !important;
+      color: var(--bench-muted, #aaa);
+      cursor: pointer;
+      transition: background .15s ease, border-color .15s ease, color .15s ease;
+    }
+    #config-page #advanced-settings-modal .adv-rail button.adv-tab span {
+      font-size: 13px; font-weight: 600; line-height: 1.25; color: var(--bench-text, #ddd);
+    }
+    #config-page #advanced-settings-modal .adv-rail button.adv-tab small {
+      font-size: 11px !important; line-height: 1.3; font-weight: 400; color: var(--bench-muted, #8f9baa); opacity: 1;
+    }
+    #config-page #advanced-settings-modal .adv-rail button.adv-tab:hover {
+      background: var(--sidebar-button-hover, rgba(255,255,255,0.08));
+      border-color: var(--bench-focus, #3d4a57);
+    }
+    #config-page #advanced-settings-modal .adv-rail button.adv-tab:focus-visible {
+      outline: 2px solid var(--bench-focus, #2a6a4a); outline-offset: 1px;
+    }
+    #config-page #advanced-settings-modal .adv-rail button.adv-tab.active,
+    #config-page #advanced-settings-modal .adv-rail button.adv-tab.active:hover {
+      background: var(--bench-accent, #1a3a2a);
+      border-color: var(--bench-focus, #2a6a4a);
+      box-shadow: 0 1px 6px rgba(0,0,0,0.35);
+    }
+    #config-page #advanced-settings-modal .adv-rail button.adv-tab.active span { color: var(--bench-accent-text, #fff); }
+    #config-page #advanced-settings-modal .adv-rail button.adv-tab.active small { color: var(--bench-accent-text, #fff); opacity: .8; }
+    .adv-page-head { margin-bottom: 16px; }
+    .adv-page-head h2 { margin: 2px 0 4px; font-size: 24px; line-height: 1.15; color: var(--bench-text, #fff); }
+    .adv-page-head p { margin: 0; max-width: 760px; font-size: 12px; color: var(--bench-muted, #8f9baa); line-height: 1.5; }
+    #advanced-settings-modal .advanced-settings-card {
+      background: var(--bench-card-bg, rgba(255,255,255,0.025));
+      border-color: var(--bench-border, rgba(255,255,255,0.08));
+      border-radius: 9px;
+      padding: 14px;
+    }
+    @media (max-width: 860px) {
+      .adv-shell { grid-template-columns: minmax(0, 1fr); }
+      .adv-rail { flex-direction: row; gap: 8px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--bench-border, #293238); padding: 10px; }
+      #config-page #advanced-settings-modal .adv-rail button.adv-tab { flex: 0 0 auto; width: auto; min-height: 36px !important; padding: 6px 12px !important; white-space: nowrap; }
+      #config-page #advanced-settings-modal .adv-rail button.adv-tab small { display: none; }
+    }
+    .adv-panel { display: none; }
+    .adv-panel.active { display: block; }
+    .adv-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      align-items: start;
+    }
+    .adv-grid.adv-grid-providers { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
+    .adv-grid.adv-grid-narrow { grid-template-columns: minmax(0, 640px); }
+    .adv-stack { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+    .adv-backend-bar { margin-bottom: 12px; }
+    .adv-help { font-size: 11px; color: #7d8794; line-height: 1.45; margin: -4px 0 10px; }
+    .adv-help code, .provider-hint code { background: #222; padding: 0 3px; border-radius: 2px; }
+    .adv-muted { font-size: 11px; color: #6b7480; font-weight: normal; }
+    .adv-row { display: flex; gap: 6px; align-items: center; margin-bottom: 6px; }
+    .adv-row > input, .adv-row > select { flex: 1; min-width: 0; }
+    .adv-actions { margin-top: 4px; margin-bottom: 0; }
+    .adv-actions > .adv-btn { flex: 1; }
+    .adv-status { font-size: 12px; color: #aaa; min-height: 16px; margin: 4px 0 8px; line-height: 1.4; }
+    .adv-subtle-title { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #666; margin: 10px 0 6px; }
+    .adv-check { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #ccc; margin: 6px 0; cursor: pointer; }
+    .adv-check input { width: 15px; height: 15px; cursor: pointer; }
+    #advanced-settings-modal .advanced-settings-card label { font-size: 11px; color: #aaa; display: block; }
+    #advanced-settings-modal .advanced-settings-card label.adv-check { display: flex; font-size: 12px; color: #ccc; }
+    #advanced-settings-modal .advanced-settings-card input[type="text"],
+    #advanced-settings-modal .advanced-settings-card input[type="password"],
+    #advanced-settings-modal .advanced-settings-card input[type="number"] {
+      background: #111; border: 1px solid #333; color: #ccc; border-radius: 4px; padding: 4px 6px; font-size: 12px;
+    }
+    #provider-card input[type="text"], #provider-card input[type="password"] { width: 100%; box-sizing: border-box; margin-bottom: 4px; }
+    .adv-row > input[type="text"], .adv-row > input[type="password"] { margin-bottom: 0 !important; }
+    #config-page #advanced-settings-modal .adv-btn {
+      background: #1a2a22; border: 1px solid #2a6a4a; color: #ddd; cursor: pointer; flex: 0 0 auto;
+    }
+    #config-page #advanced-settings-modal .adv-btn.info { background: #1a2a3a; border-color: #2a4a6a; color: #7ab4f5; }
+    #config-page #advanced-settings-modal .adv-btn.primary { background: #1a3a2a; border-color: #2a6a4a; color: #6f6; font-weight: 700; }
+    #config-page #advanced-settings-modal .adv-btn.danger { background: #2a1a1a; border-color: #6a2a2a; color: #e88; }
+    .provider-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-bottom: 10px; }
+    .provider-tile {
+      position: relative; text-align: left; padding: 10px 12px; border-radius: 8px; cursor: pointer;
+      background: #151515; border: 1px solid #2d3238; color: #ccc; outline: none; min-width: 0;
+    }
+    .provider-tile:hover { border-color: #3d4a57; background: #1a1d20; }
+    .provider-tile:focus-visible { box-shadow: 0 0 0 2px #2a6a4a; }
+    .provider-tile.selected { border-color: #2a6a4a; background: rgba(42,106,74,0.16); }
+    .provider-tile-name { font-weight: 600; font-size: 13px; color: #e4e8ec; overflow-wrap: anywhere; }
+    .provider-tile-sub { font-size: 11px; color: #7d8794; margin-top: 2px; line-height: 1.35; }
+    .provider-tile-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+    .provider-pill { font-size: 10px; padding: 1px 7px; border-radius: 10px; border: 1px solid #333; color: #8a949a; }
+    .provider-pill.live { border-color: #2a6a4a; color: #6f6; background: rgba(42,106,74,0.2); }
+    .provider-pill.warn { border-color: #6a4a1a; color: #e0a060; }
+    .provider-hint { margin: 0 0 8px; }
+    .provider-warning { font-size: 11px; color: #e0a060; margin-bottom: 6px; line-height: 1.4; }
+    .provider-caps { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+    .provider-cap { font-size: 10px; padding: 2px 7px; border-radius: 10px; border: 1px solid #333; color: #666; background: #151515; }
+    .provider-cap.on { border-color: #2a6a4a; color: #6f6; background: #1a2a22; }
+    @media (max-width: 1024px) {
+      .adv-grid, .adv-grid.adv-grid-providers { grid-template-columns: minmax(0, 1fr); }
+    }
     #advanced-settings-btn {
       width: 100%;
       margin-top: 10px;
@@ -363,12 +715,12 @@
     }
     @media (max-width: 1400px) {
       #advanced-settings-overlay {
-        left: 220px;
+        left: 290px;
       }
     }
     @media (max-width: 1024px) {
       #advanced-settings-overlay {
-        left: 180px;
+        left: 240px;
       }
       .advanced-settings-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -389,7 +741,7 @@
     }
     #sampling-settings-overlay {
       position: fixed;
-      inset: 60px 0 0 260px;
+      inset: 60px 0 0 330px;
       display: none;
       align-items: flex-start;
       justify-content: center;
@@ -654,9 +1006,9 @@
       background: #1f5a3a;
       color: #fff;
     }
-    @media (max-width: 1400px) { #sampling-settings-overlay { left: 220px; } }
+    @media (max-width: 1400px) { #sampling-settings-overlay { left: 290px; } }
     @media (max-width: 1024px) {
-      #sampling-settings-overlay { left: 180px; }
+      #sampling-settings-overlay { left: 240px; }
       #sampling-settings-modal { padding: 12px; }
       .sampling-control-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
@@ -852,8 +1204,8 @@
     /* ---- Config control sizing ----
        Single-line tab controls and action buttons share the compact sidebar
        height; textareas keep their content-appropriate heights. */
-    #config-page #container .config-tab-panel:not(#tab-helcyon-bench) input:not([type="checkbox"]):not([type="range"]):not([type="hidden"]),
-    #config-page #container .config-tab-panel:not(#tab-helcyon-bench) select {
+    #config-page #container .config-tab-panel:not(#tab-helcyon-bench):not(#tab-hf-models) input:not([type="checkbox"]):not([type="range"]):not([type="hidden"]),
+    #config-page #container .config-tab-panel:not(#tab-helcyon-bench):not(#tab-hf-models) select {
       box-sizing: border-box;
       height: 34px;
       min-height: 34px;
@@ -863,7 +1215,7 @@
       padding-bottom: 0;
       line-height: 1.2;
     }
-    #config-page #container .config-tab-panel:not(#tab-helcyon-bench) button:not(.config-tab) {
+    #config-page #container .config-tab-panel:not(#tab-helcyon-bench):not(#tab-hf-models) button:not(.config-tab) {
       box-sizing: border-box;
       height: 30px;
       min-height: 30px;
@@ -883,7 +1235,7 @@
       font-size: 12px !important;
       line-height: 1.2 !important;
     }
-    #config-page #container .config-tab-panel:not(#tab-helcyon-bench) input[type="file"] {
+    #config-page #container .config-tab-panel:not(#tab-helcyon-bench):not(#tab-hf-models) input[type="file"] {
       padding-left: 8px;
       padding-right: 8px;
       font-size: 14px;
@@ -1019,15 +1371,15 @@
 
     <!-- Model selector — ported from index.html so config matches it. Keep the
          model first, with the backend indicator immediately to its right. -->
-    <div style="position:fixed; top:72px; left:286px; z-index:999; display:flex; align-items:center; gap:8px;">
+    <div style="position:fixed; top:72px; left:calc(var(--chat-sidebar-width, 330px) + 26px); z-index:999; display:flex; align-items:center; gap:8px;">
       <button id="model-display" onclick="toggleModelPicker()" title="Switch model" style="
         background: rgba(74, 106, 138, 0.18); border: 1px solid rgba(74, 106, 138, 0.75);
-        border-radius: 20px; padding: 7px 16px 7px 14px; font-size: 14px; color: #e7edf4;
+        border-radius: 20px; padding: 7px 16px 7px 14px; font-size: 14px; color: #fff0cf;
         cursor: pointer; display: flex; align-items: center; gap: 7px; white-space: nowrap;
         max-width: 280px; transition: border-color 0.15s, background 0.15s;
         position: relative; overflow: hidden;
-      " onmouseover="this.style.borderColor='#4a6a8a'; this.style.background='rgba(74,106,138,0.28)'" onmouseout="this.style.borderColor='rgba(74,106,138,0.75)'; this.style.background='rgba(74,106,138,0.18)'">
-        <span id="model-load-progress" aria-hidden="true" style="position:absolute; inset:0 auto 0 0; width:0; background:rgba(74,106,138,0.35); pointer-events:none;"></span>
+      " onmouseover="this.style.borderColor='#4a6a8a'; this.style.background='rgba(74,106,138,0.28)'" onmouseout="this.style.borderColor='rgba(255,175,55,0.55)'; this.style.background='rgba(210,130,20,0.18)'">
+        <span id="model-load-progress" aria-hidden="true" style="position:absolute; inset:0 auto 0 0; width:0; background:rgba(235,145,25,0.42); pointer-events:none;"></span>
         <span id="model-display-name" style="position:relative; z-index:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Loading...</span>
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="position:relative; z-index:1; flex-shrink:0; opacity:0.45;"><polyline points="6 9 12 15 18 9"></polyline></svg>
       </button>
@@ -1048,7 +1400,7 @@
     </div>
 
     <!-- Model Picker Dropdown -->
-    <div id="model-picker" style="display: none; position: fixed; top: 110px; left: 286px;
+    <div id="model-picker" style="display: none; position: fixed; top: 110px; left: calc(var(--chat-sidebar-width, 330px) + 26px);
       background: var(--modal-bg, #1a1f2a); border: 1px solid var(--modal-border, #2d394b);
       border-radius: 10px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); z-index: 2000; width: 220px; overflow: hidden;">
       <div id="model-picker-list" style="padding: 6px 0; overflow-y: auto; max-height: 70vh;"></div>
@@ -1067,6 +1419,15 @@
     <div id="sampling-sidebar">
       <button id="sampling-settings-btn" type="button" onclick="openSamplingSettings()" aria-haspopup="dialog" aria-controls="sampling-settings-overlay">Sampling Settings</button>
       <button id="advanced-settings-btn" type="button" onclick="openAdvancedSettings()" aria-haspopup="dialog" aria-controls="advanced-settings-overlay">Advanced Settings</button>
+      <label class="sampling-memory-toggle" for="auto-memory-enabled">
+        <input type="checkbox" id="auto-memory-enabled">
+        <span>Automatic local memory</span>
+      </label>
+      <label class="sampling-memory-toggle" for="message-reactions-enabled">
+        <input type="checkbox" id="message-reactions-enabled" onchange="saveMessageReactionsSetting()" checked>
+        <span>Message reactions</span>
+      </label>
+      <button id="save-auto-memory-btn" type="button" onclick="saveAutoMemorySetting()">💾 Save Memory Setting</button>
     </div>
 
     <div id="sampling-settings-overlay" aria-hidden="true">
@@ -1200,13 +1561,7 @@
               <input id="sampling-preset-name" type="text" placeholder="Preset name..." oninput="syncSamplingUpdateBtn()" aria-label="Sampling preset name">
               <div class="sampling-preset-action-row">
                 <button id="update-sampling-preset-btn" type="button" onclick="saveOrUpdateSamplingPreset()">💾 Save Preset</button>
-                <div class="sampling-memory-save-group">
-                  <label class="sampling-memory-save-toggle" for="auto-memory-enabled">
-                    <input type="checkbox" id="auto-memory-enabled">
-                    <span>Automatic local memory</span>
-                  </label>
-                  <button id="saveSettingsBtn" type="button">💾 Save &amp; Apply</button>
-                </div>
+                <button id="saveSettingsBtn" type="button">💾 Save &amp; Apply</button>
               </div>
             </div>
           </div>
@@ -1224,15 +1579,101 @@
           <button class="advanced-settings-close" type="button" onclick="closeAdvancedSettings()" aria-label="Close Advanced Settings">&times;</button>
         </div>
 
-        <div class="advanced-settings-grid">
-          <div class="advanced-settings-column">
-          <section class="advanced-settings-card">
-            <h3>&#9729;&#65039; Cloud Backend</h3>
+        <div class="adv-shell">
+        <nav class="adv-rail" id="adv-tabs" role="tablist" aria-label="Advanced settings sections">
+          <button type="button" role="tab" class="adv-tab active" data-adv-tab="runtime" aria-selected="true" onclick="advSwitchTab('runtime')"><span>&#128421;&#65039; Runtime</span><small>Built-in llama.cpp</small></button>
+          <button type="button" role="tab" class="adv-tab" data-adv-tab="providers" aria-selected="false" onclick="advSwitchTab('providers')"><span>&#128268; Providers</span><small>Backends &amp; cloud APIs</small></button>
+          <button type="button" role="tab" class="adv-tab" data-adv-tab="voice" aria-selected="false" onclick="advSwitchTab('voice')"><span>&#127908; Voice</span><small>Text-to-speech</small></button>
+          <button type="button" role="tab" class="adv-tab" data-adv-tab="search" aria-selected="false" onclick="advSwitchTab('search')"><span>&#128269; Web Search</span><small>Brave Search key</small></button>
+          <button type="button" role="tab" class="adv-tab" data-adv-tab="vision" aria-selected="false" onclick="advSwitchTab('vision')"><span>&#128444;&#65039; LoRA / Vision</span><small>Adapters &amp; projector</small></button>
+          <button type="button" role="tab" class="adv-tab" data-adv-tab="advanced" aria-selected="false" onclick="advSwitchTab('advanced')"><span>&#9881;&#65039; Advanced</span><small>Images, presets, reset</small></button>
+        </nav>
+        <div class="adv-content">
+
+        <!-- RUNTIME: built-in llama.cpp -->
+        <div class="adv-panel active" id="adv-panel-runtime" role="tabpanel">
+          <header class="adv-page-head"><span class="bench-eyebrow">Settings</span><h2>Runtime</h2><p>The built-in llama.cpp server: executable, models folder and launch arguments. This is the default engine.</p></header>
+          <div class="adv-grid">
+            <section class="advanced-settings-card">
+              <h3>&#128421;&#65039; Built-in llama.cpp</h3>
+              <div class="adv-help">The default engine. HWUI launches and manages this server itself.</div>
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Server Executable Path</label>
+            <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">
+              <input id="llama-exe" type="text" placeholder="C:\path\to\llama-server.exe" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
+              <button onclick="browseFile('llama-exe')" title="Browse for file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">&#128193;</button>
+            </div>
+
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Models Folder</label>
+            <div style="display:flex; align-items:center; gap:6px; margin-bottom:12px;">
+              <input id="llama-models-dir" type="text" placeholder="C:\path\to\models" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
+              <button onclick="browseFolder('llama-models-dir')" title="Browse for folder" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">&#128193;</button>
+            </div>
+
+            </section>
+            <section class="advanced-settings-card">
+              <h3>Launch &amp; model settings</h3>
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:6px; font-weight:600;">Launch Arguments</label>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px 10px; margin-bottom:10px;">
+              <div>
+                <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">GPU Layers</label>
+                <input id="llama-gpu-layers" type="number" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
+              </div>
+              <div>
+                <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Context Size</label>
+                <input id="llama-ctx-size" type="number" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
+              </div>
+              <div style="grid-column:1 / -1;">
+                <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Chat Template</label>
+                <select id="llama-chat-template" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
+                  <option value="chatml">ChatML - Nemo/ChatML fine-tunes, Llama 3.2-3B</option>
+                  <option value="llama3">Llama 3 - Meta Llama 3 / 3.1 / 3.3 / 3.2-8B+</option>
+                  <option value="llama2">Llama 2 - legacy [INST] format</option>
+                  <option value="gemma">Gemma - Google Gemma 2 / 3</option>
+                  <option value="qwen2">Qwen 2 / 3 - Qwen2.5, QwQ, Qwen3</option>
+                  <option value="mistral">Mistral - Mistral v0.1 / Mixtral</option>
+                  <option value="phi3">Phi-3 / Phi-4 - Microsoft Phi-3/4</option>
+                  <option value="zephyr">Zephyr - HF Zephyr / ORPO fine-tunes</option>
+                  <option value="deepseek2">DeepSeek - DeepSeek V2 / V3 / R1</option>
+                  <option value="command-r">Command R - Cohere Command R/R+</option>
+                  <option value="openchat">OpenChat - OpenChat 3.5 / 3.6</option>
+                  <option value="vicuna">Vicuna - Vicuna / WizardLM</option>
+                  <option value="jinja">Native GGUF/Jinja - Ministral 3, Gemma, model metadata</option>
+                </select>
+              </div>
+              <div style="grid-column:1 / -1;">
+                <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Ministral Template</label>
+                <select id="llama-ministral-template-mode" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
+                  <option value="native">Native template - current behaviour</option>
+                  <option value="clean">Clean template - text-only [SYSTEM_PROMPT]/[INST]</option>
+                </select>
+              </div>
+              <label style="grid-column:1 / -1; display:flex; align-items:center; gap:8px; font-size:11px; color:#aaa; cursor:pointer;" title="Allow reasoning/thinking for models that support it. This can increase time to first token.">
+                <input type="checkbox" id="llama-reasoning-enabled" style="width:14px; height:14px; margin:0; cursor:pointer;">
+                Reasoning / Thinking
+              </label>
+            </div>
+            <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:#aaa; margin-bottom:10px; cursor:pointer;">
+              <input type="checkbox" id="llama-show-console" style="width:14px; height:14px; cursor:pointer;">
+              Show llama.cpp console window
+            </label>
+            <div id="llama-config-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:16px;"></div>
+            <button onclick="saveLlamaConfig()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:6px;">&#128190; Save Llama Config</button>
+            </section>
+          </div>
+        </div>
+
+        <!-- PROVIDERS: active backend + external inference providers + cloud APIs -->
+        <div class="adv-panel" id="adv-panel-providers" role="tabpanel">
+          <header class="adv-page-head"><span class="bench-eyebrow">Settings</span><h2>Providers</h2><p>Choose where chat requests go, and configure external inference servers or cloud APIs.</p></header>
+          <section class="advanced-settings-card adv-backend-bar">
+            <h3>Active backend</h3>
+            <div class="adv-help">Choose where chat requests are sent. Built-in llama.cpp is the default; Local returns to it.</div>
             <label style="font-size:11px; color:#aaa; display:block; margin-bottom:6px;">Backend Mode</label>
             <div style="display:flex; gap:0; margin-bottom:10px; border:1px solid #333; border-radius:4px; overflow:hidden;">
               <button id="mode-local-btn" onclick="selectLocalMode()" style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#1a3a2a; color:#6f6; font-weight:bold;">&#128421;&#65039; Local</button>
               <button id="mode-openai-btn" onclick="setBackendMode('openai')" style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#111; color:#888;">&#9729;&#65039; OpenAI</button>
               <button id="mode-anthropic-btn" onclick="setBackendMode('anthropic')" style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#111; color:#888;">&#129504; Anthropic</button>
+              <button id="mode-provider-btn" onclick="selectProviderMode()" title="Use the Inference Provider configured below (LM Studio, Ollama, KoboldCpp, ...)" style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#111; color:#888;">&#128268; Provider</button>
             </div>
             <button id="cloud-connect-btn" onclick="onCloudConnectClick()" style="width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; font-weight:bold; margin-bottom:10px; background:#1a3a2a; border:1px solid #2a6a4a; color:white;">&#127760; Connect</button>
 
@@ -1248,6 +1689,63 @@
               </div>
             </div>
 
+          </section>
+          <div class="adv-grid adv-grid-providers">
+            <section class="advanced-settings-card" id="provider-card">
+              <h3>&#128268; Inference providers</h3>
+              <div class="adv-help">Local or self-hosted servers. Keys are kept in <code>secrets.local.json</code>, never in settings.json.</div>
+              <div id="provider-tiles" class="provider-tiles" role="radiogroup" aria-label="Inference provider"></div>
+              <select id="provider-select" onchange="providerOnSelect()" hidden></select>
+              <div id="provider-hint" class="adv-help provider-hint"></div>
+
+              <label for="provider-base-url">Base URL</label>
+              <input id="provider-base-url" type="text" oninput="providerUrlChanged()">
+              <div id="provider-remote-warning" class="provider-warning" style="display:none;">&#9888;&#65039; This address is not on your machine or local network. Your messages will be sent to that service.</div>
+
+              <div id="provider-key-row">
+                <label for="provider-api-key">API key <span id="provider-key-hint" class="adv-muted"></span></label>
+                <div class="adv-row">
+                  <input id="provider-api-key" type="password" autocomplete="off">
+                  <button type="button" id="provider-clear-key" class="adv-btn danger" onclick="providerClearKey()" style="display:none;">Clear</button>
+                </div>
+              </div>
+
+              <label for="provider-model">Model</label>
+              <div class="adv-row">
+                <input id="provider-model" list="provider-model-list" type="text" placeholder="Type a model id, or fetch the list">
+                <datalist id="provider-model-list"></datalist>
+                <button type="button" class="adv-btn info" onclick="providerFetchModels()" title="List models from this server">Fetch models</button>
+              </div>
+
+              <div id="provider-context-row">
+                <label for="provider-context">Context length</label>
+                <div class="adv-row">
+                  <input id="provider-context" type="number" min="0" step="1024" placeholder="auto" style="max-width:130px;">
+                  <span id="provider-context-hint" class="adv-muted">0 = auto-detect</span>
+                </div>
+              </div>
+
+              <label id="provider-vision-row" class="adv-check">
+                <input id="provider-vision" type="checkbox">
+                <span>Model can read images</span>
+              </label>
+              <label class="adv-check">
+                <input id="provider-persist" type="checkbox">
+                <span>Keep using this provider after restart</span>
+              </label>
+
+              <div class="adv-subtle-title">Capabilities</div>
+              <div id="provider-caps" class="provider-caps"></div>
+              <div id="provider-status" class="adv-status"></div>
+              <div class="adv-row adv-actions">
+                <button type="button" class="adv-btn info" onclick="providerTest()">Test connection</button>
+                <button type="button" class="adv-btn" onclick="providerSave(false)">Save</button>
+                <button type="button" class="adv-btn primary" onclick="providerSave(true)">Save &amp; use</button>
+              </div>
+            </section>
+            <section class="advanced-settings-card adv-cloud-card">
+              <h3>&#9729;&#65039; Cloud APIs</h3>
+              <div class="adv-help">OpenAI-compatible and Anthropic cloud services. Select OpenAI or Anthropic above, then press Connect to enable them.</div>
             <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">OpenAI-Compatible Endpoint</label>
             <input id="openai-base-url" type="text" placeholder="https://api.openai.com/v1" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:2px;">
             <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Base URL up to <code style="background:#222; padding:0 3px; border-radius:2px;">/v1</code> - leave default for OpenAI. Examples: <code style="background:#222; padding:0 3px; border-radius:2px;">https://api.anthropic.com/v1</code>, <code style="background:#222; padding:0 3px; border-radius:2px;">https://api.x.ai/v1</code>, <code style="background:#222; padding:0 3px; border-radius:2px;">https://openrouter.ai/api/v1</code></div>
@@ -1298,13 +1796,16 @@
             <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Shows supported Claude or local llama.cpp reasoning in the same collapsible panel above each reply. The budget and temperature notes apply only to Anthropic: budget must be &gt;= 1024 and below max-tokens; temperature is ignored while Claude thinking is on.</div>
             <div id="anthropic-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
             <button onclick="saveAnthropicSettings()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">&#128190; Save Anthropic Settings</button>
-          </section>
-
+            </section>
           </div>
+        </div>
 
-          <div class="advanced-settings-column">
-          <section class="advanced-settings-card">
-            <h3>TTS Engine</h3>
+        <!-- VOICE -->
+        <div class="adv-panel" id="adv-panel-voice" role="tabpanel">
+          <header class="adv-page-head"><span class="bench-eyebrow">Settings</span><h2>Voice</h2><p>Text-to-speech engine and its quantisation.</p></header>
+          <div class="adv-grid adv-grid-narrow">
+            <section class="advanced-settings-card">
+              <h3>&#127908; TTS engine</h3>
             <label>Engine:</label>
             <select id="tts-engine-select" onchange="updateTTSEngineStatus(this.value)" style="width:100%; margin-bottom:8px;">
               <option value="f5">F5-TTS</option>
@@ -1335,10 +1836,16 @@
             </div>
             <div id="tts-engine-status" style="font-size:12px; color:#aaa; margin-bottom:10px;"></div>
             <button id="saveTTSEngineBtn" style="background-color:#1f3a5a; border-color:#245080; color:white; width:100%;">&#128190; Save TTS Engine</button>
-          </section>
+            </section>
+          </div>
+        </div>
 
-          <section class="advanced-settings-card">
-            <h3>Web Search</h3>
+        <!-- WEB SEARCH -->
+        <div class="adv-panel" id="adv-panel-search" role="tabpanel">
+          <header class="adv-page-head"><span class="bench-eyebrow">Settings</span><h2>Web Search</h2><p>The Brave Search API key used for in-chat web searches.</p></header>
+          <div class="adv-grid adv-grid-narrow">
+            <section class="advanced-settings-card">
+              <h3>&#128269; Web search</h3>
             <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">
               Brave Search API Key
               <span style="color:#666; font-weight:normal;">- <a href="https://api.search.brave.com" target="_blank" style="color:#7ab4f5;">get free key</a> (2000/month)</span>
@@ -1347,10 +1854,43 @@
             <div id="brave-key-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
             <button onclick="saveBraveKey()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:4px;">&#128190; Save Search Key</button>
             <button onclick="clearBraveKey()" style="background:#3a1a1a; border:1px solid #6a2a2a; color:#e88; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">&#10005; Clear Key (use DDG fallback)</button>
-          </section>
+            </section>
+          </div>
+        </div>
 
-          <section class="advanced-settings-card">
-            <h3>ComfyUI Image Generation</h3>
+        <!-- LORA / VISION -->
+        <div class="adv-panel" id="adv-panel-vision" role="tabpanel">
+          <header class="adv-page-head"><span class="bench-eyebrow">Settings</span><h2>LoRA / Vision</h2><p>Optional adapters and the vision projector for the built-in llama.cpp server.</p></header>
+          <div class="adv-grid adv-grid-narrow">
+            <section class="advanced-settings-card">
+              <h3>&#128444;&#65039; Vision projector &amp; LoRA</h3>
+              <div class="adv-help">Applied to the built-in llama.cpp server. Save launch settings from the Runtime tab.</div>
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Vision Projector - mmproj <span style="color:#777;">(optional - loaded alongside the current model so image turns work without model switching)</span></label>
+            <div style="display:flex; align-items:center; gap:6px; margin-bottom:12px;">
+              <input id="llama-mmproj-path" type="text" placeholder="C:\path\to\model.mmproj.gguf" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
+              <button onclick="browseFile('llama-mmproj-path','gguf')" title="Browse for an mmproj .gguf file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">&#128193;</button>
+              <button onclick="attachMmproj()" title="Save the mmproj path and apply it to the current local model configuration" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Attach</button>
+              <button onclick="detachMmproj()" title="Clear the mmproj path so the projector is detached from future model launches" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Detach</button>
+            </div>
+
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">LoRA <span style="color:#777;">(optional - adapter applied on next llama.cpp launch)</span></label>
+            <div style="display:flex; align-items:center; gap:6px; margin-bottom:12px;">
+              <input id="llama-lora-path" type="text" placeholder="C:\path\to\adapter.gguf" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
+              <button onclick="browseFile('llama-lora-path','lora',document.getElementById('llama-models-dir').value.trim())" title="Browse for a LoRA adapter .gguf file (starts in the configured Models Folder)" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">&#128193;</button>
+              <button onclick="attachLora()" title="Save the LoRA path (applied on next llama.cpp launch)" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Attach</button>
+              <button onclick="detachLora()" title="Clear the LoRA path" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Detach</button>
+            </div>
+
+            </section>
+          </div>
+        </div>
+
+        <!-- ADVANCED -->
+        <div class="adv-panel" id="adv-panel-advanced" role="tabpanel">
+          <header class="adv-page-head"><span class="bench-eyebrow">Settings</span><h2>Advanced</h2><p>Image generation, launch configuration presets and reset.</p></header>
+          <div class="adv-grid">
+            <section class="advanced-settings-card">
+              <h3>&#127912; ComfyUI image generation</h3>
             <div style="font-size:10px; color:#777; margin-bottom:8px; line-height:1.4;">Uses an external ComfyUI API workflow. HWUI unloads Helcyon for the job, asks ComfyUI to release VRAM, then restores the same model configuration.</div>
             <div style="display:grid; grid-template-columns:1fr 82px; gap:6px; margin-bottom:8px;">
               <div>
@@ -1378,87 +1918,11 @@
               </div>
             </div>
             <button onclick="saveComfyUISettings()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer;">&#128190; Save ComfyUI Settings</button>
-          </section>
-          </div>
-          <div class="advanced-settings-column">
-          <section class="advanced-settings-card">
-            <h3>Llama.cpp</h3>
-            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Server Executable Path</label>
-            <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">
-              <input id="llama-exe" type="text" placeholder="C:\path\to\llama-server.exe" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
-              <button onclick="browseFile('llama-exe')" title="Browse for file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">&#128193;</button>
-            </div>
-
-            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Models Folder</label>
-            <div style="display:flex; align-items:center; gap:6px; margin-bottom:12px;">
-              <input id="llama-models-dir" type="text" placeholder="C:\path\to\models" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
-              <button onclick="browseFolder('llama-models-dir')" title="Browse for folder" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">&#128193;</button>
-            </div>
-
-            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Vision Projector - mmproj <span style="color:#777;">(optional - loaded alongside the current model so image turns work without model switching)</span></label>
-            <div style="display:flex; align-items:center; gap:6px; margin-bottom:12px;">
-              <input id="llama-mmproj-path" type="text" placeholder="C:\path\to\model.mmproj.gguf" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
-              <button onclick="browseFile('llama-mmproj-path','gguf')" title="Browse for an mmproj .gguf file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">&#128193;</button>
-              <button onclick="attachMmproj()" title="Save the mmproj path and apply it to the current local model configuration" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Attach</button>
-              <button onclick="detachMmproj()" title="Clear the mmproj path so the projector is detached from future model launches" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Detach</button>
-            </div>
-
-            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">LoRA <span style="color:#777;">(optional - adapter applied on next llama.cpp launch)</span></label>
-            <div style="display:flex; align-items:center; gap:6px; margin-bottom:12px;">
-              <input id="llama-lora-path" type="text" placeholder="C:\path\to\adapter.gguf" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
-              <button onclick="browseFile('llama-lora-path','lora',document.getElementById('llama-models-dir').value.trim())" title="Browse for a LoRA adapter .gguf file (starts in the configured Models Folder)" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">&#128193;</button>
-              <button onclick="attachLora()" title="Save the LoRA path (applied on next llama.cpp launch)" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Attach</button>
-              <button onclick="detachLora()" title="Clear the LoRA path" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Detach</button>
-            </div>
-
-            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:6px; font-weight:600;">Launch Arguments</label>
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px 10px; margin-bottom:10px;">
-              <div>
-                <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">GPU Layers</label>
-                <input id="llama-gpu-layers" type="number" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
-              </div>
-              <div>
-                <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Context Size</label>
-                <input id="llama-ctx-size" type="number" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
-              </div>
-              <div style="grid-column:1 / -1;">
-                <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Chat Template</label>
-                <select id="llama-chat-template" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
-                  <option value="chatml">ChatML - Nemo/ChatML fine-tunes, Llama 3.2-3B</option>
-                  <option value="llama3">Llama 3 - Meta Llama 3 / 3.1 / 3.3 / 3.2-8B+</option>
-                  <option value="llama2">Llama 2 - legacy [INST] format</option>
-                  <option value="gemma">Gemma - Google Gemma 2 / 3</option>
-                  <option value="qwen2">Qwen 2 / 3 - Qwen2.5, QwQ, Qwen3</option>
-                  <option value="mistral">Mistral - Mistral v0.1 / Mixtral</option>
-                  <option value="phi3">Phi-3 / Phi-4 - Microsoft Phi-3/4</option>
-                  <option value="zephyr">Zephyr - HF Zephyr / ORPO fine-tunes</option>
-                  <option value="deepseek2">DeepSeek - DeepSeek V2 / V3 / R1</option>
-                  <option value="command-r">Command R - Cohere Command R/R+</option>
-                  <option value="openchat">OpenChat - OpenChat 3.5 / 3.6</option>
-                  <option value="vicuna">Vicuna - Vicuna / WizardLM</option>
-                  <option value="jinja">Native GGUF/Jinja - Ministral 3, Gemma, model metadata</option>
-                </select>
-              </div>
-              <div style="grid-column:1 / -1;">
-                <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Ministral Template</label>
-                <select id="llama-ministral-template-mode" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
-                  <option value="native">Native template - current behaviour</option>
-                  <option value="clean">Clean template - text-only [SYSTEM_PROMPT]/[INST]</option>
-                </select>
-              </div>
-              <label style="grid-column:1 / -1; display:flex; align-items:center; gap:8px; font-size:11px; color:#aaa; cursor:pointer;" title="Allow reasoning/thinking for models that support it. This can increase time to first token.">
-                <input type="checkbox" id="llama-reasoning-enabled" style="width:14px; height:14px; margin:0; cursor:pointer;">
-                Reasoning / Thinking
-              </label>
-            </div>
-            <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:#aaa; margin-bottom:10px; cursor:pointer;">
-              <input type="checkbox" id="llama-show-console" style="width:14px; height:14px; cursor:pointer;">
-              Show llama.cpp console window
-            </label>
-            <div id="llama-config-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:16px;"></div>
-            <button onclick="saveLlamaConfig()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:6px;">&#128190; Save Llama Config</button>
-            <button onclick="resetToDefault()" title="Wipe settings.json and restore from settings.default.json" style="background:#3a1a1a; border:1px solid #6a2a2a; color:#e88; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">&#8634; Reset All Settings to Default</button>
-
+            </section>
+            <div class="adv-stack">
+              <section class="advanced-settings-card">
+                <h3>Config presets</h3>
+                <div class="adv-help">Save and recall complete llama.cpp launch configurations.</div>
             <div style="border-top:1px solid #2a2a2a; padding-top:8px;">
               <div style="font-size:10px; text-transform:uppercase; letter-spacing:1px; color:#666; margin-bottom:6px;">Config Presets</div>
               <div style="display:flex; gap:4px; margin-bottom:6px;">
@@ -1472,10 +1936,16 @@
               <button onclick="saveLlamaPreset()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; border-radius:3px; padding:4px 7px; font-size:12px; cursor:pointer; width:100%; margin-bottom:4px;">&#128190; Save Preset</button>
               <div id="llama-preset-status" style="font-size:11px; color:#aaa; min-height:14px;"></div>
             </div>
-          </section>
-
+              </section>
+              <section class="advanced-settings-card">
+                <h3>Reset</h3>
+                <div class="adv-help">Restores settings.json from settings.default.json. This cannot be undone.</div>
+            <button onclick="resetToDefault()" title="Wipe settings.json and restore from settings.default.json" style="background:#3a1a1a; border:1px solid #6a2a2a; color:#e88; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">&#8634; Reset All Settings to Default</button>
+              </section>
+            </div>
           </div>
-
+        </div>
+        </div>
         </div>
       </div>
     </div>
@@ -1493,6 +1963,7 @@
         <button class="config-tab" onclick="switchConfigTab('voice-forge', this)">🎙 Voice Forge</button>
         <button class="config-tab" onclick="switchConfigTab('helcyon-bench', this)">Helcyon-Bench</button>
         <button class="config-tab" onclick="switchConfigTab('random-checkins', this)">Random Check-ins</button>
+        <button class="config-tab" onclick="switchConfigTab('hf-models', this)">&#129303; Hugging Face</button>
       </div>
 
       <!-- ===== TAB: SYSTEM PROMPT ===== -->
@@ -2005,6 +2476,7 @@
           </div>
         </div>
         <div class="random-checkin-form-grid">
+          <h4 class="random-checkin-card-title">Schedule &amp; messages</h4>
           <label class="random-checkin-field"><span>Minimum inactivity (minutes) <span class="random-checkin-info" tabindex="0" role="button" aria-label="About inactivity window">ⓘ<span class="random-checkin-info-tip">Minimum and Maximum form one random waiting window. For example, 10–30 minutes schedules one check-in somewhere in that range after you stop interacting. They are not first-message or second-message timers.</span></span></span><small>Shortest time to wait after your last message</small><input id="random-checkins-min" class="config-control-short" type="number" min="1" step="1" value="30"></label>
           <label class="random-checkin-field"><span>Maximum inactivity (minutes) <span class="random-checkin-info" tabindex="0" role="button" aria-label="About inactivity window">ⓘ<span class="random-checkin-info-tip">Minimum and Maximum form one random waiting window. For example, 10–30 minutes schedules one check-in somewhere in that range after you stop interacting. They are not first-message or second-message timers.</span></span></span><small>Longest time to wait after your last message</small><input id="random-checkins-max" class="config-control-short" type="number" min="1" step="1" value="90"></label>
           <div id="random-checkins-schedule-fields" class="random-checkin-full" style="display:none;border:1px solid #3a3a3a;border-radius:6px;padding:10px;">
@@ -2060,6 +2532,7 @@
             <label class="random-checkin-field"><span>Until</span><input id="random-checkins-quiet-end" type="time" value="08:00"></label>
           </div>
         </div>
+        <div class="random-checkin-notify-grid">
         <div class="random-checkin-panel random-checkin-notify-panel">
           <div class="random-checkin-enabled-row">
             <div>
@@ -2088,9 +2561,123 @@
             <button type="button" id="random-checkins-mobile-test" class="random-checkin-profile-btn" onclick="sendRandomCheckinMobileTest()">Send test notification</button>
           </div>
         </div>
+        </div>
         <div class="random-checkin-actions">
           <button type="button" class="random-checkin-save" onclick="saveRandomCheckinSettings()">💾 Save Random Check-ins</button>
           <span id="random-checkins-status" style="color:#8ab;min-height:1em;"></span>
+        </div>
+      </div>
+
+      <!-- ===== TAB: HUGGING FACE MODEL BROWSER ===== -->
+      <!-- Separate from Inference Provider: this only finds GGUF models and saves them to the models folder. -->
+      <div id="tab-hf-models" class="config-tab-panel">
+        <div class="bench-app-shell">
+          <aside class="bench-nav-rail">
+            <div class="bench-brand">
+              <span class="bench-brand-mark">HF</span>
+              <div><strong>Model Browser</strong><small>Hugging Face &middot; GGUF</small></div>
+            </div>
+
+            <section class="bench-rail-section">
+              <h4>View</h4>
+              <button type="button" class="bench-view-tab active" data-hf-view="discover" onclick="hfSwitchView('discover')">
+                <span>Discover</span><small>Search and pick a quant</small>
+              </button>
+              <button type="button" class="bench-view-tab" data-hf-view="downloads" onclick="hfSwitchView('downloads')">
+                <span>Downloads</span><small>Progress, cancel, resume</small>
+                <span class="hf-count" id="hf-downloads-count" hidden>0</span>
+              </button>
+              <button type="button" class="bench-view-tab" data-hf-view="installed" onclick="hfSwitchView('installed')">
+                <span>Installed</span><small>Models in your folder</small>
+              </button>
+            </section>
+
+            <section class="bench-rail-section">
+              <h4>Saves to</h4>
+              <div id="hf-rail-path" class="hf-rail-path">Loading&hellip;</div>
+              <small id="hf-rail-free" class="bench-muted"></small>
+            </section>
+
+            <details class="bench-rail-section" id="hf-token-details">
+              <summary><h4 style="display:inline">Access token</h4> <small id="hf-token-state" class="bench-muted">optional</small></summary>
+              <small class="bench-muted">Only needed for gated or private repositories. Stored in <code>secrets.local.json</code>, never in settings, exports or backups.</small>
+              <input id="hf-token-input" type="password" autocomplete="off" placeholder="hf_&hellip;">
+              <div style="display:flex; gap:6px;">
+                <button type="button" class="hf-primary" onclick="hfSaveToken()">Save</button>
+                <button type="button" onclick="hfClearToken()">Remove</button>
+              </div>
+            </details>
+          </aside>
+
+          <main class="bench-workspace">
+            <!-- DISCOVER -->
+            <div class="hf-view active" id="hf-view-discover">
+              <header class="bench-page-header">
+                <div>
+                  <span class="bench-eyebrow">Hugging Face</span>
+                  <h2>Discover models</h2>
+                  <p>Search the Hub, compare quantisations and download straight into your models folder. GGUF repositories are shown by default.</p>
+                </div>
+              </header>
+
+              <form class="hf-searchbar" onsubmit="event.preventDefault(); hfSearch(true);" role="search">
+                <input id="hf-query" type="text" placeholder="Search models &mdash; e.g. qwen, llama 8b, mistral nemo" aria-label="Search Hugging Face models" autocomplete="off">
+                <button type="submit" class="hf-go" id="hf-search-btn">Search</button>
+              </form>
+
+              <div class="hf-filters">
+                <select id="hf-sort" onchange="hfSearch(true)" title="Sort results" aria-label="Sort results">
+                  <option value="downloads">Most downloaded</option>
+                  <option value="trending">Trending</option>
+                  <option value="likes">Most liked</option>
+                  <option value="updated">Recently updated</option>
+                </select>
+                <button type="button" class="hf-chip" id="hf-f-gguf" aria-pressed="true" onclick="hfToggleFilter('gguf')" title="Only repositories that contain GGUF files">GGUF only</button>
+                <button type="button" class="hf-chip" id="hf-f-vision" aria-pressed="false" onclick="hfToggleFilter('vision')" title="Show only vision-capable models in the loaded results">Vision</button>
+                <button type="button" class="hf-chip" id="hf-f-open" aria-pressed="false" onclick="hfToggleFilter('open')" title="Hide gated repositories in the loaded results">Open access</button>
+                <span class="hf-spacer"></span>
+                <small class="bench-muted" id="hf-results-summary"></small>
+              </div>
+
+              <div class="hf-discover-grid">
+                <section class="hf-pane" aria-label="Search results">
+                  <div class="hf-pane-head"><strong>Results</strong><small class="bench-muted" id="hf-results-note"></small></div>
+                  <div class="hf-scroll" id="hf-results-scroll">
+                    <div id="hf-results" class="hf-results"></div>
+                    <div style="text-align:center; margin-top:10px;"><button type="button" id="hf-more" style="display:none;" onclick="hfSearch(false)">Load more</button></div>
+                  </div>
+                </section>
+                <section class="hf-pane hf-detail-pane" aria-label="Model details" id="hf-detail-pane">
+                  <div class="hf-scroll" id="hf-detail"></div>
+                </section>
+              </div>
+            </div>
+
+            <!-- DOWNLOADS -->
+            <div class="hf-view" id="hf-view-downloads">
+              <header class="bench-page-header">
+                <div>
+                  <span class="bench-eyebrow">Transfers</span>
+                  <h2>Downloads</h2>
+                  <p>Active and recent downloads. A failed download keeps its partial file; Resume continues where it stopped. Cancel discards the partial file.</p>
+                </div>
+              </header>
+              <div id="hf-downloads"></div>
+            </div>
+
+            <!-- INSTALLED -->
+            <div class="hf-view" id="hf-view-installed">
+              <header class="bench-page-header">
+                <div>
+                  <span class="bench-eyebrow">Library</span>
+                  <h2>Installed models</h2>
+                  <p>GGUF files found in your models folder. Models downloaded here are available to the built-in llama.cpp immediately.</p>
+                </div>
+                <button type="button" onclick="hfLoadInstalled()">Refresh</button>
+              </header>
+              <div id="hf-installed"></div>
+            </div>
+          </main>
         </div>
       </div>
 
@@ -2401,7 +2988,7 @@
   <script src="/static/helcyon_bench_integration.js?v=9"></script>
 <script>
   function switchConfigTab(tabId, btn) {
-    document.body.classList.toggle('bench-config-active', tabId === 'helcyon-bench');
+    document.body.classList.toggle('bench-config-active', tabId === 'helcyon-bench' || tabId === 'hf-models');
     // Hide all panels
     document.querySelectorAll('.config-tab-panel').forEach(p => p.classList.remove('active'));
     // Deactivate all tab buttons
@@ -2417,6 +3004,7 @@
     if (tabId === 'helcyon-bench') initialiseHelcyonBench();
     if (tabId === 'voice-forge') initialiseVoiceForge();
     if (tabId === 'random-checkins') { loadRandomCheckinSettings(); refreshRandomCheckinMobileDevices(); }
+    if (tabId === 'hf-models') hfActivate(); else hfDeactivate();
   }
 
   function validRandomCheckinTime(value) {
@@ -2827,53 +3415,11 @@
     document.getElementById('voice-forge-speed-value').textContent = `${speed.toFixed(2)}×`;
   }
 
-  async function loadVoiceForgeTestText() {
-    if (voiceForgeSettingsLoaded) return;
-    try {
-      const response = await fetch('/api/tts/voice-forge/settings');
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Could not load saved test text');
-      if (typeof data.test_text === 'string' && data.test_text.trim()) {
-        document.getElementById('voice-forge-text').value = data.test_text;
-      }
-      voiceForgeSettingsLoaded = true;
-    } catch (error) {
-      console.warn('Voice Forge test text could not be loaded:', error);
-    }
-  }
+  async function loadVoiceForgeTestText() { showHwuiProModal("Voice Forge", "Voice Forge settings are available in HWUI Pro."); return; }
 
   async function saveVoiceForgeTestText() { showHwuiProModal("Voice Forge", "Voice Forge settings are available in HWUI Pro."); return; }
 
-  async function initialiseVoiceForge(force = false) {
-    await loadVoiceForgeTestText();
-    if (voiceForgeInitialised && !force) return;
-    const selects = [document.getElementById('voice-forge-a-select'), document.getElementById('voice-forge-b-select')];
-    try {
-      const response = await fetch('/api/tts/voice-forge/voices');
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Qwen3-TTS Fast is unavailable');
-      selects.forEach(select => {
-        const previous = select.value;
-        select.innerHTML = '<option value="">-- Select existing voice --</option>';
-        (data.voices || []).forEach(voice => {
-          const option = document.createElement('option');
-          option.value = voice.name;
-          option.textContent = voice.label || voice.name;
-          select.appendChild(option);
-        });
-        if ([...select.options].some(option => option.value === previous)) select.value = previous;
-      });
-      updateVoiceForgeSourceControls('A');
-      updateVoiceForgeSourceControls('B');
-      voiceForgeInitialised = true;
-      setVoiceForgeStatus('Qwen3-TTS Fast is ready.');
-    } catch (error) {
-      selects.forEach(select => { select.innerHTML = '<option value="">Qwen unavailable</option>'; });
-      updateVoiceForgeSourceControls('A');
-      updateVoiceForgeSourceControls('B');
-      setVoiceForgeStatus(error.message, 'error');
-    }
-  }
+  async function initialiseVoiceForge(force = false) { showHwuiProModal("Voice Forge", "Voice Forge is available in HWUI Pro."); return; }
 
   async function generateVoiceForgeBlend() { showHwuiProModal("Voice Forge", "Blending voices is available in HWUI Pro."); return; }
 
@@ -3453,11 +3999,15 @@
       (labels[status] || status.replaceAll('_', ' ')) +
       (inactiveOriginalChat ? ' · original chat inactive' : '');
     statusElement.dataset.captureStatus = status;
-    button.disabled = false;
+    button.disabled = status !== 'ready_to_capture';
     button.textContent = status === 'captured'
       ? 'Captured'
       : 'Capture response';
-    button.title = 'Capturing live chat responses is available in HWUI Pro.';
+    button.title = association?.error || (
+      status === 'ready_to_capture'
+        ? 'Capture the exact completed assistant reply linked to this submitted turn'
+        : 'Capture becomes available after the exact linked assistant reply is saved as completed'
+    );
     if (nextButton && status === 'captured') nextButton.hidden = false;
   }
 
@@ -4291,20 +4841,7 @@
     }
   }
 
-  async function cancelBenchJudgeRun() {
-    if (!helcyonBenchJudgeJob?.job_id) return;
-    try {
-      const response = await fetch(
-        `/api/helcyon-bench/judge/runs/${encodeURIComponent(helcyonBenchJudgeJob.job_id)}`,
-        { method: 'DELETE' }
-      );
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Judge run could not be cancelled.');
-      renderBenchJudgeJob(result.job);
-    } catch (error) {
-      setBenchStatus(error.message, 'error');
-    }
-  }
+  async function cancelBenchJudgeRun() { showHwuiProModal("Helcyon-Bench", "Automated judging is available in HWUI Pro."); return; }
 
   function filterBenchPackOptions() {
     const category = document.getElementById('bench-pack-category').value;
@@ -4681,7 +5218,7 @@
         send.onclick = () => sendBenchPrompt(pack, item, slot);
         const capture = document.createElement('button');
         capture.type = 'button';
-        capture.disabled = true;
+        capture.disabled = false;
         capture.textContent = `Capture Model ${slot} response`;
         capture.dataset.captureButton = 'true';
         const association = HelcyonBenchPromptTransfer.getAssociation(
@@ -6624,6 +7161,8 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       document.getElementById('frequency_penalty').value = settings.frequency_penalty ?? 0.0;
       document.getElementById('presence_penalty').value  = settings.presence_penalty  ?? 0.0;
       document.getElementById('auto-memory-enabled').checked = settings.auto_memory?.enabled === true;
+      // On unless explicitly switched off, so existing installs keep their behaviour.
+      document.getElementById('message-reactions-enabled').checked = settings.message_reactions_enabled !== false;
       
       console.log('✅ Loaded sampling settings:', settings);
     } catch (err) {
@@ -6640,11 +7179,6 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       const settings = buildSamplingPresetFromFields();
       localStorage.removeItem('hwui_active_sampling_preset');
       localStorage.removeItem('hwui_sampling_preset_baseline');
-      settings.auto_memory = {
-        enabled: document.getElementById('auto-memory-enabled').checked,
-        local_only: true
-      };
-      
       const res = await fetch("/save_sampling_settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -6659,6 +7193,51 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     } catch (err) {
       console.error("Failed to save settings:", err);
       hwuiToast("Error saving settings.", 'error');
+    }
+  }
+
+  async function saveAutoMemorySetting() {
+    const button = document.getElementById('save-auto-memory-btn');
+    try {
+      if (button) button.disabled = true;
+      const res = await fetch('/save_sampling_settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auto_memory: {
+          enabled: document.getElementById('auto-memory-enabled').checked,
+          local_only: true
+        } })
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      hwuiToast('✅ Automatic local memory setting saved.', 'success');
+    } catch (err) {
+      console.error('Failed to save automatic memory setting:', err);
+      hwuiToast('⚠️ Error saving automatic memory setting.', 'error');
+    } finally {
+      if (button) button.disabled = false;
+    }
+  }
+
+  // Saves on change (like the other toggles); the server reads it on every chat request,
+  // so it applies to the next message with no restart. Stored reactions are never touched.
+  async function saveMessageReactionsSetting() {
+    const box = document.getElementById('message-reactions-enabled');
+    const enabled = box.checked;
+    box.disabled = true;
+    try {
+      const res = await fetch('/save_sampling_settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message_reactions_enabled: enabled })
+      });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      hwuiToast(enabled ? '✅ Message reactions turned on.' : '✅ Message reactions turned off.', 'success');
+    } catch (err) {
+      console.error('Failed to save message reactions setting:', err);
+      box.checked = !enabled;
+      hwuiToast('⚠️ Error saving message reactions setting.', 'error');
+    } finally {
+      box.disabled = false;
     }
   }
 
@@ -7374,7 +7953,7 @@ const FALLBACK_FONT_NAMES = [
 const FONT_FAVOURITES_KEY = 'hwui_favourite_fonts';
 
 function escapeCssFontName(name) {
-  return String(name || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return String(name || '').replace(/\\/g, '\\\\').replace(/"/g, '\"');
 }
 
 function fontStackFor(name) {
@@ -7383,8 +7962,8 @@ function fontStackFor(name) {
 
 function primaryFontFromStack(stack) {
   const text = String(stack || '').trim();
-  const quoted = text.match(/^"((?:\\"|[^"])*)"/);
-  if (quoted) return quoted[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  const quoted = text.match(/^"((?:\"|[^"])*)"/);
+  if (quoted) return quoted[1].replace(/\"/g, '"').replace(/\\\\/g, '\\');
   return (text.split(',')[0] || 'Segoe UI').trim().replace(/^['"]|['"]$/g, '');
 }
 
@@ -9317,7 +9896,7 @@ function previewThemeVar(varName, value) {
   // confirmation. The confirmation is shown only when CONNECTING, via the
   // repurposed cloud-confirm-modal below (same slick style). (changes.md.)
   function _openConnectConfirm() {
-    if (_currentBackendMode === 'local') return;
+    if (_currentBackendMode === 'local' || _currentBackendMode === 'provider') return;
     const provider = (_currentBackendMode === 'openai') ? 'OpenAI' : 'Anthropic';
     const titleEl = document.getElementById('cloud-confirm-title');
     const msgEl   = document.getElementById('cloud-confirm-message');
@@ -9337,7 +9916,7 @@ function previewThemeVar(varName, value) {
   async function confirmCloudConnectOK() {
     const modal = document.getElementById('cloud-confirm-modal');
     if (modal) modal.style.display = 'none';
-    if (_currentBackendMode === 'local') return;
+    if (_currentBackendMode === 'local' || _currentBackendMode === 'provider') return;
     const provider = (_currentBackendMode === 'openai') ? 'OpenAI' : 'Anthropic';
     try {
       // Send the SELECTED backend_mode along with the connect — setBackendMode()
@@ -9370,6 +9949,7 @@ function previewThemeVar(varName, value) {
 
   function setBackendMode(mode) {
     _currentBackendMode = mode;
+    try { if (_providerState) { _providerState.backend_mode = mode; providerRenderTiles(); } } catch (e) { /* provider UI not initialised yet */ }
     const localBtn     = document.getElementById('mode-local-btn');
     const openaiBtn    = document.getElementById('mode-openai-btn');
     const anthropicBtn = document.getElementById('mode-anthropic-btn');
@@ -9378,8 +9958,11 @@ function previewThemeVar(varName, value) {
 
     // Reset all three buttons to inactive, then light up the active one.
     const _inactive = (btn) => { if (btn) { btn.style.background = '#111'; btn.style.color = '#888'; btn.style.fontWeight = 'normal'; } };
-    _inactive(localBtn); _inactive(openaiBtn); _inactive(anthropicBtn);
-    if (mode === 'openai') {
+    const providerBtn  = document.getElementById('mode-provider-btn');
+    _inactive(localBtn); _inactive(openaiBtn); _inactive(anthropicBtn); _inactive(providerBtn);
+    if (mode === 'provider') {
+      if (providerBtn) { providerBtn.style.background = '#2a1a3a'; providerBtn.style.color = '#c9a0f0'; providerBtn.style.fontWeight = 'bold'; }
+    } else if (mode === 'openai') {
       if (openaiBtn) { openaiBtn.style.background = '#1a2a4a'; openaiBtn.style.color = '#7ab4f5'; openaiBtn.style.fontWeight = 'bold'; }
     } else if (mode === 'anthropic') {
       if (anthropicBtn) { anthropicBtn.style.background = '#3a2a1a'; anthropicBtn.style.color = '#e0a060'; anthropicBtn.style.fontWeight = 'bold'; }
@@ -9387,8 +9970,9 @@ function previewThemeVar(varName, value) {
       if (localBtn) { localBtn.style.background = '#1a3a2a'; localBtn.style.color = '#6f6'; localBtn.style.fontWeight = 'bold'; }
     }
 
-    // Local-only sampling params dim whenever ANY cloud backend is active.
-    const _cloud = (mode !== 'local');
+    // Local-only sampling params dim whenever a paid cloud backend is active. A
+    // provider keeps them live: it forwards the samplers it supports and drops the rest.
+    const _cloud = (mode === 'openai' || mode === 'anthropic');
     if (localParams) localParams.classList.toggle('is-cloud-disabled', _cloud);
     if (localNote)   { localNote.style.display = _cloud ? 'block' : 'none'; }
 
@@ -9431,14 +10015,14 @@ function previewThemeVar(varName, value) {
   function _renderCloudConnectBtn() {
     const btn = document.getElementById('cloud-connect-btn');
     if (!btn) return;
-    if (_currentBackendMode === 'local') {
-      // Always visible, but disabled + greyed when Local is selected.
+    if (_currentBackendMode === 'local' || _currentBackendMode === 'provider') {
+      // Always visible, but disabled + greyed when Local or a local Provider is selected.
       btn.disabled = true;
       btn.textContent = '🌐 Connect';
       btn.style.cursor = 'not-allowed';
       btn.style.opacity = '0.5';
       btn.style.background = '#1a1a1a'; btn.style.borderColor = '#333'; btn.style.color = '#666';
-      btn.title = 'Select a cloud provider (OpenAI/Anthropic) to connect.';
+      btn.title = 'Select OpenAI or Anthropic to connect. Local and Provider modes need no cloud connection.';
       return;
     }
     btn.disabled = false;
@@ -9473,7 +10057,7 @@ function previewThemeVar(varName, value) {
   }
 
   async function onCloudConnectClick() {
-    if (_currentBackendMode === 'local') return;  // button hidden anyway
+    if (_currentBackendMode === 'local' || _currentBackendMode === 'provider') return;  // button hidden anyway
     if (_cloudConnected) {
       // Disconnect — immediate, no confirmation. Only flip after the server
       // confirms the value is persisted (res.ok + returned cloud_api_enabled).
@@ -9750,8 +10334,744 @@ function previewThemeVar(varName, value) {
     }
   }
 
+  // ── Inference provider (LM Studio / Ollama / KoboldCpp / text-generation-webui / generic) ──
+  // Credentials never come back from the server: only has_key + a mask. The key box is
+  // write-only; leaving it blank keeps the stored key, "Clear" removes it.
+  let _providerState = null;
+  let _providerClearKey = false;
+
+  const _PROVIDER_CAP_LABELS = [
+    ['streaming', 'Streaming'], ['cancellation', 'Cancel'], ['model_enumeration', 'Model list'],
+    ['context_detect', 'Context detect'], ['vision', 'Vision'], ['tools', 'Tools'],
+    ['structured_output', 'Structured output'], ['token_count', 'Token count'],
+  ];
+
+  function _providerCfg(id) { return ((_providerState || {}).configs || {})[id] || {}; }
+  function _providerDesc(id) { return ((_providerState || {}).providers || []).find(p => p.id === id); }
+
+  const _PROVIDER_META = {
+    openai_compat: { sub: 'Any OpenAI-style server (vLLM, LocalAI…)', tag: 'Generic',
+      hint: 'Use the server’s /v1 URL. Add an API key only if it needs one; set the context length yourself.' },
+    lmstudio: { sub: 'Models served by LM Studio', tag: 'Local app',
+      hint: 'Start the Local Server in LM Studio (default port 1234). Loaded models and their context are detected.' },
+    textgen_webui: { sub: 'oobabooga text-generation-webui', tag: 'Local app',
+      hint: 'Launch with --api (default port 5000). Most samplers are supported; image input needs a multimodal extension.' },
+    ollama: { sub: 'Ollama runtime', tag: 'Local app',
+      hint: 'Default port 11434. Context is read from the model, and HWUI always sends num_ctx so Ollama’s small default is never used.' },
+    koboldcpp: { sub: 'KoboldCpp / Kobold API', tag: 'Local app',
+      hint: 'Default port 5001. Stop uses KoboldCpp’s own abort, and the true context length is detected.' },
+  };
+
+  function providerRenderCaps(caps) {
+    const box = document.getElementById('provider-caps');
+    if (!box) return;
+    box.textContent = '';
+    _PROVIDER_CAP_LABELS.forEach(([key, label]) => {
+      const on = !!(caps && caps[key]);
+      const chip = document.createElement('span');
+      chip.textContent = (on ? '✓ ' : '– ') + label;
+      chip.title = on ? 'Supported' : 'Not supported by this provider — HWUI works around it';
+      chip.className = 'provider-cap' + (on ? ' on' : '');
+      box.appendChild(chip);
+    });
+  }
+
+  function providerRenderTiles() {
+    const box = document.getElementById('provider-tiles');
+    if (!box || !_providerState) return;
+    const selected = document.getElementById('provider-select').value;
+    const live = _providerState.backend_mode === 'provider';
+    box.textContent = '';
+    _providerState.providers.filter(p => !p.builtin).forEach(p => {
+      const meta = _PROVIDER_META[p.id] || {};
+      const cfg = _providerCfg(p.id);
+      const tile = document.createElement('div');
+      tile.className = 'provider-tile' + (p.id === selected ? ' selected' : '');
+      tile.tabIndex = 0;
+      tile.setAttribute('role', 'radio');
+      tile.setAttribute('aria-checked', String(p.id === selected));
+      tile.dataset.provider = p.id;
+      const name = document.createElement('div'); name.className = 'provider-tile-name'; name.textContent = p.label;
+      const sub = document.createElement('div'); sub.className = 'provider-tile-sub'; sub.textContent = meta.sub || '';
+      const tags = document.createElement('div'); tags.className = 'provider-tile-tags';
+      const pill = (t, c) => { const e = document.createElement('span'); e.className = 'provider-pill' + (c ? ' ' + c : ''); e.textContent = t; tags.appendChild(e); };
+      if (live && p.id === _providerState.selected) pill('In use', 'live');
+      if (meta.tag) pill(meta.tag);
+      if (cfg.has_key) pill('Key saved');
+      if (cfg.is_remote) pill('Remote', 'warn');
+      tile.append(name, sub, tags);
+      const choose = () => { document.getElementById('provider-select').value = p.id; providerOnSelect(); };
+      tile.onclick = choose;
+      tile.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); choose(); } };
+      box.appendChild(tile);
+    });
+  }
+
+  function providerFillForm(id) {
+    const desc = _providerDesc(id) || {};
+    const cfg = _providerCfg(id);
+    const caps = desc.capabilities || {};
+    const meta = _PROVIDER_META[id] || {};
+    document.getElementById('provider-select').value = id;
+    document.getElementById('provider-hint').textContent = meta.hint || '';
+    document.getElementById('provider-base-url').value = cfg.base_url || desc.default_base_url || '';
+    document.getElementById('provider-base-url').placeholder = desc.default_base_url || '';
+    document.getElementById('provider-model').value = cfg.model || '';
+    document.getElementById('provider-context').value = cfg.context_length || '';
+    document.getElementById('provider-context-hint').textContent = caps.context_detect
+      ? '0 = auto-detect from the server'
+      : '0 = default 8192. This server cannot report it, so set it to match your model.';
+    document.getElementById('provider-vision').checked = (typeof cfg.vision === 'boolean') ? cfg.vision : !!caps.vision;
+    // Ollama reports vision per model itself; the manual toggle only matters for the others.
+    document.getElementById('provider-vision-row').style.display = id === 'ollama' ? 'none' : 'flex';
+    const keyInput = document.getElementById('provider-api-key');
+    keyInput.value = '';
+    _providerClearKey = false;
+    document.getElementById('provider-key-row').style.display = (caps.api_key !== 'none') ? 'block' : 'none';
+    document.getElementById('provider-key-hint').textContent = caps.api_key === 'required' ? '(required)' : '(optional)';
+    keyInput.placeholder = cfg.has_key ? 'Saved: ' + cfg.key_mask + ' — leave blank to keep' : 'None set';
+    document.getElementById('provider-clear-key').style.display = cfg.has_key ? 'block' : 'none';
+    document.getElementById('provider-model-list').textContent = '';
+    providerRenderCaps(caps);
+    providerRenderTiles();
+    providerUrlChanged();
+  }
+
+  function _providerStatus(text, color) {
+    const el = document.getElementById('provider-status');
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = color || '#aaa';
+  }
+
+  function providerOnSelect() {
+    providerFillForm(document.getElementById('provider-select').value);
+    _providerStatus('');
+  }
+
+  function _providerForm() {
+    const body = {
+      id: document.getElementById('provider-select').value,
+      config: {
+        base_url: document.getElementById('provider-base-url').value.trim(),
+        model: document.getElementById('provider-model').value.trim(),
+        context_length: parseInt(document.getElementById('provider-context').value, 10) || 0,
+        vision: document.getElementById('provider-vision').checked,
+      },
+      persist_on_startup: document.getElementById('provider-persist').checked,
+    };
+    const key = document.getElementById('provider-api-key').value.trim();
+    if (key) body.api_key = key;
+    if (_providerClearKey) body.clear_api_key = true;
+    return body;
+  }
+
+  async function providerLoad() {
+    const select = document.getElementById('provider-select');
+    if (!select) return;
+    try {
+      _providerState = await (await fetch('/provider/state')).json();
+    } catch (e) { _providerStatus('Could not load provider settings', '#f66'); return; }
+    select.textContent = '';
+    _providerState.providers.filter(p => !p.builtin).forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.id; opt.textContent = p.label;
+      select.appendChild(opt);
+    });
+    select.value = _providerState.selected;
+    document.getElementById('provider-persist').checked = !!_providerState.persist_on_startup;
+    providerFillForm(select.value);
+    if (_providerState.backend_mode === 'provider') setBackendMode('provider');
+  }
+
+  async function providerFetchModels() {
+    _providerStatus('Fetching models…');
+    try {
+      const data = await (await fetch('/provider/models', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(_providerForm()) })).json();
+      if (data.status !== 'ok') { _providerStatus('❌ ' + data.error, '#f66'); return; }
+      const list = document.getElementById('provider-model-list');
+      list.textContent = '';
+      data.models.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.label = m.id + (m.loaded ? ' (loaded)' : '');
+        list.appendChild(opt);
+      });
+      const modelInput = document.getElementById('provider-model');
+      if (!modelInput.value && data.models.length) modelInput.value = data.models[0].id;
+      _providerStatus('✅ ' + data.models.length + ' model(s) found', '#6f6');
+    } catch (e) { _providerStatus('❌ Fetch failed: ' + e.message, '#f66'); }
+  }
+
+  async function providerTest() {
+    _providerStatus('Testing…');
+    try {
+      const data = await (await fetch('/provider/test', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(_providerForm()) })).json();
+      if (data.capabilities) providerRenderCaps(data.capabilities);
+      if (data.status === 'ok') {
+        _providerStatus('✅ Connected — ' + data.detail +
+          (data.context_length ? ' • context ' + data.context_length : ''), '#6f6');
+      } else {
+        _providerStatus('❌ ' + data.detail, '#f66');
+      }
+    } catch (e) { _providerStatus('❌ Test failed: ' + e.message, '#f66'); }
+  }
+
+  async function providerSave(activate) {
+    try {
+      const res = await fetch('/provider/save', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(_providerForm()) });
+      const data = await res.json();
+      if (!res.ok || data.status !== 'ok') { _providerStatus('❌ ' + (data.error || 'Save failed'), '#f66'); return false; }
+      _providerState = data;
+      providerFillForm(data.selected);
+      if (activate) {
+        const r2 = await fetch('/save_backend_mode', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ backend_mode: 'provider' }) });
+        const d2 = await r2.json().catch(() => ({}));
+        if (!r2.ok || d2.backend_mode !== 'provider') { _providerStatus('❌ Saved, but could not switch mode', '#f66'); return false; }
+        setBackendMode('provider');
+        _providerStatus('✅ Using ' + (_providerDesc(data.selected) || {}).label, '#6f6');
+      } else {
+        _providerStatus('Saved', '#888');
+      }
+      return true;
+    } catch (e) { _providerStatus('❌ Save failed: ' + e.message, '#f66'); return false; }
+  }
+
+  function providerClearKey() {
+    _providerClearKey = true;
+    document.getElementById('provider-api-key').value = '';
+    document.getElementById('provider-api-key').placeholder = 'Will be cleared on Save';
+    document.getElementById('provider-clear-key').style.display = 'none';
+  }
+
+  // ── Advanced Settings tabs ──────────────────────────────────────────────────
+  function advSwitchTab(name) {
+    document.querySelectorAll('#adv-tabs .adv-tab').forEach(b => {
+      const on = b.dataset.advTab === name;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', String(on));
+    });
+    document.querySelectorAll('#advanced-settings-modal .adv-panel').forEach(p => p.classList.toggle('active', p.id === 'adv-panel-' + name));
+    const modal = document.getElementById('advanced-settings-modal');
+    if (modal) modal.scrollTop = 0;
+    try { localStorage.setItem('hwui_adv_tab', name); } catch (e) { /* storage unavailable */ }
+  }
+  (function advRestoreTab() {
+    let saved = null;
+    try { saved = localStorage.getItem('hwui_adv_tab'); } catch (e) { /* storage unavailable */ }
+    if (saved && document.getElementById('adv-panel-' + saved)) advSwitchTab(saved);
+  })();
+
+  // The Provider mode button saves the form and activates it, same as "Save & use".
+  async function selectProviderMode() { await providerSave(true); }
+
+  // ── Hugging Face model browser ─────────────────────────────────────────────
+  // Workspace with Discover / Downloads / Installed views. Every HF-supplied string is
+  // written as plain text nodes, never parsed as HTML.
+  const _hf = {
+    cursor: '', poll: null, models: [], selected: '', installed: new Set(),
+    filters: { gguf: true, vision: false, open: false },
+    seenFirstPoll: false, doneSeen: new Set(), started: false, view: 'discover', searching: false,
+  };
+
+  function _hfEl(tag, text, cls) {
+    const el = document.createElement(tag);
+    if (text !== undefined && text !== null) el.textContent = text;
+    if (cls) el.className = cls;
+    return el;
+  }
+  function _hfBytes(n) {
+    if (!n) return '–';
+    const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return n.toFixed(i > 1 ? 1 : 0) + ' ' + u[i];
+  }
+  function _hfCount(n) { return n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n || 0); }
+  function _hfDate(s) { return s ? String(s).slice(0, 10) : ''; }
+  function _hfEta(sec) {
+    if (!isFinite(sec) || sec <= 0) return '';
+    if (sec < 90) return Math.round(sec) + 's';
+    if (sec < 5400) return Math.round(sec / 60) + ' min';
+    return (sec / 3600).toFixed(1) + ' h';
+  }
+  function _hfClear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+
+  function hfSwitchView(name) {
+    _hf.view = name;
+    document.querySelectorAll('#tab-hf-models .hf-view').forEach(v => v.classList.toggle('active', v.id === 'hf-view-' + name));
+    document.querySelectorAll('#tab-hf-models [data-hf-view]').forEach(b => b.classList.toggle('active', b.dataset.hfView === name));
+    if (name === 'installed') hfLoadInstalled();
+    if (name === 'downloads') hfRefreshDownloads();
+  }
+
+
+  // ── Tooltip for truncated names (shared element; only shows when text is actually cut off) ──
+  function _hfInitTips() {
+    const root = document.getElementById('tab-hf-models');
+    if (!root || document.getElementById('hf-tip')) return;
+    const tip = document.createElement('div');
+    tip.id = 'hf-tip'; tip.className = 'hf-tip'; tip.setAttribute('role', 'tooltip');
+    document.body.appendChild(tip);
+    let timer = null, cur = null;
+    const hide = () => { clearTimeout(timer); timer = null; cur = null; tip.classList.remove('show'); };
+    const show = (el) => {
+      tip.textContent = el.dataset.tip;
+      const r = el.getBoundingClientRect();
+      tip.style.left = '0px'; tip.style.top = '0px';
+      const t = tip.getBoundingClientRect();
+      const left = Math.max(8, Math.min(r.left, window.innerWidth - t.width - 8));
+      let top = r.bottom + 6;
+      if (top + t.height > window.innerHeight - 8) top = Math.max(8, r.top - t.height - 6);
+      tip.style.left = left + 'px'; tip.style.top = top + 'px';
+      tip.classList.add('show');
+    };
+    const truncated = (el) => el.scrollWidth > el.clientWidth + 1;
+    const target = (e) => (e.target && e.target.closest) ? e.target.closest('[data-tip]') : null;
+    root.addEventListener('mouseover', (e) => {
+      const el = target(e);
+      if (!el || el === cur) return;
+      hide();
+      if (!truncated(el)) return;
+      cur = el;
+      timer = setTimeout(() => show(el), 200);
+    });
+    root.addEventListener('mouseout', (e) => {
+      const el = target(e);
+      if (el && !el.contains(e.relatedTarget)) hide();
+    });
+    root.addEventListener('focusin', (e) => {
+      // Cards are buttons: surface the full name for keyboard users too.
+      const el = e.target.querySelector ? e.target.querySelector('.hf-card-name[data-tip]') : null;
+      if (el && truncated(el)) { cur = el; show(el); }
+    });
+    root.addEventListener('focusout', hide);
+    root.addEventListener('scroll', hide, true);
+    root.addEventListener('mousedown', hide, true);
+    window.addEventListener('blur', hide);
+  }
+  _hfInitTips();
+
+  // Helcyon-Bench's view switcher clears `.active` from every `.bench-view-tab` on the page, including this
+  // rail's, so re-apply the current view's highlight each time the HF tab is shown.
+  function _hfSyncTabs() {
+    document.querySelectorAll('#tab-hf-models [data-hf-view]').forEach(b => b.classList.toggle('active', b.dataset.hfView === _hf.view));
+  }
+
+  async function hfActivate() {
+    _hfSyncTabs();
+    hfRefreshInfo();
+    hfRefreshDownloads();
+    hfLoadInstalled(true);
+    if (!_hf.poll) _hf.poll = setInterval(hfRefreshDownloads, 1000);
+    if (!_hf.started) { _hf.started = true; hfSearch(true); }   // open on the most-downloaded GGUF models
+  }
+  function hfDeactivate() { if (_hf.poll) { clearInterval(_hf.poll); _hf.poll = null; } }
+
+  async function hfRefreshInfo() {
+    try {
+      const d = await (await fetch('/hf/info')).json();
+      const path = document.getElementById('hf-rail-path');
+      path.textContent = d.models_dir || 'Not configured';
+      path.style.color = d.exists ? '' : '#f66';
+      document.getElementById('hf-rail-free').textContent = d.exists
+        ? _hfBytes(d.free_bytes) + ' free'
+        : 'Set the Models Folder in Advanced Settings → Runtime before downloading.';
+      document.getElementById('hf-token-state').textContent = d.has_token ? '• saved' : 'optional';
+      document.getElementById('hf-token-input').placeholder = d.has_token ? 'Saved — enter a new token to replace' : 'hf_…';
+    } catch (e) { document.getElementById('hf-rail-path').textContent = 'Could not read settings'; }
+  }
+
+  async function _hfPostToken(body) {
+    const d = await (await fetch('/hf/token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
+    document.getElementById('hf-token-input').value = '';
+    hfRefreshInfo();
+    hwuiToast(d.has_token ? 'Hugging Face token saved' : 'Hugging Face token removed', 'success');
+  }
+  function hfSaveToken() {
+    const t = document.getElementById('hf-token-input').value.trim();
+    if (t) _hfPostToken({ token: t });
+  }
+  function hfClearToken() { _hfPostToken({ clear: true }); }
+
+  // ── Discover ──────────────────────────────────────────────────────────────
+  function hfToggleFilter(key) {
+    _hf.filters[key] = !_hf.filters[key];
+    document.getElementById('hf-f-' + key).setAttribute('aria-pressed', String(_hf.filters[key]));
+    if (key === 'gguf') hfSearch(true); else hfRenderResults();
+  }
+
+  function _hfVisible() {
+    return _hf.models.filter(m => (!_hf.filters.vision || m.vision) && (!_hf.filters.open || !m.gated));
+  }
+
+  async function hfSearch(reset) {
+    if (_hf.searching) return;
+    _hf.searching = true;
+    const btn = document.getElementById('hf-search-btn');
+    btn.disabled = true;
+    const list = document.getElementById('hf-results');
+    if (reset) {
+      _hf.cursor = ''; _hf.models = [];
+      _hfClear(list);
+      for (let i = 0; i < 5; i++) list.appendChild(_hfEl('div', null, 'hf-skeleton'));
+      document.getElementById('hf-more').style.display = 'none';
+    }
+    const params = new URLSearchParams({
+      q: document.getElementById('hf-query').value.trim(),
+      sort: document.getElementById('hf-sort').value,
+      gguf: _hf.filters.gguf ? '1' : '0',
+    });
+    if (!reset && _hf.cursor) params.set('cursor', _hf.cursor);
+    try {
+      const d = await (await fetch('/hf/search?' + params)).json();
+      if (d.status !== 'ok') { _hfClear(list); list.appendChild(_hfEmpty('Search failed', d.error)); return; }
+      _hf.models = _hf.models.concat(d.models);
+      _hf.cursor = d.next || '';
+      hfRenderResults();
+    } catch (e) {
+      _hfClear(list); list.appendChild(_hfEmpty('Search failed', e.message));
+    } finally {
+      _hf.searching = false; btn.disabled = false;
+    }
+  }
+
+  function _hfEmpty(title, text) {
+    const box = _hfEl('div', null, 'hf-empty');
+    box.appendChild(_hfEl('strong', title));
+    box.appendChild(document.createTextNode(text || ''));
+    return box;
+  }
+
+  function hfRenderResults() {
+    const list = document.getElementById('hf-results');
+    _hfClear(list);
+    const shown = _hfVisible();
+    shown.forEach(m => list.appendChild(_hfCard(m)));
+    if (!shown.length) {
+      list.appendChild(_hf.models.length
+        ? _hfEmpty('Nothing matches these filters', 'Turn off Vision or Open access, or load more results.')
+        : _hfEmpty('No models found', 'Try a different search, or switch off “GGUF only”.'));
+    }
+    document.getElementById('hf-more').style.display = _hf.cursor ? 'inline-block' : 'none';
+    document.getElementById('hf-results-note').textContent = _hf.models.length ? shown.length + ' shown' : '';
+    document.getElementById('hf-results-summary').textContent = _hf.models.length ? _hf.models.length + ' loaded' : '';
+    if (!_hf.selected) _hfDetailEmpty();
+  }
+
+  function _hfPill(text, cls) { return _hfEl('span', text, 'hf-pill' + (cls ? ' ' + cls : '')); }
+
+  function _hfCard(m) {
+    const card = _hfEl('button', null, 'hf-card' + (m.id === _hf.selected ? ' selected' : ''));
+    card.type = 'button';
+    card.dataset.repo = m.id;
+    const slash = m.id.indexOf('/');
+    const author = _hfEl('span', slash > 0 ? m.id.slice(0, slash) : m.author, 'hf-card-author');
+    const cname = _hfEl('span', slash > 0 ? m.id.slice(slash + 1) : m.id, 'hf-card-name');
+    author.dataset.tip = m.id; cname.dataset.tip = m.id;   // full repo id on hover when truncated
+    card.appendChild(author);
+    card.appendChild(cname);
+    const pills = _hfEl('div', null, 'hf-pills');
+    if (m.is_gguf) pills.appendChild(_hfPill('GGUF', 'gguf'));
+    if (m.vision) pills.appendChild(_hfPill('Vision', 'vision'));
+    if (m.gated) pills.appendChild(_hfPill('Gated', 'warn'));
+    if (m.params) pills.appendChild(_hfPill(m.params + ' params'));
+    if (m.context_length) pills.appendChild(_hfPill(_hfCount(m.context_length) + ' ctx'));
+    if (m.architecture) pills.appendChild(_hfPill(m.architecture));
+    if (m.license) pills.appendChild(_hfPill(m.license));
+    card.appendChild(pills);
+    const stats = _hfEl('div', null, 'hf-stats');
+    stats.appendChild(_hfEl('span', '⬇ ' + _hfCount(m.downloads)));
+    stats.appendChild(_hfEl('span', '♥ ' + _hfCount(m.likes)));
+    if (m.updated) stats.appendChild(_hfEl('span', 'Updated ' + _hfDate(m.updated)));
+    card.appendChild(stats);
+    card.onclick = () => hfOpenRepo(m.id);
+    return card;
+  }
+
+  function _hfDetailEmpty() {
+    const box = document.getElementById('hf-detail');
+    _hfClear(box);
+    box.appendChild(_hfEmpty('Select a model', 'Pick a result to see its details, available quantisations and file sizes.'));
+  }
+
+  async function hfOpenRepo(id) {
+    _hf.selected = id;
+    if (_hf.view !== 'discover') hfSwitchView('discover');
+    document.querySelectorAll('#hf-results .hf-card').forEach(c => c.classList.toggle('selected', c.dataset.repo === id));
+    const box = document.getElementById('hf-detail');
+    _hfClear(box);
+    for (let i = 0; i < 3; i++) box.appendChild(_hfEl('div', null, 'hf-skeleton')).style.marginBottom = '8px';
+    if (window.matchMedia('(max-width: 1250px)').matches) document.getElementById('hf-detail-pane').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    try {
+      const d = await (await fetch('/hf/repo?id=' + encodeURIComponent(id))).json();
+      if (_hf.selected !== id) return;   // user already picked something else
+      _hfClear(box);
+      if (d.status !== 'ok') { box.appendChild(_hfEmpty('Could not load this model', d.error)); return; }
+      box.appendChild(_hfDetail(d.model, d.files));
+    } catch (e) { _hfClear(box); box.appendChild(_hfEmpty('Could not load this model', e.message)); }
+  }
+
+  function _hfFact(label, value) {
+    const f = _hfEl('div', null, 'hf-fact');
+    f.appendChild(_hfEl('span', label));
+    f.appendChild(_hfEl('strong', value));
+    return f;
+  }
+
+  function _hfDetail(m, files) {
+    const root = _hfEl('div', null, 'hf-detail');
+    const slash = m.id.indexOf('/');
+    root.appendChild(_hfEl('span', slash > 0 ? m.id.slice(0, slash) : m.author, 'bench-eyebrow'));
+    root.appendChild(_hfEl('h3', slash > 0 ? m.id.slice(slash + 1) : m.id));
+    const links = _hfEl('div', null, 'hf-detail-links');
+    const card = _hfEl('a', 'Model card on Hugging Face ↗');
+    card.href = m.url; card.target = '_blank'; card.rel = 'noopener noreferrer';
+    links.appendChild(card);
+    const files_ = _hfEl('a', 'Files ↗');
+    files_.href = m.url + '/tree/main'; files_.target = '_blank'; files_.rel = 'noopener noreferrer';
+    links.appendChild(files_);
+    root.appendChild(links);
+
+    const pills = _hfEl('div', null, 'hf-pills');
+    if (m.is_gguf) pills.appendChild(_hfPill('GGUF', 'gguf'));
+    if (m.vision) pills.appendChild(_hfPill('Vision', 'vision'));
+    if (m.gated) pills.appendChild(_hfPill('Gated', 'warn'));
+    if (m.pipeline) pills.appendChild(_hfPill(m.pipeline));
+    (m.languages || []).slice(0, 4).forEach(l => pills.appendChild(_hfPill(l)));
+    root.appendChild(pills);
+
+    const facts = _hfEl('div', null, 'hf-facts');
+    [['Parameters', m.params], ['Architecture', m.architecture],
+     ['Context', m.context_length ? _hfCount(m.context_length) + ' tokens' : ''],
+     ['Licence', m.license], ['Base model', m.base_model], ['Updated', _hfDate(m.updated)],
+     ['Downloads', _hfCount(m.downloads)], ['Likes', _hfCount(m.likes)]]
+      .filter(([, v]) => v).forEach(([k, v]) => facts.appendChild(_hfFact(k, v)));
+    root.appendChild(facts);
+
+    if (m.gated) {
+      const warn = _hfEl('div', 'This repository is gated. Accept its licence on huggingface.co and add an access token (sidebar) before downloading.', 'hf-note');
+      warn.style.color = '#e0a060';
+      root.appendChild(warn);
+    }
+
+    const models = files.filter(g => !g.is_mmproj);
+    const projectors = files.filter(g => g.is_mmproj);
+    if (!files.length) {
+      root.appendChild(_hfEmpty('No GGUF files', 'This repository does not contain GGUF files, so it cannot be used with llama.cpp directly.'));
+      return root;
+    }
+
+    const title = _hfEl('div', null, 'hf-section-title');
+    title.appendChild(_hfEl('h4', 'Quantisations · ' + models.length));
+    const verifyLabel = _hfEl('label', null, 'hf-check');
+    const verify = document.createElement('input'); verify.type = 'checkbox'; verify.checked = true; verify.id = 'hf-verify';
+    verifyLabel.appendChild(verify); verifyLabel.appendChild(_hfEl('span', 'Verify checksum'));
+    title.appendChild(verifyLabel);
+    root.appendChild(title);
+
+    const smallest = models.length ? models[0].size : 0;
+    models.forEach(g => root.appendChild(_hfFileRow(m, g, g.size === smallest && models.length > 1 ? 'smallest' : '')));
+    if (projectors.length) {
+      const t2 = _hfEl('div', null, 'hf-section-title');
+      t2.appendChild(_hfEl('h4', 'Vision projectors'));
+      root.appendChild(t2);
+      root.appendChild(_hfEl('div', 'Only needed for image input. Download one that matches the model, then attach it under Advanced Settings → LoRA / Vision.', 'hf-note'));
+      projectors.forEach(g => root.appendChild(_hfFileRow(m, g, '')));
+    }
+
+    const guide = _hfEl('details', null, 'hf-quant-guide');
+    guide.appendChild(_hfEl('summary', 'Which quantisation should I pick?'));
+    guide.appendChild(_hfEl('p', 'Smaller numbers (Q2, Q3) are smaller and faster but lose quality; Q4_K_M is the usual balance; Q5/Q6 are closer to the original; Q8_0 is near-lossless; F16/BF16 are unquantised. Pick the largest file that fits in your VRAM with room left for context.', 'hf-note'));
+    root.appendChild(guide);
+    return root;
+  }
+
+  function _hfFileRow(m, g, tag) {
+    const installed = g.files.every(f => _hf.installed.has(f.path.split('/').pop()));
+    const row = _hfEl('div', null, 'hf-file' + (installed ? ' installed' : ''));
+    const quantLabel = g.quant || (g.is_mmproj ? 'mmproj' : 'GGUF');
+    const quant = _hfEl('div', null, 'hf-quant');
+    const quantText = _hfEl('span', quantLabel, 'hf-quant-text');
+    quantText.dataset.tip = quantLabel;
+    quant.appendChild(quantText);
+    if (tag) quant.appendChild(_hfEl('small', tag));
+    row.appendChild(quant);
+    const fullName = (g.folder ? g.folder + '/' : '') + g.name;
+    const name = _hfEl('div', null, 'hf-file-name');
+    const nameText = _hfEl('span', fullName, 'hf-file-name-text');
+    nameText.dataset.tip = fullName;
+    name.appendChild(nameText);
+    if (g.shards > 1) name.appendChild(_hfPill(g.shards + ' parts'));
+    if (installed) name.appendChild(_hfPill('Installed', 'gguf'));
+    row.appendChild(name);
+    row.appendChild(_hfEl('div', _hfBytes(g.size), 'hf-file-size'));
+    const btn = _hfEl('button', installed ? 'Installed' : 'Download', installed ? '' : 'hf-go');
+    btn.type = 'button';
+    btn.disabled = installed;
+    btn.title = installed ? 'Already in your models folder' : 'Download ' + _hfBytes(g.size);
+    btn.onclick = () => hfDownload(m.id, g.files.map(f => f.path), btn);
+    row.appendChild(btn);
+    return row;
+  }
+
+  async function hfDownload(repoId, paths, btn) {
+    if (btn) btn.disabled = true;
+    try {
+      const verify = document.getElementById('hf-verify');
+      const d = await (await fetch('/hf/download', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo_id: repoId, paths, verify: verify ? verify.checked : true }) })).json();
+      if (d.status !== 'ok') { hwuiToast(d.error || 'Could not start download', 'error', 5000); return; }
+      hwuiToast('Download started — see Downloads', 'success');
+      hfRefreshDownloads();
+    } catch (e) { hwuiToast('Could not start download: ' + e.message, 'error'); }
+    finally { if (btn) btn.disabled = false; }
+  }
+
+  async function hfCancel(id) {
+    await fetch('/hf/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+    hfRefreshDownloads();
+  }
+
+  // ── Downloads ─────────────────────────────────────────────────────────────
+  async function hfRefreshDownloads() {
+    try {
+      const d = await (await fetch('/hf/downloads')).json();
+      const jobs = d.jobs || [];
+      const active = jobs.filter(j => ['queued', 'downloading', 'verifying'].includes(j.status));
+      const badge = document.getElementById('hf-downloads-count');
+      badge.textContent = active.length; badge.hidden = !active.length;
+      const wrap = document.getElementById('hf-downloads');
+      _hfClear(wrap);
+      if (!jobs.length) wrap.appendChild(_hfEmpty('No downloads yet', 'Choose a quantisation in Discover and press Download.'));
+      jobs.forEach(j => wrap.appendChild(_hfJobCard(j, active.includes(j))));
+      let finished = false;
+      jobs.forEach(j => {
+        if (j.status === 'done' && !_hf.doneSeen.has(j.id)) {
+          _hf.doneSeen.add(j.id); finished = true;
+          if (_hf.seenFirstPoll) hwuiToast('Downloaded ' + j.files.join(', '), 'success', 4000);
+        }
+      });
+      if (finished) { hfRefreshInfo(); hfLoadInstalled(true); }
+      _hf.seenFirstPoll = true;
+    } catch (e) { /* transient poll failure */ }
+  }
+
+  function _hfJobCard(j, active) {
+    const card = _hfEl('div', null, 'hf-job');
+    const head = _hfEl('div', null, 'hf-job-head');
+    const title = _hfEl('div', null, 'hf-job-title');
+    title.appendChild(_hfEl('strong', j.repo_id));
+    title.appendChild(_hfEl('small', j.current && active ? j.current : j.files.join(', ')));
+    head.appendChild(title);
+    const actions = _hfEl('div', null, 'hf-job-actions');
+    if (active) {
+      const cancel = _hfEl('button', 'Cancel', 'hf-danger'); cancel.type = 'button';
+      cancel.onclick = () => hfCancel(j.id);
+      actions.appendChild(cancel);
+    } else if (j.status === 'error' && j.paths) {
+      const resume = _hfEl('button', 'Resume', 'hf-go'); resume.type = 'button';
+      resume.title = 'Continues from the partial file';
+      resume.onclick = () => hfDownload(j.repo_id, j.paths, resume);
+      actions.appendChild(resume);
+    } else if (j.status === 'cancelled' && j.paths) {
+      const again = _hfEl('button', 'Download again'); again.type = 'button';
+      again.onclick = () => hfDownload(j.repo_id, j.paths, again);
+      actions.appendChild(again);
+    } else if (j.status === 'done') {
+      const open = _hfEl('button', 'View installed'); open.type = 'button';
+      open.onclick = () => hfSwitchView('installed');
+      actions.appendChild(open);
+    }
+    head.appendChild(actions);
+    card.appendChild(head);
+
+    const bar = _hfEl('div', null, 'hf-progress');
+    const fill = _hfEl('div');
+    fill.style.width = (j.status === 'done' ? 100 : j.percent) + '%';
+    if (j.status === 'error') fill.className = 'err';
+    else if (j.status === 'verifying') fill.className = 'pulse';
+    bar.appendChild(fill);
+    card.appendChild(bar);
+
+    const line = _hfEl('div', null, 'hf-status-line');
+    const add = (t, cls) => line.appendChild(_hfEl('span', t, cls));
+    if (j.status === 'done') add('✅ Done — ' + _hfBytes(j.total) + ' saved to ' + j.folder, 'ok');
+    else if (j.status === 'cancelled') add('Cancelled — partial file discarded');
+    else if (j.status === 'error') {
+      add('❌ ' + j.error, 'bad');
+      add(j.paths ? 'The partial file was kept; Resume continues from it.' : 'Open the model and download again to resume.');
+    } else {
+      add(_hfBytes(j.done) + ' / ' + _hfBytes(j.total) + ' (' + j.percent + '%)');
+      if (j.status === 'verifying') add('Verifying checksum…');
+      else if (j.speed) {
+        add(_hfBytes(j.speed) + '/s');
+        const eta = _hfEta((j.total - j.done) / j.speed);
+        if (eta) add(eta + ' left');
+      } else add(j.status === 'queued' ? 'Starting…' : 'Connecting…');
+    }
+    card.appendChild(line);
+    return card;
+  }
+
+  // ── Installed ─────────────────────────────────────────────────────────────
+  async function hfLoadInstalled(silent) {
+    const wrap = document.getElementById('hf-installed');
+    try {
+      const d = await (await fetch('/list_models')).json();
+      const set = new Set();
+      (d.groups || []).forEach(g => g.models.forEach(m => set.add(m)));
+      const changed = set.size !== _hf.installed.size || [...set].some(x => !_hf.installed.has(x));
+      _hf.installed = set;
+      if (changed && _hf.selected) {   // refresh "Installed" markers in an open detail pane
+        const open = _hf.selected; _hf.selected = '';
+        hfOpenRepoQuiet(open);
+      }
+      if (silent && _hf.view !== 'installed') return;
+      _hfClear(wrap);
+      if (d.error) { wrap.appendChild(_hfEmpty('Models folder unavailable', d.error)); return; }
+      const groups = (d.groups || []).filter(g => g.models.length);
+      if (!groups.length) { wrap.appendChild(_hfEmpty('No models installed', 'Downloaded GGUF files appear here.')); return; }
+      groups.forEach(g => wrap.appendChild(_hfFolderCard(g)));
+    } catch (e) {
+      if (!silent) { _hfClear(wrap); wrap.appendChild(_hfEmpty('Could not read the models folder', e.message)); }
+    }
+  }
+
+  async function hfOpenRepoQuiet(id) {
+    // Re-render the detail pane in place (no view switch, no scroll) after the installed set changed.
+    _hf.selected = id;
+    try {
+      const d = await (await fetch('/hf/repo?id=' + encodeURIComponent(id))).json();
+      if (_hf.selected !== id || d.status !== 'ok') return;
+      const box = document.getElementById('hf-detail');
+      _hfClear(box); box.appendChild(_hfDetail(d.model, d.files));
+    } catch (e) { /* leave the existing pane */ }
+  }
+
+  function _hfFolderCard(g) {
+    const card = _hfEl('div', null, 'hf-folder');
+    const head = _hfEl('div', null, 'hf-folder-head');
+    const isHf = !!g.folder && g.folder.indexOf('__') > 0;
+    head.appendChild(_hfEl('strong', g.folder || 'Models folder (root)'));
+    if (isHf) {
+      const repo = g.folder.replace('__', '/');
+      const view = _hfEl('button', 'View on Hugging Face'); view.type = 'button';
+      view.onclick = () => hfOpenRepo(repo);
+      head.appendChild(view);
+    }
+    card.appendChild(head);
+    g.models.forEach(m => card.appendChild(_hfEl('div', m, 'hf-folder-file')));
+    return card;
+  }
+
+
   loadOpenAISettings();
   loadAnthropicSettings();
+  providerLoad();
   refreshCloudConnect();  // set Connect/Disconnect button to current state
 
   // Re-sync the Connect/Disconnect button whenever the tab regains

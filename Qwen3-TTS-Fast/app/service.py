@@ -7,6 +7,7 @@ import queue
 import re
 import shutil
 import struct
+import subprocess
 import threading
 import time
 import uuid
@@ -364,10 +365,28 @@ def health(load_model: bool = False) -> dict[str, Any]:
             "idle_vram_mb": runtime.idle, "loaded_vram_mb": runtime.loaded_vram_mb, "error": error}
 
 
+def library_info() -> dict[str, Any]:
+    """Version/commit of the faster_qwen3_tts that is actually imported (two stacks can be installed)."""
+    import faster_qwen3_tts
+    import transformers
+    commit = None
+    try:
+        repo = Path(faster_qwen3_tts.__file__).resolve().parents[1]
+        found = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True,
+                               timeout=5).stdout.strip()
+        commit = found or None
+    except Exception:
+        pass
+    return {"version": getattr(faster_qwen3_tts, "__version__", "unknown"), "commit": commit,
+            "transformers": transformers.__version__, "source": str(Path(faster_qwen3_tts.__file__).resolve().parents[1])}
+
+
 @app.get("/backend")
 def backend() -> dict[str, Any]:
-    return {"implementation": "andimarafioti/faster-qwen3-tts", "version": "0.3.0",
-            "commit": "6cdb07a3deea6a8d097a5493963f9b2df3fd9af9", "backend": "PyTorch CUDA graphs",
+    info = library_info()
+    return {"implementation": "andimarafioti/faster-qwen3-tts", "version": info["version"],
+            "commit": info["commit"], "transformers": info["transformers"], "source": info["source"],
+            "backend": "PyTorch CUDA graphs",
             "triton": False, "flash_attention": False, "attention": "SDPA",
             "true_decoded_audio_streaming": True, "cached_voices": list(runtime.prompt_meta.values())}
 
@@ -379,12 +398,24 @@ def hwui_voices() -> dict[str, Any]:
     return {"voices": shared_voice_names(), "voices_dir": str(SHARED_VOICES)}
 
 
+@app.get("/blend-voices/test-text")
+def get_blend_voice_test_text() -> dict[str, Any]:
+    raise HTTPException(status_code=403, detail={'error': 'Voice Forge is available in HWUI Pro.', 'pro_required': True})
 
 
+@app.post("/blend-voices/test-text")
+def save_blend_voice_test_text(payload: dict[str, Any]) -> dict[str, Any]:
+    raise HTTPException(status_code=403, detail={'error': 'Voice Forge is available in HWUI Pro.', 'pro_required': True})
 
 
+@app.get("/blend-voices/reference")
+def blend_voice_reference(voice: str) -> FileResponse:
+    raise HTTPException(status_code=403, detail={'error': 'Voice Forge is available in HWUI Pro.', 'pro_required': True})
 
 
+@app.delete("/blend-voices/voice")
+def delete_blended_voice(voice: str) -> dict[str, Any]:
+    raise HTTPException(status_code=403, detail={'error': 'Voice Forge is available in HWUI Pro.', 'pro_required': True})
 
 
 @app.get("/status")
@@ -394,10 +425,34 @@ def hwui_status() -> dict[str, Any]:
             "voices_dir": str(SHARED_VOICES)}
 
 
+@app.post("/blend-voices")
+async def blend_voices(
+    text: str = Form(...),
+    blend_ratio: float = Form(50.0),
+    expression: float = Form(HWUI_VOICE_TEMPERATURE),
+    speed: float = Form(1.0),
+    language: str = Form("English"),
+    seed: int | None = Form(None),
+    voice_a: str | None = Form(None),
+    voice_b: str | None = Form(None),
+    voice_a_audio: UploadFile | None = File(None),
+    voice_b_audio: UploadFile | None = File(None),
+) -> dict[str, Any]:
+    raise HTTPException(status_code=403, detail={'error': 'Voice Forge is available in HWUI Pro.', 'pro_required': True})
 
 
+@app.get("/blend-voices/audio/{filename}")
+def blend_voice_audio(filename: str) -> FileResponse:
+    raise HTTPException(status_code=403, detail={'error': 'Voice Forge is available in HWUI Pro.', 'pro_required': True})
 
 
+@app.post("/blend-voices/save")
+def save_blended_voice(
+    result_id: str = Form(...),
+    voice_name: str = Form(...),
+    transcript: str = Form(...),
+) -> dict[str, Any]:
+    raise HTTPException(status_code=403, detail={'error': 'Voice Forge is available in HWUI Pro.', 'pro_required': True})
 
 
 @app.post("/warmup")

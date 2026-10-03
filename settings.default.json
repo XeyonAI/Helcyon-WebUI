@@ -31,8 +31,8 @@
   "ignore_eos": false,
   "eos_logit_bias": -3.0,
   "ministral_eos_logit_bias": 3.0,
-  "ministral_legacy_post_history_reminder": false,
   "ministral_response_intent": true,
+  "message_reactions_enabled": true,
   "llama_server_exe": "",
   "llama_models_dir": "C:\\HWUI-Models",
   "llama_show_console": true,
@@ -48,6 +48,11 @@
     "parallel": 1,
     "reasoning": "off",
     "cache_ram": 0
+  },
+  "inference_provider": {
+    "id": "openai_compat",
+    "persist_on_startup": false,
+    "configs": {}
   },
   "llama_last_model": "",
   "automatic_vision_routing_enabled": false,

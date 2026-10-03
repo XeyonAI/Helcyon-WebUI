@@ -57,6 +57,55 @@
     .msg-action-bar button.context-toggle.is-excluded { color: rgba(255, 190, 90, 0.9) !important; }
   </style>
   <script>
+    // Restore the chat sidebar state before the page paints, and persist changes.
+    try {
+      if (localStorage.getItem('hwui_chat_sidebar_collapsed') === '1') {
+        document.documentElement.classList.add('chat-sidebar-collapsed');
+      }
+    } catch (e) {}
+    function toggleChatSidebar() {
+      closeCollapsedChatHistory();
+      const collapsed = document.documentElement.classList.toggle('chat-sidebar-collapsed');
+      try { localStorage.setItem('hwui_chat_sidebar_collapsed', collapsed ? '1' : '0'); } catch (e) {}
+      syncChatSidebarToggle(collapsed);
+    }
+    function syncChatSidebarToggle(collapsed = document.documentElement.classList.contains('chat-sidebar-collapsed')) {
+      const toggle = document.getElementById('sidebar-collapse-btn');
+      if (!toggle) return;
+      toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      toggle.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+      toggle.setAttribute('aria-label', toggle.title);
+    }
+    document.addEventListener('DOMContentLoaded', () => syncChatSidebarToggle());
+    function openCollapsedChatHistory() {
+      const panel = document.getElementById('collapsed-chat-history-panel');
+      const list = document.getElementById('chat-list');
+      const host = document.getElementById('collapsed-chat-history-list');
+      const returnPoint = document.getElementById('chat-list-return-point');
+      const sort = document.getElementById('collapsed-chat-sort-select');
+      if (!panel || !list || !host || !returnPoint) return;
+      if (sort) sort.value = localStorage.getItem('chatSortMode') || 'newest';
+      host.appendChild(list);
+      panel.hidden = false;
+      panel.setAttribute('aria-hidden', 'false');
+      document.getElementById('collapsed-chat-history-close')?.focus();
+    }
+    function closeCollapsedChatHistory() {
+      const panel = document.getElementById('collapsed-chat-history-panel');
+      const list = document.getElementById('chat-list');
+      const returnPoint = document.getElementById('chat-list-return-point');
+      if (panel) {
+        panel.hidden = true;
+        panel.setAttribute('aria-hidden', 'true');
+      }
+      if (list && returnPoint?.parentNode) returnPoint.parentNode.insertBefore(list, returnPoint);
+    }
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') closeCollapsedChatHistory();
+    });
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('sidebar-footer')?.addEventListener('click', closeCollapsedChatHistory, true);
+    });
     // Always fetch active theme with cache-bust so saved changes appear immediately
     fetch('/themes/list').then(r=>r.json()).then(d=>{
       const name = d.active || 'midnight';
@@ -214,7 +263,7 @@
     <!-- Model trigger and backend indicator — floating just below the top bar
          at the left edge of the chat area. Keep the model first so the two
          controls read in the same order as the header layout. -->
-    <div style="position:fixed; top:72px; left:286px; z-index:999; display:flex; align-items:center; gap:8px;">
+    <div style="position:fixed; top:72px; left:calc(var(--chat-sidebar-width, 330px) + 26px); z-index:999; display:flex; align-items:center; gap:8px;">
       <button id="model-display" onclick="toggleModelPicker()" title="Switch model" style="
         background: rgba(74, 106, 138, 0.18);
         border: 1px solid rgba(74, 106, 138, 0.75);
@@ -223,7 +272,7 @@
         overflow: hidden;
         padding: 7px 16px 7px 14px;
         font-size: 14px;
-        color: #e7edf4;
+        color: #fff0cf;
         cursor: pointer;
         display: flex;
         align-items: center;
@@ -231,7 +280,7 @@
         white-space: nowrap;
         max-width: 280px;
         transition: border-color 0.15s, background 0.15s;
-      " onmouseover="this.style.borderColor='#4a6a8a'; this.style.background='rgba(74,106,138,0.28)'" onmouseout="this.style.borderColor='rgba(74,106,138,0.75)'; this.style.background='rgba(74,106,138,0.18)'">
+      " onmouseover="this.style.borderColor='#4a6a8a'; this.style.background='rgba(74,106,138,0.28)'" onmouseout="this.style.borderColor='rgba(255,175,55,0.55)'; this.style.background='rgba(210,130,20,0.18)'">
         <span id="model-load-progress" aria-hidden="true" style="position:absolute; inset:0 auto 0 0; width:0; background:rgba(74,106,138,0.35); pointer-events:none;"></span>
         <span id="model-display-name" style="position:relative; z-index:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Loading...</span>
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="position:relative; z-index:1; flex-shrink:0; opacity:0.45;"><polyline points="6 9 12 15 18 9"></polyline></svg>
@@ -556,6 +605,9 @@
         <div class="chat-heading-row">
           <h2>Chats</h2>
           <button id="open-chat-folder-btn" onclick="openChatsFolder()" title="Open chat folder">📂 Open folder</button>
+          <button id="sidebar-collapse-btn" type="button" onclick="toggleChatSidebar()" aria-label="Collapse sidebar" aria-expanded="true" title="Collapse sidebar">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2"></rect><path d="M9 5v14"></path><path d="m14 9 3 3-3 3"></path></svg>
+          </button>
         </div>
           <div class="sidebar-controls">
             <select id="chat-sort-select" onchange="sortChats()">
@@ -564,19 +616,38 @@
               <option value="most_recent">Most Recent</option>
               <option value="alphabetical">A-Z</option>
             </select>
-            <button id="new-chat-btn">＋ New</button>
+            <button id="new-chat-btn" onclick="closeCollapsedChatHistory()" title="New chat" aria-label="New chat"><span class="sidebar-new-chat-icon" aria-hidden="true">✎</span><span class="sidebar-new-chat-label">New</span></button>
           </div>
+          <button id="collapsed-chat-history-btn" type="button" onclick="openCollapsedChatHistory()" title="Chat history" aria-label="Open chat history">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"></path><circle cx="2.5" cy="6" r=".5"></circle><circle cx="2.5" cy="12" r=".5"></circle><circle cx="2.5" cy="18" r=".5"></circle></svg>
+          </button>
         </div>
         <ul id="chat-list"></ul>
+        <div id="chat-list-return-point" hidden></div>
       
       <div id="sidebar-footer">
-        <button id="projects-btn" onclick="openProjectModal()">📁 Projects</button>
-        <button id="opening-line-btn" onclick="openOpeningLineModal()">💬 Opening Line</button>
-        <button id="author-note-btn" onclick="openAuthorNote()">📝 Author's Note</button>
-        <button id="memory-btn" onclick="openMemoryModal()">🧠 Memory</button>
-        <button id="global-docs-btn" onclick="openGlobalDocsModal()">📚 Documents</button>
+        <button id="projects-btn" onclick="openProjectModal()" title="Projects" aria-label="Projects"><span class="sidebar-action-icon" aria-hidden="true">📁</span><span class="sidebar-action-label">Projects</span></button>
+        <button id="opening-line-btn" onclick="openOpeningLineModal()" title="Opening Line" aria-label="Opening Line"><span class="sidebar-action-icon" aria-hidden="true">💬</span><span class="sidebar-action-label">Opening Line</span></button>
+        <button id="author-note-btn" onclick="openAuthorNote()" title="Author's Note" aria-label="Author's Note"><span class="sidebar-action-icon" aria-hidden="true">📝</span><span class="sidebar-action-label">Author's Note</span></button>
+        <button id="memory-btn" onclick="openMemoryModal()" title="Memory" aria-label="Memory"><span class="sidebar-action-icon" aria-hidden="true">🧠</span><span class="sidebar-action-label">Memory</span></button>
+        <button id="global-docs-btn" onclick="openGlobalDocsModal()" title="Documents" aria-label="Documents"><span class="sidebar-action-icon" aria-hidden="true">📚</span><span class="sidebar-action-label">Documents</span></button>
       </div>
       
+    </div>
+    <div id="collapsed-chat-history-panel" hidden aria-hidden="true" onclick="if(event.target===this) closeCollapsedChatHistory()">
+      <section class="collapsed-chat-history-card" role="dialog" aria-modal="true" aria-labelledby="collapsed-chat-history-title">
+        <header class="collapsed-chat-history-header">
+          <h2 id="collapsed-chat-history-title">Chats</h2>
+          <select id="collapsed-chat-sort-select" aria-label="Sort chats" onchange="document.getElementById('chat-sort-select').value=this.value; sortChats()">
+            <option value="newest">Newest First</option>
+            <option value="oldest">Oldest First</option>
+            <option value="most_recent">Most Recent</option>
+            <option value="alphabetical">A-Z</option>
+          </select>
+          <button id="collapsed-chat-history-close" type="button" onclick="closeCollapsedChatHistory()" aria-label="Close chat history" title="Close">&times;</button>
+        </header>
+        <div id="collapsed-chat-history-list"></div>
+      </section>
     </div>
     <!-- Main -->
     <div id="main">
@@ -630,7 +701,7 @@
         <!-- Chat -->
         <div id="chat"></div>
         <!-- Input -->
-        <div id="input-area" style="position:fixed;bottom:20px;left:250px;right:0;z-index:9999;display:flex;flex-direction:column;align-items:center;pointer-events:none;background:transparent;padding:0;border:none;">
+        <div id="input-area" style="position:fixed;bottom:20px;left:var(--chat-sidebar-width,330px);right:0;z-index:9999;display:flex;flex-direction:column;align-items:center;pointer-events:none;background:transparent;padding:0;border:none;">
 
           <!-- Image Preview Strip -->
           <div id="image-preview-strip" style="display:none;padding:6px 0;gap:8px;flex-wrap:wrap;max-width:calc(var(--chat-width) - 100px);width:100%;pointer-events:all;"></div>
@@ -4126,6 +4197,7 @@ function persistChatState() {
       
       // Open chat on click - USE extractCharacterFromFilename()
       li.addEventListener('click', () => {
+        closeCollapsedChatHistory();
         const characterName = extractCharacterFromFilename(chat.filename);
         
         console.log('📂 Opening chat, setting lastCharacter to:', characterName);
@@ -6528,6 +6600,8 @@ async function sendPrompt() {
         body: JSON.stringify(chatRequestBody)
       });
       const reactionDiagnosticId = response.headers.get('X-HWUI-Reaction-Diagnostic');
+      // Message reactions switched off (Config): never touch stored reactions, even on regenerate.
+      const reactionsOff = response.headers.get('X-HWUI-Reactions') === 'off';
       if (reactionDiagnosticId) {
         console.info('🧪 REACTION DIAGNOSTIC response identified', {
           request_id: reactionDiagnosticId,
@@ -6573,7 +6647,8 @@ async function sendPrompt() {
           return false;
         }
         const data = await response.json();
-        const imageAction = parseHwuiImageAction(data.text || '');
+        const reactionOutput = HwuiChatCore.parseAssistantReaction(data.text || '', { final: true });
+        const imageAction = parseHwuiImageAction(reactionOutput.text);
         if (imageAction) {
           window._streamingPartial = "";
           setTimeout(() => runComfyUIImagePipeline({
@@ -6582,14 +6657,15 @@ async function sendPrompt() {
           }), 0);
           return;
         }
-        const reactionOutput = HwuiChatCore.parseAssistantReaction(data.text || '', { final: true });
         const message = reactionOutput.text || "⚠️ Unknown response";
         const assistantMessageId = createHwuiMessageId();
         const assistantCompleted = message.trim().length > 0 && message !== "⚠️ Unknown response";
         const assistantStatus = assistantCompleted ? 'completed' : 'error';
         const generationCompletedAt = new Date().toISOString();
 
-        syncDesktopModelReaction(reactionOutput.reaction, replySourceUserMessageId);
+        if (!reactionsOff) syncDesktopModelReaction(reactionOutput.reaction, replySourceUserMessageId);
+        if (reactionOutput.reaction) await HwuiChatCore.waitForReactionPaint();
+        if (window._generationCancelled) return;
 
         const modelWrapper = document.createElement("div");
         modelWrapper.className = "message-wrapper model-wrapper";
@@ -6909,7 +6985,7 @@ async function sendPrompt() {
       });
 
       // ── Reader loop (producer only — no rendering) ────────────────────────
-      function consumeDecodedChunk(chunk) {
+      async function consumeDecodedChunk(chunk) {
         if (!chunk) return;
         rawAll += chunk;
 
@@ -6928,7 +7004,13 @@ async function sendPrompt() {
               reactionAnswer.reaction,
               replySourceUserMessageId,
             );
+            if (modelReactionAttached) await HwuiChatCore.waitForReactionPaint();
+            if (window._generationCancelled) return;
           }
+        }
+        if (reactionAnswer.decided && !reactionAnswer.reaction && !modelReactionAttached) {
+          syncDesktopModelReaction(null, replySourceUserMessageId);
+          modelReactionAttached = true;
         }
         if (reactionDiagnosticId && reactionAnswer.reaction && !reactionDiagnosticParserLogged) {
           reactionDiagnosticParserLogged = true;
@@ -6946,7 +7028,7 @@ async function sendPrompt() {
           renderThinkingPanel(msgDiv, streamEl, _parts.thinking, chat);
         }
 
-        const actionCandidate = fullMessage.trimStart();
+        const actionCandidate = reactionAnswer.text.trimStart();
         const actionCandidateLower = actionCandidate.toLowerCase();
         if (hwuiActionState === 'pending') {
           if (HWUI_IMAGE_ACTION_OPEN.startsWith(actionCandidateLower)) {
@@ -7017,12 +7099,12 @@ async function sendPrompt() {
         const { value, done } = readResult;
         if (done) { console.log('✅ Stream done signal received'); break; }
 
-        consumeDecodedChunk(decoder.decode(value, { stream: true }));
+        await consumeDecodedChunk(decoder.decode(value, { stream: true }));
       }
 
       // Finalise the stateful UTF-8 decoder. A multibyte character split across
       // the final transport boundary is buffered until this no-argument drain.
-      consumeDecodedChunk(decoder.decode());
+      await consumeDecodedChunk(decoder.decode());
 
       // A cancelled reader can resolve before the next animation frame gets to
       // observe the flag, so freeze here too before marking the stream complete.
@@ -7153,7 +7235,7 @@ async function sendPrompt() {
       const rawMemoryMessage = HwuiChatCore.parseAssistantReaction(
         rawFullMessage, { final: true }
       ).text;
-      syncDesktopModelReaction(latestModelReaction, replySourceUserMessageId);
+      if (!reactionsOff) syncDesktopModelReaction(latestModelReaction, replySourceUserMessageId);
       if (reactionDiagnosticId) {
         const reactionTarget = window.loadedChat?.find(
           message => message.message_id === replySourceUserMessageId

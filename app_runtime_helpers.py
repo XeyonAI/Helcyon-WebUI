@@ -1,7 +1,10 @@
+import contextlib
 import json
 import os
 import re
 import socket
+import tempfile
+import time
 
 import requests
 
@@ -39,42 +42,160 @@ def _web_port_is_free(port):
             return False
 
 
-def resolve_web_port(persist=True):
-    """Return this installation's own HWUI web port, assigning one on first run.
+def _sibling_claimed_ports(base_dir=None):
+    """Web ports persisted by other HWUI installs next to this one.
 
-    Mirrors how the llama port is handled. Ownership lives in settings.json,
-    which is gitignored and seeded from settings.default.json, so it is already
-    installation-local and untouched by code updates. The seed used to hardcode
-    8081, so every install claimed the same web port and only one UI could run
-    at a time.
-
-    Resolution order:
-      1. An existing numeric port in settings.json wins, always — existing
-         installs are never moved off the port they already run on.
-      2. Otherwise (missing/null/non-numeric, i.e. a fresh install seeded from
-         the default) scan from WEB_PORT_SCAN_START for the first free port and
-         persist it, so app.py, the launchers, URL generation and any
-         self-reference all resolve the same value.
-
-    The scan deliberately starts above 8081 so a fresh install never claims the
-    legacy default out from under an existing one that is merely stopped.
-
-    `persist=False` resolves without writing, for callers that only need to
-    display or probe the port.
+    _web_port_is_free() only sees ports bound right now, so two installs that
+    are both stopped could otherwise be handed the same port at first run.
     """
-    settings = _read_settings()
-    existing = settings.get("port")
+    base_dir = base_dir or _BASE_DIR
+    claimed = set()
+    parent = os.path.dirname(base_dir)
     try:
-        if existing is not None and int(existing) > 0:
-            return int(existing)
+        names = os.listdir(parent)
+    except OSError:
+        return claimed
+    for name in names:
+        other = os.path.join(parent, name)
+        if os.path.normcase(other) == os.path.normcase(base_dir):
+            continue
+        if not os.path.isfile(os.path.join(other, "app.py")):
+            continue
+        try:
+            with open(os.path.join(other, "settings.json"), "r", encoding="utf-8") as f:
+                port = int((json.load(f) or {}).get("port"))
+            claimed.add(port)
+        except Exception:
+            continue
+    return claimed
+
+
+@contextlib.contextmanager
+def _port_assignment_lock(timeout=10.0):
+    """Serialise port assignment/repair across installs launched together.
+
+    Best-effort: if the lock cannot be taken in time we proceed unlocked rather
+    than block startup.
+    """
+    handle = None
+    locked = False
+    try:
+        handle = open(os.path.join(tempfile.gettempdir(), "hwui_web_port.lock"), "a+b")
+        deadline = time.time() + timeout
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+                break
+            except OSError:
+                if time.time() >= deadline:
+                    break
+                time.sleep(0.1)
+    except Exception:
+        pass
+    try:
+        yield
+    finally:
+        if handle is not None:
+            try:
+                if locked:
+                    if os.name == "nt":
+                        import msvcrt
+                        handle.seek(0)
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                handle.close()
+            except Exception:
+                pass
+
+
+def _persisted_port(settings):
+    try:
+        value = settings.get("port")
+        if value is not None and int(value) > 0:
+            return int(value)
     except (TypeError, ValueError):
         pass
+    return None
 
-    chosen = next(
-        (p for p in range(WEB_PORT_SCAN_START, WEB_PORT_SCAN_END + 1) if _web_port_is_free(p)),
-        WEB_PORT_SCAN_START,
-    )
-    if not persist:
+
+def resolve_web_port(persist=True):
+    """Return this installation's own HWUI web port, assigning/repairing as needed.
+
+    Ownership lives in settings.json, which is gitignored and seeded from
+    settings.default.json, so it is installation-local and untouched by code
+    updates. The old seed hardcoded 8081 and the old resolver only avoided ports
+    bound at that moment, so sibling installs could end up persisting the same
+    port.
+
+    Resolution order:
+      1. A persisted numeric port that no sibling install also persists is
+         returned untouched, always.
+      2. A persisted port that a sibling install also persists (a duplicate
+         reservation from the old resolver) is repaired: this installation, and
+         only this one, moves to the first free port not reserved by any
+         sibling. The sibling's settings are never written. Assignment is done
+         under a cross-install lock and re-checked inside it, so when two
+         conflicting builds launch together exactly one moves.
+      3. A missing/null/non-numeric port (fresh install) gets the same scan.
+
+    The scan starts above 8081 so a fresh install never claims the legacy
+    default out from under an existing one that is merely stopped.
+
+    `persist=False` resolves without writing, for callers that only display or
+    probe the port.
+    """
+    existing = _persisted_port(_read_settings())
+    if existing is not None and existing not in _sibling_claimed_ports():
+        return existing
+
+    with _port_assignment_lock():
+        # Re-read inside the lock: a sibling may have just repaired/assigned.
+        settings = _read_settings()
+        existing = _persisted_port(settings)
+        claimed = _sibling_claimed_ports()
+        if existing is not None and existing not in claimed:
+            return existing
+
+        chosen = next(
+            (p for p in range(WEB_PORT_SCAN_START, WEB_PORT_SCAN_END + 1)
+             if p not in claimed and _web_port_is_free(p)),
+            WEB_PORT_SCAN_START,
+        )
+        if not persist:
+            return chosen
+
+        settings["port"] = chosen
+        try:
+            tmp = _SETTINGS_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(settings, f, indent=2)
+            os.replace(tmp, _SETTINGS_FILE)
+            if existing is None:
+                print(
+                    "First run: assigned this installation its own HWUI web port "
+                    "{} (persisted to settings.json).".format(chosen),
+                    flush=True,
+                )
+            else:
+                print(
+                    "Web port {} was also reserved by a sibling HWUI install; "
+                    "moved this installation to {} (persisted to settings.json).".format(existing, chosen),
+                    flush=True,
+                )
+        except Exception as exc:
+            print(
+                "WARNING: could not persist assigned web port {}: {!r}".format(chosen, exc),
+                flush=True,
+            )
         return chosen
 
     settings["port"] = chosen

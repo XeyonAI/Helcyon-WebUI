@@ -2,6 +2,10 @@ from flask import Flask, request, jsonify, send_from_directory, render_template,
 from flask_cors import CORS
 import requests, os, json, re, hashlib, time, subprocess, sys, functools, struct, base64, socket, weakref, atexit, secrets
 import uuid
+from message_reactions import (
+    complete_reaction_stream, reaction_decision_messages, parse_reaction_decision,
+    REACTION_DECISION_SCHEMA, RECENT_CONTEXT_MESSAGES, strip_reaction_markers,
+)
 from urllib.parse import urlparse
 import psutil
 from contextlib import nullcontext
@@ -245,8 +249,11 @@ os.makedirs(_LLAMA_SLOT_SAVE_PATH, exist_ok=True)
 _LLAMA_SLOT_TRACE_LOCK = threading.Lock()
 _LLAMA_SLOT_TRACE_LAST = {}
 
-# Free omits optional Dev-only stall telemetry. Keep its call sites inert while
-# retaining the ordinary llama-server log path.
+# GPU/host state at the moments a slow prompt evaluation can be explained:
+# llama-server launch/ready, a request with no visible content 6 s after its
+# POST (then every 20 s, at most 4 times), Stop, and first content after a
+# stall. Observational only; probes run off the streaming thread. Written to
+# logs/gpu_stall_trace.jsonl. See llama_stall_diagnostics.py.
 class _NoopStallWatch:
     def mark(self, *args, **kwargs):
         return None
@@ -279,7 +286,6 @@ class _NoopStallDiagnostics:
 
 
 _STALL_DIAG = _NoopStallDiagnostics()
-
 
 def _llama_slot_trace(event, **fields):
     global _LLAMA_SLOT_TRACE_LAST
@@ -511,6 +517,167 @@ if os.environ.get('HWUI_TEMPLATE_DIAGNOSTICS') == '1':
     }
     print('HWUI_TEMPLATE_DIAGNOSTICS ' + json.dumps(_template_diag, ensure_ascii=False), flush=True)
 
+
+
+def _recent_reaction_context(history, chat_filename):
+    """Recent turns before the latest user message, with the reactions they got.
+
+    Context for the reaction decision only; it never reaches normal generation.
+    Reactions live in the chat's sidecar metadata, matched to user messages by text.
+    Any failure just means no reaction marks (the turns are still shown).
+    """
+    flat = lambda text: " ".join(str(text or "").split())
+    def text_of(message):
+        content = message.get("content", "")
+        if isinstance(content, list):
+            content = " ".join(str(p.get("text", "")) for p in content
+                               if isinstance(p, dict) and p.get("type") == "text")
+        return flat(content)
+    messages = [m for m in history or [] if isinstance(m, dict)
+                and m.get("role") in ("user", "assistant")]
+    latest = next((i for i in range(len(messages) - 1, -1, -1)
+                   if messages[i].get("role") == "user"), None)
+    if latest is None:
+        return []
+    recent = [{"role": m["role"], "text": text_of(m)}
+              for m in messages[max(0, latest - RECENT_CONTEXT_MESSAGES):latest]]
+    reactions = {}
+    try:
+        from chat_routes import get_chats_dir
+        from chat_message_metadata import load_chat_metadata
+        meta = load_chat_metadata(get_chats_dir(), chat_filename) if chat_filename else None
+        for record in (meta or {}).get("messages") or []:
+            if record.get("role") == "user" and record.get("reaction"):
+                reactions.setdefault(flat(record.get("content")), []).append(record["reaction"])
+    except Exception:
+        reactions = {}
+    for item in reversed(recent):
+        if item["role"] == "user" and reactions.get(item["text"]):
+            item["reaction"] = reactions[item["text"]].pop()
+    return recent
+
+
+def _decide_missing_message_reaction(user_text, settings, local_model, recent=None):
+    """One bounded metadata request, with no personality/style demonstrations."""
+    messages = reaction_decision_messages(user_text, recent)
+    schema = {"name": "hwui_reaction", "strict": True, "schema": REACTION_DECISION_SCHEMA}
+    backend = settings.get("backend_mode", "local")
+    if backend == "openai":
+        model = settings.get("openai_model", "gpt-4o")
+        key = settings.get("openai_api_key", "").strip()
+        if not key:
+            raise ValueError("Missing provider credential")
+        caps = _openai_caps_for(model)
+        payload = {"model": model, "messages": messages, "stream": False,
+                   caps["token_param"]: 256,
+                   "response_format": {"type": "json_schema", "json_schema": schema}}
+        if caps["sampling"]:
+            payload["temperature"] = 0
+        response = requests.post(get_openai_base_url() + "/chat/completions",
+                                 headers={"Authorization": "Bearer " + key},
+                                 json=payload, timeout=(10, 30))
+        response.raise_for_status()
+        raw = response.json()["choices"][0]["message"].get("content") or ""
+    elif backend == "anthropic":
+        key = settings.get("anthropic_api_key", "").strip()
+        if not key:
+            raise ValueError("Missing provider credential")
+        response = requests.post(
+            get_anthropic_base_url() + "/messages",
+            headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
+            json={"model": settings.get("anthropic_model", "claude-sonnet-4-5"),
+                  "max_tokens": 128, "system": messages[0]["content"],
+                  "messages": messages[1:],
+                  "tools": [{"name": "message_reaction", "description": "Record the reaction decision",
+                             "input_schema": REACTION_DECISION_SCHEMA}],
+                  "tool_choice": {"type": "tool", "name": "message_reaction"}},
+            timeout=(10, 30),
+        )
+        response.raise_for_status()
+        tool = next(item for item in response.json()["content"]
+                    if item.get("type") == "tool_use" and item.get("name") == "message_reaction")
+        raw = json.dumps(tool["input"])
+    elif backend == "provider":
+        response = provider_runtime.post_chat_completion(
+            {"messages": messages, "temperature": 0, "max_tokens": 48,
+             "response_format": {"type": "json_schema", "json_schema": schema}}, settings)
+        response.raise_for_status()
+        raw = response.json()["choices"][0]["message"].get("content") or ""
+    else:
+        with _MODEL_SWAP_LOCK:
+            if not local_model or CURRENT_MODEL != local_model:
+                raise ValueError("Generation model changed")
+            response = _locked_local_json_post(
+                "/v1/chat/completions",
+                {"model": local_model, "messages": messages, "stream": False,
+                 "response_format": {"type": "json_schema", "json_schema": schema},
+                 "reasoning_format": "none", "chat_template_kwargs": {"enable_thinking": False},
+                 "temperature": 0, "max_tokens": 48, "cache_prompt": False},
+                (10, 30), "message_reaction",
+            )
+        response.raise_for_status()
+        raw = response.json()["choices"][0]["message"].get("content") or ""
+    return parse_reaction_decision(raw)
+
+
+@app.after_request
+def _complete_missing_message_reaction(response):
+    """Decide before the lazy provider stream starts, using the user message."""
+    if request.path != "/chat" or request.method != "POST" or response.status_code != 200:
+        return response
+    try:
+        with open("settings.json", "r", encoding="utf-8") as handle:
+            settings = json.load(handle)
+    except Exception:
+        return response
+    if settings.get("message_reactions_enabled", True) is False:
+        # Reactions switched off (Config page): no selector call, no new reaction. Any
+        # marker the chat model emits on its own is removed too, for every kind of turn
+        # (normal, Continue, check-in). Stored reactions are untouched; the header tells
+        # the browser not to clear one when this turn carries none (e.g. regenerate).
+        response.headers["X-HWUI-Reactions"] = "off"
+        if response.mimetype == "text/event-stream":
+            response.response = strip_reaction_markers(response.response)
+        elif response.is_json:
+            payload = response.get_json(silent=True)
+            if isinstance(payload, dict) and isinstance(payload.get("text"), str):
+                payload["text"] = "".join(strip_reaction_markers([payload["text"]]))
+                response.set_data(json.dumps(payload, ensure_ascii=False))
+        return response
+    data = request.get_json(silent=True) or {}
+    if data.get("continue_prefix") or data.get("generation_kind") == "continuation" or data.get("automatic_event"):
+        return response
+    latest = next((m for m in reversed(data.get("conversation_history") or [])
+                   if isinstance(m, dict) and m.get("role") == "user"), {})
+    content = latest.get("content", "")
+    if isinstance(content, list):
+        content = " ".join(str(p.get("text", "")) for p in content
+                           if isinstance(p, dict) and p.get("type") == "text")
+    if not isinstance(content, str) or not content.strip():
+        return response
+    local_model = CURRENT_MODEL
+    recent = _recent_reaction_context(data.get("conversation_history"),
+                                      data.get("current_chat_filename"))
+    decide = lambda: _decide_missing_message_reaction(content, settings, local_model, recent)
+    reaction_request_id = uuid.uuid4().hex[:12]
+    response.headers["X-HWUI-Reaction-Request"] = reaction_request_id
+    trace = lambda **result: print("HWUI_REACTION_RESULT " + json.dumps(
+        dict(request_id=reaction_request_id, **result), ensure_ascii=False), flush=True)
+    # Stream generators reset the legacy abort flag on entry. A Stop during
+    # the reaction request must survive that reset and prevent main generation.
+    cancel_epoch = getattr(_hwui_g, "_reaction_cancel_epoch", _reaction_cancel_epoch)
+    cancelled = lambda: _reaction_cancel_epoch != cancel_epoch
+    if response.mimetype == "text/event-stream":
+        response.response = complete_reaction_stream(response.response, decide,
+                                                     cancelled, trace)
+    elif response.is_json:
+        payload = response.get_json(silent=True)
+        if isinstance(payload, dict) and isinstance(payload.get("text"), str):
+            payload["text"] = "".join(complete_reaction_stream([payload["text"]], decide,
+                                                              cancelled, trace))
+            response.set_data(json.dumps(payload, ensure_ascii=False))
+    return response
+
 # Add CSP headers for TTS audio playback
 @app.after_request
 def add_security_headers(response):
@@ -562,6 +729,9 @@ from situation_routes import situation_bp
 from user_routes import user_bp
 from character_routes import character_bp
 from cloud_api_routes import cloud_api_bp
+from provider_routes import provider_bp
+from hf_routes import hf_bp
+from providers import runtime as provider_runtime
 from helcyon_bench_routes import helcyon_bench_bp
 from document_routes import document_bp
 from push_routes import push_bp
@@ -596,6 +766,8 @@ app.register_blueprint(situation_bp)
 app.register_blueprint(user_bp)
 app.register_blueprint(character_bp)
 app.register_blueprint(cloud_api_bp)
+app.register_blueprint(provider_bp)
+app.register_blueprint(hf_bp)
 app.register_blueprint(helcyon_bench_bp)
 if sentinel_bp is not None:
     app.register_blueprint(sentinel_bp)
@@ -1782,7 +1954,10 @@ try:
     _cae_was = _cae.get('cloud_api_enabled', False)
     _bm_was = _cae.get('backend_mode', 'local')
     _cae['cloud_api_enabled'] = False
-    _cae['backend_mode'] = 'local'
+    # An opt-in (provider_persist_on_startup) lets a LAN/local provider survive a
+    # restart; it is never a paid-cloud mode, so the cloud rule above still holds.
+    if not (_bm_was == 'provider' and (_cae.get('inference_provider') or {}).get('persist_on_startup')):
+        _cae['backend_mode'] = 'local'
     import tempfile as _caetmp, shutil as _caesh
     _cae_tmpf = _cae_path + '.tmp'
     with open(_cae_tmpf, 'w', encoding='utf-8') as _caef2:
@@ -3700,6 +3875,12 @@ def _close_locked_local_stream(response):
 
 def _locked_local_json_post(path, payload, timeout, purpose):
     """Run a non-streaming llama request without competing for slot 0."""
+    # Auxiliary model calls (intent gates, reactions, document writing...) must not
+    # secretly depend on the built-in llama.cpp when another provider is active.
+    # Only the OpenAI-style chat path can be re-served; /completion callers are
+    # converted at their own call sites.
+    if path == "/v1/chat/completions" and provider_runtime.is_provider_mode():
+        return provider_runtime.post_chat_completion(payload)
     auxiliary_id = f"aux-{purpose}-{threading.get_ident()}-{time.monotonic_ns()}"
     with _LOCAL_MODEL_REQUEST_LOCK:
         _llama_slot_trace(
@@ -5692,8 +5873,13 @@ _DOCUMENT_QUESTION_RE = re.compile(
     re.IGNORECASE,
 )
 # The verb is negated ("do NOT write") or the user is the actor ("so I can save").
+# ⚠️ "cannot" and "unable to" negate too. Traced 2026-10-02: the API shard prompt's
+# own line "You cannot write files to my computer. Output every shard directly in
+# this chat" was read as a positive request to write files ("\bnot" does not match
+# inside "cannot"), so the document tool ran alongside the chat shards - it wrote
+# a document, or with no local router posted a "Nothing was changed" notice into the chat.
 _DOCUMENT_VERB_NEGATED_RE = re.compile(
-    r"(?:\bnot|n't|\bnever|\bno\s+need\s+to|\bwithout)\s+"
+    r"(?:\bnot|n't|\bcannot|\bunable\s+to|\bnever|\bno\s+need\s+to|\bwithout)\s+"
     r"(?:(?:ever|actually|please|bother\s+to|try\s+to|attempt\s+to)\s+)?$", re.IGNORECASE)
 _DOCUMENT_USER_ACTOR_RE = re.compile(
     r"\b(?:I|we)\s+(?:(?:can|could|will|would|might|may|shall|then|later|also)\s+|'ll\s+"
@@ -8486,6 +8672,15 @@ def stream_model_response(payload, request_id=None):
     if app.debug:
         print("\n🧩 FULL PAYLOAD SENDING TO MODEL:", flush=True)
         print(json.dumps(payload, indent=2), flush=True)
+    experiment = _PREFILL_WARMUP_EXPERIMENT
+    launch = _STALL_DIAG.current_launch()
+    experiment_first_real = bool(
+        experiment and experiment.get("first_real_pending")
+        and experiment.get("launch_id") == launch.get("launch_id"))
+    if experiment_first_real:
+        experiment["first_real_pending"] = False
+        _llama_slot_trace("prefill_warmup_first_real_request",
+                          request_id=_trace_request_id, experiment=dict(experiment))
     _llama_slot_trace(
         "before_llama_request",
         request_id=_trace_request_id,
@@ -8495,7 +8690,11 @@ def stream_model_response(payload, request_id=None):
     )
     _t_post0 = time.monotonic()
     _watch = _STALL_DIAG.start_watch(
-        _trace_request_id, "/completion", {"architecture_path": "legacy_chatml"}
+        _trace_request_id, "/completion", {
+            "architecture_path": "legacy_chatml",
+            **({"prefill_experiment": dict(experiment), "first_real_request": True}
+               if experiment_first_real else {}),
+        }
     )
     try:
         response = _open_locked_local_stream("/completion", payload)
@@ -8725,6 +8924,8 @@ def stream_model_response(payload, request_id=None):
         prompt_tokens=last_event.get("tokens_evaluated") if last_event else None,
         predicted_tokens=last_event.get("tokens_predicted") if last_event else None,
         visible_chars=len("".join(all_text)),
+        **({"timings": last_event.get("timings") if last_event else None}
+           if experiment_first_real else {}),
     )
     if _diagnostic_raw_pieces is not None:
         _prompt_diagnostic_finish(
@@ -8869,6 +9070,176 @@ def _reset_idle_llama_slot(request_id=None, reason="", expected_slot_id=None):
             error=repr(exc),
         )
         return False
+
+
+# Opt-in load experiment (ported from Personal). Never read/write conversation material.
+_PREFILL_WARMUP_EXPERIMENT = None
+
+
+def _run_prefill_warmup_experiment(enabled, args):
+    """Prime a fresh single-slot server, then verify removal of all warmup KV."""
+    global _PREFILL_WARMUP_EXPERIMENT
+    launch = _STALL_DIAG.current_launch()
+    experiment = {
+        "launch_id": launch.get("launch_id"), "pid": launch.get("pid"),
+        "ready_at": launch.get("ready_at"), "enabled": enabled,
+        "first_real_pending": True, "status": "control" if not enabled else "pending",
+    }
+    _PREFILL_WARMUP_EXPERIMENT = experiment
+    _llama_slot_trace("prefill_warmup_ready", experiment=dict(experiment))
+    if not enabled:
+        return dict(experiment)
+    # RAM caching could retain another copy even after a slot erase. Do not
+    # change runtime flags or erase any pre-existing conversation cache.
+    if int(args.get("parallel", 1)) != 1 or int(args.get("cache_ram", 0)) != 0:
+        experiment.update(status="skipped", reason="requires parallel=1 and cache_ram=0")
+        _llama_slot_trace("prefill_warmup_skipped", experiment=dict(experiment))
+        return dict(experiment)
+    watch = None
+    response = None
+    submitted = False
+    cleanup_ok = True
+    with _LOCAL_MODEL_REQUEST_LOCK:
+        slot = _get_llama_slot_state()
+        if (not slot or slot.get("is_processing")
+                or slot.get("n_prompt_tokens") not in (None, 0)
+                or slot.get("n_prompt_tokens_cache") not in (None, 0)):
+            experiment.update(status="skipped", reason="fresh idle empty slot not verified")
+            _llama_slot_trace("prefill_warmup_skipped", experiment=dict(experiment))
+            return dict(experiment)
+        slot_id = slot["id"]
+        try:
+            target = 2560
+            if int(args.get("ctx_size", 16384)) < target + 16:
+                raise ValueError("context too small for representative 2560-token warmup")
+            # Tokenize harmless synthetic text without inference. Use exactly
+            # 2560 tokens, covering a full 2048-token logical prompt batch plus
+            # a remainder. No user/card/history data enters this request.
+            text = ("The quiet garden has a stone path and a wooden gate. " * 700)
+            token_response = requests.post(
+                f"{API_URL}/tokenize", json={"content": text, "add_special": True},
+                timeout=(2, 10),
+            )
+            token_response.raise_for_status()
+            tokens = token_response.json()["tokens"]
+            if len(tokens) < target or not all(isinstance(t, int) for t in tokens):
+                raise ValueError("tokenizer did not return enough integer tokens")
+            payload = {"prompt": tokens[:target], "id_slot": slot_id,
+                       "stream": True, "n_predict": 1, "cache_prompt": False,
+                       "temperature": 0, "seed": 0}
+            watch = _STALL_DIAG.start_watch(
+                "warmup-" + str(launch.get("launch_id")), "/completion",
+                {"purpose": "discarded_prefill_warmup", "target_tokens": target},
+            )
+            experiment.update(warmup_started_at=watch.identity()["post_started_at"],
+                              target_tokens=target, slot_id=slot_id,
+                              ready_to_start_seconds=round(watch.started_wall -
+                                  datetime.fromisoformat(launch["ready_at"]).timestamp(), 6))
+            _llama_slot_trace("prefill_warmup_start", experiment=dict(experiment))
+            submitted = True
+            response = requests.post(f"{API_URL}/completion", json=payload,
+                                     stream=True, timeout=(5, 120))
+            watch.mark("headers")
+            response.raise_for_status()
+            final = None
+            for line in response.iter_lines(chunk_size=1):
+                if not line:
+                    continue
+                value = line.decode("utf-8").strip()
+                if value.startswith("data:"):
+                    value = value[5:].strip()
+                if value == "[DONE]":
+                    break
+                event = json.loads(value)
+                if "first_server_event_seconds" not in experiment:
+                    experiment["first_server_event_seconds"] = watch.mark("first_json")
+                    experiment["first_server_event_at"] = datetime.fromtimestamp(
+                        watch.started_wall + experiment["first_server_event_seconds"]
+                    ).isoformat(timespec="milliseconds")
+                    _llama_slot_trace("prefill_warmup_first_event", experiment=dict(experiment))
+                if event.get("error"):
+                    raise RuntimeError("llama rejected the warmup request")
+                if event.get("content"):
+                    watch.mark("first_content")
+                if event.get("stop"):
+                    final = event
+            if final is None:
+                raise RuntimeError("warmup ended without final stop metadata")
+            experiment.update(status="completed", timings=final.get("timings"),
+                              evaluated_tokens=final.get("tokens_evaluated"),
+                              truncated=final.get("truncated"),
+                              inference_complete_seconds=watch.elapsed())
+            if int(final.get("tokens_evaluated") or 0) < 2048:
+                raise RuntimeError("warmup did not evaluate a representative full prompt batch")
+            if final.get("truncated"):
+                raise RuntimeError("warmup was truncated")
+        except Exception as exc:
+            experiment.update(status="failed", error=repr(exc))
+        finally:
+            if response is not None:
+                response.close()
+            if submitted:
+                # A broken stream may take a moment to release its slot. Never
+                # erase a busy slot and never release chat into unverified KV.
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    current = _get_llama_slot_state(slot_id)
+                    if current and not current.get("is_processing"):
+                        break
+                    time.sleep(0.05)
+                cleanup_ok = _reset_idle_llama_slot(
+                    request_id="warmup-" + str(launch.get("launch_id")),
+                    reason="discarded_prefill_warmup", expected_slot_id=slot_id,
+                )
+            experiment["cleanup_verified"] = cleanup_ok
+            if watch is not None:
+                experiment["complete_seconds"] = watch.elapsed()
+                experiment["warmup_completed_at"] = datetime.now().isoformat(timespec="milliseconds")
+                watch.finish(experiment["status"], timings=experiment.get("timings"),
+                             cleanup_verified=cleanup_ok)
+            _llama_slot_trace("prefill_warmup_complete", experiment=dict(experiment))
+    return dict(experiment)
+
+
+class _ReasoningCloseRecovery:
+    """Recover the answer when a reasoning model garbles its closing marker.
+
+    llama.cpp's Ministral parser only ends the reasoning block on the exact
+    text `[/THINK]`. If the model emits a near-miss such as `[/THICK]`, the
+    server never leaves reasoning mode, so the whole answer arrives as
+    delta.reasoning_content, delta.content stays empty and the browser reports
+    an empty response. This treats a `[/XXXX]`-shaped marker inside reasoning
+    as the close: text before it stays reasoning, text after it is the answer.
+    Reasoning that never contains such a marker passes through unchanged.
+    """
+
+    _MARKER = re.compile(r"\[/T[A-Z]{2,5}\]")
+    _PARTIAL = re.compile(r"\[(?:/(?:T[A-Z]{0,5})?)?$")
+
+    def __init__(self):
+        self.closed = False
+        self._held = ""
+
+    def feed(self, reasoning_chunk):
+        """Return (reasoning_text, answer_text) for this reasoning delta."""
+        if self.closed:
+            return "", reasoning_chunk
+        text = self._held + reasoning_chunk
+        self._held = ""
+        match = self._MARKER.search(text)
+        if match:
+            self.closed = True
+            return text[:match.start()], text[match.end():]
+        partial = self._PARTIAL.search(text)
+        if partial:
+            self._held = text[partial.start():]
+            text = text[:partial.start()]
+        return text, ""
+
+    def flush(self):
+        """Reasoning text still held back when the stream ended."""
+        held, self._held = self._held, ""
+        return held
 
 
 def stream_vision_response(
@@ -9217,6 +9588,8 @@ def stream_vision_response(
         and _payload_messages[-1].get("reasoning_content")
     )
     _reasoning_streaming = False
+    _close_recovery = _ReasoningCloseRecovery()
+    raw_chunk_seen_content = False
     _answer_started = False
     _reasoning_chars = 0
     _last_prompt_tokens = None
@@ -9288,6 +9661,15 @@ def stream_vision_response(
             delta = _choice.get("delta", {})
             reasoning_chunk = delta.get("reasoning_content") or ""
             raw_chunk = delta.get("content") or ""
+            if reasoning_chunk and not raw_chunk_seen_content:
+                # Garbled close marker (e.g. [/THICK]): the server keeps
+                # reporting the answer as reasoning. Route it as content.
+                reasoning_chunk, _recovered_answer = _close_recovery.feed(reasoning_chunk)
+                raw_chunk = _recovered_answer + raw_chunk
+            elif reasoning_chunk and _close_recovery.closed:
+                reasoning_chunk, raw_chunk = "", reasoning_chunk + raw_chunk
+            if raw_chunk:
+                raw_chunk_seen_content = True
             _raw_chars += len(raw_chunk)
             _reasoning_raw_chars += len(reasoning_chunk)
             if not _first_token_marked and (raw_chunk or reasoning_chunk):
@@ -9412,6 +9794,13 @@ def stream_vision_response(
             else:
                 print(f"❌ Vision parse error: {e}", flush=True)
             continue
+
+    _held_reasoning = _close_recovery.flush()
+    if _held_reasoning and show_thinking and not _reasoning_prefilled:
+        if not _reasoning_streaming:
+            _reasoning_streaming = True
+            yield THINK_OPEN
+        yield _held_reasoning
 
     if _reasoning_streaming:
         yield THINK_CLOSE
@@ -10239,8 +10628,12 @@ def _rebuild_search_user_turn(original_content, augmented_text):
 # messages array) and different re-prompt endpoints, and the local path is
 # load-bearing and must not be perturbed.
 def _web_search_stream_openai(messages, api_key, model, temperature, max_tokens,
-                              top_p, frequency_penalty, presence_penalty, user_input):
+                              top_p, frequency_penalty, presence_penalty, user_input,
+                              stream_fn=None):
     global abort_generation
+    # stream_fn lets a non-OpenAI provider reuse this tag-detecting wrapper unchanged;
+    # it must have stream_openai_response's signature. None = the OpenAI cloud stream.
+    stream_openai_response = stream_fn or globals()["stream_openai_response"]
     import re as _re
 
     # ── Phase 1: stream OpenAI response live, watch for [WEB SEARCH: …] tag ──
@@ -11169,6 +11562,7 @@ def _anthropic_normalize(active_chat):
 # Global abort flag for stopping generation
 # --------------------------------------------------
 abort_generation = False
+_reaction_cancel_epoch = 0
 
 # In-flight /chat tracker — load-bearing diagnostic for the mid-response cutoff
 # bug (final SSE event arrives with stop=true but no stopped_* flags, which
@@ -11413,9 +11807,16 @@ def _chat_inflight_teardown(_exc=None):
 @app.route("/abort_generation", methods=["POST"])
 def abort_generation_endpoint():
     """Stop the current generation immediately."""
-    global abort_generation
+    global abort_generation, _reaction_cancel_epoch
+    _reaction_cancel_epoch += 1
     abort_generation = True
     print("🛑 Generation abort requested")
+    try:
+        # Non-built-in providers: close the socket / send the backend's own abort so a
+        # read blocked on prompt evaluation stops too. No-op for the built-in path.
+        provider_runtime.abort_active()
+    except Exception as exc:
+        print(f"⚠️ provider abort failed: {exc!r}", flush=True)
     try:
         _STALL_DIAG.on_stop()
     except Exception as exc:
@@ -15281,6 +15682,7 @@ def chat():
     print("🔴🔴🔴 CHAT ROUTE HIT - STARTING 🔴🔴🔴")
     import datetime
     import re, os, json, requests
+    _hwui_g._reaction_cancel_epoch = _reaction_cancel_epoch
 
     # 🩺 In-flight tracker — see comment above _chat_inflight_lock.
     # Decrement is handled by @app.teardown_request which fires after the
@@ -17503,13 +17905,48 @@ def chat():
             return ("⚠️ Local backend unavailable. Cloud API is disabled. "
                     "Check that llama.cpp is running.", 503)
 
-        if _oaist.get('backend_mode', 'local') == 'openai':
-            _oai_key   = _oaist.get('openai_api_key', '').strip()
-            _oai_model = _oaist.get('openai_model', 'gpt-4o').strip() or 'gpt-4o'
-            if not _oai_key:
-                return "⚠️ OpenAI backend selected but no API key set. Check config page.", 500
+        # 'provider' (LM Studio / Ollama / KoboldCpp / text-generation-webui / generic
+        # OpenAI-compatible) deliberately reuses this fork's message building,
+        # [WEB SEARCH:] tag handling, OOC stripping and document guard. Only the
+        # transport differs: _oai_stream_fn is the cloud stream for 'openai' and the
+        # provider's stream for 'provider'. Cloud behaviour is unchanged.
+        if _oaist.get('backend_mode', 'local') in ('openai', 'provider'):
+            _oai_is_provider = _oaist.get('backend_mode') == 'provider'
+            _oai_stream_fn = stream_openai_response
+            _oai_notice = [""]   # one-shot text shown before the first provider chunk
+            if _oai_is_provider:
+                try:
+                    _oai_provider = provider_runtime.build_provider(_oaist)
+                except Exception as _pe:
+                    return f"⚠️ Inference provider is not configured: {_pe}", 500
+                _oai_key = ""
+                _oai_model = _oai_provider.config.model
+                print(f"🔌 PROVIDER PATH: {_oai_provider.label} model={_oai_model or '(server default)'}",
+                      flush=True)
 
-            print(f"☁️ OPENAI PATH: model={_oai_model}", flush=True)
+                def _oai_stream_fn(messages, api_key=None, model=None, temperature=None,
+                                   max_tokens=None, top_p=None, frequency_penalty=0.0,
+                                   presence_penalty=0.0, _p=_oai_provider):
+                    global abort_generation
+                    abort_generation = False
+                    if _oai_notice[0]:
+                        yield _oai_notice[0]
+                        _oai_notice[0] = ""
+                    _s = dict(sampling)
+                    _s.update(temperature=temperature, max_tokens=max_tokens, top_p=top_p,
+                              frequency_penalty=frequency_penalty, presence_penalty=presence_penalty)
+                    try:
+                        for _c in provider_runtime.stream_text(_p, messages, _s, lambda: abort_generation):
+                            yield _c
+                    except provider_runtime.ProviderError as _pex:
+                        yield f"[{_p.label} error: {_pex}]"
+            else:
+                _oai_key   = _oaist.get('openai_api_key', '').strip()
+                _oai_model = _oaist.get('openai_model', 'gpt-4o').strip() or 'gpt-4o'
+                if not _oai_key:
+                    return "⚠️ OpenAI backend selected but no API key set. Check config page.", 500
+
+                print(f"☁️ OPENAI PATH: model={_oai_model}", flush=True)
 
             # Build clean messages array: system block + conversation
             _oai_messages = [{"role": "system", "content": system_text + ("\n\n" + memory if memory else "")}]
@@ -17539,6 +17976,12 @@ def chat():
             _oai_messages = _prepend_to_last_user_message(
                 _oai_messages, _oai_packet, "OpenAI"
             )
+            if _oai_is_provider:
+                # Capability degrade: a provider without vision gets text only.
+                _oai_messages, _oai_dropped = _oai_provider.prepare_messages(_oai_messages)
+                if _oai_dropped:
+                    _oai_notice[0] = (f"*({_oai_provider.label} can't view images here, so the image "
+                                      f"was not sent.)*" + chr(10) * 2)
 
             # ── Web-search toggle (OpenAI branch only) ───────────────
             # Read use_web_search here so the OpenAI path can route through
@@ -17562,6 +18005,7 @@ def chat():
                             frequency_penalty = sampling.get("frequency_penalty", 0.0),
                             presence_penalty  = sampling.get("presence_penalty", 0.0),
                             user_input        = user_input,
+                            stream_fn         = _oai_stream_fn,
                         )))),
                         content_type="text/event-stream; charset=utf-8",
                     )
@@ -17589,7 +18033,7 @@ def chat():
                                 return len(buf) - _k
                         return len(buf)
 
-                    for _chunk in stream_openai_response(
+                    for _chunk in _oai_stream_fn(
                         messages          = _oai_messages,
                         api_key           = _oai_key,
                         model             = _oai_model,
@@ -17627,7 +18071,7 @@ def chat():
                 )
             except Exception as e:
                 print(f"❌ OpenAI chat error: {e}", flush=True)
-                return f"⚠️ Error contacting OpenAI: {e}", 500
+                return f"⚠️ Error contacting {'the inference provider' if _oai_is_provider else 'OpenAI'}: {e}", 500
         # ── End OpenAI fork ────────────────────────────────────
 
         # ── Anthropic cloud backend fork (NATIVE Messages format) ──
@@ -20659,8 +21103,42 @@ def _synchronized_model_swap(func):
     return wrapped
 
 
+def _semantic_title_messages(first_message):
+    return [
+        {"role": "system", "content": (
+            "Write a short sidebar title for the user's message. Select the actual topic, "
+            "including relevant words later in the message. Use a 2-6 word noun phrase. "
+            "Drop opening requests such as 'can you help me' or 'how do I'. "
+            "Output only the title, with no quotes, label, or ending punctuation."
+        )},
+        {"role": "user", "content": "Can you help me debug a memory leak in my Python script?"},
+        {"role": "assistant", "content": "Python Memory Leak Debug"},
+        {"role": "user", "content": "What's the best way to learn German grammar?"},
+        {"role": "assistant", "content": "Learning German Grammar"},
+        {"role": "user", "content": str(first_message)[:400]},
+    ]
+
+
+def _clean_semantic_title(raw):
+    lines = str(raw or "").strip().splitlines()
+    title = lines[0].strip().strip("\"'").strip() if lines else ""
+    title = re.sub(r"[.!?,;:]+$", "", title).strip()
+    return " ".join(title.split()[:6]) or None
+
+
 def _generate_semantic_chat_title(first_message):
     """Name a completed first turn only while the local slot is free."""
+    if provider_runtime.is_provider_mode():
+        # No local slot to protect; the active provider names the chat.
+        try:
+            reply = provider_runtime.post_chat_completion({
+                "messages": _semantic_title_messages(first_message),
+                "temperature": 0.3, "top_p": 0.9, "max_tokens": 32})
+            reply.raise_for_status()
+            return _clean_semantic_title(reply.json()["choices"][0]["message"].get("content"))
+        except Exception as exc:
+            print(f"Provider title generation failed: {exc}", flush=True)
+            return None
     if not _MODEL_SWAP_LOCK.acquire(blocking=False):
         return None
     try:
@@ -20680,19 +21158,7 @@ def _generate_semantic_chat_title(first_message):
                 f"{API_URL}/v1/chat/completions",
                 json={
                     "model": CURRENT_MODEL,
-                    "messages": [
-                        {"role": "system", "content": (
-                            "Write a short sidebar title for the user's message. Select the actual topic, "
-                            "including relevant words later in the message. Use a 2-6 word noun phrase. "
-                            "Drop opening requests such as 'can you help me' or 'how do I'. "
-                            "Output only the title, with no quotes, label, or ending punctuation."
-                        )},
-                        {"role": "user", "content": "Can you help me debug a memory leak in my Python script?"},
-                        {"role": "assistant", "content": "Python Memory Leak Debug"},
-                        {"role": "user", "content": "What's the best way to learn German grammar?"},
-                        {"role": "assistant", "content": "Learning German Grammar"},
-                        {"role": "user", "content": str(first_message)[:400]},
-                    ],
+                    "messages": _semantic_title_messages(first_message),
                     "temperature": 0.3,
                     "top_p": 0.9,
                     "max_tokens": 32,
@@ -21679,6 +22145,14 @@ def load_model():
                     requested_model=model_file,
                     load_port=args.get("port", 8080),
                 )
+                warmup_experiment = _run_prefill_warmup_experiment(
+                    data.get("prefill_warmup") is True, args,
+                )
+                if warmup_experiment.get("cleanup_verified") is False:
+                    _shutdown_llama_for_model_swap(args.get("port", 8080))
+                    return jsonify({"status": "error", "error":
+                                    "Warmup cleanup could not be verified; new server stopped.",
+                                    "warmup_experiment": warmup_experiment})
                 # Remember this model for next startup
                 try:
                     with open('settings.json', 'r') as f:
@@ -21688,7 +22162,8 @@ def load_model():
                         json.dump(s, f, indent=2)
                 except Exception:
                     pass
-                return jsonify({"status": "ok", "model": display})
+                return jsonify({"status": "ok", "model": display,
+                                "warmup_experiment": warmup_experiment})
         except Exception:
             pass
 

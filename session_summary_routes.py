@@ -537,7 +537,12 @@ def generate_session_summary():
         cloud_settings = _load_cloud_settings()
         backend_mode = (cloud_settings.get("backend_mode", "local") or "local").lower()
         cloud_enabled = bool(cloud_settings.get("cloud_api_enabled", False))
-        if backend_mode == "openai" and cloud_enabled:
+        if backend_mode == "provider":
+            from providers import runtime as _provider_runtime
+            summary_text = _provider_runtime.complete_text(
+                summary_system, _build_cloud_user_prompt(transcript),
+                {"temperature": 0.75, "top_p": 0.9, "max_tokens": _n_predict})
+        elif backend_mode == "openai" and cloud_enabled:
             summary_text = _generate_openai_summary(_build_cloud_user_prompt(transcript), _n_predict)
         elif backend_mode == "anthropic" and cloud_enabled:
             summary_text = _generate_anthropic_summary(_build_cloud_user_prompt(transcript), _n_predict)

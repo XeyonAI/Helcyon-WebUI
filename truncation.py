@@ -128,6 +128,11 @@ def _read_max_prompt_tokens() -> int:
         with open(_sf, "r", encoding="utf-8") as f:
             s = json.load(f)
         mode = s.get("backend_mode", "local")
+        if mode == "provider":
+            # Budget against the provider's own context window (configured or default),
+            # leaving room for the reply; never the built-in llama.cpp ctx_size.
+            from providers.runtime import context_limit
+            return max(context_limit(s) - GENERATION_RESERVE, 2048)
         caps = s.get("max_prompt_tokens", {})
         return int(caps.get(mode, caps.get("local", 8500)))
     except Exception:
@@ -188,7 +193,7 @@ def trim_chat_history(messages, token_budget: int = None, extra_system_overhead:
     backend_mode = _read_backend_mode()
     max_prompt_tokens = _read_max_prompt_tokens()  # live read — varies by backend_mode
     context_window = _read_ctx_size()
-    if backend_mode in ("openai", "anthropic"):
+    if backend_mode in ("openai", "anthropic", "provider"):
         prompt_budget = int(max_prompt_tokens / TOKEN_FUDGE)
     else:
         prompt_budget = int((context_window - GENERATION_RESERVE - SYSTEM_BUFFER) / TOKEN_FUDGE)
@@ -243,7 +248,7 @@ def trim_chat_history(messages, token_budget: int = None, extra_system_overhead:
               f"anyway (likely a large attached document); older turns dropped.")
 
     print(f"📊 Kept {len(trimmed)} conversation messages (~{total} tokens)")
-    _limit_label = max_prompt_tokens if backend_mode in ("openai", "anthropic") else context_window
+    _limit_label = max_prompt_tokens if backend_mode in ("openai", "anthropic", "provider") else context_window
     print(f"📊 Estimated total prompt: ~{system_tokens + total} / {_limit_label} tokens")
 
     # Alternation guard: if the trim stopped mid-pair (first body message is

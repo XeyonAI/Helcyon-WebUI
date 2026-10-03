@@ -10,17 +10,22 @@ import base64
 import struct
 import re
 import threading
+import time
 import uuid
 from pathlib import Path
 from user_config import load_user_config_section, save_user_config_section
 from urllib.parse import quote
 
 from tts_path_config import apply_tts_path_overrides
+from qwentts_cpp_server import QWEN_FAST_TALKER_MAX_SEQ, QWENTTS_CPP_TALKER_MAX_SEQ
 
 apply_tts_path_overrides()
 
 # Create blueprint
 tts_bp = Blueprint('tts', __name__)
+
+def _pro_only():
+    return jsonify({'error': 'This feature is available in HWUI Pro.', 'pro_required': True}), 403
 
 # Server URLs
 F5_SERVER_URL          = 'http://localhost:8003'
@@ -45,6 +50,23 @@ F5_VOICES_DIR = Path(os.getenv(
 QWENTTS_MAX_REFERENCE_BYTES = 20 * 1024 * 1024
 QWENTTS_QUANTIZATIONS = {'Q8_0', 'Q4_K_M', 'Q3_K_M'}
 QWEN_FAST_TALKER_QUANTIZATIONS = {'Q8_0', 'Q4_K_M'}
+# Per-chunk diagnostics. qwentts.cpp does not report why a generation stopped (EOS vs the
+# talker KV cache filling up), but the cap is exactly predictable (qwentts.cpp/src/
+# pipeline-tts.cpp, prompt-builder.h) so a cap hit can be detected exactly:
+#   T_ctx  = reference_frames + 10     (ICL clone voice: 3 role rows + 6 codec-prefix rows
+#                                        + 1 codec_bos; --lang English and a speaker slot)
+#   budget = min(max_new_tokens 2048, talker_max_seq - T_ctx)
+#   frames = wav_samples / 1920        (12.5 frames/s at 24 kHz)
+# EOS can never be sampled at step == budget (the loop stops first), so frames == budget
+# means the cache cap ended the utterance. Verified against the live server.
+QWEN_FRAME_SAMPLES = 1920
+QWEN_SAMPLE_RATE = 24000
+QWEN_ICL_PROMPT_OVERHEAD_FRAMES = 10
+QWEN_DEFAULT_MAX_NEW_TOKENS = 2048     # qt_tts_default_params; HWUI sends no max_new_tokens
+QWEN_RVQ_CODE_BITS = 11                # tts-server.cpp RVQ_CODE_BITS
+QWEN_RVQ_CODEBOOKS = 16                # 12 Hz codec code groups
+TTS_DIAG_TEXT_LIMIT = 600
+_ref_frames_cache = {}
 _omnivoice_client = None
 _omnivoice_client_lock = None
 _omnivoice_generate_lock = None
@@ -358,16 +380,7 @@ def _ensure_qwentts_voice_registered(voice, server_url=QWENTTS_CPP_SERVER_URL):
     if transcript:
         payload['ref_text'] = transcript
 
-    source_mtime = max(
-        wav_path.stat().st_mtime,
-        transcript_path.stat().st_mtime if transcript_path.is_file() else 0,
-    )
-    sidecars_fresh = (
-        spk_path.is_file()
-        and rvq_path.is_file()
-        and min(spk_path.stat().st_mtime, rvq_path.stat().st_mtime) >= source_mtime
-    )
-    if sidecars_fresh:
+    if _qwentts_sidecars_fresh(wav_path, transcript_path):
         payload['spk_b64'] = base64.b64encode(spk_path.read_bytes()).decode('ascii')
         payload['rvq_b64'] = base64.b64encode(rvq_path.read_bytes()).decode('ascii')
         source = 'pre-encoded .spk/.rvq'
@@ -492,6 +505,167 @@ def set_tts_engine():
     })
 
 
+def _wav_pcm_info(content):
+    """(sample_rate, channels, bits, samples_per_channel) of an in-memory PCM WAV, else None."""
+    try:
+        if len(content) < 44 or content[:4] != b'RIFF' or content[8:12] != b'WAVE':
+            return None
+        pos, fmt = 12, None
+        while pos + 8 <= len(content):
+            chunk_id = content[pos:pos + 4]
+            size = struct.unpack_from('<I', content, pos + 4)[0]
+            body = pos + 8
+            if chunk_id == b'fmt ':
+                channels, rate = struct.unpack_from('<HI', content, body + 2)
+                bits = struct.unpack_from('<H', content, body + 14)[0]
+                fmt = (rate, channels, bits)
+            elif chunk_id == b'data':
+                if not fmt or not all(fmt):
+                    return None
+                rate, channels, bits = fmt
+                available = len(content) - body
+                # A streaming server may leave the data size unset; then trust the byte count.
+                data_len = available if size == 0 or size > available else size
+                return rate, channels, bits, data_len // (channels * (bits // 8))
+            pos = body + size + (size & 1)
+        return None
+    except Exception:
+        return None
+
+
+def _choose_tts_seed(data, default_seed=None, default_source='server_default'):
+    """Choose an explicit diagnostic seed or the path's historical default.
+
+    Desktop leaves seed unset so qwentts.cpp chooses it. The mobile streaming
+    route supplies its historical fixed seed of 42 as its default.
+    """
+    override = data.get('seed') if isinstance(data, dict) else None
+    if override is None:
+        return default_seed, default_source
+    if isinstance(override, bool) or not isinstance(override, int) or not 0 <= override < 2 ** 63:
+        raise ValueError('seed must be an integer from 0 to 9223372036854775807')
+    return override, 'override'
+
+
+def _qwentts_sidecars_fresh(wav_path, transcript_path):
+    """True when pre-encoded .spk/.rvq sidecars are at least as new as the wav and transcript."""
+    spk_path, rvq_path = wav_path.with_suffix('.spk'), wav_path.with_suffix('.rvq')
+    if not (spk_path.is_file() and rvq_path.is_file()):
+        return False
+    source_mtime = max(
+        wav_path.stat().st_mtime,
+        transcript_path.stat().st_mtime if transcript_path.is_file() else 0,
+    )
+    return min(spk_path.stat().st_mtime, rvq_path.stat().st_mtime) >= source_mtime
+
+
+def _qwentts_reference_frames(voice):
+    """(frames, source) of reference codes the native server holds for `voice` in ICL mode, or
+    (None, reason) when it cannot be known exactly. Mirrors how the server derives them:
+    pre-encoded .rvq -> bytes*8 / (16 codebooks * 11 bits); otherwise the wav resampled to
+    24 kHz (ceil(24000*n/sr)) and floored to whole 1920-sample frames."""
+    wav_path = _qwentts_voice_files(voice)
+    if wav_path is None:
+        return None, 'voice_files_missing'
+    transcript_path = wav_path.with_suffix('.txt')
+    try:
+        transcript = transcript_path.read_text(encoding='utf-8').strip() if transcript_path.is_file() else ''
+        if not transcript:
+            return None, 'no_icl_reference'   # x-vector-only clone: prompt length depends on text tokens
+        fresh = _qwentts_sidecars_fresh(wav_path, transcript_path)
+        rvq_path = wav_path.with_suffix('.rvq')
+        stamp = (str(wav_path), wav_path.stat().st_mtime, rvq_path.stat().st_mtime if fresh else None)
+        if stamp in _ref_frames_cache:
+            return _ref_frames_cache[stamp]
+        if fresh:
+            codes = rvq_path.stat().st_size * 8 // QWEN_RVQ_CODE_BITS
+            result = (codes // QWEN_RVQ_CODEBOOKS, 'rvq') if codes % QWEN_RVQ_CODEBOOKS == 0 else (None, 'rvq_invalid')
+        else:
+            try:
+                import soundfile
+                info = soundfile.info(str(wav_path))
+                n_in, sample_rate = info.frames, info.samplerate
+            except Exception:
+                import wave
+                with wave.open(str(wav_path), 'rb') as wav:
+                    n_in, sample_rate = wav.getnframes(), wav.getframerate()
+            n_24k = -(-QWEN_SAMPLE_RATE * n_in // sample_rate)
+            result = (n_24k // QWEN_FRAME_SAMPLES, 'wav')
+        _ref_frames_cache[stamp] = result
+        return result
+    except Exception:
+        return None, 'reference_unreadable'
+
+
+def _qwen_generation_budget(engine, voice):
+    """(frames, basis, talker_max_seq, ref_frames): the exact number of frames the server can generate
+    for this voice before its talker cache ends the utterance; frames is None (with the reason in
+    basis) when it cannot be known exactly."""
+    max_seq = QWEN_FAST_TALKER_MAX_SEQ if engine == 'qwen-fast' else QWENTTS_CPP_TALKER_MAX_SEQ
+    ref_frames, source = _qwentts_reference_frames(voice)
+    if ref_frames is None:
+        return None, source, max_seq, None
+    remaining = max_seq - (ref_frames + QWEN_ICL_PROMPT_OVERHEAD_FRAMES)
+    if remaining <= 0:
+        return None, 'prompt_exceeds_cache', max_seq, ref_frames
+    return min(QWEN_DEFAULT_MAX_NEW_TOKENS, remaining), f'icl_{source}', max_seq, ref_frames
+
+
+def _tts_chunk_meta(data):
+    """Sanitised diagnostics sent by the client (original text, split reason)."""
+    meta = data.get('meta') if isinstance(data, dict) else None
+    if not isinstance(meta, dict):
+        return {}
+    return {
+        'original': str(meta.get('original', ''))[:TTS_DIAG_TEXT_LIMIT],
+        'reason': str(meta.get('reason', ''))[:80],
+        'chars': meta.get('chars') if isinstance(meta.get('chars'), int) else None,
+    }
+
+
+def _log_tts_chunk(engine, voice, sent_text, meta, samples, sample_rate, seed=None, seed_source=None, elapsed=None):
+    """One log line per generated chunk: what the model was given, the seed that drove it, and
+    whether it probably ended on the talker cache cap (exact test, see the constants above)."""
+    frames, frames_note = None, None
+    if samples is None or sample_rate is None:
+        frames_note = 'audio_unreadable'
+    elif sample_rate != QWEN_SAMPLE_RATE:
+        frames_note = 'unexpected_sample_rate'
+    elif samples % QWEN_FRAME_SAMPLES:
+        frames_note = 'samples_not_frame_aligned'
+    else:
+        frames = samples // QWEN_FRAME_SAMPLES
+    budget, basis, max_seq, ref_frames = _qwen_generation_budget(engine, voice)
+    if frames is None or budget is None:
+        end, end_check = 'natural_or_unknown', frames_note or basis
+    elif frames == budget:
+        end, end_check = 'probable_cache_cap', 'frames_equal_budget'
+    elif frames > budget:
+        end, end_check = 'natural_or_unknown', 'frames_exceed_budget'   # assumptions broken; do not trust
+    else:
+        end, end_check = 'natural_or_unknown', 'frames_below_budget'
+    record = {
+        'engine': engine,
+        'voice': voice,
+        'reason': meta.get('reason') or 'unknown',
+        'chars': len(sent_text),
+        'original': meta.get('original') or sent_text[:TTS_DIAG_TEXT_LIMIT],
+        'sent': sent_text[:TTS_DIAG_TEXT_LIMIT],
+        'seed': seed,
+        'seed_source': seed_source,
+        'audio_s': round(samples / sample_rate, 2) if samples is not None and sample_rate else None,
+        'gen_frames': frames,
+        'frame_budget': budget,
+        'talker_max_seq': max_seq,
+        'ref_frames': ref_frames,
+        'end': end,
+        'end_check': end_check,
+        'gen_s': round(elapsed, 2) if elapsed is not None else None,
+    }
+    log = logging.warning if end == 'probable_cache_cap' else logging.info
+    log('TTS-CHUNK ' + json.dumps(record, ensure_ascii=False))
+
+
 # --------------------------------------------------
 # GENERATE TTS AUDIO
 # --------------------------------------------------
@@ -525,16 +699,32 @@ def generate_tts():
             audio_data = BytesIO(_generate_omnivoice(text, voice, data.get('language', 'English')))
             return send_file(audio_data, mimetype='audio/wav', as_attachment=False, download_name='tts_output.wav')
         elif engine in ('qwen-fast', 'qwentts-cpp'):
+            try:
+                seed, seed_source = _choose_tts_seed(data)
+            except ValueError as exc:
+                return jsonify({'error': str(exc)}), 400
             _ensure_qwentts_voice_registered(voice, server_url)
+            started = time.monotonic()
+            payload = {
+                'input': text,
+                'voice': voice,
+                'response_format': 'wav',
+            }
+            if seed is not None:
+                payload['seed'] = seed
             response = requests.post(
                 f'{server_url}/v1/audio/speech',
-                json={
-                    'input': text,
-                    'voice': voice,
-                    'response_format': 'wav',
-                },
+                json=payload,
                 timeout=180,
             )
+            if response.status_code == 200:
+                try:
+                    pcm = _wav_pcm_info(response.content)
+                    _log_tts_chunk(engine, voice, text, _tts_chunk_meta(data),
+                                   pcm[3] if pcm else None, pcm[0] if pcm else None,
+                                   seed, seed_source, time.monotonic() - started)
+                except Exception as exc:  # diagnostics must never break playback
+                    logging.debug(f'TTS-CHUNK diagnostics failed: {exc}')
         else:
             payload = {'text': text, 'voice': voice, 'first_chunk': first_chunk}
 
@@ -579,15 +769,23 @@ def generate_tts_stream():
     if not text:
         return jsonify({'error': 'No text provided'}), 400
     try:
+        seed, seed_source = _choose_tts_seed(
+            data, default_seed=42, default_source='legacy_mobile_default'
+        )
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    try:
         _ensure_qwentts_voice_registered(voice, QWEN_FAST_SERVER_URL)
+        payload = {
+            'input': text,
+            'voice': voice,
+            'response_format': 'pcm',
+        }
+        if seed is not None:
+            payload['seed'] = seed
         upstream = requests.post(
             f'{QWEN_FAST_SERVER_URL}/v1/audio/speech',
-            json={
-                'input': text,
-                'voice': voice,
-                'response_format': 'pcm',
-                'seed': data.get('seed', 42),
-            },
+            json=payload,
             stream=True,
             timeout=(10, 120),
         )
@@ -596,8 +794,13 @@ def generate_tts_stream():
             upstream.close()
             return jsonify({'error': message or f'Qwen Fast returned {upstream.status_code}'}), upstream.status_code
 
+        meta = _tts_chunk_meta(data)
+        started = time.monotonic()
+
         @stream_with_context
         def relay():
+            pcm_bytes = 0
+            completed = False
             try:
                 # Mobile's established PCM scheduler consumes a 44-byte WAV
                 # header before scheduling the native s16le/24 kHz chunks.
@@ -608,9 +811,19 @@ def generate_tts_stream():
                 )
                 for chunk in upstream.iter_content(chunk_size=4096):
                     if chunk:
+                        pcm_bytes += len(chunk)
                         yield chunk
+                completed = True
             finally:
                 upstream.close()
+                if completed:  # an aborted stream has a truncated length, so it is not logged
+                    try:
+                        # Native PCM is s16le mono at 24 kHz (the header above), 2 bytes/sample.
+                        _log_tts_chunk('qwen-fast', voice, text, meta,
+                                       pcm_bytes // 2 if pcm_bytes % 2 == 0 else None, QWEN_SAMPLE_RATE,
+                                       seed, seed_source, time.monotonic() - started)
+                    except Exception as exc:  # diagnostics must never break playback
+                        logging.debug(f'TTS-CHUNK diagnostics failed: {exc}')
 
         return Response(relay(), mimetype='audio/wav', headers={'X-Audio-Streaming': 'decoded-pcm'})
     except requests.exceptions.Timeout:
@@ -676,42 +889,42 @@ def get_voices():
 # --------------------------------------------------
 @tts_bp.route('/voice-forge/settings', methods=['GET'])
 def get_voice_forge_settings():
-    return jsonify({'error': 'Voice Forge is available in the Pro build only.', 'pro_required': True}), 403
+    return _pro_only()
 
 
 @tts_bp.route('/voice-forge/settings', methods=['POST'])
 def save_voice_forge_settings():
-    return jsonify({'error': 'Voice Forge is available in the Pro build only.', 'pro_required': True}), 403
+    return _pro_only()
 
 
 @tts_bp.route('/voice-forge/voices', methods=['GET'])
 def get_voice_forge_voices():
-    return jsonify({'error': 'Voice Forge is available in the Pro build only.', 'pro_required': True}), 403
+    return _pro_only()
 
 
 @tts_bp.route('/voice-forge/reference', methods=['GET'])
 def get_voice_forge_reference():
-    return jsonify({'error': 'Voice Forge is available in the Pro build only.', 'pro_required': True}), 403
+    return _pro_only()
 
 
 @tts_bp.route('/voice-forge/voice', methods=['DELETE'])
 def delete_voice_forge_voice():
-    return jsonify({'error': 'Voice Forge is available in the Pro build only.', 'pro_required': True}), 403
+    return _pro_only()
 
 
 @tts_bp.route('/voice-forge/blend', methods=['POST'])
 def blend_voice_forge_sources():
-    return jsonify({'error': 'Voice Forge is available in the Pro build only.', 'pro_required': True}), 403
+    return _pro_only()
 
 
 @tts_bp.route('/voice-forge/audio/<path:filename>', methods=['GET'])
 def get_voice_forge_audio(filename):
-    return jsonify({'error': 'Voice Forge is available in the Pro build only.', 'pro_required': True}), 403
+    return _pro_only()
 
 
 @tts_bp.route('/voice-forge/save', methods=['POST'])
 def save_voice_forge_result():
-    return jsonify({'error': 'Voice Forge is available in the Pro build only.', 'pro_required': True}), 403
+    return _pro_only()
 
 
 # --------------------------------------------------

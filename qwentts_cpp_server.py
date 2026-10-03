@@ -17,6 +17,11 @@ SETTINGS_PATH = BUILD_ROOT / "settings.json"
 QWENTTS_ROOT = BUILD_ROOT / "qwentts.cpp"
 ALLOWED_QUANTIZATIONS = {"Q8_0", "Q4_K_M", "Q3_K_M"}
 QWEN_FAST_TALKER_QUANTIZATIONS = {"Q8_0", "Q4_K_M"}
+# Talker KV-cache capacity in positions (--talker-max-seq). tts_routes.py imports these to
+# work out each request's exact generation budget for its cache-cap diagnostics, so the
+# launch value and the diagnostic can never drift apart.
+QWEN_FAST_TALKER_MAX_SEQ = 768
+QWENTTS_CPP_TALKER_MAX_SEQ = 4096
 
 
 def _load_settings() -> dict:
@@ -95,7 +100,7 @@ def build_command() -> list[str]:
         "--host", "127.0.0.1",
         "--port", str(port),
         "--lang", "English",
-        "--talker-max-seq", "768" if native_fast else "4096",
+        "--talker-max-seq", str(QWEN_FAST_TALKER_MAX_SEQ if native_fast else QWENTTS_CPP_TALKER_MAX_SEQ),
     ]
 
 

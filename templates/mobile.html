@@ -200,7 +200,7 @@ const marked={parse:function(txt){
     .ai .msg-bubble p { margin-bottom: 1.4em; white-space: pre-wrap; }
     .ai .msg-bubble p:last-child { margin-bottom: 0; }
     .ai .msg-bubble br { display: inline; margin: 0; }
-    .mobile-reaction-badge { display:inline-flex; align-items:center; justify-content:center; min-width:23px; height:21px; margin-top:3px; padding:0 6px; border:1px solid var(--border); border-radius:999px; background:var(--surface2); font-size:13px; line-height:1; }
+    .mobile-reaction-badge { display:inline-flex; align-items:center; justify-content:center; min-width:23px; height:23px; margin-top:3px; padding:0 6px; border:1px solid var(--border); border-radius:999px; background:var(--surface2); font-size:15px; line-height:1; }
     .mobile-reaction-row { display:flex; align-items:center; gap:5px; margin-top:3px; padding:0 4px; position:relative; }
     .mobile-reaction-row button { background:none; border:0; color:var(--text-dim); border-radius:5px; padding:3px 5px; font-size:12px; cursor:pointer; }
     .mobile-reaction-row .mobile-reaction-icon { width:17px; height:17px; display:block; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
@@ -955,6 +955,7 @@ function _mobSplit(raw){
 async function handleStream(res,requestId=null,options={}){
   stopAllAudio();
   const reactionDiagnosticId=res.headers.get('X-HWUI-Reaction-Diagnostic');
+  const reactionsOff=res.headers.get('X-HWUI-Reactions')==='off';  // reactions switched off (Config): leave stored ones alone
   let reactionDiagnosticParserLogged=false;
   if(reactionDiagnosticId)console.info('🧪 REACTION DIAGNOSTIC response identified',{request_id:reactionDiagnosticId,source_message_id:options.replyToMessageId});
   const responseRun=++mobileTTSRun;
@@ -989,7 +990,7 @@ async function handleStream(res,requestId=null,options={}){
   const abandonStream=()=>{if(options.continueMessage)wrap.remove();return false;};
 
   // HWUI streams raw text chunks — append and buffer for TTS simultaneously
-  function consumeDecodedChunk(chunk){
+  async function consumeDecodedChunk(chunk){
     if(!chunk)return;
     rawAll+=chunk;
     const parts=_mobSplit(rawAll);
@@ -1013,7 +1014,15 @@ async function handleStream(res,requestId=null,options={}){
     const reactionAnswer=HwuiChatCore.parseAssistantReaction(fullText,{final:false});
     if(reactionAnswer.reaction){
       modelReaction=reactionAnswer.reaction;
-      if(!modelReactionAttached)modelReactionAttached=applyMobileModelReaction(reactionAnswer.reaction,options.replyToMessageId);
+      if(!modelReactionAttached){
+        modelReactionAttached=applyMobileModelReaction(reactionAnswer.reaction,options.replyToMessageId);
+        if(modelReactionAttached)await HwuiChatCore.waitForReactionPaint();
+        if(requestId&&!mobileRequestIsActive(requestId))return;
+      }
+    }
+    if(reactionAnswer.decided&&!reactionAnswer.reaction&&!modelReactionAttached){
+      syncMobileModelReaction(null,options.replyToMessageId);
+      modelReactionAttached=true;
     }
     if(reactionDiagnosticId&&reactionAnswer.reaction&&!reactionDiagnosticParserLogged){reactionDiagnosticParserLogged=true;console.info('🧪 REACTION DIAGNOSTIC streaming parser detected marker',{request_id:reactionDiagnosticId,reaction:reactionAnswer.reaction});}
     const cleaned=cleanedAnswer();
@@ -1035,10 +1044,10 @@ async function handleStream(res,requestId=null,options={}){
     if(requestId&&!mobileRequestIsActive(requestId)){console.warn('📱 Mobile stale stream ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});await reader.cancel();return abandonStream();}
     const{done,value}=await reader.read();
     if(done)break;
-    consumeDecodedChunk(decoder.decode(value,{stream:true}));
+    await consumeDecodedChunk(decoder.decode(value,{stream:true}));
   }
   // Drain any multibyte UTF-8 character buffered across the final transport chunk.
-  consumeDecodedChunk(decoder.decode());
+  await consumeDecodedChunk(decoder.decode());
   if(thinkEl)thinkEl.open=false;
   if(requestId&&!mobileRequestIsActive(requestId)){console.warn('📱 Mobile stale stream completion ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});return abandonStream();}
   mobileLogResponse('stream-complete',requestId||'untracked',fullText);
@@ -1120,7 +1129,7 @@ async function handleStream(res,requestId=null,options={}){
   chatHistory.push(assistantEntry);
   // A continuation never opens with a marker: it may add a reaction but must
   // not clear the one the continued reply already gave.
-  if(!options.continueMessage||modelReaction)syncMobileModelReaction(modelReaction,options.replyToMessageId);
+  if(!reactionsOff&&(!options.continueMessage||modelReaction))syncMobileModelReaction(modelReaction,options.replyToMessageId);
   if(reactionDiagnosticId){
     const reactionTarget=chatHistory.find(message=>message.message_id===options.replyToMessageId);
     window.mobileReactionDiagnosticSave={request_id:reactionDiagnosticId,source_message_id:options.replyToMessageId,expected_reaction:'😂',parser_reaction:modelReaction,attached_reaction:reactionTarget?.reaction||null};
@@ -1160,6 +1169,7 @@ async function handleStream(res,requestId=null,options={}){
 // cleaner only runs on streamed text), "⚠️ Unknown response" when empty and
 // marked as an error.
 async function appendNonStreamedReply(res,requestId,options={}){
+  const reactionsOff=res.headers.get('X-HWUI-Reactions')==='off';
   const data=await res.json();
   const reactionOutput=HwuiChatCore.parseAssistantReaction(data.text||'',{final:true});
   const assistantCompleted=typeof reactionOutput.text==='string'&&reactionOutput.text.trim().length>0;
@@ -1168,6 +1178,9 @@ async function appendNonStreamedReply(res,requestId,options={}){
   if(!mobileRequestIsActive(requestId)){console.warn('📱 Mobile stale completion ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});return false;}
   const completedAt=new Date().toISOString();
   showTyping(false);
+  if(!reactionsOff)syncMobileModelReaction(reactionOutput.reaction,options.replyToMessageId);
+  if(reactionOutput.reaction)await HwuiChatCore.waitForReactionPaint();
+  if(!mobileRequestIsActive(requestId))return false;
   const assistantEntry=HwuiChatCore.buildAssistantMessage({
     content:reply,speaker:characterName,completedAt,
     replyToMessageId:options.replyToMessageId,startedAt:options.startedAt,
@@ -1641,54 +1654,232 @@ function normaliseDecimalsForTTS(text){
   return text.replace(/(\d)\.(?=\d)/g,'$1 point ');
 }
 
-function splitAndQueue(text){
+// `origin` tags where the text came from; `isFragment` marks an unfinished piece of a
+// longer sentence (its last chunk then ends in a comma, never an invented ".").
+function splitAndQueue(text,origin,isFragment){
   text=text.replace(/<a\b[^>]*>[\s\S]*?<\/a>/gi,'')
            .replace(/\n*[\u{1F517}\uD83D\uDD17]*\s*Source:[^\n]*/gu,'')
            .replace(/<[^>]+>/g,' ')
            .replace(/\[([^\]]+)\]\([^)]*\)/g,'$1')
            .replace(/https?:\/\/\S+/g,'')
            .replace(/[\u{1F517}]/gu,'');
-  const cleaned=normaliseDecimalsForTTS(text).trim()
-    .replace(/\s*\u2014\s*/g,', ')
-    .replace(/\u{1F4AF}/gu,'one hundred percent')
-    .replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu,'$1.')
-    .replace(/(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu,'')
-    .replace(/\*\*/g,'').replace(/\*/g,'').replace(/_/g,'')
-    .replace(/(?:^|\s+)x{1,4}(?=\s*[.!?]*\s*$)/g,'').replace(/\s+([.!?])/g,'$1')
-    .replace(/^[-*•>]\s+/,'').replace(/^\d+\.\s+/,'').replace(/\s*>\s*/g,'. ')
-    .replace(/:/g,'. ')
-    .replace(/\s*\(\s*/g,'. ').replace(/\s*\)\s*/g,'. ')
-    .trim();
-  if(cleaned.length===0)return;
-  const withPunct=/[.!?]$/.test(cleaned)?cleaned:cleaned+'.';
-  if(withPunct.length<=TTS_MAX_CHUNK_LENGTH){
-    if(withPunct.length>2){
-      ttsQueue.push({text:withPunct,run:mobileTTSRun});
-      if(!ttsProcessing&&ttsQueue.length>=TTS_START_THRESHOLD)processQueue();
-    }
-    return;
+  text=resolveTTSEmojiBoundaries(normaliseDecimalsForTTS(text));
+  const chunks=buildTTSChunks(text,TTS_MAX_CHUNK_LENGTH,isFragment);
+  for(const chunk of chunks){
+    const reason=origin?`${origin}+${chunk.reason}`:chunk.reason;
+    ttsQueue.push({text:chunk.text,run:mobileTTSRun,meta:{original:chunk.original,reason,chars:chunk.text.length}});
   }
-  const subChunks=[];let remaining=withPunct;
-  while(remaining.length>TTS_MAX_CHUNK_LENGTH){
-    let splitAt=-1;
-    const searchStr=remaining.substring(0,TTS_MAX_CHUNK_LENGTH);
-    const commaIdx=searchStr.lastIndexOf(',');
-    const dashIdx=searchStr.lastIndexOf(' — ');
-    const spaceIdx=searchStr.lastIndexOf(' ');
-    if(commaIdx>TTS_MAX_CHUNK_LENGTH*0.4)splitAt=commaIdx+1;
-    else if(dashIdx>TTS_MAX_CHUNK_LENGTH*0.4)splitAt=dashIdx+3;
-    else if(spaceIdx>TTS_MAX_CHUNK_LENGTH*0.4)splitAt=spaceIdx;
-    else splitAt=TTS_MAX_CHUNK_LENGTH;
-    subChunks.push(remaining.substring(0,splitAt).trim());
-    remaining=remaining.substring(splitAt).trim();
-  }
-  if(remaining.length>2)subChunks.push(remaining);
-  for(const sub of subChunks){
-    if(sub.length<=2)continue;
-    ttsQueue.push({text:/[.!?]$/.test(sub)?sub:sub+'.',run:mobileTTSRun});
-  }
-  if(!ttsProcessing&&ttsQueue.length>=TTS_START_THRESHOLD)processQueue();
+  if(chunks.length>0&&!ttsProcessing&&ttsQueue.length>=TTS_START_THRESHOLD)processQueue();
 }
+
+// BEGIN TTS SEGMENTATION
+const TTS_EMOJI_SRC = '(?:[\\u{1F000}-\\u{1FFFF}\\u{2600}-\\u{27BF}][\\uFE0F\\u200D]*)+';
+const TTS_NO_BREAK_ABBREVIATIONS = new Set([
+  'mr', 'mrs', 'ms', 'mx', 'dr', 'prof', 'sr', 'jr', 'st', 'mt', 'vs', 'cf',
+  'fig', 'figs', 'approx', 'dept', 'inc', 'ltd', 'corp', 'vol'
+]);
+const TTS_CLAUSE_CONJUNCTIONS = new Set([
+  'and', 'but', 'or', 'so', 'yet', 'which', 'who', 'whom', 'whose', 'where', 'when',
+  'while', 'because', 'although', 'though', 'since', 'if', 'unless', 'until', 'that',
+  'then', 'as', 'before', 'after', 'whereas', 'whether'
+]);
+const TTS_CLAUSE_PREPOSITIONS = new Set([
+  'with', 'without', 'for', 'to', 'from', 'into', 'of', 'in', 'on', 'at', 'by', 'about'
+]);
+
+// "..." / ".." -> one ellipsis character, which is NOT a sentence terminator.
+function normaliseEllipsesForTTS(text) {
+  return text.replace(/\.{2,}/g, '…').replace(/…[.…]+/g, '…');
+}
+
+// An emoji only ends a sentence when the text after it starts a new one (uppercase,
+// digit or opening quote). Followed by anything else it is dropped without a boundary.
+// An emoji with nothing after it yet is left alone until more text (or a flush) arrives.
+function resolveTTSEmojiBoundaries(text) {
+  return text.replace(new RegExp('(\\w)?[ \\t]*' + TTS_EMOJI_SRC + '[ \\t]*(?=(\\S))', 'gu'), (all, prev, next) => {
+    if (prev && /[A-Z0-9"'“(\[]/.test(next)) return prev + '. ';
+    return (prev || '') + ' ';
+  });
+}
+
+// True when the "." that ends `before` (text since the start of the sentence) is an
+// abbreviation / initial rather than a sentence end. `after` is the text following it.
+function ttsIsNoBreakDot(before, after) {
+  const m = before.match(/(?:^|[^A-Za-z.])((?:[A-Za-z]\.)*[A-Za-z]+)$/);
+  if (!m) return false;
+  const tok = m[1];
+  if (tok.includes('.')) return true;                          // e.g.  i.e.  U.S.  a.m.  p.m.
+  if (TTS_NO_BREAK_ABBREVIATIONS.has(tok.toLowerCase())) return true;  // Dr. Mr. vs. ...
+  if (/^etc$/i.test(tok)) return !/^\s+["'“(\[]?[A-Z0-9]/.test(after);
+  return tok.length === 1 && /[B-HJ-Z]/.test(tok);             // single initial: "J. Smith"
+}
+
+// Split text into complete sentences. Returns { sentences, rest }. With isFinal=false a
+// trailing "." that has nothing after it yet is held in `rest` (it may be "5." of
+// "5.6", "Dr.", or the start of an ellipsis); isFinal=true treats `rest` as the last
+// sentence for the caller to take.
+function splitTTSSentences(text, isFinal) {
+  const sentences = [];
+  let start = 0;
+  const re = /[.!?]+/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    let end = m.index + m[0].length;
+    end += text.slice(end).match(/^[)\]"'”’*_]*/)[0].length;
+    const after = text.slice(end);
+    if (after && !/^\s/.test(after)) { re.lastIndex = end; continue; }   // "e.g.," "openai.com"
+    if (!after && !isFinal && m[0].endsWith('.')) break;
+    const before = text.slice(start, m.index);
+    const dotOnly = m[0] === '.';
+    if (dotOnly && /^\s*\d{1,2}$/.test(before)) { re.lastIndex = end; continue; }   // list marker "1."
+    if (dotOnly && ttsIsNoBreakDot(before, after)) { re.lastIndex = end; continue; }
+    const sentence = text.slice(start, end).trim();
+    if (sentence) sentences.push(sentence);
+    start = end + after.match(/^\s*/)[0].length;
+    re.lastIndex = start;
+  }
+  return { sentences, rest: text.slice(start) };
+}
+
+// Make one sentence speakable. Ellipses, parentheses, ">" and dashes turn into commas
+// (or a full stop only where a new sentence visibly starts) inside the SAME request,
+// so no ". " boundary is invented in the middle of a sentence.
+function prepareTTSSentence(raw) {
+  const s = raw.trim()
+    .replace(/\u{1F4AF}/gu, 'one hundred percent')
+    .replace(/\s*—\s*/g, ', ')
+    .replace(/\s*(?:–|--)\s*/g, ', ')
+    .replace(/\s*…\s*(?=[.!?])/g, '')
+    .replace(/\s*…\s*(?=["'“(\[]?[A-Z0-9])/g, '. ')
+    .replace(/\s*…\s*$/, '.')
+    .replace(/\s*…\s*/g, ', ')
+    .replace(new RegExp('(\\w)\\s*' + TTS_EMOJI_SRC + '\\s*$', 'u'), '$1.')
+    .replace(new RegExp(TTS_EMOJI_SRC, 'gu'), ' ')
+    .replace(/\*\*/g, '').replace(/\*/g, '').replace(/_/g, '')
+    .replace(/(?:^|\s+)x{1,4}(?=\s*[.!?]*\s*$)/g, '').replace(/\s+([.!?])/g, '$1')
+    .replace(/^[-*•>]\s+/, '').replace(/^\d+\.\s+/, '')
+    .replace(/\s*>\s*/g, ', ')
+    .replace(/\s*\(\s*/g, ', ').replace(/\s*\)\s*/g, ', ');
+  return s
+    .replace(/\s+/g, ' ')
+    .replace(/(?:,\s*){2,}/g, ', ')
+    .replace(/\s*,\s*(?=[.!?])/g, '')
+    .replace(/([!?])\s*\.+/g, '$1')
+    .replace(/\s+([,;:.!?])/g, '$1')
+    .replace(/^[,;:\s]+/, '')
+    .trim();
+}
+
+// Final fragment of a sentence: drop dangling commas, add "." only if it has no terminator.
+function ttsEnsureTerminal(s) {
+  s = s.trimEnd();
+  // A trailing colon introduces what follows. Keep it as that cue; turning it into "."
+  // would give an introduction ("Here's the thing:") a final, falling cadence.
+  if (/:["'”’)\]*]*$/.test(s)) return s;
+  s = s.replace(/[\s,;:]+$/, '');
+  return /[.!?]["'”’)\]*]*$/.test(s) ? s : s + '.';
+}
+
+// Pick where to cut an over-long sentence. Prefers ; : then ", <conjunction>", then any
+// comma, then a conjunction / preposition, then any space; among equals it picks the cut
+// nearest an even split so no tiny fragment is left. Never cuts inside a word unless the
+// text has no spaces at all.
+function ttsFindClauseCut(text, maxLen) {
+  const minPiece = 40;
+  const target = text.length / Math.ceil(text.length / maxLen);
+  let best = null;
+  for (let i = 1; i < text.length - 1; i++) {
+    if (text[i] !== ' ' || text[i - 1] === ' ') continue;
+    if (i < minPiece || text.length - i < minPiece || i > maxLen) continue;
+    const prev = text[i - 1];
+    const word = (text.slice(i + 1).match(/^[A-Za-z']+/) || [''])[0].toLowerCase();
+    let kind, penalty;
+    if (prev === ';') { kind = 'semicolon'; penalty = 0; }
+    else if (prev === ':') { kind = 'colon'; penalty = 0; }
+    else if (prev === ',' && TTS_CLAUSE_CONJUNCTIONS.has(word)) { kind = 'comma-conjunction'; penalty = 15; }
+    else if (prev === ',') { kind = 'comma'; penalty = 30; }
+    else if (TTS_CLAUSE_CONJUNCTIONS.has(word)) { kind = 'conjunction'; penalty = 60; }
+    else if (TTS_CLAUSE_PREPOSITIONS.has(word)) { kind = 'preposition'; penalty = 90; }
+    else { kind = 'word'; penalty = 130; }
+    const cost = Math.abs(i - target) + penalty;
+    if (!best || cost < best.cost) best = { index: i, kind, cost };
+  }
+  if (best) return best;
+  const space = text.lastIndexOf(' ', maxLen);
+  return space > 0 ? { index: space, kind: 'word', cost: 0 } : { index: maxLen, kind: 'hard-cut', cost: 0 };
+}
+
+// End of a deliberate non-final fragment (e.g. an early-start opening cut from a long
+// sentence that is still streaming): a comma-class mark, never a "." we invent.
+function ttsEnsureFragmentEnd(s) {
+  s = s.replace(/[\s;:]+$/, '');
+  return /[,.!?]$/.test(s) ? s : s + ',';
+}
+
+// Cut a sentence longer than maxLen into clause-sized pieces. Every piece except the
+// last ends in a comma-class mark (never a "." added by us); the last carries the
+// sentence's own ending (or a comma-class mark when isFragment says more text follows).
+function segmentTTSSentence(text, maxLen, isFragment) {
+  const pieces = [];
+  let rest = text.trim();
+  while (rest.length > maxLen) {
+    const cut = ttsFindClauseCut(rest, maxLen);
+    let head = rest.slice(0, cut.index).trim();
+    rest = rest.slice(cut.index).trim();
+    if (!/[,;:.!?]$/.test(head)) head += ',';
+    pieces.push({ text: head, reason: 'clause-split:' + cut.kind });
+  }
+  pieces.push({
+    text: isFragment ? ttsEnsureFragmentEnd(rest) : ttsEnsureTerminal(rest),
+    reason: pieces.length ? 'clause-tail' : (isFragment ? 'fragment' : 'sentence')
+  });
+  return pieces;
+}
+
+// Raw text (one line, one sentence, or several) -> chunks to send to the TTS model:
+// [{ text, reason, original }]. Sentences that fit are kept whole; consecutive short
+// sentences are packed up to maxLen (more context per request); a sentence longer than
+// maxLen is cut at clause boundaries. isFragment=true marks `text` as an unfinished
+// piece of a longer sentence: its last chunk then ends in a comma, not a ".".
+function buildTTSChunks(text, maxLen, isFragment) {
+  const parts = splitTTSSentences(normaliseEllipsesForTTS(text).trim(), true);
+  const rawSentences = parts.rest.trim() ? parts.sentences.concat(parts.rest.trim()) : parts.sentences;
+  const units = [];
+  let current = null;
+  for (const raw of rawSentences) {
+    const prepared = prepareTTSSentence(raw);
+    if (!prepared) continue;
+    if (prepared.length > maxLen) {
+      current = null;
+      units.push({ text: prepared, original: raw, count: 1, long: true });
+    } else if (current && current.text.length + 1 + prepared.length <= maxLen) {
+      current.text += ' ' + prepared;
+      current.original += ' ' + raw;
+      current.count++;
+    } else {
+      current = { text: prepared, original: raw, count: 1, long: false };
+      units.push(current);
+    }
+  }
+  const chunks = [];
+  units.forEach((unit, index) => {
+    const fragment = !!isFragment && index === units.length - 1;
+    if (unit.long) {
+      for (const piece of segmentTTSSentence(unit.text, maxLen, fragment)) {
+        chunks.push({ text: piece.text, reason: piece.reason, original: unit.original });
+      }
+    } else {
+      chunks.push({
+        text: fragment ? ttsEnsureFragmentEnd(unit.text) : ttsEnsureTerminal(unit.text),
+        reason: unit.count > 1 ? 'packed-sentences' : (fragment ? 'fragment' : 'sentence'),
+        original: unit.original
+      });
+    }
+  });
+  return chunks.filter(chunk => chunk.text.length > 2);
+}
+// END TTS SEGMENTATION
+
 
 async function initTTSEngine(){
   try{
@@ -1702,7 +1893,7 @@ async function initTTSEngine(){
       TTS_FIRST_BATCH_MIN=60;
       TTS_BATCH_MIN=120;
     }else if(engine==='qwen-fast'){
-      TTS_MAX_CHUNK_LENGTH=220;
+      TTS_MAX_CHUNK_LENGTH=320;
       TTS_FIRST_BATCH_MIN=60;
       TTS_BATCH_MIN=160;
     }else{
@@ -1724,13 +1915,13 @@ async function initTTSEngine(){
 // one for smoother prosody. \u26A0\uFE0F DO NOT bypass this on the streaming
 // path \u2014 sending one-sentence-at-a-time requests to F5 reintroduces
 // the lower-quality streaming audio that this whole batcher fixes.
-function batchAndQueue(sentence){
+function batchAndQueue(sentence,origin){
   if(!sentence)return;
   const trimmed=sentence.trim();
   if(trimmed.length<=2)return;
   if(mobileTTSEngine==='qwen-fast'){
     ttsFirstBatchSent=true;
-    splitAndQueue(trimmed);
+    splitAndQueue(trimmed,origin);
     return;
   }
   ttsPendingBatch=ttsPendingBatch?ttsPendingBatch+' '+trimmed:trimmed;
@@ -1835,14 +2026,10 @@ function bufferTextForTTS(chunk){
     ttsFirstBatchSent=false;
   }
   chunk=normaliseDecimalsForTTS(fixContractionsForTTS(chunk));
-  chunk=chunk.replace(/\.{3}/g,'. ').replace(/\u2026/g,'. ').replace(/\.{2}/g,'. ');
-  chunk=chunk.replace(/\s*\(\s*/g,'. ').replace(/\s*\)\s*/g,'. ');
-  chunk=chunk.replace(/^>\s*/gm,'').replace(/\s*>\s*/g,'. ');
+  chunk=chunk.replace(/^>\s*/gm,'');  // leading > only; ellipses, parens, mid-line > and emoji are resolved per sentence
   chunk=chunk.replace(/\u{1F4AF}/gu,'one hundred percent');
-  chunk=chunk.replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu,'$1.');
-  chunk=chunk.replace(/(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu,'');
   ttsSentenceBuffer+=chunk;
-  ttsSentenceBuffer=normaliseDecimalsForTTS(ttsSentenceBuffer);
+  ttsSentenceBuffer=resolveTTSEmojiBoundaries(normaliseDecimalsForTTS(normaliseEllipsesForTTS(ttsSentenceBuffer)));
   const lines=ttsSentenceBuffer.split('\n');
   ttsSentenceBuffer=lines.pop();
   // Paragraph break = natural prosody boundary \u2014 flush any pending
@@ -1851,19 +2038,11 @@ function bufferTextForTTS(chunk){
     flushPendingBatch();
     batchAndQueue(line);
   }
-  // Emoji-as-sentence-terminator: the model frequently ends a sentence
-  // with an emoji (no trailing punctuation). Without this branch the
-  // sentence stays in the buffer until the next newline and merges
-  // with whatever comes next.
-  const sentenceRegex=/[^.!?]+(?:[.!?]+|(?:[\u{1F000}-\u{1FFFF}\u{1F300}-\u{1FAFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}\u2600-\u27BF])+)[)"'*_]*\s*/gu;
-  // Hold a streamed trailing decimal dot until the next token arrives.
-  const sentenceScanBuffer=/\d\.$/.test(ttsSentenceBuffer)?ttsSentenceBuffer.slice(0,-1):ttsSentenceBuffer;
-  let match,lastIndex=0;
-  while((match=sentenceRegex.exec(sentenceScanBuffer))!==null){
-    batchAndQueue(match[0]);
-    lastIndex=match.index+match[0].length;
-  }
-  if(lastIndex>0)ttsSentenceBuffer=ttsSentenceBuffer.substring(lastIndex);
+  // Complete sentences go out now; a trailing "." with nothing after it yet is held back one
+  // chunk ("5." of "5.6", "Dr.", the start of an ellipsis). flushTTSBuffer releases it.
+  const scan=splitTTSSentences(ttsSentenceBuffer,false);
+  for(const sentence of scan.sentences)batchAndQueue(sentence);
+  ttsSentenceBuffer=scan.rest;
   // Qwen mobile live speech normally waits for a complete sentence. If the
   // model opens with one very long sentence, cap only the first wait at the
   // existing 60-character Qwen opening threshold and cut on a natural word
@@ -1875,18 +2054,15 @@ function bufferTextForTTS(chunk){
     if(splitAt<1)splitAt=TTS_FIRST_BATCH_MIN;
     const opening=ttsSentenceBuffer.substring(0,splitAt).replace(/[,:;\s]+$/,'').trim();
     ttsSentenceBuffer=ttsSentenceBuffer.substring(splitAt).replace(/^\s+/,'');
-    if(opening.length>2)batchAndQueue(opening);
+    if(opening.length>2){ttsFirstBatchSent=true;splitAndQueue(opening,'opening',true);}
   }
 }
 
 function flushTTSBuffer(){
   if(!ttsEnabled)return;
-  const remaining=ttsSentenceBuffer.trim()
-    .replace(/(\w)\s*(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu,'$1.')
-    .replace(/(?:[\u{1F000}-\u{1FFFF}\u{1F900}-\u{1F9FF}\u{1FA00}-\u{1FAFF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\uD800-\uDBFF][\uDC00-\uDFFF])+/gu,'')
-    .replace(/\*\*/g,'').replace(/\*/g,'').replace(/_/g,'').trim();
-  if(remaining.length>2)batchAndQueue(remaining);
+  const remaining=ttsSentenceBuffer.trim();
   ttsSentenceBuffer='';
+  if(remaining.length>2)batchAndQueue(remaining,'flush');
   // Drop any held-back backtick fragments — never spoken aloud regardless
   // of whether the closing ``` ever arrived.
   ttsBacktickTail='';
@@ -1908,11 +2084,11 @@ function stopMobileQwen(){
   if(mobileQwenCtx){mobileQwenCtx.close().catch(()=>{});mobileQwenCtx=null;}
 }
 
-async function streamMobileQwen(sentence,run){
+async function streamMobileQwen(sentence,run,meta){
   if(run!==mobileTTSRun)return;
   if(!mobileQwenCtx||mobileQwenCtx.state==='closed'){mobileQwenCtx=new AudioContext();mobileQwenNext=0;}
   await mobileQwenCtx.resume();mobileQwenAbort=new AbortController();
-  const r=await fetch('/api/tts/generate_stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:sentence,voice:ttsVoice||'Sol',language:'English',chunk_size:2}),signal:mobileQwenAbort.signal});
+  const r=await fetch('/api/tts/generate_stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:sentence,voice:ttsVoice||'Sol',language:'English',chunk_size:2,meta}),signal:mobileQwenAbort.signal});
   if(!r.ok)throw new Error((await r.json().catch(()=>({}))).error||`Qwen Fast returned ${r.status}`);
   const reader=r.body.getReader(),FRAME=3840;let header=44,carry=new Uint8Array(0),samples=[];
   const schedule=a=>{if(!a.length||!mobileQwenCtx||run!==mobileTTSRun)return;const b=mobileQwenCtx.createBuffer(1,a.length,24000),c=b.getChannelData(0);for(let i=0;i<a.length;i++)c[i]=a[i]/32768;const s=mobileQwenCtx.createBufferSource();s.buffer=b;s.connect(mobileQwenCtx.destination);if(!mobileQwenNext)mobileQwenNext=mobileQwenCtx.currentTime+.08;else if(mobileQwenNext<mobileQwenCtx.currentTime+.015)mobileQwenNext=mobileQwenCtx.currentTime+.06;s.start(mobileQwenNext);mobileQwenNext+=a.length/24000;const entry={source:s,run};mobileQwenSources.push(entry);s.onended=()=>{const i=mobileQwenSources.indexOf(entry);if(i>=0)mobileQwenSources.splice(i,1);};};
@@ -1920,19 +2096,19 @@ async function streamMobileQwen(sentence,run){
 }
 
 async function processMobileQwen(run){
-  while(ttsEnabled&&run===mobileTTSRun){if(ttsQueue.length){const item=ttsQueue.shift();if(item.run!==run)continue;try{await streamMobileQwen(item.text,run);}catch(e){if(e.name!=='AbortError')console.error('Qwen Fast stream failed:',e);}continue;}if(ttsStreamingComplete)break;await new Promise(r=>setTimeout(r,25));}
+  while(ttsEnabled&&run===mobileTTSRun){if(ttsQueue.length){const item=ttsQueue.shift();if(item.run!==run)continue;try{await streamMobileQwen(item.text,run,item.meta);}catch(e){if(e.name!=='AbortError')console.error('Qwen Fast stream failed:',e);}continue;}if(ttsStreamingComplete)break;await new Promise(r=>setTimeout(r,25));}
   if(run!==mobileTTSRun)return;
   if(mobileQwenCtx&&ttsEnabled){const ms=Math.max(0,(mobileQwenNext-mobileQwenCtx.currentTime)*1000);if(ms)await new Promise(r=>setTimeout(r,ms));}
   ttsProcessing=false;isPlayingAudio=false;const cb=ttsOnComplete;ttsOnComplete=null;if(cb)cb();const replayBtn=document.querySelector('.mobile-replay-btn.active');if(replayBtn)setReplayBtnIdle(replayBtn);
 }
 
-async function fetchMobileQwenWav(sentence,run,liveRun){
+async function fetchMobileQwenWav(sentence,run,liveRun,meta){
   if(run!==mobileTTSRun||liveRun!==mobileQwenLiveRun)return null;
   for(let attempt=0;attempt<2;attempt++){
     const controller=new AbortController();
     mobileQwenAbort=controller;
     try{
-      const response=await fetch('/api/tts/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:sentence,voice:ttsVoice||'Sol'}),signal:controller.signal});
+      const response=await fetch('/api/tts/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:sentence,voice:ttsVoice||'Sol',meta}),signal:controller.signal});
       if(response.ok){
         const blob=await response.blob();
         if(run!==mobileTTSRun||liveRun!==mobileQwenLiveRun)return null;
@@ -1955,7 +2131,7 @@ async function processMobileQwenLiveWav(){
   let nextAudio=null;
   while(ttsEnabled&&run===mobileTTSRun&&liveRun===mobileQwenLiveRun){
     if(!nextAudio){
-      if(ttsQueue.length){const item=ttsQueue.shift();nextAudio=item.run===run?fetchMobileQwenWav(item.text,run,liveRun):null;}
+      if(ttsQueue.length){const item=ttsQueue.shift();nextAudio=item.run===run?fetchMobileQwenWav(item.text,run,liveRun,item.meta):null;}
       else if(ttsStreamingComplete)break;
       else{await new Promise(r=>setTimeout(r,25));continue;}
     }
@@ -1972,7 +2148,7 @@ async function processMobileQwenLiveWav(){
       const prefetchInterval=setInterval(()=>{
         if(!nextAudio&&ttsQueue.length&&ttsEnabled&&run===mobileTTSRun&&liveRun===mobileQwenLiveRun){
           const item=ttsQueue.shift();
-          if(item.run===run)nextAudio=fetchMobileQwenWav(item.text,run,liveRun);
+          if(item.run===run)nextAudio=fetchMobileQwenWav(item.text,run,liveRun,item.meta);
         }
       },25);
       let cleaned=false;
@@ -2011,10 +2187,10 @@ async function processQueue(){
     return;
   }
 
-  async function fetchAudio(sentence){
+  async function fetchAudio(sentence,meta){
     for(let attempt=0;attempt<2;attempt++){
       try{
-        const response=await fetch('/api/tts/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:sentence,voice:ttsVoice||'Sol'})});
+        const response=await fetch('/api/tts/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:sentence,voice:ttsVoice||'Sol',meta})});
         if(response.ok){const blob=await response.blob();return URL.createObjectURL(blob);}
         console.warn(`TTS fetch ${response.status} (attempt ${attempt+1})`);
       }catch(err){console.warn(`TTS fetch error (attempt ${attempt+1}):`,err);}
@@ -2027,7 +2203,7 @@ async function processQueue(){
 
   const prefetchBuffer=[];
   const PREFETCH_DEPTH=mobileTTSEngine==='omnivoice'?1:3;
-  const topUp=()=>{while(prefetchBuffer.length<PREFETCH_DEPTH&&ttsQueue.length>0){const item=ttsQueue.shift();if(item.run===run)prefetchBuffer.push(fetchAudio(item.text));}};
+  const topUp=()=>{while(prefetchBuffer.length<PREFETCH_DEPTH&&ttsQueue.length>0){const item=ttsQueue.shift();if(item.run===run)prefetchBuffer.push(fetchAudio(item.text,item.meta));}};
   topUp();
 
   while(true){

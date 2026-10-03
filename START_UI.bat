@@ -16,9 +16,9 @@ if not exist "venv\Scripts\activate.bat" (
 
 call "venv\Scripts\activate.bat"
 
-:: Read port from settings.json (falls back to 8081 if not set)
+:: Resolve this build's web port (also repairs duplicate sibling reservations)
 set "HWUI_PORT="
-for /f %%p in ('python -c "import json; d=json.load(open('settings.json', encoding='utf-8')); print(d.get('port', 8081))"') do set "HWUI_PORT=%%p"
+for /f %%p in ('python -c "from app_runtime_helpers import resolve_web_port; print(resolve_web_port())"') do set "HWUI_PORT=%%p"
 
 if not defined HWUI_PORT (
     echo ERROR: Could not determine HWUI port from settings.json.
@@ -32,6 +32,10 @@ for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":%HWUI_PORT% " ^| findstr LI
     echo Killing old process: %%a
     taskkill /PID %%a /F >nul 2>&1
 )
+
+:: Point the stable Tailscale/mobile URL at THIS build's resolved port.
+:: Best-effort: never blocks startup.
+if exist "tailscale_serve.py" python tailscale_serve.py
 
 echo Clean start.
 echo Starting HWUI on port %HWUI_PORT%...
