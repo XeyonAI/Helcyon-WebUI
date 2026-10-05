@@ -9,7 +9,7 @@
   <!-- Shared desktop/mobile chat core (same file index.html loads): request,
        history and reply-cleaning rules, so identical chat state produces the
        same model input from either page. -->
-  <script src="/static/hwui_chat_core.js?v=1"></script>
+  <script src="/static/hwui_chat_core.js?v=2"></script>
   <script src="/static/text_scale.js" defer></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -753,7 +753,7 @@ function setPTTState(state){
   btn.classList.remove('recording','processing');
   sendBtn.style.display=state==='recording'?'flex':'none';
   if(state==='recording'){btn.classList.add('recording');wave.classList.add('active');mic.style.display='none';lbl.textContent='Cancel';}
-  else if(state==='processing'){btn.classList.add('processing');wave.classList.remove('active');mic.style.display='';lbl.textContent='Thinking...';}
+  else if(state==='processing'){btn.classList.add('processing');wave.classList.remove('active');mic.style.display='';lbl.textContent='Sending...';}
   else{wave.classList.remove('active');mic.style.display='';lbl.textContent='Tap to Talk';}
 }
 
@@ -923,7 +923,7 @@ async function sendMessage(text){
     if(ct.includes('text/event-stream')&&res.body){await handleStream(res,requestId,{replyToMessageId:userMessageId,startedAt:generationStartedAt});}
     else{await appendNonStreamedReply(res,requestId,{replyToMessageId:userMessageId,startedAt:generationStartedAt});}
   }catch(err){if(err.name!=='AbortError'){showTyping(false);showToast('⚠️ Connection error');setStatus('Offline?');}}
-  finally{console.log('📱 Mobile request end',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});if(mobileActiveRequest?.id===requestId){mobileActiveRequest=null;mobileSending=false;setSendBusy(false);}else{console.warn('📱 Mobile stale request end ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});}}
+  finally{console.log('📱 Mobile request end',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});if(mobileActiveRequest?.id===requestId){if(mobileReadiness)setStatus('Ready');mobileActiveRequest=null;mobileSending=false;setSendBusy(false);}else{console.warn('📱 Mobile stale request end ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});}}
 }
 
 // Extended-thinking demux — peel Anthropic/local reasoning sentinels off the answer
@@ -1007,7 +1007,7 @@ async function handleStream(res,requestId=null,options={}){
         thinkEl.appendChild(sm);thinkEl.appendChild(bd);thinkEl._body=bd;
         bubble.insertBefore(thinkEl,textSpan);
       }
-      thinkEl._body.textContent=parts.thinking;
+      thinkEl._body.textContent=parts.thinking.trim();
     }
     prevAns=parts.answer.length;
     fullText=parts.answer;
@@ -1029,7 +1029,7 @@ async function handleStream(res,requestId=null,options={}){
     renderAnswer(cleaned);
     // Keep the reaction-visible ordering without exposing an empty stream
     // bubble: render the first answer text before revealing its wrapper.
-    if(parts.thinking||cleaned)wrap.style.display='';
+    if(parts.thinking||cleaned){wrap.style.display='';setStatus('Generating reply');}
     // Speech uses the SAME cleaned text as the bubble, via the shared core.
     // This previously passed the RAW delta straight to TTS with no cleaning at
     // all, so internal scaffolding could be spoken while the bubble looked
@@ -1155,7 +1155,7 @@ async function handleStream(res,requestId=null,options={}){
     setReplayBtnActive(replayBtn2);
     // Final release — see the desktop equivalent and ttsSpeakableDelta.
     if(ttsEnabled){
-      const lastSpeakable=HwuiChatCore.ttsSpeakableDelta(fullText,ttsSpokenLen,{charName:characterName,userName:userName,final:true});
+      const lastSpeakable=HwuiChatCore.ttsSpeakableDelta(finalReactionOutput.text,ttsSpokenLen,{charName:characterName,userName:userName,final:true});
       ttsSpokenLen=lastSpeakable.spokenLength;
       if(lastSpeakable.text)bufferTextForTTS(lastSpeakable.text);
     }
@@ -2490,14 +2490,17 @@ async function loadModel(filename,label,options={}){
   status.style.color='var(--accent)';
   status.textContent='⏳ Loading '+displayName+'...';
   el.style.opacity='0.4';el.style.pointerEvents='none';
+  const loadingStartedAt=Date.now();
+  const loadingTimer=setInterval(()=>{status.textContent='⏳ Loading '+displayName+' · '+Math.floor((Date.now()-loadingStartedAt)/1000)+'s';},1000);
   try{
     const r=await fetch('/load_model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:filename,force_reload:options.forceReload===true,reason:options.reason||'unspecified'})});
     const d=await r.json();
+    clearInterval(loadingTimer);
     if(d.status==='ok'){
       localStorage.setItem('llama_last_model',filename);
       cur.textContent=d.label||displayName;
       status.style.color='#6dbf8a';
-      status.textContent='✅ Loaded: '+(d.label||displayName);
+      status.textContent='✅ Ready: '+(d.label||displayName);
       el.style.opacity='1';el.style.pointerEvents='all';
       setTimeout(()=>closeModelPicker(),1500);
       return true;
@@ -2508,6 +2511,7 @@ async function loadModel(filename,label,options={}){
       return false;
     }
   }catch(e){
+    clearInterval(loadingTimer);
     status.style.color='#e88';
     status.textContent='❌ '+e.message;
     el.style.opacity='1';el.style.pointerEvents='all';
@@ -2650,7 +2654,19 @@ function showDeletePopover(wrap, text, role){
   document.body.appendChild(pop);
 }
 function showTyping(show){const t=document.getElementById('typing-indicator');t.style.display=show?'flex':'none';if(show)scrollToBottom();}
-function setStatus(msg){document.getElementById('header-status').textContent=msg;}
+let mobileReadiness=null;
+function setStatus(msg){
+  const el=document.getElementById('header-status');
+  if(msg==='Thinking...'||msg==='Continuing...'){
+    mobileReadiness?.stop();
+    mobileReadiness=HwuiChatCore.startReadinessStatus(text=>{el.textContent=text;},msg==='Continuing...'?'Preparing continuation':'Preparing reply');
+  }else if(msg==='Generating reply'&&mobileReadiness){
+    mobileReadiness.setPhase(msg);
+  }else{
+    mobileReadiness?.stop();mobileReadiness=null;
+    el.textContent=msg;
+  }
+}
 function scrollToBottom(){const c=document.getElementById('chat');c.scrollTop=c.scrollHeight;}
 function autoResize(el){el.style.height='';el.style.height=Math.min(el.scrollHeight,80)+'px';}
 function fmtTime(d){
@@ -2711,7 +2727,7 @@ async function regenerateLastResponse(){
     if(ct.includes('text/event-stream')&&res.body){await handleStream(res,requestId,{replyToMessageId:regenerateSourceId,startedAt:generationStartedAt});}
     else{await appendNonStreamedReply(res,requestId,{replyToMessageId:regenerateSourceId,startedAt:generationStartedAt});}
   }catch(e){if(e.name!=='AbortError'){showTyping(false);showToast('⚠️ Error: '+e.message);}}
-  finally{if(mobileActiveRequest?.id===requestId){mobileActiveRequest=null;mobileSending=false;setSendBusy(false);}}
+  finally{if(mobileActiveRequest?.id===requestId){if(mobileReadiness)setStatus('Ready');mobileActiveRequest=null;mobileSending=false;setSendBusy(false);}}
 }
 async function resumeLastResponse() {
   if (!mobileChatFilename) { showToast('⚠️ No chat file to resume from'); return; }
@@ -2796,7 +2812,7 @@ async function continueResponse() {
     if (e.name !== 'AbortError') { showTyping(false); showToast('⚠️ Error: ' + e.message); }
   } finally {
     if (!continued && continueWrap && continueWrap.isConnected) continueWrap.style.display = '';
-    if (mobileActiveRequest?.id === requestId) { mobileActiveRequest = null; mobileSending = false; setSendBusy(false); }
+    if (mobileActiveRequest?.id === requestId) { if(mobileReadiness)setStatus('Ready'); mobileActiveRequest = null; mobileSending = false; setSendBusy(false); }
   }
 }
 

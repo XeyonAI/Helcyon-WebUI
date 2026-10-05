@@ -47,11 +47,11 @@ from helcyon_bench_judge import (
 
 helcyon_bench_bp = Blueprint("helcyon_bench", __name__)
 
+
+@helcyon_bench_bp.route("/api/helcyon-bench/prompt-packs", methods=["GET"])
 def _pro_only():
     return jsonify({"error": "This feature is available in HWUI Pro.", "pro_required": True}), 403
 
-
-@helcyon_bench_bp.route("/api/helcyon-bench/prompt-packs", methods=["GET"])
 def prompt_packs():
     return jsonify({"prompt_packs": load_prompt_packs()})
 

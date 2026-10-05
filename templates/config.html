@@ -10,6 +10,10 @@
   <link rel="stylesheet" href="/style.css?v=44" />
   <script src="/static/text_scale.js?v=3" defer></script>
   <style>
+    /* Model switching belongs on the main chat page, not Settings. Keep its
+       DOM available because the shared status/loading code still references it. */
+    body#config-page #model-display,
+    body#config-page #model-picker { display: none !important; }
     /* ---- Config Tab System (self-contained — do not rely on style.css for this) ---- */
     #config-tab-bar {
       display: flex;
@@ -385,33 +389,47 @@
       #tab-random-checkins .random-checkin-quiet-panel { grid-template-columns: 1fr; gap: 14px; }
       #tab-random-checkins .random-checkin-quiet-divider { width: 100%; height: 1px; }
     }
-    .voice-forge-note {
-      padding: 10px 12px;
-      margin-bottom: 16px;
-      border: 1px solid #554b27;
-      border-radius: 6px;
-      background: #292513;
-      color: #d8ca8a;
-      font-size: 12px;
+    #tab-voice-forge .voice-forge-note {
+      padding: 10px 12px; margin: 0 0 14px;
+      border: 1px solid var(--config-box-border, var(--field-border, #293238));
+      border-radius: 6px; background: var(--config-box-bg, var(--bench-box, #242424));
+      color: var(--text-muted, #aeb8c5); font-size: 12px; line-height: 1.5;
     }
-    .voice-forge-sources {
+    #tab-voice-forge .voice-forge-sources {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 14px;
+      gap: 14px; margin-bottom: 14px;
     }
-    .voice-forge-card,
-    .voice-forge-tuning-control,
-    .voice-forge-result {
+    #tab-voice-forge .voice-forge-card,
+    #tab-voice-forge .voice-forge-tuning-control,
+    #tab-voice-forge .voice-forge-settings-card,
+    #tab-voice-forge .voice-forge-result {
       border: 1px solid var(--config-box-border, var(--field-border, #293238));
       border-radius: 10px;
       background: var(--config-box-bg, var(--bench-box, #242424));
       box-shadow: inset 0 1px rgba(255,255,255,0.025);
       box-sizing: border-box;
     }
-    .voice-forge-card { padding: 16px 18px; }
-    .voice-forge-card h4 { margin: 0 0 10px; color: #ddd; }
-    .voice-forge-card label { margin-top: 8px; }
-    .voice-forge-existing-row { display: flex; align-items: center; gap: 8px; }
+    #tab-voice-forge .voice-forge-card,
+    #tab-voice-forge .voice-forge-settings-card { padding: 16px 18px; }
+    #tab-voice-forge .voice-forge-card { transition: background .18s ease, border-color .18s ease; }
+    #tab-voice-forge .voice-forge-card.is-inactive { background: color-mix(in srgb, var(--config-box-bg, var(--bench-box, #242424)) 72%, #080808); border-color: color-mix(in srgb, var(--config-box-border, var(--field-border, #293238)) 65%, #080808); }
+    #tab-voice-forge .voice-forge-card.is-inactive > :not(.voice-forge-card-heading) { opacity: .38; filter: grayscale(1); }
+    #tab-voice-forge .voice-forge-card.is-inactive .voice-forge-card-heading h4 { color: #858585; }
+    #tab-voice-forge .voice-forge-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+    #tab-voice-forge .voice-forge-card h4,
+    #tab-voice-forge .voice-forge-settings-card h4 { margin: 0; color: #ddd; font-size: 15px; font-weight: 600; }
+    #tab-voice-forge .voice-forge-card > label,
+    #tab-voice-forge .voice-forge-test-card > label { margin: 8px 0 5px; color: #ccc; font-size: 13px; font-weight: 600; }
+    #tab-voice-forge .voice-forge-mode { display: flex; align-items: center; gap: 8px; color: #aeb8c5; font-size: 11px; }
+    #tab-voice-forge .voice-forge-mode-toggle { position: relative; display: inline-flex; flex: 0 0 auto; width: 48px; height: 26px; cursor: pointer; margin: 0; }
+    #tab-voice-forge .voice-forge-mode-toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+    #tab-voice-forge .voice-forge-mode-toggle-track { position: absolute; inset: 0; border-radius: 999px; background: var(--sidebar-button-hover, #303b45); transition: background .18s ease, box-shadow .18s ease; }
+    #tab-voice-forge .voice-forge-mode-toggle-track::after { content: ""; position: absolute; width: 20px; height: 20px; left: 3px; top: 3px; border-radius: 50%; background: var(--modal-text, #f6f7f8); box-shadow: 0 2px 6px rgba(0,0,0,.35); transition: transform .18s ease; }
+    #tab-voice-forge .voice-forge-mode-toggle input:checked + .voice-forge-mode-toggle-track { background: var(--memory-tab-active-bg, #20b968); box-shadow: 0 0 0 2px color-mix(in srgb, var(--memory-tab-active-bg, #20b968) 20%, transparent); }
+    #tab-voice-forge .voice-forge-mode-toggle input:checked + .voice-forge-mode-toggle-track::after { transform: translateX(22px); }
+    #tab-voice-forge .voice-forge-mode-toggle input:focus-visible + .voice-forge-mode-toggle-track { outline: 2px solid var(--field-border-focus, #8fd9ad); outline-offset: 3px; }
+    #tab-voice-forge .voice-forge-existing-row { display: flex; align-items: center; gap: 8px; }
     .voice-forge-existing-row select { flex: 1; min-width: 0; }
     .voice-forge-delete-button { background: #3a1a1a; border-color: #6a2a2a; color: #e88; white-space: nowrap; }
     .voice-forge-upload-row { display: flex; align-items: center; gap: 8px; }
@@ -429,17 +447,27 @@
       color: #fff;
     }
     .voice-forge-or { margin: 8px 0 2px; text-align: center; color: #666; font-size: 11px; }
-    .voice-forge-ratio-row { display: flex; align-items: center; gap: 12px; margin: 18px 0 8px; }
+    #tab-voice-forge .voice-forge-ratio-card { margin-bottom: 14px; }
+    .voice-forge-ratio-row { display: flex; align-items: center; gap: 12px; margin: 0 0 8px; }
     .voice-forge-ratio-row input[type="range"] { flex: 1; }
     .voice-forge-ratio-label { min-width: 88px; color: #bbb; font-size: 12px; }
-    .voice-forge-presets { display: flex; justify-content: center; gap: 8px; margin-bottom: 16px; }
+    .voice-forge-presets { display: flex; justify-content: center; gap: 8px; margin-bottom: 0; }
     .voice-forge-presets button { padding: 5px 12px; font-size: 12px; }
-    .voice-forge-tuning-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 16px; }
+    .voice-forge-tuning-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
     .voice-forge-tuning-control { padding: 12px 14px; }
-    .voice-forge-tuning-control label { display: flex; justify-content: space-between; margin: 0 0 8px; }
+    .voice-forge-tuning-control label { display: flex; justify-content: space-between; margin: 0 0 8px; color: #ccc; font-size: 13px; font-weight: 600; }
     .voice-forge-tuning-control input[type="range"] { width: 100%; }
     .voice-forge-tuning-control small { display: block; margin-top: 6px; color: #777; font-size: 11px; }
-    .voice-forge-result { margin-top: 16px; padding: 14px; }
+    .voice-forge-test-card { margin-bottom: 14px; }
+    #tab-voice-forge .voice-forge-reference-card { margin-bottom: 14px; }
+    #tab-voice-forge .voice-forge-reference-card > small { display: block; margin: 6px 0 12px; color: #888; font-size: 11px; line-height: 1.4; }
+    #tab-voice-forge .voice-forge-reference-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    #tab-voice-forge .voice-forge-reference-field { min-width: 0; }
+    #tab-voice-forge .voice-forge-reference-field label { display: block; margin: 0 0 6px; color: #ccc; font-size: 13px; font-weight: 600; }
+    #tab-voice-forge .voice-forge-reference-field textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+    #tab-voice-forge .voice-forge-reference-field.is-inactive { opacity: .38; }
+    .voice-forge-result { margin-top: 14px; padding: 16px 18px; }
+    #tab-voice-forge .voice-forge-result > label { margin: 8px 0 5px; color: #ccc; font-size: 13px; font-weight: 600; }
     .voice-forge-result audio { width: 100%; margin: 4px 0 12px; }
     .voice-forge-save-row { display: flex; gap: 8px; }
     .voice-forge-save-row input { flex: 1; }
@@ -456,6 +484,7 @@
       margin-top: 0 !important;
       margin-bottom: 0;
     }
+    #tab-voice-forge .voice-forge-seed-row > label { color: #ccc; font-size: 13px; font-weight: 600; }
     #tab-voice-forge .voice-forge-seed-row > input,
     #tab-voice-forge .voice-forge-seed-row > button {
       width: 100%;
@@ -466,6 +495,7 @@
     @media (max-width: 800px) {
       .voice-forge-sources { grid-template-columns: 1fr; }
       .voice-forge-tuning-grid { grid-template-columns: 1fr; }
+      #tab-voice-forge .voice-forge-reference-grid { grid-template-columns: 1fr; }
       #tab-voice-forge .voice-forge-seed-row { grid-template-columns: 1fr; gap: 6px; }
     }
     #advanced-settings-overlay {
@@ -474,7 +504,9 @@
       display: none;
       align-items: flex-start;
       justify-content: center;
-      padding: 28px 64px 24px;
+      /* One variable drives both the top and bottom margin, so they always match. */
+      --adv-modal-gap: 52px;
+      padding: var(--adv-modal-gap) 64px;
       background: rgba(0, 0, 0, 0.58);
       z-index: 1200;
       box-sizing: border-box;
@@ -485,13 +517,18 @@
     }
     #advanced-settings-modal {
       width: min(1440px, 100%);
-      max-height: calc(100vh - 164px);
+      /* Centres when there is spare room; with auto margins an overflowing modal
+         still starts at the top and scrolls (unlike align-items:center). */
+      margin-block: auto;
+      /* 60px header offset + the gap above and below: fills the space left exactly. */
+      max-height: calc(100vh - 60px - 2 * var(--adv-modal-gap, 52px));
       overflow-y: auto;
       background: var(--modal-bg, #1a1f2a);
       border: 1px solid var(--modal-border, #2d394b);
       border-radius: 12px;
       box-shadow: 0 18px 60px rgba(0, 0, 0, 0.65);
       padding: 22px;
+      --adv-pad: 22px;   /* the pinned narrow rail uses this to sit flush with the modal edge */
       box-sizing: border-box;
     }
     .advanced-settings-header {
@@ -575,19 +612,102 @@
       grid-template-columns: 244px minmax(0, 1fr);
       border: 1px solid var(--bench-border, #293238);
       border-radius: 12px;
-      overflow: hidden;
+      /* clip, not hidden: hidden would make the shell a scroll container and
+         stop the rail below from sticking while the modal scrolls. */
+      overflow: clip;
       background: var(--bench-page-bg, #141414);
-      min-height: 420px;
+      align-items: start;
     }
+    /* The rail stays in view while the one continuous settings surface scrolls. */
     .adv-rail {
       display: flex;
       flex-direction: column;
       gap: 8px;
-      padding: 14px 12px;
+      padding: 12px 10px;
+      margin: 10px 0 10px 10px;
+      position: sticky;
+      top: 10px;
       background: var(--bench-panel-bg, #1a1a1a);
-      border-right: 1px solid var(--bench-border, #293238);
+      border: 1px solid var(--bench-border, #293238);
+      border-radius: 8px;
     }
-    .adv-content { min-width: 0; padding: clamp(14px, 2vw, 26px); }
+    /* One continuous document: every section is always visible and its height
+       comes from its own content. Runtime, Providers and Advanced take the full
+       row; the three small sections (Voice, Web Search, LoRA / Vision) share a
+       row when the surface is wide enough. Container queries (not viewport
+       media queries) because the available width depends on the modal. */
+    .adv-content {
+      min-width: 0;
+      padding: clamp(14px, 2vw, 26px);
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 18px 12px;
+      align-content: start;
+      container-type: inline-size;
+    }
+    .adv-content > .adv-panel { grid-column: 1 / -1; }
+    @container (min-width: 640px) {
+      .adv-content > #adv-panel-voice,
+      .adv-content > #adv-panel-search,
+      .adv-content > #adv-panel-vision { grid-column: span 3; }
+      /* Side-by-side sections: one common heading height (description on its own
+         line, room for two lines) so every card in the row starts at the same top. */
+      .adv-content > #adv-panel-voice > .adv-page-head,
+      .adv-content > #adv-panel-search > .adv-page-head,
+      .adv-content > #adv-panel-vision > .adv-page-head { min-height: 58px; align-content: flex-start; }
+      .adv-content > #adv-panel-voice > .adv-page-head p,
+      .adv-content > #adv-panel-search > .adv-page-head p,
+      .adv-content > #adv-panel-vision > .adv-page-head p { flex-basis: 100%; }
+    }
+    @container (min-width: 940px) {
+      .adv-content > #adv-panel-voice,
+      .adv-content > #adv-panel-search,
+      .adv-content > #adv-panel-vision { grid-column: span 2; }
+    }
+    .adv-content > .adv-panel .adv-grid-narrow { grid-template-columns: minmax(0, 1fr); }
+    /* Small sections that share a row: stretch their cards to one common height. */
+    .adv-content > #adv-panel-voice,
+    .adv-content > #adv-panel-search,
+    .adv-content > #adv-panel-vision { display: flex; flex-direction: column; }
+    .adv-content > #adv-panel-voice > .adv-grid,
+    .adv-content > #adv-panel-search > .adv-grid,
+    .adv-content > #adv-panel-vision > .adv-grid { flex: 1 1 auto; }
+    /* Providers: two columns while there is room, one column when the content area narrows. */
+    @container (max-width: 760px) {
+      .adv-grid.adv-grid-providers { grid-template-columns: minmax(0, 1fr); }
+    }
+
+    /* Backend selector: large 2x2 choice cards. Selected state is explicit. */
+    .backend-mode-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; align-items: stretch; }
+    #config-page #advanced-settings-modal button.backend-mode-btn:not(.advanced-settings-close):not(.adv-tab) {
+      display: flex; align-items: center; gap: 10px; width: 100%; height: auto !important; min-height: 62px !important;
+      margin: 0 !important; padding: 9px 11px !important; text-align: left; cursor: pointer; border-radius: 9px !important;
+      background: #151515; border: 1px solid #2d3238; color: #aab2bb; font-size: 12px !important;
+      transition: background .15s ease, border-color .15s ease, color .15s ease;
+    }
+    #config-page #advanced-settings-modal button.backend-mode-btn:not(.advanced-settings-close):not(.adv-tab):hover { border-color: #3d4a57; background: #1a1d20; }
+    #config-page #advanced-settings-modal button.backend-mode-btn:not(.advanced-settings-close):not(.adv-tab):focus-visible { outline: 2px solid #2a6a4a; outline-offset: 1px; }
+    #advanced-settings-modal .backend-mode-btn .bm-icon { font-size: 30px; line-height: 1; flex: 0 0 auto; }
+    #advanced-settings-modal .backend-mode-btn .bm-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    #advanced-settings-modal .backend-mode-btn .bm-name { font-size: 14px; font-weight: 700; color: #e4e8ec; line-height: 1.2; }
+    #advanced-settings-modal .backend-mode-btn .bm-sub { font-size: 10.5px; color: #7d8794; line-height: 1.3; overflow-wrap: anywhere; }
+    #config-page #advanced-settings-modal button.backend-mode-btn.is-selected:not(.advanced-settings-close):not(.adv-tab) { box-shadow: 0 1px 8px rgba(0,0,0,0.35); }
+    #advanced-settings-modal .backend-mode-btn.is-selected .bm-sub { color: inherit; opacity: .85; }
+    #config-page #advanced-settings-modal button.backend-mode-btn[data-mode="local"].is-selected:not(.advanced-settings-close):not(.adv-tab) { background: #1a3a2a; border-color: #2a6a4a; color: #6f6; }
+    #config-page #advanced-settings-modal button.backend-mode-btn[data-mode="openai"].is-selected:not(.advanced-settings-close):not(.adv-tab) { background: #1a2a4a; border-color: #2a4a8a; color: #7ab4f5; }
+    #config-page #advanced-settings-modal button.backend-mode-btn[data-mode="anthropic"].is-selected:not(.advanced-settings-close):not(.adv-tab) { background: #3a2a1a; border-color: #8a5a2a; color: #e0a060; }
+    #config-page #advanced-settings-modal button.backend-mode-btn[data-mode="provider"].is-selected:not(.advanced-settings-close):not(.adv-tab) { background: #2a1a3a; border-color: #6a4a9a; color: #c9a0f0; }
+    #advanced-settings-modal .backend-mode-btn.is-selected .bm-name { color: inherit; }
+    .backend-cfg[hidden] { display: none; }
+    /* Spans/links inside card labels (e.g. "(optional - ...)", "get free key") fell back to the
+       global 15px and looked bigger than the label they belong to; make them follow it. */
+    #advanced-settings-modal .advanced-settings-card label span,
+    #advanced-settings-modal .advanced-settings-card label a,
+    #advanced-settings-modal .advanced-settings-card code { font-size: inherit; line-height: inherit; }
+    #advanced-settings-modal .backend-cfg-title { font-size: 13px; font-weight: 700; color: #e4e8ec; margin-bottom: 4px; line-height: 1.3; }
+    /* Pills/chips are spans, so the global 15px rule also overrode their authored 10px. */
+    #advanced-settings-modal .provider-pill,
+    #advanced-settings-modal .provider-cap { font-size: 10px; line-height: 1.35; }
     #config-page #advanced-settings-modal .adv-rail button.adv-tab {
       display: flex;
       flex-direction: column;
@@ -628,9 +748,15 @@
     }
     #config-page #advanced-settings-modal .adv-rail button.adv-tab.active span { color: var(--bench-accent-text, #fff); }
     #config-page #advanced-settings-modal .adv-rail button.adv-tab.active small { color: var(--bench-accent-text, #fff); opacity: .8; }
-    .adv-page-head { margin-bottom: 16px; }
-    .adv-page-head h2 { margin: 2px 0 4px; font-size: 24px; line-height: 1.15; color: var(--bench-text, #fff); }
-    .adv-page-head p { margin: 0; max-width: 760px; font-size: 12px; color: var(--bench-muted, #8f9baa); line-height: 1.5; }
+    /* Compact section heading (title + one-line description) instead of a page header. */
+    .adv-page-head {
+      display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px;
+      margin: 0 0 9px; padding-bottom: 6px;
+      border-bottom: 1px solid var(--bench-border, #293238);
+    }
+    .adv-page-head .bench-eyebrow { display: none; }
+    .adv-page-head h2 { margin: 0; font-size: 15px; line-height: 1.2; color: var(--bench-text, #fff); }
+    .adv-page-head p { margin: 0; flex: 1 1 200px; font-size: 11px; color: var(--bench-muted, #8f9baa); line-height: 1.4; }
     #advanced-settings-modal .advanced-settings-card {
       background: var(--bench-card-bg, rgba(255,255,255,0.025));
       border-color: var(--bench-border, rgba(255,255,255,0.08));
@@ -639,21 +765,24 @@
     }
     @media (max-width: 860px) {
       .adv-shell { grid-template-columns: minmax(0, 1fr); }
-      .adv-rail { flex-direction: row; gap: 8px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--bench-border, #293238); padding: 10px; }
+      /* Narrow: the rail becomes a horizontal strip that stays pinned above the content. */
+      .adv-rail { flex-direction: row; gap: 8px; overflow-x: auto; margin: 0; top: calc(var(--adv-pad, 0px) * -1); z-index: 3; border: 0; border-radius: 0; border-bottom: 1px solid var(--bench-border, #293238); padding: 10px; }
       #config-page #advanced-settings-modal .adv-rail button.adv-tab { flex: 0 0 auto; width: auto; min-height: 36px !important; padding: 6px 12px !important; white-space: nowrap; }
       #config-page #advanced-settings-modal .adv-rail button.adv-tab small { display: none; }
     }
-    .adv-panel { display: none; }
-    .adv-panel.active { display: block; }
+    .adv-panel { min-width: 0; }
     .adv-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 12px;
-      align-items: start;
+      /* Cards that sit side by side match heights within their row/group. */
+      align-items: stretch;
     }
-    .adv-grid.adv-grid-providers { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
+    .adv-grid.adv-grid-providers { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .adv-grid.adv-grid-narrow { grid-template-columns: minmax(0, 640px); }
     .adv-stack { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+    /* The card in a stack that absorbs spare height so the stack matches its neighbour. */
+    .adv-stack > .adv-grow { flex: 1 1 auto; }
     .adv-backend-bar { margin-bottom: 12px; }
     .adv-help { font-size: 11px; color: #7d8794; line-height: 1.45; margin: -4px 0 10px; }
     .adv-help code, .provider-hint code { background: #222; padding: 0 3px; border-radius: 2px; }
@@ -681,7 +810,7 @@
     #config-page #advanced-settings-modal .adv-btn.info { background: #1a2a3a; border-color: #2a4a6a; color: #7ab4f5; }
     #config-page #advanced-settings-modal .adv-btn.primary { background: #1a3a2a; border-color: #2a6a4a; color: #6f6; font-weight: 700; }
     #config-page #advanced-settings-modal .adv-btn.danger { background: #2a1a1a; border-color: #6a2a2a; color: #e88; }
-    .provider-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-bottom: 10px; }
+    .provider-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; margin-bottom: 10px; }
     .provider-tile {
       position: relative; text-align: left; padding: 10px 12px; border-radius: 8px; cursor: pointer;
       background: #151515; border: 1px solid #2d3238; color: #ccc; outline: none; min-width: 0;
@@ -1308,15 +1437,106 @@
         flex-basis: auto !important;
       }
     }
+    /* Advanced Settings compact scale: like the HF workspace, use explicit
+       scoped CSS sizing (about 0.8x spacing and 0.84x type, with a 10px floor).
+       No page zoom or transforms; the shared settings visual language stays intact. */
+    @media (min-width: 769px) {
+      #config-page #advanced-settings-modal { padding: 17px; --adv-pad: 17px; }
+      #config-page #advanced-settings-modal .advanced-settings-header {
+        gap: 12px; padding-bottom: 12px; margin-bottom: 14px;
+      }
+      #config-page #advanced-settings-modal .advanced-settings-title { font-size: 17px; margin-bottom: 4px; }
+      #config-page #advanced-settings-modal .advanced-settings-subtitle { font-size: 10px; }
+      #config-page #advanced-settings-modal .advanced-settings-close {
+        width: 27px; height: 27px; min-height: 27px; font-size: 16px;
+      }
+      #config-page #advanced-settings-modal .adv-shell {
+        grid-template-columns: 224px minmax(0, 1fr); border-radius: 10px;
+      }
+      #config-page #advanced-settings-modal .adv-rail { gap: 6px; padding: 9px 8px; }
+      #config-page #advanced-settings-modal .adv-rail button.adv-tab {
+        min-height: 40px !important; padding: 7px 10px !important; border-radius: 6px !important;
+      }
+      #config-page #advanced-settings-modal .adv-rail button.adv-tab span { font-size: 12px; }
+      #config-page #advanced-settings-modal .adv-rail button.adv-tab small { font-size: 10px !important; }
+      #config-page #advanced-settings-modal .adv-content { padding: clamp(12px, 1.6vw, 20px); gap: 16px 10px; }
+      #config-page #advanced-settings-modal .adv-page-head { margin-bottom: 8px; }
+      #config-page #advanced-settings-modal .adv-page-head h2 { font-size: 14px; }
+      #config-page #advanced-settings-modal .adv-page-head p { font-size: 10.5px; }
+      #config-page #advanced-settings-modal .adv-grid,
+      #config-page #advanced-settings-modal .advanced-settings-grid { gap: 9.5px; }
+      #config-page #advanced-settings-modal .adv-stack { gap: 9.5px; }
+      #config-page #advanced-settings-modal .adv-backend-bar { margin-bottom: 9.5px; }
+      #config-page #advanced-settings-modal .adv-help { font-size: 10px; margin-bottom: 8px; }
+      #config-page #advanced-settings-modal .adv-muted { font-size: 10px; }
+      #config-page #advanced-settings-modal .adv-row { gap: 5px; margin-bottom: 5px; }
+      #config-page #advanced-settings-modal .adv-status { font-size: 10.5px; min-height: 14px; margin: 3px 0 6px; }
+      #config-page #advanced-settings-modal .adv-subtle-title { margin: 8px 0 5px; letter-spacing: .8px; }
+      #config-page #advanced-settings-modal .adv-check { gap: 6px; font-size: 11px; margin: 5px 0; }
+      #config-page #advanced-settings-modal .adv-check input { width: 13px; height: 13px; }
+      #config-page #advanced-settings-modal .advanced-settings-card { padding: 11px; border-radius: 7px; }
+      #config-page #advanced-settings-modal .advanced-settings-card h3 { font-size: 13px; margin-bottom: 9px; }
+      #config-page #advanced-settings-modal .advanced-settings-card label { font-size: 10px !important; }
+      #config-page #advanced-settings-modal input:not([type="checkbox"]):not([type="range"]):not([type="hidden"]),
+      #config-page #advanced-settings-modal select,
+      #config-page #advanced-settings-modal button:not(.advanced-settings-close):not(.adv-tab) {
+        height: 27px !important; min-height: 27px !important; padding: 0 6px !important;
+        border-radius: 4px !important; font-size: 11px !important;
+      }
+      #config-page #advanced-settings-modal button:not(.advanced-settings-close):not(.adv-tab) {
+        height: 26px !important; min-height: 26px !important;
+      }
+    }
+    /* Provider tiles share one responsive grid and a fixed row height. Titles
+       and descriptions wrap to bounded lines; tags stay anchored at the bottom. */
+    #advanced-settings-modal .provider-tiles {
+      align-items: stretch; grid-auto-rows: 92px; gap: 7px; margin-bottom: 8px;
+    }
+    #advanced-settings-modal .provider-tile {
+      display: flex; flex-direction: column; height: 100%; min-height: 0;
+      box-sizing: border-box; overflow: hidden; padding: 9px 10px;
+    }
+    #advanced-settings-modal .provider-tile-name {
+      display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1;
+      overflow: hidden; overflow-wrap: anywhere; line-height: 1.25;
+    }
+    #advanced-settings-modal .provider-tile-sub {
+      display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+      overflow: hidden; overflow-wrap: anywhere; line-height: 1.3;
+    }
+    #advanced-settings-modal .provider-tile-tags {
+      max-height: 22px; overflow: hidden; margin-top: auto; padding-top: 4px; gap: 3px;
+    }
+    @media (min-width: 769px) {
+      #advanced-settings-modal .provider-tiles { grid-auto-rows: 78px; gap: 6px; }
+      #advanced-settings-modal .provider-tile { padding: 8px 9px; }
+      #advanced-settings-modal .provider-tile-name { font-size: 11px; }
+      #advanced-settings-modal .provider-tile-sub { font-size: 10px; }
+    }
+    @media (max-width: 860px) {
+      #config-page #advanced-settings-modal .adv-shell { grid-template-columns: minmax(0, 1fr); }
+      #config-page #advanced-settings-modal .adv-rail { margin: 0; }
+      #config-page #advanced-settings-modal .adv-rail button.adv-tab {
+        min-height: 36px !important; padding: 6px 12px !important; white-space: nowrap;
+      }
+    }
+    @media (max-width: 768px) {
+      #config-page #advanced-settings-modal { padding: 16px; --adv-pad: 16px; }
+      #config-page #advanced-settings-modal input:not([type="checkbox"]):not([type="range"]):not([type="hidden"]),
+      #config-page #advanced-settings-modal select,
+      #config-page #advanced-settings-modal button:not(.advanced-settings-close):not(.adv-tab) {
+        height: 30px !important; min-height: 30px !important; font-size: 12px !important;
+      }
+    }
   </style>
-  <link rel="stylesheet" href="/theme-files/midnight.css" id="active-theme-link" />
+  <link rel="stylesheet" href="/theme-files/claude.css" id="active-theme-link" />
   <script>
     // Swap to actual active theme if different from default
     fetch('/themes/list').then(r=>r.json()).then(d=>{
-      const name = d.active || 'midnight';
+      const name = d.active || 'claude';
       const link = document.getElementById('active-theme-link');
       if (link) link.href = '/theme-files/' + name + '.css?v=' + Date.now();
-    }).catch(()=>{}); // silent fail — default midnight.css already loaded above
+    }).catch(()=>{}); // silent fail — default claude.css already loaded above
   </script>
 </head>
 <body id="config-page">
@@ -1378,8 +1598,8 @@
         cursor: pointer; display: flex; align-items: center; gap: 7px; white-space: nowrap;
         max-width: 280px; transition: border-color 0.15s, background 0.15s;
         position: relative; overflow: hidden;
-      " onmouseover="this.style.borderColor='#4a6a8a'; this.style.background='rgba(74,106,138,0.28)'" onmouseout="this.style.borderColor='rgba(255,175,55,0.55)'; this.style.background='rgba(210,130,20,0.18)'">
-        <span id="model-load-progress" aria-hidden="true" style="position:absolute; inset:0 auto 0 0; width:0; background:rgba(235,145,25,0.42); pointer-events:none;"></span>
+      " onmouseover="this.style.borderColor='#4a6a8a'; this.style.background='rgba(74,106,138,0.28)'" onmouseout="this.style.borderColor='rgba(74,106,138,0.75)'; this.style.background='rgba(74,106,138,0.18)'">
+        <span id="model-load-progress" aria-hidden="true" style="position:absolute; inset:0 auto 0 0; width:0; background:rgba(74,106,138,0.35); pointer-events:none;"></span>
         <span id="model-display-name" style="position:relative; z-index:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Loading...</span>
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="position:relative; z-index:1; flex-shrink:0; opacity:0.45;"><polyline points="6 9 12 15 18 9"></polyline></svg>
       </button>
@@ -1580,18 +1800,18 @@
         </div>
 
         <div class="adv-shell">
-        <nav class="adv-rail" id="adv-tabs" role="tablist" aria-label="Advanced settings sections">
-          <button type="button" role="tab" class="adv-tab active" data-adv-tab="runtime" aria-selected="true" onclick="advSwitchTab('runtime')"><span>&#128421;&#65039; Runtime</span><small>Built-in llama.cpp</small></button>
-          <button type="button" role="tab" class="adv-tab" data-adv-tab="providers" aria-selected="false" onclick="advSwitchTab('providers')"><span>&#128268; Providers</span><small>Backends &amp; cloud APIs</small></button>
-          <button type="button" role="tab" class="adv-tab" data-adv-tab="voice" aria-selected="false" onclick="advSwitchTab('voice')"><span>&#127908; Voice</span><small>Text-to-speech</small></button>
-          <button type="button" role="tab" class="adv-tab" data-adv-tab="search" aria-selected="false" onclick="advSwitchTab('search')"><span>&#128269; Web Search</span><small>Brave Search key</small></button>
-          <button type="button" role="tab" class="adv-tab" data-adv-tab="vision" aria-selected="false" onclick="advSwitchTab('vision')"><span>&#128444;&#65039; LoRA / Vision</span><small>Adapters &amp; projector</small></button>
-          <button type="button" role="tab" class="adv-tab" data-adv-tab="advanced" aria-selected="false" onclick="advSwitchTab('advanced')"><span>&#9881;&#65039; Advanced</span><small>Images, presets, reset</small></button>
+        <nav class="adv-rail" id="adv-tabs" aria-label="Advanced settings sections">
+          <button type="button" class="adv-tab active" data-adv-tab="runtime" aria-current="true" onclick="advSwitchTab('runtime')"><span>&#128421;&#65039; Runtime</span><small>Built-in llama.cpp</small></button>
+          <button type="button" class="adv-tab" data-adv-tab="providers" onclick="advSwitchTab('providers')"><span>&#128268; Providers</span><small>Backends &amp; cloud APIs</small></button>
+          <button type="button" class="adv-tab" data-adv-tab="voice" onclick="advSwitchTab('voice')"><span>&#127908; Voice</span><small>Text-to-speech</small></button>
+          <button type="button" class="adv-tab" data-adv-tab="search" onclick="advSwitchTab('search')"><span>&#128269; Web Search</span><small>Brave Search key</small></button>
+          <button type="button" class="adv-tab" data-adv-tab="vision" onclick="advSwitchTab('vision')"><span>&#128444;&#65039; LoRA / Vision</span><small>Adapters &amp; projector</small></button>
+          <button type="button" class="adv-tab" data-adv-tab="advanced" onclick="advSwitchTab('advanced')"><span>&#9881;&#65039; Advanced</span><small>Images, presets, reset</small></button>
         </nav>
         <div class="adv-content">
 
         <!-- RUNTIME: built-in llama.cpp -->
-        <div class="adv-panel active" id="adv-panel-runtime" role="tabpanel">
+        <div class="adv-panel" id="adv-panel-runtime" role="region" aria-label="Runtime">
           <header class="adv-page-head"><span class="bench-eyebrow">Settings</span><h2>Runtime</h2><p>The built-in llama.cpp server: executable, models folder and launch arguments. This is the default engine.</p></header>
           <div class="adv-grid">
             <section class="advanced-settings-card">
@@ -1647,10 +1867,15 @@
                   <option value="clean">Clean template - text-only [SYSTEM_PROMPT]/[INST]</option>
                 </select>
               </div>
-              <label style="grid-column:1 / -1; display:flex; align-items:center; gap:8px; font-size:11px; color:#aaa; cursor:pointer;" title="Allow reasoning/thinking for models that support it. This can increase time to first token.">
+              <label style="grid-column:1 / -1; display:flex; align-items:center; gap:8px; font-size:11px; color:#aaa; cursor:pointer;" title="Allow supported local llama.cpp models to generate reasoning. This can increase time to first token.">
                 <input type="checkbox" id="llama-reasoning-enabled" style="width:14px; height:14px; margin:0; cursor:pointer;">
-                Reasoning / Thinking
+                Enable reasoning / thinking
               </label>
+              <label style="grid-column:1 / -1; display:flex; align-items:center; gap:8px; font-size:11px; color:#aaa; cursor:pointer;" title="Show supported Claude or local llama.cpp reasoning in the collapsible panel above replies.">
+                <input id="anthropic-thinking" type="checkbox" style="width:14px; height:14px; cursor:pointer;">
+                <span>&#128173; Show reasoning / thinking</span>
+              </label>
+              <div style="grid-column:1 / -1; font-size:10px; color:#666; line-height:1.4; margin:-4px 0 2px;">For supported local models, Enable ON + Show OFF lets the model reason privately while the panel stays hidden.</div>
             </div>
             <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:#aaa; margin-bottom:10px; cursor:pointer;">
               <input type="checkbox" id="llama-show-console" style="width:14px; height:14px; cursor:pointer;">
@@ -1663,19 +1888,20 @@
         </div>
 
         <!-- PROVIDERS: active backend + external inference providers + cloud APIs -->
-        <div class="adv-panel" id="adv-panel-providers" role="tabpanel">
+        <div class="adv-panel" id="adv-panel-providers" role="region" aria-label="Providers">
           <header class="adv-page-head"><span class="bench-eyebrow">Settings</span><h2>Providers</h2><p>Choose where chat requests go, and configure external inference servers or cloud APIs.</p></header>
-          <section class="advanced-settings-card adv-backend-bar">
-            <h3>Active backend</h3>
-            <div class="adv-help">Choose where chat requests are sent. Built-in llama.cpp is the default; Local returns to it.</div>
-            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:6px;">Backend Mode</label>
-            <div style="display:flex; gap:0; margin-bottom:10px; border:1px solid #333; border-radius:4px; overflow:hidden;">
-              <button id="mode-local-btn" onclick="selectLocalMode()" style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#1a3a2a; color:#6f6; font-weight:bold;">&#128421;&#65039; Local</button>
-              <button id="mode-openai-btn" onclick="setBackendMode('openai')" style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#111; color:#888;">&#9729;&#65039; OpenAI</button>
-              <button id="mode-anthropic-btn" onclick="setBackendMode('anthropic')" style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#111; color:#888;">&#129504; Anthropic</button>
-              <button id="mode-provider-btn" onclick="selectProviderMode()" title="Use the Inference Provider configured below (LM Studio, Ollama, KoboldCpp, ...)" style="flex:1; padding:5px 0; font-size:12px; cursor:pointer; border:none; background:#111; color:#888;">&#128268; Provider</button>
-            </div>
-            <button id="cloud-connect-btn" onclick="onCloudConnectClick()" style="width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; font-weight:bold; margin-bottom:10px; background:#1a3a2a; border:1px solid #2a6a4a; color:white;">&#127760; Connect</button>
+          <div class="adv-grid adv-grid-providers">
+            <div class="adv-stack adv-providers-left">
+              <section class="advanced-settings-card adv-backend-bar" id="backend-card">
+                <h3>Backend</h3>
+                <div class="adv-help">Where chat requests are sent. Local (the built-in llama.cpp) is the default.</div>
+                <div class="backend-mode-grid" role="group" aria-label="Active backend">
+                  <button type="button" id="mode-local-btn" class="backend-mode-btn is-selected" data-mode="local" aria-pressed="true" onclick="selectLocalMode()"><span class="bm-icon">&#128421;&#65039;</span><span class="bm-text"><span class="bm-name">Local</span><span class="bm-sub">Built-in llama.cpp</span></span></button>
+                  <button type="button" id="mode-openai-btn" class="backend-mode-btn" data-mode="openai" aria-pressed="false" onclick="setBackendMode('openai')"><span class="bm-icon">&#9729;&#65039;</span><span class="bm-text"><span class="bm-name">OpenAI</span><span class="bm-sub">OpenAI &amp; compatible APIs</span></span></button>
+                  <button type="button" id="mode-anthropic-btn" class="backend-mode-btn" data-mode="anthropic" aria-pressed="false" onclick="setBackendMode('anthropic')"><span class="bm-icon">&#129504;</span><span class="bm-text"><span class="bm-name">Anthropic</span><span class="bm-sub">Claude</span></span></button>
+                  <button type="button" id="mode-provider-btn" class="backend-mode-btn" data-mode="provider" aria-pressed="false" onclick="selectProviderMode()" title="Use the Inference Provider configured on the right (LM Studio, Ollama, KoboldCpp, ...)"><span class="bm-icon">&#128268;</span><span class="bm-text"><span class="bm-name">Provider</span><span class="bm-sub">Custom / self-hosted</span></span></button>
+                </div>
+                <button id="cloud-connect-btn" onclick="onCloudConnectClick()" style="width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; font-weight:bold; background:#1a3a2a; border:1px solid #2a6a4a; color:white;">&#127760; Connect</button>
 
             <div id="cloud-confirm-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.7); z-index:9999; align-items:center; justify-content:center;">
               <div style="background:#1a1f2a; border:1px solid #3a5a7a; border-radius:10px; padding:24px 20px; max-width:300px; width:90%; box-shadow:0 8px 32px rgba(0,0,0,0.6);">
@@ -1689,8 +1915,69 @@
               </div>
             </div>
 
-          </section>
-          <div class="adv-grid adv-grid-providers">
+              </section>
+              <section class="advanced-settings-card adv-grow" id="backend-config-card">
+                <h3>Configuration</h3>
+                <div class="backend-cfg" data-backend="local">
+                  <div class="backend-cfg-title">&#128421;&#65039; Built-in llama.cpp</div>
+                  <div class="adv-help">The default engine. HWUI launches and manages this server itself, so there is nothing to connect. Executable, models folder, launch arguments and reasoning are in Runtime.</div>
+                  <button type="button" class="adv-btn info" onclick="advSwitchTab('runtime')">Open Runtime settings</button>
+                </div>
+                <div class="backend-cfg" data-backend="openai" hidden>
+                  <div class="backend-cfg-title">&#9729;&#65039; OpenAI &amp; compatible APIs</div>
+                  <div class="adv-help">OpenAI-compatible cloud services. Press Connect above to enable cloud APIs.</div>
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">OpenAI-Compatible Endpoint</label>
+            <input id="openai-base-url" type="text" placeholder="https://api.openai.com/v1" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:2px;">
+            <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Base URL up to <code style="background:#222; padding:0 3px; border-radius:2px;">/v1</code> - leave default for OpenAI. Examples: <code style="background:#222; padding:0 3px; border-radius:2px;">https://api.anthropic.com/v1</code>, <code style="background:#222; padding:0 3px; border-radius:2px;">https://api.x.ai/v1</code>, <code style="background:#222; padding:0 3px; border-radius:2px;">https://openrouter.ai/api/v1</code></div>
+
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">OpenAI API Key</label>
+            <input id="openai-api-key" type="password" placeholder="sk-..." style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:6px;">
+
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Model</label>
+            <div style="display:flex; gap:6px; align-items:center; margin-bottom:4px;">
+              <select id="openai-model" style="flex:1; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; height:28px;">
+                <option value="gpt-4o">gpt-4o</option>
+              </select>
+              <button onclick="fetchOpenAIModels()" title="Fetch models from OpenAI" style="background:#1a2a3a; border:1px solid #2a4a6a; color:#7ab4f5; border-radius:4px; padding:0 8px; font-size:12px; cursor:pointer; height:28px; white-space:nowrap; flex-shrink:0;">&#128260; Fetch</button>
+            </div>
+            <div style="font-size:10px; color:#555; margin-bottom:8px;">Click Fetch to load your available models</div>
+            <div id="openai-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
+            <button onclick="saveOpenAISettings()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">&#128190; Save OpenAI Settings</button>
+                </div>
+                <div class="backend-cfg" data-backend="anthropic" hidden>
+                  <div class="backend-cfg-title">&#129504; Anthropic (Claude)</div>
+            <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Native Anthropic API - keep both keys saved here and pick Anthropic in the Backend selector to switch. No re-pasting.</div>
+
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Anthropic Endpoint</label>
+            <input id="anthropic-base-url" type="text" placeholder="https://api.anthropic.com/v1" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:2px;">
+            <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Base URL up to <code style="background:#222; padding:0 3px; border-radius:2px;">/v1</code> - leave default for Anthropic. Must be a native Anthropic-format endpoint.</div>
+
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Anthropic API Key</label>
+            <input id="anthropic-api-key" type="password" placeholder="sk-ant-..." style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:6px;">
+
+            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Model</label>
+            <div style="display:flex; gap:6px; align-items:center; margin-bottom:4px;">
+              <select id="anthropic-model" style="flex:1; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; height:28px;">
+                <option value="claude-sonnet-4-5">claude-sonnet-4-5</option>
+              </select>
+              <button onclick="fetchAnthropicModels()" title="Fetch models from Anthropic" style="background:#1a2a3a; border:1px solid #2a4a6a; color:#7ab4f5; border-radius:4px; padding:0 8px; font-size:12px; cursor:pointer; height:28px; white-space:nowrap; flex-shrink:0;">&#128260; Fetch</button>
+            </div>
+            <div style="font-size:10px; color:#555; margin-bottom:8px;">Click Fetch to load your available Claude models</div>
+
+            <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
+              <label for="anthropic-thinking-budget" style="font-size:11px; color:#aaa;">Thinking budget (tokens)</label>
+              <input id="anthropic-thinking-budget" type="number" min="1024" step="1024" value="2048" style="width:90px; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:12px;">
+            </div>
+            <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Anthropic only: Claude extended thinking is requested by Runtime → Show reasoning / thinking. Its budget must be &gt;= 1024 and below max-tokens; temperature is ignored while Claude thinking is on.</div>
+            <div id="anthropic-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
+            <button onclick="saveAnthropicSettings()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">&#128190; Save Anthropic Settings</button>
+                </div>
+                <div class="backend-cfg" data-backend="provider" hidden>
+                  <div class="backend-cfg-title">&#128268; Inference provider</div>
+                  <div class="adv-help">Chat requests go to the inference provider selected on the right. Configure it there and press <b>Save &amp; use</b> to make it the active backend.</div>
+                </div>
+              </section>
+            </div>
             <section class="advanced-settings-card" id="provider-card">
               <h3>&#128268; Inference providers</h3>
               <div class="adv-help">Local or self-hosted servers. Keys are kept in <code>secrets.local.json</code>, never in settings.json.</div>
@@ -1743,65 +2030,11 @@
                 <button type="button" class="adv-btn primary" onclick="providerSave(true)">Save &amp; use</button>
               </div>
             </section>
-            <section class="advanced-settings-card adv-cloud-card">
-              <h3>&#9729;&#65039; Cloud APIs</h3>
-              <div class="adv-help">OpenAI-compatible and Anthropic cloud services. Select OpenAI or Anthropic above, then press Connect to enable them.</div>
-            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">OpenAI-Compatible Endpoint</label>
-            <input id="openai-base-url" type="text" placeholder="https://api.openai.com/v1" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:2px;">
-            <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Base URL up to <code style="background:#222; padding:0 3px; border-radius:2px;">/v1</code> - leave default for OpenAI. Examples: <code style="background:#222; padding:0 3px; border-radius:2px;">https://api.anthropic.com/v1</code>, <code style="background:#222; padding:0 3px; border-radius:2px;">https://api.x.ai/v1</code>, <code style="background:#222; padding:0 3px; border-radius:2px;">https://openrouter.ai/api/v1</code></div>
-
-            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">OpenAI API Key</label>
-            <input id="openai-api-key" type="password" placeholder="sk-..." style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:6px;">
-
-            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Model</label>
-            <div style="display:flex; gap:6px; align-items:center; margin-bottom:4px;">
-              <select id="openai-model" style="flex:1; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; height:28px;">
-                <option value="gpt-4o">gpt-4o</option>
-              </select>
-              <button onclick="fetchOpenAIModels()" title="Fetch models from OpenAI" style="background:#1a2a3a; border:1px solid #2a4a6a; color:#7ab4f5; border-radius:4px; padding:0 8px; font-size:12px; cursor:pointer; height:28px; white-space:nowrap; flex-shrink:0;">&#128260; Fetch</button>
-            </div>
-            <div style="font-size:10px; color:#555; margin-bottom:8px;">Click Fetch to load your available models</div>
-            <div id="openai-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
-            <button onclick="saveOpenAISettings()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">&#128190; Save OpenAI Settings</button>
-
-            <hr style="margin:14px 0; border-color:#333;">
-
-            <h3>&#129504; Anthropic (Claude)</h3>
-            <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Native Anthropic API - keep both keys saved here and flip the Backend Mode toggle above to switch. No re-pasting.</div>
-
-            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Anthropic Endpoint</label>
-            <input id="anthropic-base-url" type="text" placeholder="https://api.anthropic.com/v1" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:2px;">
-            <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Base URL up to <code style="background:#222; padding:0 3px; border-radius:2px;">/v1</code> - leave default for Anthropic. Must be a native Anthropic-format endpoint.</div>
-
-            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Anthropic API Key</label>
-            <input id="anthropic-api-key" type="password" placeholder="sk-ant-..." style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; margin-bottom:6px;">
-
-            <label style="font-size:11px; color:#aaa; display:block; margin-bottom:3px;">Model</label>
-            <div style="display:flex; gap:6px; align-items:center; margin-bottom:4px;">
-              <select id="anthropic-model" style="flex:1; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px; height:28px;">
-                <option value="claude-sonnet-4-5">claude-sonnet-4-5</option>
-              </select>
-              <button onclick="fetchAnthropicModels()" title="Fetch models from Anthropic" style="background:#1a2a3a; border:1px solid #2a4a6a; color:#7ab4f5; border-radius:4px; padding:0 8px; font-size:12px; cursor:pointer; height:28px; white-space:nowrap; flex-shrink:0;">&#128260; Fetch</button>
-            </div>
-            <div style="font-size:10px; color:#555; margin-bottom:8px;">Click Fetch to load your available Claude models</div>
-
-            <label style="display:flex; align-items:center; gap:8px; font-size:12px; color:#ccc; margin-bottom:4px; cursor:pointer;">
-              <input id="anthropic-thinking" type="checkbox" style="width:15px; height:15px; cursor:pointer;">
-              <span>&#128173; Show extended thinking</span>
-            </label>
-            <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px;">
-              <label for="anthropic-thinking-budget" style="font-size:11px; color:#aaa;">Thinking budget (tokens)</label>
-              <input id="anthropic-thinking-budget" type="number" min="1024" step="1024" value="2048" style="width:90px; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:12px;">
-            </div>
-            <div style="font-size:10px; color:#666; margin-bottom:8px; line-height:1.4;">Shows supported Claude or local llama.cpp reasoning in the same collapsible panel above each reply. The budget and temperature notes apply only to Anthropic: budget must be &gt;= 1024 and below max-tokens; temperature is ignored while Claude thinking is on.</div>
-            <div id="anthropic-status" style="font-size:11px; color:#aaa; margin-bottom:6px; min-height:14px;"></div>
-            <button onclick="saveAnthropicSettings()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">&#128190; Save Anthropic Settings</button>
-            </section>
           </div>
         </div>
 
         <!-- VOICE -->
-        <div class="adv-panel" id="adv-panel-voice" role="tabpanel">
+        <div class="adv-panel" id="adv-panel-voice" role="region" aria-label="Voice">
           <header class="adv-page-head"><span class="bench-eyebrow">Settings</span><h2>Voice</h2><p>Text-to-speech engine and its quantisation.</p></header>
           <div class="adv-grid adv-grid-narrow">
             <section class="advanced-settings-card">
@@ -1841,7 +2074,7 @@
         </div>
 
         <!-- WEB SEARCH -->
-        <div class="adv-panel" id="adv-panel-search" role="tabpanel">
+        <div class="adv-panel" id="adv-panel-search" role="region" aria-label="Web Search">
           <header class="adv-page-head"><span class="bench-eyebrow">Settings</span><h2>Web Search</h2><p>The Brave Search API key used for in-chat web searches.</p></header>
           <div class="adv-grid adv-grid-narrow">
             <section class="advanced-settings-card">
@@ -1859,7 +2092,7 @@
         </div>
 
         <!-- LORA / VISION -->
-        <div class="adv-panel" id="adv-panel-vision" role="tabpanel">
+        <div class="adv-panel" id="adv-panel-vision" role="region" aria-label="LoRA / Vision">
           <header class="adv-page-head"><span class="bench-eyebrow">Settings</span><h2>LoRA / Vision</h2><p>Optional adapters and the vision projector for the built-in llama.cpp server.</p></header>
           <div class="adv-grid adv-grid-narrow">
             <section class="advanced-settings-card">
@@ -1886,7 +2119,7 @@
         </div>
 
         <!-- ADVANCED -->
-        <div class="adv-panel" id="adv-panel-advanced" role="tabpanel">
+        <div class="adv-panel" id="adv-panel-advanced" role="region" aria-label="Advanced">
           <header class="adv-page-head"><span class="bench-eyebrow">Settings</span><h2>Advanced</h2><p>Image generation, launch configuration presets and reset.</p></header>
           <div class="adv-grid">
             <section class="advanced-settings-card">
@@ -1920,7 +2153,7 @@
             <button onclick="saveComfyUISettings()" style="background:#1a3a2a; border:1px solid #2a6a4a; color:white; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer;">&#128190; Save ComfyUI Settings</button>
             </section>
             <div class="adv-stack">
-              <section class="advanced-settings-card">
+              <section class="advanced-settings-card adv-grow">
                 <h3>Config presets</h3>
                 <div class="adv-help">Save and recall complete llama.cpp launch configurations.</div>
             <div style="border-top:1px solid #2a2a2a; padding-top:8px;">
@@ -2349,12 +2582,20 @@
       <div id="tab-voice-forge" class="config-tab-panel">
         <h3>🎙 Voice Forge</h3>
         <div class="voice-forge-note">
-          Experimental Qwen3-TTS feature. Voice Forge blends speaker embeddings only; it does not mix reference audio or codec data.
+          Experimental Qwen3-TTS feature. Use one voice with its reference spoken text for fuller cloning, or blend two speaker embeddings.
         </div>
 
         <div class="voice-forge-sources">
-          <section class="voice-forge-card">
-            <h4>Voice A</h4>
+          <section id="voice-forge-a-card" class="voice-forge-card">
+            <div class="voice-forge-card-heading">
+              <h4>Voice A</h4>
+              <div class="voice-forge-mode"><span>Use alone</span>
+                <label class="voice-forge-mode-toggle" aria-label="Generate using only Voice A" title="Generate using only Voice A">
+                  <input id="voice-forge-only-a" type="checkbox" onchange="toggleVoiceForgeOnlyA()">
+                  <span class="voice-forge-mode-toggle-track"></span>
+                </label>
+              </div>
+            </div>
             <label for="voice-forge-a-select">Existing HWUI voice</label>
             <div class="voice-forge-existing-row">
               <select id="voice-forge-a-select" onchange="selectVoiceForgeExisting('A')"><option value="">Loading voices...</option></select>
@@ -2372,8 +2613,16 @@
               <button id="voice-forge-a-preview" type="button" onclick="toggleVoiceForgePreview('A')" disabled>▶ Preview A</button>
             </div>
           </section>
-          <section class="voice-forge-card">
-            <h4>Voice B</h4>
+          <section id="voice-forge-b-card" class="voice-forge-card">
+            <div class="voice-forge-card-heading">
+              <h4>Voice B</h4>
+              <div class="voice-forge-mode"><span>Use alone</span>
+                <label class="voice-forge-mode-toggle" aria-label="Generate using only Voice B" title="Generate using only Voice B">
+                  <input id="voice-forge-only-b" type="checkbox" onchange="toggleVoiceForgeOnlyB()">
+                  <span class="voice-forge-mode-toggle-track"></span>
+                </label>
+              </div>
+            </div>
             <label for="voice-forge-b-select">Existing HWUI voice</label>
             <div class="voice-forge-existing-row">
               <select id="voice-forge-b-select" onchange="selectVoiceForgeExisting('B')"><option value="">Loading voices...</option></select>
@@ -2393,16 +2642,33 @@
           </section>
         </div>
 
-        <div class="voice-forge-ratio-row">
-          <span id="voice-forge-a-percent" class="voice-forge-ratio-label">A 50%</span>
-          <input id="voice-forge-ratio" type="range" min="0" max="100" value="50" oninput="updateVoiceForgeRatio()" aria-label="Voice A blend percentage">
-          <span id="voice-forge-b-percent" class="voice-forge-ratio-label" style="text-align:right;">B 50%</span>
-        </div>
-        <div class="voice-forge-presets">
-          <button type="button" onclick="setVoiceForgeRatio(75)">75 / 25</button>
-          <button type="button" onclick="setVoiceForgeRatio(50)">50 / 50</button>
-          <button type="button" onclick="setVoiceForgeRatio(25)">25 / 75</button>
-        </div>
+        <section class="voice-forge-settings-card voice-forge-reference-card">
+          <h4>Text spoken in the reference recording</h4>
+          <small>Enter the words spoken in the uploaded audio, not the text you want generated. Used in “Use alone” mode. For an existing HWUI voice, leave blank to use its saved transcript; blending uses speaker embeddings only.</small>
+          <div class="voice-forge-reference-grid">
+            <div id="voice-forge-a-reference-field" class="voice-forge-reference-field">
+              <label for="voice-forge-a-ref-text">Voice A spoken text</label>
+              <textarea id="voice-forge-a-ref-text" rows="3" maxlength="10000" placeholder="Exactly what Voice A says in the reference recording…"></textarea>
+            </div>
+            <div id="voice-forge-b-reference-field" class="voice-forge-reference-field">
+              <label for="voice-forge-b-ref-text">Voice B spoken text</label>
+              <textarea id="voice-forge-b-ref-text" rows="3" maxlength="10000" placeholder="Exactly what Voice B says in the reference recording…"></textarea>
+            </div>
+          </div>
+        </section>
+
+        <section id="voice-forge-ratio-controls" class="voice-forge-settings-card voice-forge-ratio-card">
+          <div class="voice-forge-ratio-row">
+            <span id="voice-forge-a-percent" class="voice-forge-ratio-label">A 50%</span>
+            <input id="voice-forge-ratio" type="range" min="0" max="100" value="50" oninput="updateVoiceForgeRatio()" aria-label="Voice A blend percentage">
+            <span id="voice-forge-b-percent" class="voice-forge-ratio-label" style="text-align:right;">B 50%</span>
+          </div>
+          <div class="voice-forge-presets">
+            <button type="button" onclick="setVoiceForgeRatio(75)">75 / 25</button>
+            <button type="button" onclick="setVoiceForgeRatio(50)">50 / 50</button>
+            <button type="button" onclick="setVoiceForgeRatio(25)">25 / 75</button>
+          </div>
+        </section>
 
         <div class="voice-forge-tuning-grid">
           <div class="voice-forge-tuning-control">
@@ -2413,22 +2679,25 @@
           <div class="voice-forge-tuning-control">
             <label for="voice-forge-speed"><span>Speed</span><strong id="voice-forge-speed-value">1.00×</strong></label>
             <input id="voice-forge-speed" type="range" min="0.75" max="1.25" step="0.05" value="1" oninput="updateVoiceForgeTuning()">
-            <small>Pitch-preserving tempo applied only to the merged WAV.</small>
+            <small>Pitch-preserving tempo applied to the generated WAV.</small>
           </div>
         </div>
 
-        <label for="voice-forge-text">Test text</label>
-        <textarea id="voice-forge-text" rows="5" placeholder="Enter the line the blended voice should speak...">Hello. This is a test of a newly blended voice.</textarea>
-        <button id="voice-forge-save-text" class="config-action-button" type="button" onclick="saveVoiceForgeTestText()" style="margin-top:6px; background-color:#1f3a5a; border-color:#245080; color:white;">💾 Save Test Text</button>
-        <div class="config-inline-field voice-forge-seed-row" style="margin-top:10px;">
-          <label for="voice-forge-seed">Seed <span style="color:#777; font-weight:normal;">(optional)</span></label>
-          <input id="voice-forge-seed" class="config-control-short" type="number" step="1" placeholder="Random">
-          <button id="voice-forge-generate" class="config-action-button" type="button" onclick="generateVoiceForgeBlend()" style="margin-top:14px; background-color:#1f5a3a; border-color:#248050; color:white;">Generate Blend</button>
-        </div>
-        <div id="voice-forge-status" role="status" aria-live="polite" style="min-height:18px; margin-top:10px; font-size:12px; color:#aaa;"></div>
+        <section class="voice-forge-settings-card voice-forge-test-card">
+          <h4>Test voice</h4>
+          <label for="voice-forge-text">Test text</label>
+          <textarea id="voice-forge-text" rows="5" placeholder="Enter the line the voice should speak...">Hello. This is a test of a newly blended voice.</textarea>
+          <button id="voice-forge-save-text" class="config-action-button" type="button" onclick="saveVoiceForgeTestText()" style="margin-top:8px; background-color:#1f3a5a; border-color:#245080; color:white;">💾 Save Test Text</button>
+          <div class="config-inline-field voice-forge-seed-row" style="margin-top:12px;">
+            <label for="voice-forge-seed">Seed <span style="color:#777; font-weight:normal;">(optional)</span></label>
+            <input id="voice-forge-seed" class="config-control-short" type="number" step="1" placeholder="Random">
+            <button id="voice-forge-generate" class="config-action-button" type="button" onclick="generateVoiceForgeBlend()" style="background-color:#1f5a3a; border-color:#248050; color:white;">Generate voice</button>
+          </div>
+          <div id="voice-forge-status" role="status" aria-live="polite" style="min-height:18px; margin-top:10px; font-size:12px; color:#aaa;"></div>
+        </section>
 
         <section id="voice-forge-result" class="voice-forge-result" hidden>
-          <label for="voice-forge-audio">Blended voice preview</label>
+          <label for="voice-forge-audio">Generated voice preview</label>
           <audio id="voice-forge-audio" controls preload="metadata"></audio>
           <label for="voice-forge-save-name">Save as HWUI Voice</label>
           <div class="voice-forge-save-row">
@@ -3421,6 +3690,30 @@
 
   async function initialiseVoiceForge(force = false) { showHwuiProModal("Voice Forge", "Voice Forge is available in HWUI Pro."); return; }
 
+  function toggleVoiceForgeOnlyA() {
+    if (document.getElementById('voice-forge-only-a').checked) {
+      document.getElementById('voice-forge-only-b').checked = false;
+    }
+    toggleVoiceForgeBlendControls();
+  }
+
+  function toggleVoiceForgeOnlyB() {
+    if (document.getElementById('voice-forge-only-b').checked) {
+      document.getElementById('voice-forge-only-a').checked = false;
+    }
+    toggleVoiceForgeBlendControls();
+  }
+
+  function toggleVoiceForgeBlendControls() {
+    const onlyA = document.getElementById('voice-forge-only-a').checked;
+    const onlyB = document.getElementById('voice-forge-only-b').checked;
+    document.getElementById('voice-forge-ratio-controls').hidden = onlyA || onlyB;
+    document.getElementById('voice-forge-a-card').classList.toggle('is-inactive', onlyB);
+    document.getElementById('voice-forge-b-card').classList.toggle('is-inactive', onlyA);
+    document.getElementById('voice-forge-a-reference-field').classList.toggle('is-inactive', onlyB);
+    document.getElementById('voice-forge-b-reference-field').classList.toggle('is-inactive', onlyA);
+  }
+
   async function generateVoiceForgeBlend() { showHwuiProModal("Voice Forge", "Blending voices is available in HWUI Pro."); return; }
 
   async function saveVoiceForgeVoice() { showHwuiProModal("Voice Forge", "Saving generated voices is available in HWUI Pro."); return; }
@@ -3999,7 +4292,7 @@
       (labels[status] || status.replaceAll('_', ' ')) +
       (inactiveOriginalChat ? ' · original chat inactive' : '');
     statusElement.dataset.captureStatus = status;
-    button.disabled = status !== 'ready_to_capture';
+    button.disabled = false;
     button.textContent = status === 'captured'
       ? 'Captured'
       : 'Capture response';
@@ -7953,7 +8246,7 @@ const FALLBACK_FONT_NAMES = [
 const FONT_FAVOURITES_KEY = 'hwui_favourite_fonts';
 
 function escapeCssFontName(name) {
-  return String(name || '').replace(/\\/g, '\\\\').replace(/"/g, '\"');
+  return String(name || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
 function fontStackFor(name) {
@@ -7962,8 +8255,8 @@ function fontStackFor(name) {
 
 function primaryFontFromStack(stack) {
   const text = String(stack || '').trim();
-  const quoted = text.match(/^"((?:\"|[^"])*)"/);
-  if (quoted) return quoted[1].replace(/\"/g, '"').replace(/\\\\/g, '\\');
+  const quoted = text.match(/^"((?:\\"|[^"])*)"/);
+  if (quoted) return quoted[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\');
   return (text.split(',')[0] || 'Segoe UI').trim().replace(/^['"]|['"]$/g, '');
 }
 
@@ -8314,6 +8607,7 @@ async function loadLlamaConfig() {
     document.getElementById('llama-chat-template').value = a.chat_template ?? 'chatml';
     document.getElementById('llama-ministral-template-mode').value = a.ministral_template_mode ?? 'native';
     document.getElementById('llama-reasoning-enabled').checked = a.reasoning === 'on';
+    document.getElementById('anthropic-thinking').checked = !!data.anthropic_thinking;
     populateLlamaPresetDropdown();
   } catch(e) {
     console.error('Failed to load llama config:', e);
@@ -8332,6 +8626,7 @@ async function saveLlamaConfig() {
     comfyui_prompt_node_id: document.getElementById('comfyui-prompt-node-id').value.trim(),
     comfyui_output_node_id: document.getElementById('comfyui-output-node-id').value.trim(),
     show_console: document.getElementById('llama-show-console').checked,
+    anthropic_thinking: document.getElementById('anthropic-thinking').checked,
     args: {
       port: 5000,
       n_gpu_layers: parseInt(document.getElementById('llama-gpu-layers').value) || 44,
@@ -9294,13 +9589,13 @@ async function saveGlobalPostHistory() {
 <script>
 // ---- Theme Modal open/close ----
 // ---- Theme file management ----
-let _activeThemeName = 'midnight';
+let _activeThemeName = 'claude';
 
 async function loadThemeFileList() {
   try {
     const res = await fetch('/themes/list');
     const data = await res.json();
-    _activeThemeName = data.active || 'midnight';
+    _activeThemeName = data.active || 'claude';
     const sel = document.getElementById('theme-file-select');
     if (!sel) return;
     sel.innerHTML = '';
@@ -9956,19 +10251,17 @@ function previewThemeVar(varName, value) {
     const localParams  = document.getElementById('local-only-params');
     const localNote    = document.getElementById('local-only-note');
 
-    // Reset all three buttons to inactive, then light up the active one.
-    const _inactive = (btn) => { if (btn) { btn.style.background = '#111'; btn.style.color = '#888'; btn.style.fontWeight = 'normal'; } };
+    // Light up the active backend card and show only its configuration block.
     const providerBtn  = document.getElementById('mode-provider-btn');
-    _inactive(localBtn); _inactive(openaiBtn); _inactive(anthropicBtn); _inactive(providerBtn);
-    if (mode === 'provider') {
-      if (providerBtn) { providerBtn.style.background = '#2a1a3a'; providerBtn.style.color = '#c9a0f0'; providerBtn.style.fontWeight = 'bold'; }
-    } else if (mode === 'openai') {
-      if (openaiBtn) { openaiBtn.style.background = '#1a2a4a'; openaiBtn.style.color = '#7ab4f5'; openaiBtn.style.fontWeight = 'bold'; }
-    } else if (mode === 'anthropic') {
-      if (anthropicBtn) { anthropicBtn.style.background = '#3a2a1a'; anthropicBtn.style.color = '#e0a060'; anthropicBtn.style.fontWeight = 'bold'; }
-    } else {
-      if (localBtn) { localBtn.style.background = '#1a3a2a'; localBtn.style.color = '#6f6'; localBtn.style.fontWeight = 'bold'; }
-    }
+    const _active = ['local', 'openai', 'anthropic', 'provider'].includes(mode) ? mode : 'local';
+    [['local', localBtn], ['openai', openaiBtn], ['anthropic', anthropicBtn], ['provider', providerBtn]].forEach(([name, btn]) => {
+      if (!btn) return;
+      btn.classList.toggle('is-selected', name === _active);
+      btn.setAttribute('aria-pressed', String(name === _active));
+    });
+    document.querySelectorAll('#adv-panel-providers .backend-cfg').forEach(block => {
+      block.hidden = block.dataset.backend !== _active;
+    });
 
     // Local-only sampling params dim whenever a paid cloud backend is active. A
     // provider keeps them live: it forwards the samplers it supports and drops the rest.
@@ -10267,7 +10560,7 @@ function previewThemeVar(varName, value) {
       if (baseUrlInput) baseUrlInput.value = data.anthropic_base_url || 'https://api.anthropic.com/v1';
       _setAnthropicModelSelect(data.anthropic_model || 'claude-sonnet-4-5');
       const thinkCb = document.getElementById('anthropic-thinking');
-      if (thinkCb) thinkCb.checked = !!data.anthropic_thinking;
+      // Runtime load owns the shared thinking-visibility control.
       const thinkBudget = document.getElementById('anthropic-thinking-budget');
       if (thinkBudget) thinkBudget.value = data.anthropic_thinking_budget || 2048;
       const status = document.getElementById('anthropic-status');
@@ -10548,22 +10841,67 @@ function previewThemeVar(varName, value) {
     document.getElementById('provider-clear-key').style.display = 'none';
   }
 
-  // ── Advanced Settings tabs ──────────────────────────────────────────────────
-  function advSwitchTab(name) {
+  // ── Advanced Settings navigation ────────────────────────────────────────────
+  // All sections live in one continuous scrollable surface. The rail buttons are
+  // anchors that scroll to a section (advSwitchTab keeps its name for the
+  // buttons), and the highlighted button follows the section at the top.
+  let _advScrollLockUntil = 0;
+  function _advSetActive(name) {
     document.querySelectorAll('#adv-tabs .adv-tab').forEach(b => {
       const on = b.dataset.advTab === name;
       b.classList.toggle('active', on);
-      b.setAttribute('aria-selected', String(on));
+      if (on) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current');
     });
-    document.querySelectorAll('#advanced-settings-modal .adv-panel').forEach(p => p.classList.toggle('active', p.id === 'adv-panel-' + name));
-    const modal = document.getElementById('advanced-settings-modal');
-    if (modal) modal.scrollTop = 0;
-    try { localStorage.setItem('hwui_adv_tab', name); } catch (e) { /* storage unavailable */ }
   }
-  (function advRestoreTab() {
-    let saved = null;
-    try { saved = localStorage.getItem('hwui_adv_tab'); } catch (e) { /* storage unavailable */ }
-    if (saved && document.getElementById('adv-panel-' + saved)) advSwitchTab(saved);
+  function _advTopOffset() {
+    // On narrow widths the rail is a strip pinned above the content.
+    const rail = document.getElementById('adv-tabs');
+    const pinned = window.matchMedia('(max-width: 860px)').matches && rail ? rail.offsetHeight : 0;
+    return pinned + 8;
+  }
+  function advSwitchTab(name) {
+    const modal = document.getElementById('advanced-settings-modal');
+    const panel = document.getElementById('adv-panel-' + name);
+    if (!modal || !panel) return;
+    _advSetActive(name);
+    _advScrollLockUntil = Date.now() + 700;   // keep the spy from flickering through sections mid-scroll
+    const top = panel.getBoundingClientRect().top - modal.getBoundingClientRect().top + modal.scrollTop - _advTopOffset();
+    const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    modal.scrollTo({ top: Math.max(0, top), behavior: reduce ? 'auto' : 'smooth' });
+  }
+  (function advScrollSpy() {
+    const modal = document.getElementById('advanced-settings-modal');
+    if (!modal) return;
+    let queued = false;
+    function update() {
+      queued = false;
+      if (Date.now() < _advScrollLockUntil) return;
+      const panels = Array.from(modal.querySelectorAll('.adv-panel'));
+      if (!panels.length) return;
+      let current = null;
+      const atBottom = modal.scrollTop + modal.clientHeight >= modal.scrollHeight - 2;
+      if (atBottom && modal.scrollTop > 0) {
+        current = panels[panels.length - 1];
+      } else {
+        const cutoff = modal.getBoundingClientRect().top + _advTopOffset() + 16;
+        // Sections sharing a row start at the same height: keep the current one if it is among them.
+        let bestTop = -Infinity, group = [];
+        panels.forEach(p => {
+          const t = p.getBoundingClientRect().top;
+          if (t > cutoff) return;
+          if (t > bestTop + 2) { bestTop = t; group = [p]; } else if (Math.abs(t - bestTop) <= 2) { group.push(p); }
+        });
+        const active = document.querySelector('#adv-tabs .adv-tab.active');
+        const activeId = active ? 'adv-panel-' + active.dataset.advTab : '';
+        current = group.find(p => p.id === activeId) || group[0] || panels[0];
+      }
+      if (current) _advSetActive(current.id.replace('adv-panel-', ''));
+    }
+    modal.addEventListener('scroll', () => {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(update);
+    }, { passive: true });
   })();
 
   // The Provider mode button saves the form and activates it, same as "Save & use".
@@ -11266,13 +11604,21 @@ function previewThemeVar(varName, value) {
     list.style.pointerEvents = 'none';
     const nameSpanL = document.getElementById('model-display-name');
     if (nameSpanL) { nameSpanL.textContent = 'Loading...'; nameSpanL.style.color = '#8ab4d4'; }
+    const loadingStartedAt = Date.now();
+    const loadingTimer = setInterval(() => {
+      if (window._modelLoadProgressRun !== progressRun) return;
+      const elapsed = Math.floor((Date.now() - loadingStartedAt) / 1000);
+      status.textContent = `⏳ Loading ${filename.replace(/\.gguf$/i, '')} · ${elapsed}s`;
+      if (nameSpanL) nameSpanL.textContent = `Loading · ${elapsed}s`;
+    }, 1000);
     try {
       const res = await fetch('/load_model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: filename, force_reload: options.forceReload === true, reason: options.reason || 'unspecified' }) });
       const data = await res.json();
+      clearInterval(loadingTimer);
       if (data.status === 'ok') {
         finishProgress(true);
         localStorage.setItem('llama_last_model', filename);
-        status.textContent = `✅ Loaded: ${data.model}`;
+        status.textContent = `✅ Ready: ${data.model}`;
         list.style.opacity = '1'; list.style.pointerEvents = 'all';
         await loadModelDisplay(filename);
         setTimeout(() => closeModelPicker(), 1200);
@@ -11285,6 +11631,7 @@ function previewThemeVar(varName, value) {
         list.style.opacity = '1'; list.style.pointerEvents = 'all';
       }
     } catch(e) {
+      clearInterval(loadingTimer);
       finishProgress(false);
       status.style.color = '#e88';
       status.textContent = `❌ Request failed: ${e}`;

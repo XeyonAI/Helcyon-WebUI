@@ -729,7 +729,6 @@
   };
 });
 
-// ============================================================
 // HWUI Free build — Pro-upgrade modal
 // Shared by the Theme Editor and the Benchmark workspace (both loaded on
 // this page). Locked actions stay visible; clicking them opens this modal

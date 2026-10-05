@@ -8,7 +8,7 @@
   <script src="/build_scope.js"></script>
   <title>Helcyon-WebUI</title>
   <link rel="stylesheet" href="/style.css?v=27">
-  <link rel="stylesheet" href="/theme-files/midnight.css" id="active-theme-link">
+  <link rel="stylesheet" href="/theme-files/claude.css" id="active-theme-link">
   <script src="/static/text_scale.js?v=3" defer></script>
   <style>
     /* Cog dropdown menu — converted from the old #settings-link <a>.
@@ -108,15 +108,15 @@
     });
     // Always fetch active theme with cache-bust so saved changes appear immediately
     fetch('/themes/list').then(r=>r.json()).then(d=>{
-      const name = d.active || 'midnight';
+      const name = d.active || 'claude';
       const link = document.getElementById('active-theme-link');
       if (link) link.href = '/theme-files/' + name + '.css?v=' + Date.now();
-    }).catch(()=>{}); // silent fail — default midnight.css already loaded above
+    }).catch(()=>{}); // silent fail — default claude.css already loaded above
   </script>
   <!-- Shared desktop/mobile chat core: request, history and reply-cleaning
        rules used by BOTH pages (mobile.html loads the same file). Not deferred —
        page scripts below call HwuiChatCore during load. -->
-  <script src="/static/hwui_chat_core.js?v=1"></script>
+  <script src="/static/hwui_chat_core.js?v=2"></script>
   <!-- JS Utils -->
   <script src="/utils/utils.js" defer></script>
   <script>
@@ -280,7 +280,7 @@
         white-space: nowrap;
         max-width: 280px;
         transition: border-color 0.15s, background 0.15s;
-      " onmouseover="this.style.borderColor='#4a6a8a'; this.style.background='rgba(74,106,138,0.28)'" onmouseout="this.style.borderColor='rgba(255,175,55,0.55)'; this.style.background='rgba(210,130,20,0.18)'">
+      " onmouseover="this.style.borderColor='#4a6a8a'; this.style.background='rgba(74,106,138,0.28)'" onmouseout="this.style.borderColor='rgba(74,106,138,0.75)'; this.style.background='rgba(74,106,138,0.18)'">
         <span id="model-load-progress" aria-hidden="true" style="position:absolute; inset:0 auto 0 0; width:0; background:rgba(74,106,138,0.35); pointer-events:none;"></span>
         <span id="model-display-name" style="position:relative; z-index:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Loading...</span>
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="position:relative; z-index:1; flex-shrink:0; opacity:0.45;"><polyline points="6 9 12 15 18 9"></polyline></svg>
@@ -725,6 +725,7 @@
             </div>
           </div>
 
+          <div id="reply-readiness" hidden role="status" aria-live="polite" style="pointer-events:none;color:var(--text-dim,#8ab4d4);font-size:12px;padding:0 12px 6px;max-width:calc(var(--chat-width) - 100px);box-sizing:border-box;"></div>
           <!-- Floating pill -->
           <div id="input-row" style="pointer-events:all;display:flex;flex-direction:row;align-items:center;gap:6px;background:var(--container-bg,#131922);border:1px solid var(--sidebar-border,#2a2a2a);border-radius:16px;padding:7px 12px;box-shadow:0 4px 24px rgba(0,0,0,0.5);width:100%;max-width:calc(var(--chat-width) - 100px) !important;box-sizing:border-box;overflow:visible;">
 
@@ -1507,31 +1508,9 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
     return state;
   }
 
-  async function saveIntegratedBenchSession(state) {
-    localStorage.setItem(HelcyonBenchPromptTransfer.FORM_STATE_KEY, JSON.stringify(state));
-    const response = await fetch('/api/helcyon-bench/session', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(state)
-    });
-    if (!response.ok) throw new Error('The integrated Bench session could not be saved.');
-    return state;
-  }
+  async function saveIntegratedBenchSession(state) { showHwuiProModal("Helcyon-Bench", "Saving benchmark sessions is available in HWUI Pro."); return; }
 
-  async function returnToActiveBench() {
-    const association = window._activeBenchChatAssociation || activeBenchChatAssociation();
-    if (!association) return;
-    const state = HelcyonBenchPromptTransfer.applyAssociationToSession(
-      await loadIntegratedBenchSession(),
-      association
-    );
-    try {
-      await saveIntegratedBenchSession(state);
-    } catch (error) {
-      console.warn(error.message);
-    }
-    window.location.href = HelcyonBenchPromptTransfer.returnUrl(association);
-  }
+  async function returnToActiveBench() { showHwuiProModal("Helcyon-Bench", "Returning a live chat response to Bench is available in HWUI Pro."); return; }
 
   function hideActiveBenchPanel() {
     const association = window._activeBenchChatAssociation || activeBenchChatAssociation();
@@ -2435,7 +2414,7 @@ function createMessageReactionControl(message, wrapper) {
 // verbatim, pre-wrap CSS keeps newlines) — never parsed as HTML/markdown, so it
 // cannot inject markup.
 function renderThinkingPanel(msgDiv, answerEl, text, chatEl) {
-  if (!text || !msgDiv) return;
+  if (!{{ show_thinking | default(false) | tojson }} || !text || !msgDiv) return;
   let panel = msgDiv._thinkPanel;
   if (!panel) {
     panel = document.createElement('details');
@@ -2452,7 +2431,9 @@ function renderThinkingPanel(msgDiv, answerEl, text, chatEl) {
     msgDiv._thinkPanel = panel;
     panel._body = body;
   }
-  panel._body.textContent = text;
+  // pre-wrap renders the model's leading blank lines above the first line;
+  // trim the displayed copy only (inner paragraph breaks are kept).
+  panel._body.textContent = text.trim();
   if (chatEl) chatEl.scrollTop = chatEl.scrollHeight;
 }
 
@@ -2963,6 +2944,13 @@ if (typeof marked === "undefined") {
     list.style.pointerEvents = 'none';
     const nameSpanL = document.getElementById('model-display-name');
     if (nameSpanL) { nameSpanL.textContent = 'Loading...'; nameSpanL.style.color = '#8ab4d4'; }
+    const loadingStartedAt = Date.now();
+    const loadingTimer = setInterval(() => {
+      if (window._modelLoadProgressRun !== progressRun) return;
+      const elapsed = Math.floor((Date.now() - loadingStartedAt) / 1000);
+      status.textContent = `⏳ Loading ${filename.replace(/\.gguf$/i, '')} · ${elapsed}s`;
+      if (nameSpanL) nameSpanL.textContent = `Loading · ${elapsed}s`;
+    }, 1000);
     try {
       const res = await fetch('/load_model', {
         method: 'POST',
@@ -2970,10 +2958,11 @@ if (typeof marked === "undefined") {
         body: JSON.stringify({ model: filename, force_reload: options.forceReload === true, reason: options.reason || 'unspecified' })
       });
       const data = await res.json();
+      clearInterval(loadingTimer);
       if (data.status === 'ok') {
         finishProgress(true);
         localStorage.setItem('llama_last_model', filename); // remember for preset saving
-        status.textContent = `✅ Loaded: ${data.model}`;
+        status.textContent = `✅ Ready: ${data.model}`;
         list.style.opacity = '1';
         list.style.pointerEvents = 'all';
         await loadModelDisplay(filename);
@@ -2990,6 +2979,7 @@ if (typeof marked === "undefined") {
         return false;
       }
     } catch(e) {
+      clearInterval(loadingTimer);
       finishProgress(false);
       status.style.color = '#e88';
       status.textContent = `❌ Request failed: ${e}`;
@@ -4098,7 +4088,30 @@ function persistChatState() {
     }
   }
 
-  async function loadChats() {
+  function captureChatListPosition(list, item) {
+    if (!list) return { scrollTop: 0, itemOffset: null };
+    const listRect = list.getBoundingClientRect();
+    const itemRect = item && item.isConnected ? item.getBoundingClientRect() : null;
+    return {
+      scrollTop: list.scrollTop,
+      itemOffset: list.clientHeight && itemRect ? itemRect.top - listRect.top : null
+    };
+  }
+
+  function restoreChatListPosition(list, filename, savedPosition) {
+    requestAnimationFrame(() => {
+      if (!list || !list.isConnected || !savedPosition) return;
+      const item = Array.from(list.querySelectorAll('.chat-item')).find(row => row.dataset.filename === filename);
+      if (item && list.clientHeight && savedPosition.itemOffset !== null) {
+        const currentOffset = item.getBoundingClientRect().top - list.getBoundingClientRect().top;
+        list.scrollTop += currentOffset - savedPosition.itemOffset;
+      } else {
+        list.scrollTop = savedPosition.scrollTop;
+      }
+    });
+  }
+
+  async function loadChats(options = {}) {
     const res = await fetch('/chats/list');
     const chats = await res.json();
     
@@ -4106,6 +4119,7 @@ function persistChatState() {
     sortChatList(chats);
     
     const list = document.getElementById('chat-list');
+    const preservedScrollTop = options.preserveScroll === false || !list ? 0 : list.scrollTop;
     closeChatActionsMenu();
     list.innerHTML = '';
     
@@ -4197,6 +4211,8 @@ function persistChatState() {
       
       // Open chat on click - USE extractCharacterFromFilename()
       li.addEventListener('click', () => {
+        const chatList = document.getElementById('chat-list');
+        const savedListPosition = captureChatListPosition(chatList, li);
         closeCollapsedChatHistory();
         const characterName = extractCharacterFromFilename(chat.filename);
         
@@ -4208,7 +4224,11 @@ function persistChatState() {
           select.value = characterName;
         }
         
-        openChat(chat.filename);
+        openChat(chat.filename).then(() => {
+          if (currentChatFilename === chat.filename) {
+            restoreChatListPosition(chatList, chat.filename, savedListPosition);
+          }
+        }, error => console.error('Could not open selected chat:', error));
       });
 
       // Right-click to colour code
@@ -4246,6 +4266,14 @@ function persistChatState() {
         return item.dataset.filename === currentChatFilename;
       });
       if (activeItem) activeItem.classList.add('active');
+    }
+
+    // loadChats replaces every row. Keep the same part of the list in view so
+    // refreshing chat metadata does not send the user back to the first entry.
+    if (options.preserveScroll !== false && list) {
+      requestAnimationFrame(() => {
+        if (list.isConnected) list.scrollTop = preservedScrollTop;
+      });
     }
 
     return chats;
@@ -4326,7 +4354,7 @@ function persistChatState() {
       if (!res.ok || result.error) throw new Error(result.error || 'Copy failed');
 
       copyChatColor(chat.filename, result.new_filename);
-      await loadChats();
+      await loadChats({ preserveScroll: false });
       await openChat(result.new_filename);
     } catch (err) {
       console.error('Chat copy failed:', err);
@@ -5822,7 +5850,7 @@ async function _openChatInternal(filename, loadGeneration) {
           const retainedThinking = msg.thinking || retainedThinkingForMessage(msg.message_id);
           if (retainedThinking) {
             renderThinkingPanel(div, modelSpan, retainedThinking, null);
-            div._thinkPanel.open = false;
+            if (div._thinkPanel) div._thinkPanel.open = false;
           }
           div.appendChild(makeTimestampEl(msg.timestamp));
           if (contextExcluded) {
@@ -6013,7 +6041,7 @@ async function sendPrompt() {
         localStorage.setItem('currentChatFilename', currentChatFilename);
         localStorage.setItem('lastCharacter', currentChar);
         
-        await loadChats();
+        await loadChats({ preserveScroll: false });
         
         var chatItems = document.querySelectorAll('.chat-item');
         chatItems.forEach(function(item) {
@@ -6453,6 +6481,7 @@ async function sendPrompt() {
     let replySourceUserMessageId = sourceUserMessageId;
     let generationStartedAt = null;
     let responseReader = null;
+    let replyReadiness = null;
     let postStreamActionSetup = null;
     let releasePostStreamActionSetup = null;
     const automaticCheckin = Boolean(options.automaticCheckin);
@@ -6474,6 +6503,11 @@ async function sendPrompt() {
       window.isSending = true;
       window._generationCancelled = false;
       window._randomCheckinGeneration = automaticCheckin ? options : null;
+      const readinessEl = document.getElementById('reply-readiness');
+      if (readinessEl) {
+        readinessEl.hidden = false;
+        replyReadiness = HwuiChatCore.startReadinessStatus(text => { readinessEl.textContent = text; }, 'Preparing reply');
+      }
       const sourceMessage = [...(window.loadedChat || [])].reverse().find(message =>
         message.role === 'user' && !message.hidden &&
         (!sourceUserMessageId || message.message_id === sourceUserMessageId)
@@ -6503,7 +6537,7 @@ async function sendPrompt() {
         if (data.filename) {
           currentChatFilename = data.filename;
           currentChatId = data.chat_id || null;
-          await loadChats();
+          await loadChats({ preserveScroll: false });
         }
       }
       
@@ -7084,6 +7118,7 @@ async function sendPrompt() {
             streaming: true,
           }
         );
+        if (_parts.thinking || cleanedFull.trim()) replyReadiness?.setPhase('Generating reply');
         window._streamingPartial = cleanedFull;   // expose for the pagehide beacon
       }
 
@@ -7128,6 +7163,7 @@ async function sendPrompt() {
       if (document.hidden) finishDrip();
       else setTimeout(finishDrip, 250);
       await dripDone;
+      replyReadiness?.setPhase('Finishing reply');
 
       if (window._generationCancelled) {
         // Keep save/re-render and post-stream parsing on the same visible partial.
@@ -7364,6 +7400,9 @@ async function sendPrompt() {
         await updateBenchGenerationState(replySourceUserMessageId, 'error');
       }
     } finally {
+      replyReadiness?.stop();
+      const readinessEl = document.getElementById('reply-readiness');
+      if (readinessEl) readinessEl.hidden = true;
       // Hide stop button when done
       const stopBtn = document.getElementById('stop-btn');
       if (stopBtn) stopBtn.style.display = 'none';
@@ -7598,6 +7637,9 @@ async function sendPrompt() {
     const chatToSend = continueRequest.conversationHistory;
 
     window.isSending = true;
+    const readinessEl = document.getElementById('reply-readiness');
+    if (readinessEl) readinessEl.hidden = false;
+    const replyReadiness = readinessEl ? HwuiChatCore.startReadinessStatus(text => { readinessEl.textContent = text; }, 'Preparing continuation') : null;
     const stopBtn = document.getElementById('stop-btn');
     if (stopBtn) stopBtn.style.display = 'inline-block';
 
@@ -7690,6 +7732,7 @@ async function sendPrompt() {
           charLabel, userName, { streaming: true }
         );
 
+        if (cleaned.length > (retainedHead + continuePrefix).length) replyReadiness?.setPhase('Generating reply');
         HwuiChatCore.renderStreamingAssistantText(streamEl, cleaned);
         chat.scrollTop = chat.scrollHeight;
       }
@@ -7741,6 +7784,8 @@ async function sendPrompt() {
       console.error('\u26a0\ufe0f Continue error:', err);
       chat.innerHTML += '<div class="message error-msg">\u26a0\ufe0f Error continuing chat.</div>';
     } finally {
+      replyReadiness?.stop();
+      if (readinessEl) readinessEl.hidden = true;
       window.isSending = false;
       if (stopBtn) stopBtn.style.display = 'none';
       // Refresh the token monitor with this turn's budget when visible.
@@ -9096,7 +9141,7 @@ async function branchMessage(assistantIndex) {
     // This copies the key and explicitly preserves the source tint.
     copyChatColor(currentChatFilename, data.new_filename);
 
-    await loadChats();
+    await loadChats({ preserveScroll: false });
     openChat(data.new_filename);
   } catch (e) {
     hwuiToast('Branch error: ' + e.message, 'error');
@@ -9973,7 +10018,7 @@ function showAutoMemoryToast(character, title, undoToken) {
       
       // ✅ Reload chat list
       await new Promise(r => setTimeout(r, 200));
-      await loadChats();
+      await loadChats({ preserveScroll: false });
       
       // ✅ Open the new chat (displayOpeningLineInChat will save to the CORRECT file)
       await openChat(data.filename);

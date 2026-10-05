@@ -320,7 +320,12 @@ def generate_shards():
         backend_mode = (settings.get("backend_mode", "local") or "local").lower()
         cloud_enabled = bool(settings.get("cloud_api_enabled", False))
 
-        if backend_mode == "openai" and cloud_enabled:
+        if backend_mode == "provider":
+            from providers import runtime as _provider_runtime
+            raw_output = _provider_runtime.complete_text(
+                system_prompt, "Generate the batch now. Output only the raw JSON array.",
+                {"temperature": 0.8, "top_p": 0.9, "max_tokens": max_new_tokens})
+        elif backend_mode == "openai" and cloud_enabled:
             raw_output = _generate_openai(system_prompt, max_new_tokens)
         elif backend_mode == "anthropic" and cloud_enabled:
             raw_output = _generate_anthropic(system_prompt, max_new_tokens)

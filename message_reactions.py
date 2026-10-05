@@ -33,6 +33,9 @@ REACTION_DECISION_INSTRUCTION = (
 )
 RECENT_CONTEXT_MESSAGES = 10
 RECENT_CONTEXT_CHARS = 300
+# Keep reactions occasional even when a model repeatedly labels messages strong.
+# A new reaction is eligible after three intervening user messages without one.
+REACTION_COOLDOWN_USER_TURNS = 3
 # Significance comes first so the model rates the moment before it names a
 # reaction; only "strong" can produce one (parse_reaction_decision).
 REACTION_SIGNIFICANCE = ("routine", "notable", "strong")
@@ -66,6 +69,13 @@ def _recent_line(item):
     reaction = item.get("reaction")
     tag = f" [you reacted {reaction}]" if reaction and item.get("role") != "assistant" else ""
     return f"{speaker}{tag}: {text}"
+
+
+def reaction_cooldown_active(recent):
+    """Whether one of the preceding three user turns already got a reaction."""
+    user_turns = [item for item in (recent or [])
+                  if isinstance(item, dict) and item.get("role") == "user"]
+    return any(item.get("reaction") for item in user_turns[-REACTION_COOLDOWN_USER_TURNS:])
 
 
 def reaction_decision_messages(user_text, recent=None):

@@ -1136,7 +1136,24 @@
     });
   }
 
+  // UI-only elapsed status: no requests, prompt data or saved messages.
+  function startReadinessStatus(render, initialPhase) {
+    const startedAt = Date.now();
+    let phase = initialPhase;
+    let stopped = false;
+    const paint = () => {
+      if (!stopped) render(`${phase} · ${Math.floor((Date.now() - startedAt) / 1000)}s`);
+    };
+    paint();
+    const timer = root.setInterval(paint, 1000);
+    return {
+      setPhase(next) { if (!stopped && phase !== next) { phase = next; paint(); } },
+      stop() { stopped = true; root.clearInterval(timer); },
+    };
+  }
+
   const api = {
+    startReadinessStatus,
     CONTINUE_PREFIX_CHARS,
     LEGACY_AUTHOR_NOTE_PREFIX,
     createMessageId,

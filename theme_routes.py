@@ -4,18 +4,17 @@ from user_config import load_user_config_section, save_user_config_section
 
 theme_bp = Blueprint('theme', __name__)
 
-FREE_THEMES = {"claude", "gemini"}
-
-def _pro_only():
-    return jsonify({"error": "This feature is available in HWUI Pro.", "pro_required": True}), 403
-
 # settings.json lives in the project root next to this module (same dir as app.py)
 SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "settings.json")
 
 THEMES_DIR = os.path.join(os.path.dirname(__file__), "themes")
 
+FREE_THEMES = {"claude", "gemini"}
+def _pro_only():
+    return jsonify({"error": "This feature is available in HWUI Pro.", "pro_required": True}), 403
+
 def get_active_theme_name():
-    """Get active theme name from settings.json, default to 'midnight'."""
+    """Get active theme name from settings.json, default to 'claude'."""
     try:
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
             s = json.load(f)

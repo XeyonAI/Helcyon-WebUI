@@ -5,6 +5,7 @@ import uuid
 from message_reactions import (
     complete_reaction_stream, reaction_decision_messages, parse_reaction_decision,
     REACTION_DECISION_SCHEMA, RECENT_CONTEXT_MESSAGES, strip_reaction_markers,
+    reaction_cooldown_active,
 )
 from urllib.parse import urlparse
 import psutil
@@ -238,6 +239,9 @@ def _claim_message_reaction_diagnostic_once(settings, is_ministral, automatic_ev
 
 _LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 os.makedirs(_LOG_DIR, exist_ok=True)
+# Private CUDA JIT cache for the llama-server child (see _spawn_llama_server).
+_LLAMA_CUDA_CACHE_DIR = os.path.join(_LOG_DIR, "llama_cuda_cache")
+os.makedirs(_LLAMA_CUDA_CACHE_DIR, exist_ok=True)
 
 # Structured llama lifecycle/slot trace. This is intentionally observational:
 # it reads /slots and process ownership but never resets a slot or changes a
@@ -255,37 +259,24 @@ _LLAMA_SLOT_TRACE_LAST = {}
 # stall. Observational only; probes run off the streaming thread. Written to
 # logs/gpu_stall_trace.jsonl. See llama_stall_diagnostics.py.
 class _NoopStallWatch:
-    def mark(self, *args, **kwargs):
-        return None
-
-    def finish(self, *args, **kwargs):
-        return None
-
+    def __init__(self): self.started_wall = time.time()
+    def mark(self, *args, **kwargs): return time.time() - self.started_wall
+    def finish(self, *args, **kwargs): return None
+    def identity(self): return {"post_started_at": self.started_wall}
+    def elapsed(self): return time.time() - self.started_wall
+    def note_non_json(self, *args, **kwargs): return None
 
 class _NoopStallDiagnostics:
+    def current_launch(self):
+        return {"launch_id": "free-noop", "pid": None,
+                "ready_at": datetime.now().isoformat()}
     def new_launch(self, *args, **kwargs):
         return globals().get("_LLAMA_SERVER_LOG_PATH")
-
-    def launch_pre_spawn(self, *args, **kwargs):
-        return None
-
-    def launch_spawned(self, *args, **kwargs):
-        return None
-
-    def launch_ready(self, *args, **kwargs):
-        return None
-
-    def start_watch(self, *args, **kwargs):
-        return _NoopStallWatch()
-
-    def attach_response(self, *args, **kwargs):
-        return None
-
-    def on_stop(self, *args, **kwargs):
-        return None
-
+    def start_watch(self, *args, **kwargs): return _NoopStallWatch()
+    def __getattr__(self, name): return lambda *a, **k: None
 
 _STALL_DIAG = _NoopStallDiagnostics()
+
 
 def _llama_slot_trace(event, **fields):
     global _LLAMA_SLOT_TRACE_LAST
@@ -559,6 +550,10 @@ def _recent_reaction_context(history, chat_filename):
 
 def _decide_missing_message_reaction(user_text, settings, local_model, recent=None):
     """One bounded metadata request, with no personality/style demonstrations."""
+    # Enforce a small deterministic spacing cap across the chat even if the
+    # classifier repeatedly calls different messages "strong".
+    if reaction_cooldown_active(recent):
+        return None
     messages = reaction_decision_messages(user_text, recent)
     schema = {"name": "hwui_reaction", "strict": True, "schema": REACTION_DECISION_SCHEMA}
     backend = settings.get("backend_mode", "local")
@@ -3076,9 +3071,26 @@ def _spawn_llama_server(cmd, show_console):
             stream = open(_LLAMA_SERVER_LOG_PATH, "w", encoding="utf-8", errors="replace")
         except OSError as exc:
             print(f"⚠️ Could not open {_LLAMA_SERVER_LOG_PATH}: {exc!r}", flush=True)
+    # Bound the CUDA compilation cache for this child process only. Older CUDA
+    # binaries need PTX JIT on Blackwell; a 256 MiB cache can evict those kernels.
+    server_env = os.environ.copy()
+    try:
+        inherited_cache_bytes = int(server_env.get("CUDA_CACHE_MAXSIZE", "268435456"))
+    except (TypeError, ValueError):
+        inherited_cache_bytes = None
+    if inherited_cache_bytes is not None and 0 < inherited_cache_bytes < 1073741824:
+        server_env["CUDA_CACHE_MAXSIZE"] = "1073741824"
+    # The default driver cache is shared by every CUDA process (TTS, STT, ...) and
+    # capped per writer, so other processes evict llama's JIT'd kernels. Measured:
+    # an empty cache costs ~20s on the first inference of each launch, a populated
+    # one ~0.3s. A private cache keeps those kernels across launches.
+    _cuda_cache_dir = globals().get("_LLAMA_CUDA_CACHE_DIR")
+    if _cuda_cache_dir and "CUDA_CACHE_PATH" not in server_env:
+        server_env["CUDA_CACHE_PATH"] = _cuda_cache_dir
     try:
         process = subprocess.Popen(
             cmd,
+            env=server_env,
             stdout=stream if stream is not None else (None if show_console else subprocess.DEVNULL),
             stderr=subprocess.STDOUT if stream is not None else (None if show_console else subprocess.DEVNULL),
             creationflags=(subprocess.CREATE_NEW_CONSOLE if show_console else subprocess.CREATE_NO_WINDOW) if os.name == 'nt' else 0
@@ -3103,9 +3115,13 @@ _MINISTRAL_REASONING_CONTRACT = (
     "open another [THINK] block after closing [/THINK]."
 )
 
+# Replay-measured on the captured failing request (18 runs/cue): the previous
+# wording ("use one private [THINK] draft, then present the answer") left the
+# block unclosed in 15/18 runs because the model wrote its reply as the draft
+# and stopped. Naming the close and where the reply goes closed it in 16/18.
 _MINISTRAL_REASONING_TURN_PACKET = (
-    "[REASONING SELECTED FOR THIS TURN: Use one private [THINK] draft, then "
-    "present the answer normally.]"
+    "[Work through the problem step by step in a [THINK] block first. "
+    "Close it with [/THINK], then write your reply to the user.]"
 )
 
 _MINISTRAL_REASONING_INTENT_INSTRUCTION = (
@@ -9076,7 +9092,7 @@ def _reset_idle_llama_slot(request_id=None, reason="", expected_slot_id=None):
 _PREFILL_WARMUP_EXPERIMENT = None
 
 
-def _run_prefill_warmup_experiment(enabled, args):
+def _run_prefill_warmup_experiment(enabled, args, *, lease_held=False):
     """Prime a fresh single-slot server, then verify removal of all warmup KV."""
     global _PREFILL_WARMUP_EXPERIMENT
     launch = _STALL_DIAG.current_launch()
@@ -9099,7 +9115,8 @@ def _run_prefill_warmup_experiment(enabled, args):
     response = None
     submitted = False
     cleanup_ok = True
-    with _LOCAL_MODEL_REQUEST_LOCK:
+    # /load_model already owns this non-reentrant lease through its decorator.
+    with nullcontext() if lease_held else _LOCAL_MODEL_REQUEST_LOCK:
         slot = _get_llama_slot_state()
         if (not slot or slot.get("is_processing")
                 or slot.get("n_prompt_tokens") not in (None, 0)
@@ -9213,8 +9230,9 @@ class _ReasoningCloseRecovery:
     Reasoning that never contains such a marker passes through unchanged.
     """
 
-    _MARKER = re.compile(r"\[/T[A-Z]{2,5}\]")
-    _PARTIAL = re.compile(r"\[(?:/(?:T[A-Z]{0,5})?)?$")
+    # Case-insensitive: the model also emits `[/think]` (reproduced 2026-10-04).
+    _MARKER = re.compile(r"\[/T[A-Z]{2,5}\]", re.IGNORECASE)
+    _PARTIAL = re.compile(r"\[(?:/(?:T[A-Z]{0,5})?)?$", re.IGNORECASE)
 
     def __init__(self):
         self.closed = False
@@ -9249,9 +9267,12 @@ def stream_vision_response(
     show_thinking=False,
     request_id=None,
     trace_context=None,
+    _reasoning_continuation=False,
 ):
     global abort_generation
-    abort_generation = False
+    if not _reasoning_continuation:
+        # A continuation is the same turn: do not clear a Stop pressed meanwhile.
+        abort_generation = False
 
     # Dev A/B LEAN_ST only (see _serialize_ministral_st_tekken). The key is a
     # literal so payloads without it — every LEGACY/LEAN/other request — never
@@ -9592,6 +9613,7 @@ def stream_vision_response(
     raw_chunk_seen_content = False
     _answer_started = False
     _reasoning_chars = 0
+    _reasoning_text = []
     _last_prompt_tokens = None
     _last_predicted_tokens = None
     _last_finish_reason = None
@@ -9661,7 +9683,7 @@ def stream_vision_response(
             delta = _choice.get("delta", {})
             reasoning_chunk = delta.get("reasoning_content") or ""
             raw_chunk = delta.get("content") or ""
-            if reasoning_chunk and not raw_chunk_seen_content:
+            if reasoning_chunk and not raw_chunk_seen_content and not _reasoning_prefilled:
                 # Garbled close marker (e.g. [/THICK]): the server keeps
                 # reporting the answer as reasoning. Route it as content.
                 reasoning_chunk, _recovered_answer = _close_recovery.feed(reasoning_chunk)
@@ -9735,6 +9757,7 @@ def stream_vision_response(
                         flush=True,
                     )
                 _reasoning_chars += len(reasoning_chunk)
+                _reasoning_text.append(reasoning_chunk)
                 # A reasoning prefill (Ministral Response Intent) pre-closes the
                 # block, so any reasoning the server reports here is its echo of
                 # that prompt text — never shown, even with thinking visible.
@@ -9796,6 +9819,8 @@ def stream_vision_response(
             continue
 
     _held_reasoning = _close_recovery.flush()
+    if _held_reasoning:
+        _reasoning_text.append(_held_reasoning)
     if _held_reasoning and show_thinking and not _reasoning_prefilled:
         if not _reasoning_streaming:
             _reasoning_streaming = True
@@ -9930,6 +9955,65 @@ def stream_vision_response(
             predicted_tokens=_last_predicted_tokens,
             visible_chars=len("".join(all_text)),
             reasoning_chars=_reasoning_raw_chars,
+        )
+
+    # Natural EOS inside a never-closed [THINK] block. The model sometimes writes
+    # its whole turn as the "reasoning" and stops (finish_reason "stop"), so the
+    # server reports reasoning only and the browser would treat the turn as an
+    # empty reply, delete the Thinking panel and regenerate everything. Instead
+    # continue THIS turn once: re-send it with the completed reasoning as a
+    # closed assistant prefill ([THINK]...[/THINK]), which llama-server renders
+    # exactly like the Response-Intent prefill above. The prompt and reasoning
+    # are already in the slot's KV cache, so only the answer is generated. The
+    # reasoning text is passed through verbatim — no guess at where it "turned
+    # into" an answer. Runs once, only for a reasoning-on request whose stream
+    # ended naturally with reasoning and no answer at all.
+    if (
+        not _reasoning_continuation
+        and not _aborted
+        and not abort_generation
+        and _last_finish_reason == "stop"
+        and not raw_chunk_seen_content
+        and not "".join(all_text).strip()
+        and not _close_recovery.closed
+        and not _reasoning_prefilled
+        and "".join(_reasoning_text).strip()
+        and isinstance(payload, dict)
+        and (payload.get("chat_template_kwargs") or {}).get("enable_thinking") is True
+        and payload.get("reasoning_format") == "deepseek"
+    ):
+        _continuation_payload = dict(payload)
+        _continuation_payload["messages"] = list(payload.get("messages") or []) + [{
+            "role": "assistant",
+            "content": "\n\n",
+            "reasoning_content": "".join(_reasoning_text),
+        }]
+        _max_tokens = payload.get("max_tokens")
+        if isinstance(_max_tokens, int) and isinstance(_last_predicted_tokens, int):
+            # The prompt grew by the reasoning that was just generated.
+            _continuation_payload["max_tokens"] = max(256, _max_tokens - _last_predicted_tokens)
+        print(
+            f"🩹 req#{_probe_req_id}: reasoning ended (EOS) without [/THINK] or an "
+            f"answer ({_reasoning_chars} reasoning chars) — continuing this turn "
+            "from the completed reasoning instead of regenerating it",
+            flush=True,
+        )
+        if callable(_trace):
+            _trace(
+                "reasoning_unclosed_continuation",
+                request_id=_probe_req_id,
+                endpoint="/v1/chat/completions",
+                reasoning_chars=_reasoning_chars,
+                **_trace_context,
+            )
+        yield from stream_vision_response(
+            _continuation_payload,
+            raw_capture_path=raw_capture_path,
+            preserve_fenced_chatml=preserve_fenced_chatml,
+            show_thinking=show_thinking,
+            request_id=request_id,
+            trace_context=trace_context,
+            _reasoning_continuation=True,
         )
 
 
@@ -21194,6 +21278,7 @@ def get_llama_settings():
             'models_dir': s.get('llama_models_dir', ''),
             'args': s.get('llama_args', {}),
             'show_console': s.get('llama_show_console', False),
+            'anthropic_thinking': bool(s.get('anthropic_thinking', False)),
             'mmproj_path': s.get('mmproj_path', ''),
             'lora_path': s.get('lora_path', ''),
             'comfyui_host': s.get('comfyui_host', '127.0.0.1'),
@@ -22146,7 +22231,7 @@ def load_model():
                     load_port=args.get("port", 8080),
                 )
                 warmup_experiment = _run_prefill_warmup_experiment(
-                    data.get("prefill_warmup") is True, args,
+                    data.get("prefill_warmup") is True, args, lease_held=True,
                 )
                 if warmup_experiment.get("cleanup_verified") is False:
                     _shutdown_llama_for_model_swap(args.get("port", 8080))
@@ -22319,6 +22404,9 @@ def save_llama_config():
         s['llama_models_dir'] = data.get('models_dir', s.get('llama_models_dir', ''))
         s['llama_show_console'] = data.get('show_console', s.get('llama_show_console', False))
         s['llama_args'] = {**s.get('llama_args', {}), **data.get('args', {})}
+        # Visibility is independent of llama_args.reasoning; preserve partial saves.
+        if 'anthropic_thinking' in data:
+            s['anthropic_thinking'] = bool(data['anthropic_thinking'])
         s['mmproj_path'] = data.get('mmproj_path', s.get('mmproj_path', ''))
         s['automatic_vision_routing_enabled'] = bool(
             data.get('automatic_vision_routing_enabled', s.get('automatic_vision_routing_enabled', False))
@@ -22870,7 +22958,8 @@ def build_id_route():
 
 @app.route('/')
 def root():
-    return render_template('index.html')
+    return render_template('index.html', show_thinking=bool(
+        (get_llama_settings() or {}).get('anthropic_thinking', False)))
 
 
 @app.route('/config')

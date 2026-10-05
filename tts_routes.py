@@ -4,6 +4,9 @@ from flask import Blueprint, request, jsonify, send_file, Response, stream_with_
 import requests
 from io import BytesIO
 import logging
+import math
+import shutil
+import subprocess
 import json
 import os
 import base64
@@ -23,9 +26,6 @@ apply_tts_path_overrides()
 
 # Create blueprint
 tts_bp = Blueprint('tts', __name__)
-
-def _pro_only():
-    return jsonify({'error': 'This feature is available in HWUI Pro.', 'pro_required': True}), 403
 
 # Server URLs
 F5_SERVER_URL          = 'http://localhost:8003'
@@ -73,6 +73,9 @@ _omnivoice_generate_lock = None
 _voice_forge_results = {}
 _voice_forge_results_lock = threading.Lock()
 
+
+def _pro_only():
+    return jsonify({'error': 'This feature is available in HWUI Pro.', 'pro_required': True}), 403
 
 def get_settings():
     """Read settings.json. Returns {} on any read error — callers that
@@ -290,22 +293,34 @@ def _voice_forge_upload_as_wav(upload):
 
 
 def _voice_forge_apply_speed(wav_bytes, speed):
+    if not math.isfinite(speed) or not 0.75 <= speed <= 1.25:
+        raise ValueError('Voice Forge speed must be between 0.75 and 1.25')
     if abs(speed - 1.0) < 1e-6:
         return wav_bytes
+    ffmpeg = shutil.which('ffmpeg')
+    if not ffmpeg:
+        raise RuntimeError('Voice Forge speed adjustment requires FFmpeg with the Rubber Band filter')
+    # Speech-oriented time stretching; keep pitch and channel alignment intact.
+    audio_filter = (
+        f'rubberband=tempo={speed:.8f}:pitch=1:window=short:'
+        'transients=mixed:detector=soft:phase=laminar:channels=together'
+    )
     try:
-        import numpy as np
-        import soundfile as sf
-        import librosa
-
-        audio, sample_rate = sf.read(BytesIO(wav_bytes), dtype='float32', always_2d=False)
-        audio = np.asarray(audio, dtype=np.float32)
-        if audio.ndim == 2:
-            audio = audio.mean(axis=1)
-        stretched = librosa.effects.time_stretch(audio, rate=speed)
-        encoded = BytesIO()
-        sf.write(encoded, stretched, sample_rate, format='WAV', subtype='PCM_16')
-        return encoded.getvalue()
-    except Exception as exc:
+        result = subprocess.run(
+            [ffmpeg, '-hide_banner', '-loglevel', 'error', '-nostdin',
+             '-i', 'pipe:0', '-map', '0:a:0', '-af', audio_filter,
+             '-c:a', 'pcm_s16le', '-f', 'wav', 'pipe:1'],
+            input=wav_bytes, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=120, check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+        )
+        if result.returncode:
+            detail = result.stderr.decode('utf-8', errors='replace').strip()[:500]
+            raise RuntimeError(detail or 'FFmpeg could not apply Rubber Band time stretching')
+        if not result.stdout.startswith(b'RIFF') or result.stdout[8:12] != b'WAVE':
+            raise RuntimeError('FFmpeg returned invalid WAV audio')
+        return result.stdout
+    except (OSError, subprocess.TimeoutExpired, RuntimeError) as exc:
         raise RuntimeError(f'Voice Forge speed adjustment failed: {exc}') from exc
 
 
@@ -910,6 +925,93 @@ def get_voice_forge_reference():
 @tts_bp.route('/voice-forge/voice', methods=['DELETE'])
 def delete_voice_forge_voice():
     return _pro_only()
+
+
+def _generate_voice_forge_single(fields, files, slot):
+    """Use the normal clone adapter, retaining reference codes and transcript."""
+    text = fields.get('text', '').strip()
+    transcript = fields.get(f'ref_text_{slot.lower()}', '').strip()
+    try:
+        expression = float(fields.get('expression', '0.8'))
+        speed = float(fields.get('speed', '1'))
+        seed = int(fields.get('seed', '-1'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Invalid Voice Forge expression, speed or seed'}), 400
+    if not text or len(text) > 10000:
+        return jsonify({'error': 'Enter test text of at most 10000 characters'}), 400
+    if len(transcript) > 10000:
+        return jsonify({'error': 'Reference spoken text is too long'}), 400
+    if (not math.isfinite(expression) or not 0.6 <= expression <= 1.1 or
+            not math.isfinite(speed) or not 0.75 <= speed <= 1.25 or abs(seed) > 9_000_000_000_000_000_000):
+        return jsonify({'error': 'Voice Forge expression, speed or seed is out of range'}), 400
+
+    result_id = uuid.uuid4().hex
+    temporary_voice = ''
+    voice = fields.get(f'voice_{slot.lower()}', '')
+    upload = files.get(f'voice_{slot.lower()}_audio')
+    try:
+        if upload or transcript:
+            if upload:
+                reference_wav = upload[1]
+            else:
+                reference_path = _qwentts_voice_files(voice)
+                if reference_path is None:
+                    return jsonify({'error': f'Choose or upload Voice {slot}'}), 400
+                reference_wav = reference_path.read_bytes()
+            if len(reference_wav) > QWENTTS_MAX_REFERENCE_BYTES:
+                return jsonify({'error': 'Voice Forge reference audio is too large'}), 400
+            temporary_voice = f'__voice_forge_{result_id}'
+            registration = {
+                'name': temporary_voice,
+                'wav_b64': base64.b64encode(reference_wav).decode('ascii'),
+            }
+            if transcript:
+                registration['ref_text'] = transcript
+            registered = requests.post(
+                f'{QWEN_FAST_SERVER_URL}/v1/audio/voices', json=registration, timeout=(10, 120),
+            )
+            if registered.status_code != 200:
+                return jsonify({'error': _qwentts_error_message(registered, 'Voice Forge registration failed')}), registered.status_code
+            voice = temporary_voice
+        elif voice:
+            _ensure_qwentts_voice_registered(voice, QWEN_FAST_SERVER_URL)
+        else:
+            return jsonify({'error': f'Choose or upload Voice {slot}'}), 400
+
+        speech = requests.post(
+            f'{QWEN_FAST_SERVER_URL}/v1/audio/speech',
+            json={
+                'input': text, 'voice': voice, 'response_format': 'wav', 'speed': 1.0,
+                'seed': seed, 'max_new_tokens': 512, 'top_k': 50,
+                'temperature': expression, 'top_p': 0.95, 'repetition_penalty': 1.05,
+            },
+            timeout=(10, 180),
+        )
+        if speech.status_code != 200:
+            return jsonify({'error': _qwentts_error_message(speech, 'Voice Forge generation failed')}), speech.status_code
+        audio = _voice_forge_apply_speed(speech.content, speed)
+        filename = f'voice_forge_{result_id}.wav'
+        with _voice_forge_results_lock:
+            if len(_voice_forge_results) >= 8:
+                _voice_forge_results.pop(next(iter(_voice_forge_results)))
+            _voice_forge_results[result_id] = {'filename': filename, 'audio': audio}
+        return jsonify({
+            'status': 'ok', 'result_id': result_id,
+            'audio_url': f'/api/tts/voice-forge/audio/{filename}',
+            'blend_ratio': 100 if slot == 'A' else 0,
+            'seed': seed, 'expression': expression, 'speed': speed,
+        })
+    finally:
+        if temporary_voice:
+            try:
+                cleanup = requests.delete(
+                    f'{QWEN_FAST_SERVER_URL}/v1/audio/voices/{quote(temporary_voice, safe="")}',
+                    timeout=(5, 30),
+                )
+                if cleanup.status_code not in (200, 404):
+                    logging.warning('Voice Forge temporary voice cleanup returned %s', cleanup.status_code)
+            except requests.RequestException:
+                logging.warning('Voice Forge temporary voice cleanup failed', exc_info=True)
 
 
 @tts_bp.route('/voice-forge/blend', methods=['POST'])
