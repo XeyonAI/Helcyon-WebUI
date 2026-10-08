@@ -253,11 +253,7 @@ os.makedirs(_LLAMA_SLOT_SAVE_PATH, exist_ok=True)
 _LLAMA_SLOT_TRACE_LOCK = threading.Lock()
 _LLAMA_SLOT_TRACE_LAST = {}
 
-# GPU/host state at the moments a slow prompt evaluation can be explained:
-# llama-server launch/ready, a request with no visible content 6 s after its
-# POST (then every 20 s, at most 4 times), Stop, and first content after a
-# stall. Observational only; probes run off the streaming thread. Written to
-# logs/gpu_stall_trace.jsonl. See llama_stall_diagnostics.py.
+# Free omits Dev stall-diagnostic tooling; retain a no-op for shared call sites.
 class _NoopStallWatch:
     def __init__(self): self.started_wall = time.time()
     def mark(self, *args, **kwargs): return time.time() - self.started_wall
@@ -268,10 +264,8 @@ class _NoopStallWatch:
 
 class _NoopStallDiagnostics:
     def current_launch(self):
-        return {"launch_id": "free-noop", "pid": None,
-                "ready_at": datetime.now().isoformat()}
-    def new_launch(self, *args, **kwargs):
-        return globals().get("_LLAMA_SERVER_LOG_PATH")
+        return {"launch_id": "free-noop", "pid": None, "ready_at": datetime.now().isoformat()}
+    def new_launch(self, *args, **kwargs): return globals().get("_LLAMA_SERVER_LOG_PATH")
     def start_watch(self, *args, **kwargs): return _NoopStallWatch()
     def __getattr__(self, name): return lambda *a, **k: None
 
@@ -617,20 +611,16 @@ def _decide_missing_message_reaction(user_text, settings, local_model, recent=No
 
 @app.after_request
 def _complete_missing_message_reaction(response):
-    """Decide before the lazy provider stream starts, using the user message."""
+    """The dedicated selector is the only source of a displayed reaction.
+
+    Whatever the outcome (decision, failure, timeout, invalid result, skipped
+    turn, reactions off), a marker the chat model emits on its own is removed
+    from the reply so it can never become a reaction.
+    """
     if request.path != "/chat" or request.method != "POST" or response.status_code != 200:
         return response
-    try:
-        with open("settings.json", "r", encoding="utf-8") as handle:
-            settings = json.load(handle)
-    except Exception:
-        return response
-    if settings.get("message_reactions_enabled", True) is False:
-        # Reactions switched off (Config page): no selector call, no new reaction. Any
-        # marker the chat model emits on its own is removed too, for every kind of turn
-        # (normal, Continue, check-in). Stored reactions are untouched; the header tells
-        # the browser not to clear one when this turn carries none (e.g. regenerate).
-        response.headers["X-HWUI-Reactions"] = "off"
+
+    def strip_model_markers():
         if response.mimetype == "text/event-stream":
             response.response = strip_reaction_markers(response.response)
         elif response.is_json:
@@ -639,9 +629,21 @@ def _complete_missing_message_reaction(response):
                 payload["text"] = "".join(strip_reaction_markers([payload["text"]]))
                 response.set_data(json.dumps(payload, ensure_ascii=False))
         return response
+
+    try:
+        with open("settings.json", "r", encoding="utf-8") as handle:
+            settings = json.load(handle)
+    except Exception:
+        return strip_model_markers()
+    if settings.get("message_reactions_enabled", True) is False:
+        # Reactions switched off (Config page): no selector call, no new reaction.
+        # Stored reactions are untouched; the header tells the browser not to clear
+        # one when this turn carries none (e.g. regenerate).
+        response.headers["X-HWUI-Reactions"] = "off"
+        return strip_model_markers()
     data = request.get_json(silent=True) or {}
     if data.get("continue_prefix") or data.get("generation_kind") == "continuation" or data.get("automatic_event"):
-        return response
+        return strip_model_markers()
     latest = next((m for m in reversed(data.get("conversation_history") or [])
                    if isinstance(m, dict) and m.get("role") == "user"), {})
     content = latest.get("content", "")
@@ -649,7 +651,7 @@ def _complete_missing_message_reaction(response):
         content = " ".join(str(p.get("text", "")) for p in content
                            if isinstance(p, dict) and p.get("type") == "text")
     if not isinstance(content, str) or not content.strip():
-        return response
+        return strip_model_markers()
     local_model = CURRENT_MODEL
     recent = _recent_reaction_context(data.get("conversation_history"),
                                       data.get("current_chat_filename"))
@@ -5841,6 +5843,53 @@ _DOCUMENT_REFUSAL_RE = re.compile(
     r"|\bnot\s+(?:as|into|to|in)\s+(?:a|any)\s+(?:separate\s+)?(?:files?|documents?)\b",
     re.IGNORECASE,
 )
+# ── The user says the text itself belongs in the chat (2026-10-05) ───────────
+# ⚠️ Traced 2026-10-05: "Write them directly in this chat in separate code blocks,
+# labelled GPT4o-Identity-Binding-01.txt through ...-08.txt" was judged an explicit
+# document WRITE request: the verb "Write" followed by a filename in the same
+# clause is a document target to _document_positive_request, and nothing knew the
+# message had just said where the output goes. The router (30s of model time on a
+# long prompt) then returned unusable output, and because the turn counted as an
+# explicit document request, a server-built "Nothing was changed ... the document
+# router returned malformed or truncated output" notice was streamed in front of the
+# shards the chat model went on to write perfectly well. Both paths ran for one turn
+# because the turn was misclassified, not because of any shared state.
+# Delivery wording is a statement about the destination of the OUTPUT, so it is
+# handled where refusals are: such a turn stays ordinary chat unless the message
+# also carries an unambiguous document destination (see _document_turn_stays_in_chat).
+# Strict: the output is to be written right here, or one block per item.
+_DOCUMENT_CHAT_DIRECT_RE = re.compile(
+    r"\b(?:directly|right\s+here|straight|inline|here)\s+(?:in|into|within|inside)\s+"
+    r"(?:this|the|our|your)\s+(?:chat|conversation|thread|reply|response)\b"
+    r"|\b(?:each|every|one)\b[^.!?\n]{0,60}?\b(?:in|into|inside)\s+(?:its|their)\s+own\s+"
+    r"(?:fenced\s+)?code\s*blocks?\b"
+    r"|\b(?:in|into|inside)\s+(?:separate|individual|their\s+own|own)\s+(?:fenced\s+)?code\s*blocks\b",
+    re.IGNORECASE,
+)
+# Plain: the chat or a code block is where the text appears.
+_DOCUMENT_CHAT_DELIVERY_RE = re.compile(
+    r"\b(?:in|into|within|inside)\s+(?:this|the|our)\s+(?:chat|conversation|thread)\b"
+    r"(?!\s+(?:history|logs?|archive|search))"
+    r"|\bin\s+chat\b"
+    r"|\b(?:in|into)\s+your\s+(?:reply|response|answer)\b"
+    r"|\b(?:in|into|inside)\s+(?:a|an|each|every|one|its|their|separate|individual)\s+"
+    r"(?:own\s+)?(?:fenced\s+)?code\s*blocks?\b",
+    re.IGNORECASE,
+)
+# A named store as the destination of a write: unambiguous even next to a chat cue.
+_DOCUMENT_STORE_DESTINATION_RE = re.compile(
+    r"\b(?:save|store|export|write|put|add|append|insert)\b[^.!?\n]{0,60}?"
+    r"\b(?:to|into|in|inside)\s+(?:the\s+|my\s+|our\s+)?"
+    r"(?:global\s+documents?|document\s+editing|memories\s+folder|memory\s+files?|global\s+memory)\b",
+    re.IGNORECASE,
+)
+# "Create a document/file ..." names a thing to make. Counts next to a plain chat cue
+# ("... and tell me in this chat what's in it") but not next to a strict one.
+_DOCUMENT_CREATE_NOUN_RE = re.compile(
+    r"\bcreate\s+(?:a|an|the|new|my)\s+(?:new\s+)?(?:text\s+|markdown\s+|plain\s+)?"
+    r"(?:document|doc|file)\b",
+    re.IGNORECASE,
+)
 # What a document request acts on. A bare "files?" must not be part of a
 # compound ("15-file set") or of "filename"; an extension alone only counts as
 # "a .txt file", never as an adjective ("15 individual .txt shards").
@@ -6237,9 +6286,92 @@ def _classify_document_intent(user_msg, listing_hint="", canonical_target=None):
     return compact
 
 
+def _document_existing_names():
+    """Names of the documents that exist right now (lower-cased), or [] if unavailable."""
+    try:
+        listing = document_tools.list_documents().get("listing") or {}
+        return [str(item.get("name") or "").lower()
+                for items in listing.values() for item in items if item.get("name")]
+    except Exception:                                          # pragma: no cover
+        return []
+
+
+def _document_message_names_an_operation(message, allow_create_noun=True):
+    """The user's own words carry an unambiguous document destination or target:
+    "save this as ...", a named store ("to Global Documents"), a canonical file, a
+    document that really exists ("... in plan.md") or, optionally, "create a document".
+    Used to let an explicit request override a chat-delivery cue or a standing
+    instruction that documents are not to be written."""
+    text = str(message or "")
+    if _DOCUMENT_SAVE_AS_RE.search(text) or _DOCUMENT_STORE_DESTINATION_RE.search(text):
+        return True
+    if allow_create_noun and _DOCUMENT_CREATE_NOUN_RE.search(text):
+        return True
+    try:
+        if _resolve_canonical_document_target(text):
+            return True
+    except Exception:                                          # pragma: no cover
+        pass
+    lowered = text.lower()
+    return any(name in lowered for name in _document_existing_names())
+
+
+def _document_standing_instructions(*extra):
+    """Standing instructions that apply to every turn: the active project's
+    instructions plus any extra text (e.g. the resolved character note).
+
+    ⚠️ Traced 2026-10-05 (API build): a project instruction read "Do not write shards
+    to the document folders. Write them to the chat in separate code blocks." but the
+    document gate ran on the user message alone (project instructions are loaded later,
+    in _load_documents), so a long shard request that merely mentioned file names still
+    reached the router and its failure was shown ahead of the shards."""
+    parts = [str(item).strip() for item in extra if item and str(item).strip()]
+    try:
+        from project_routes import get_active_project
+        project = get_active_project()
+        if project:
+            config_path = os.path.join(os.path.dirname(__file__), "projects", project, "config.json")
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as handle:
+                    instructions = str(json.load(handle).get("instructions") or "").strip()
+                if instructions:
+                    parts.append(instructions)
+    except Exception:                                          # pragma: no cover
+        pass
+    return "\n\n".join(parts)
+
+
+def _document_standing_refusal(standing, message):
+    """True when the standing instructions say not to write/save documents and this
+    message does not itself ask for a document operation (the user's own request wins)."""
+    if not standing or not _DOCUMENT_REFUSAL_RE.search(str(standing)):
+        return False
+    return not _document_message_names_an_operation(message, allow_create_noun=True)
+
+
+def _document_turn_stays_in_chat(message):
+    """True when the user says the TEXT belongs in the chat and names no document operation.
+
+    "Write 8 shards directly in this chat, each in its own code block, labelled
+    GPT4o-01.txt" describes the output; a filename or the word "file"/"document" in
+    it is a label, not a target. The turn stays ordinary chat unless the message also
+    carries an unambiguous document destination: "save this as ...", a named store
+    ("to Global Documents"), a canonical file, a document that really exists
+    ("... in plan.md"), or - next to a plain chat cue only - "create a document".
+    """
+    text = str(message or "")
+    strict = bool(_DOCUMENT_CHAT_DIRECT_RE.search(text))
+    if not strict and not _DOCUMENT_CHAT_DELIVERY_RE.search(text):
+        return False
+    return not _document_message_names_an_operation(text, allow_create_noun=not strict)
+
+
 def _document_turn_refuses_files(message):
-    """True when the user explicitly says not to write/save files or to answer in chat only."""
-    return bool(_DOCUMENT_REFUSAL_RE.search(str(message or "")))
+    """True when the turn must not touch documents: the user explicitly says not to
+    write/save files or to answer in chat only, or says the text belongs in the chat
+    and names no document operation (see _document_turn_stays_in_chat)."""
+    text = str(message or "")
+    return bool(_DOCUMENT_REFUSAL_RE.search(text)) or _document_turn_stays_in_chat(text)
 
 
 def _document_positive_request(message, verb_re):
@@ -7049,7 +7181,7 @@ def _document_reply_guard(chunks, active=False, fallback=""):
             yield fallback
 
 
-def _run_document_tool_for_turn(user_msg):
+def _run_document_tool_for_turn(user_msg, standing_instructions=""):
     """Run at most one document action for this turn.
 
     Returns (attached_block, status_block, result).
@@ -7104,8 +7236,12 @@ def _run_document_tool_for_turn(user_msg):
     # An explicit refusal ("do not write files", "chat only") overrides
     # everything, including a canonical target: no router call, no action.
     if _document_turn_refuses_files(message):
-        print("📄 Message says not to write/save files (or to answer in chat only) — "
-              "document tool skipped", flush=True)
+        print("📄 Message says not to write/save files, to answer in chat only, or that the "
+              "text belongs in this chat — document tool skipped", flush=True)
+        return "", "", None
+    if _document_standing_refusal(standing_instructions, message):
+        print("📄 Standing instructions say not to write documents and this message does not "
+              "ask for one — document tool skipped", flush=True)
         return "", "", None
 
     try:
@@ -7283,10 +7419,12 @@ def _document_turn_key(character, conversation):
     return digest(json.dumps(parts, sort_keys=True)), ttl
 
 
-def _document_turn_may_act(message):
+def _document_turn_may_act(message, standing_instructions=""):
     """The same cheap gate _run_document_tool_for_turn applies before any model call."""
     message = str(message or "").strip()
     if not message:
+        return False
+    if _document_standing_refusal(standing_instructions, message):
         return False
     try:
         canonical = _resolve_canonical_document_target(message)
@@ -7297,7 +7435,8 @@ def _document_turn_may_act(message):
     return bool(canonical or _DOCUMENT_INTENT_HINT_RE.search(message))
 
 
-def _run_document_tool_once(user_msg, turn_key=None, ttl=_DOCUMENT_TURN_TTL_SECONDS):
+def _run_document_tool_once(user_msg, turn_key=None, ttl=_DOCUMENT_TURN_TTL_SECONDS,
+                            standing_instructions=""):
     """_run_document_tool_for_turn, but a write runs at most once per user turn.
 
     A write that succeeded — or that may have changed the file — is remembered
@@ -7309,8 +7448,8 @@ def _run_document_tool_once(user_msg, turn_key=None, ttl=_DOCUMENT_TURN_TTL_SECO
     arrives while the first run is still writing waits for it.
     """
     import copy
-    if not turn_key or not _document_turn_may_act(user_msg):
-        return _run_document_tool_for_turn(user_msg)
+    if not turn_key or not _document_turn_may_act(user_msg, standing_instructions):
+        return _run_document_tool_for_turn(user_msg, standing_instructions)
     with _DOCUMENT_TURN_LOCK:
         now = time.time()
         for key in [k for k, record in _DOCUMENT_TURN_RESULTS.items() if record["expires"] <= now]:
@@ -7323,7 +7462,7 @@ def _run_document_tool_once(user_msg, turn_key=None, ttl=_DOCUMENT_TURN_TTL_SECO
             print(f"📄 Document {action} already done for this user turn — not repeated "
                   f"({result.get('name')})", flush=True)
             return attached, _document_status(action, result), result
-        attached, status, result = _run_document_tool_for_turn(user_msg)
+        attached, status, result = _run_document_tool_for_turn(user_msg, standing_instructions)
         if (isinstance(result, dict) and result.get("action") in _DOCUMENT_WRITE_ACTIONS
                 and (result.get("ok") or result.get("write_attempted"))):
             if len(_DOCUMENT_TURN_RESULTS) >= _DOCUMENT_TURN_MAX_RECORDS:
@@ -8525,6 +8664,63 @@ def _kw_match(kw, text_lower):
     if not kw:
         return False
     return re.search(r"\b" + re.escape(kw) + r"\b", text_lower) is not None
+
+
+_MEMORY_CORROBORATION_STOPWORDS = frozenset({
+    "about", "after", "also", "and", "any", "are", "because", "been", "but", "can", "could", "did", "does",
+    "for", "from", "get", "going", "got", "had", "has", "have", "her", "him", "his", "how", "into", "its",
+    "just", "like", "maybe", "might", "more", "much", "not", "one", "only", "our", "out", "really", "should",
+    "some", "than", "that", "the", "their", "them", "then", "there", "they", "think", "this", "too", "was",
+    "were", "what", "when", "where", "which", "while", "who", "why", "will", "with", "would", "you", "your",
+})
+
+
+def _memory_corroboration(query_text, block, matched_keywords):
+    """Count query content words (beyond the matched keywords) that also occur in the block.
+
+    A keyword hit says a memory *might* be relevant; shared vocabulary between
+    the user's message and the memory's own title/body says whether the
+    conversation is actually about it. Prefix matching (>= 4 chars) lets
+    drive/driving and visit/visits corroborate each other.
+    """
+    keyword_terms = set()
+    for kw in matched_keywords:
+        keyword_terms |= _ministral_memory_text_terms(kw)
+    query_terms = {
+        t for t in _ministral_memory_text_terms(query_text)
+        if len(t) >= 3 and t not in keyword_terms and not t.isdigit()
+        and t not in _MEMORY_CORROBORATION_STOPWORDS
+        and t not in _MINISTRAL_MEMORY_QUERY_STOPWORDS
+    }
+    block_terms = _ministral_memory_text_terms(f"{block.get('title', '')} {block.get('body', '')}")
+    count = 0
+    for term in query_terms:
+        if term in block_terms or (len(term) >= 4 and any(
+            len(b) >= 4 and b[:4] == term[:4] for b in block_terms
+        )):
+            count += 1
+    return count
+
+
+def _rank_memory_matches(items, query_text):
+    """Order keyword-matched memory items by relevance and drop incidental hits.
+
+    An item is incidental when it matched on a single keyword and the rest of
+    the user's message shares nothing with the memory. Incidental items are
+    dropped only when a corroborated item exists, so a deliberate lone keyword
+    trigger (e.g. a bare name) still retrieves its memory. Ties on score are
+    broken by corroboration before match count.
+    """
+    for item in items:
+        item["corroboration"] = _memory_corroboration(
+            query_text, item["block"], item["matched_keywords"]
+        )
+    if any(item["corroboration"] > 0 for item in items):
+        items = [item for item in items if item["matches"] > 1 or item["corroboration"] > 0]
+    items.sort(
+        key=lambda x: (-x["score"], -x["corroboration"], -x["matches"], x["block"]["title"].lower())
+    )
+    return items
 
 
 def do_chat_search(query, current_filename=None):
@@ -12126,10 +12322,7 @@ def _retrieve_memory(char_data, character_name, user_input, project_rp_mode, _di
                     })
             # Sort: score desc, then match-count desc (more distinct keywords beats
             # one super-rare hit), then title for stable ordering on full ties.
-            items.sort(
-                key=lambda x: (-x["score"], -x["matches"], x["block"]["title"].lower())
-            )
-            return items
+            return _rank_memory_matches(items, query_text)
 
         scored_items = _score_blocks(user_input)
         if not scored_items and not automatic_event:
@@ -12965,6 +13158,9 @@ def _render_user_owned_memory_perspective(text, user_name, user_gender="male"):
             # 6. Common 3rd-person singular present verb adjustment after you:
             s = re.sub(r"\b([Yy]ou)\s+(uses|wants|needs|likes|enjoys|prefers|thinks|knows|feels|remembers|lives|works|spends|owns|believes|considers)\b",
                        lambda m: m.group(1) + " " + m.group(2)[:-1], s)
+            # Consonant + "ies" verbs (tries, carries, worries) take "y", not a bare "s" strip.
+            s = re.sub(r"\b([Yy]ou)\s+(\w*[^aeiou\W]ies)\b",
+                       lambda m: m.group(1) + " " + m.group(2)[:-3] + "y", s)
 
             if s.startswith("you "):
                 s = "You " + s[4:]
@@ -16019,7 +16215,8 @@ def chat():
         # the first run's write result back instead of writing again.
         _doc_turn_key, _doc_turn_ttl = _document_turn_key(data.get("character"), active_chat)
         _local_doc_attached, _local_doc_status_block, _local_doc_result = (
-            _run_document_tool_once(user_input, _doc_turn_key, _doc_turn_ttl)
+            _run_document_tool_once(user_input, _doc_turn_key, _doc_turn_ttl,
+                                    _document_standing_instructions(_effective_author_note))
         )
     # Server-built from the real result; "" when this turn wrote nothing.
     _local_doc_confirmation = _document_confirmation(_local_doc_result)

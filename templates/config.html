@@ -395,6 +395,16 @@
       border-radius: 6px; background: var(--config-box-bg, var(--bench-box, #242424));
       color: var(--text-muted, #aeb8c5); font-size: 12px; line-height: 1.5;
     }
+    #voice-forge-template-dialog {
+      width: min(360px, calc(100vw - 40px)); padding: 18px;
+      border: 1px solid var(--config-box-border, var(--field-border, #293238));
+      border-radius: 10px; background: var(--config-box-bg, var(--bench-box, #242424));
+      color: var(--text-primary, #ddd); box-sizing: border-box;
+    }
+    #voice-forge-template-dialog::backdrop { background: rgba(0, 0, 0, .6); }
+    #voice-forge-template-dialog label { display: block; margin-bottom: 8px; }
+    #voice-forge-template-dialog input { width: 100%; box-sizing: border-box; }
+    #voice-forge-template-dialog .voice-forge-template-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
     #tab-voice-forge .voice-forge-sources {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2687,7 +2697,13 @@
           <h4>Test voice</h4>
           <label for="voice-forge-text">Test text</label>
           <textarea id="voice-forge-text" rows="5" placeholder="Enter the line the voice should speak...">Hello. This is a test of a newly blended voice.</textarea>
-          <button id="voice-forge-save-text" class="config-action-button" type="button" onclick="saveVoiceForgeTestText()" style="margin-top:8px; background-color:#1f3a5a; border-color:#245080; color:white;">💾 Save Test Text</button>
+          <div class="voice-forge-source-actions" style="flex-wrap:wrap; align-items:center;">
+            <select id="voice-forge-template" aria-label="Test text template" style="flex:1; min-width:150px;"><option value="">-- Text template --</option></select>
+            <button type="button" onclick="loadVoiceForgeTemplate()">Load</button>
+            <button type="button" onclick="saveVoiceForgeTemplate()">Save Template</button>
+            <button type="button" onclick="deleteVoiceForgeTemplate()">Delete</button>
+          </div>
+          <button id="voice-forge-save-text" class="config-action-button" type="button" onclick="saveVoiceForgeTestText()" style="margin-top:8px; background-color:#1f3a5a; border-color:#245080; color:white;">💾 Save Test Text as Startup Default</button>
           <div class="config-inline-field voice-forge-seed-row" style="margin-top:12px;">
             <label for="voice-forge-seed">Seed <span style="color:#777; font-weight:normal;">(optional)</span></label>
             <input id="voice-forge-seed" class="config-control-short" type="number" step="1" placeholder="Random">
@@ -2699,12 +2715,23 @@
         <section id="voice-forge-result" class="voice-forge-result" hidden>
           <label for="voice-forge-audio">Generated voice preview</label>
           <audio id="voice-forge-audio" controls preload="metadata"></audio>
-          <label for="voice-forge-save-name">Save as HWUI Voice</label>
+          <label for="voice-forge-save-name">Save to HWUI Voice Folder</label>
           <div class="voice-forge-save-row">
             <input id="voice-forge-save-name" type="text" maxlength="80" placeholder="New voice name">
-            <button id="voice-forge-save" type="button" onclick="saveVoiceForgeVoice()" disabled style="background-color:#1f3a5a; border-color:#245080; color:white; white-space:nowrap;">Save as HWUI Voice</button>
+            <button id="voice-forge-save" type="button" onclick="saveVoiceForgeVoice()" disabled style="background-color:#1f3a5a; border-color:#245080; color:white; white-space:nowrap;">Save to HWUI Voice Folder</button>
           </div>
+          <button id="voice-forge-export" type="button" onclick="exportVoiceForgeVoice()" disabled style="margin-top:8px; background-color:#1f3a5a; border-color:#245080; color:white;">Save Voice To...</button>
         </section>
+        <dialog id="voice-forge-template-dialog" aria-labelledby="voice-forge-template-name-label" oncancel="if (document.getElementById('voice-forge-template-confirm').disabled) event.preventDefault();">
+          <form onsubmit="event.preventDefault(); submitVoiceForgeTemplate();">
+            <label id="voice-forge-template-name-label" for="voice-forge-template-name">Template name</label>
+            <input id="voice-forge-template-name" type="text" maxlength="80" required autocomplete="off" oninput="this.setCustomValidity('')">
+            <div class="voice-forge-template-actions">
+              <button id="voice-forge-template-cancel" type="button" onclick="document.getElementById('voice-forge-template-dialog').close()">Cancel</button>
+              <button id="voice-forge-template-confirm" class="config-action-button" type="submit" style="background-color:#1f3a5a; border-color:#245080; color:white;">Save</button>
+            </div>
+          </form>
+        </dialog>
       </div><!-- end tab-voice-forge -->
 
       <!-- ===== TAB: RANDOM CHECK-INS ===== -->
@@ -3687,6 +3714,28 @@
   async function loadVoiceForgeTestText() { showHwuiProModal("Voice Forge", "Voice Forge settings are available in HWUI Pro."); return; }
 
   async function saveVoiceForgeTestText() { showHwuiProModal("Voice Forge", "Voice Forge settings are available in HWUI Pro."); return; }
+
+  let voiceForgeTemplates = {};
+
+  function renderVoiceForgeTemplates(templates, selected = '') {
+    voiceForgeTemplates = templates;
+    const selector = document.getElementById('voice-forge-template');
+    selector.replaceChildren(new Option('-- Text template --', ''));
+    Object.keys(templates).sort((a, b) => a.localeCompare(b)).forEach(name => selector.add(new Option(name, name)));
+    selector.value = selected;
+  }
+
+  async function refreshVoiceForgeTemplates() { return; }
+
+  function loadVoiceForgeTemplate() { showHwuiProModal("Voice Forge", "Voice Forge templates are available in HWUI Pro."); return; }
+
+  function saveVoiceForgeTemplate() { showHwuiProModal("Voice Forge", "Voice Forge templates are available in HWUI Pro."); return; }
+
+  async function submitVoiceForgeTemplate() { showHwuiProModal("Voice Forge", "Voice Forge templates are available in HWUI Pro."); return; }
+
+  async function deleteVoiceForgeTemplate() { showHwuiProModal("Voice Forge", "Voice Forge templates are available in HWUI Pro."); return; }
+
+  async function exportVoiceForgeVoice() { showHwuiProModal("Voice Forge", "Exporting generated voices is available in HWUI Pro."); return; }
 
   async function initialiseVoiceForge(force = false) { showHwuiProModal("Voice Forge", "Voice Forge is available in HWUI Pro."); return; }
 

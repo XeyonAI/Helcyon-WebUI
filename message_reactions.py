@@ -1,4 +1,5 @@
 """Independent reaction metadata before replies; no chat-text rewriting."""
+import codecs
 import json
 import re
 
@@ -24,12 +25,17 @@ REACTION_DECISION_INSTRUCTION = (
     "not it received a reaction (a tag such as [you reacted X] marks one that did), rate "
     "the latest message routine unless it is clearly bigger or a distinct new event. Once "
     "the conversation has moved on to other things, a fresh striking moment can be rated "
-    "strong again. Then give the reaction that fits a strong message: laugh (an "
-    "exceptionally funny or absurd moment), love (deep affection or heartfelt gratitude), "
-    "like (a major achievement or celebration, never bad news), surprise (an astonishing "
-    "or unbelievable event, good or bad), sad (grief, loss or bad news), dislike (intense "
-    "anger or outrage). For routine and notable messages the reaction is none. Output "
-    "only JSON."
+    "strong again. Then give the reaction that fits a strong message: laugh (only when "
+    "the user is telling something genuinely funny or absurd; never for anything sad, "
+    "lonely, anxious, hurt or vulnerable, however casually it is phrased or however "
+    "affectionately the user addresses you), love (deep affection or heartfelt gratitude "
+    "towards you, never for the user's own distress or bad news), like (a major "
+    "achievement or celebration, never bad news or distress), surprise (an astonishing "
+    "or unbelievable event, good or bad), sad (grief, loss, bad news, or a major "
+    "emotional disclosure of loneliness, depression or pain), dislike (intense anger or "
+    "outrage). When the user is opening up about their own pain, the only possible "
+    "reactions are sad or none; none is the safer choice. For routine and notable "
+    "messages the reaction is none. Output only JSON."
 )
 RECENT_CONTEXT_MESSAGES = 10
 RECENT_CONTEXT_CHARS = 300
@@ -120,9 +126,13 @@ def complete_reaction_stream(source, decide, cancelled=lambda: False, trace=lamb
     """Decide from the user message before advancing the lazy reply iterator.
 
     A leading 'none' marker makes an explicit abstention authoritative too.
-    Every original provider chunk then passes through without buffering.
-    Closing the consumer also closes the original provider iterator.
+    The reply is passed through without buffering, but any reaction marker the
+    chat model itself emits is removed: the selector is the only authority, so a
+    failed, skipped or invalid decision means no reaction. Closing the consumer
+    also closes the original provider iterator.
     """
+    original = source
+    source = strip_reaction_markers(source)
     try:
         if cancelled():
             trace(source="cancelled", reaction=None)
@@ -144,9 +154,10 @@ def complete_reaction_stream(source, decide, cancelled=lambda: False, trace=lamb
                 return
             yield chunk
     finally:
-        close = getattr(source, "close", None)
-        if close:
-            close()
+        for stream in (source, original):
+            close = getattr(stream, "close", None)
+            if close:
+                close()
 
 
 _MARKER_PREFIX = "<!--hwui_reaction:"
@@ -171,10 +182,13 @@ def strip_reaction_markers(source):
     as the browser parser already does. Closing this generator closes the source.
     """
     pending = ""
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")  # for byte chunks
     started = False       # any visible text emitted yet
     skip_space = False    # a leading marker was just removed
     try:
         for chunk in source:
+            if isinstance(chunk, (bytes, bytearray)):
+                chunk = decoder.decode(bytes(chunk))
             pending += chunk
             out = ""
             while True:
@@ -200,6 +214,7 @@ def strip_reaction_markers(source):
                 skip_space = False
                 started = True
                 yield out
+        pending += decoder.decode(b"", final=True)
         if pending and not _OPEN_MARKER_RE.match(pending):
             yield pending.lstrip() if skip_space else pending
     finally:

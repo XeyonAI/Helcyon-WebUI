@@ -1,8 +1,31 @@
 from flask import Blueprint, request, jsonify
-import whisper
 import tempfile
 import os
 import logging
+import time
+
+# Private CUDA JIT cache for this (in-process) Whisper model. The shared driver
+# cache is capped at 256 MiB and used by every CUDA process (llama, TTS, ...);
+# once full it evicts the PTX-JIT'd Blackwell kernels, so the first transcription
+# of every launch recompiled them (~13 s, measured; ~0.3 s with a warm cache).
+# Must be set before torch initialises CUDA, i.e. before whisper loads the model.
+# Separate from logs/llama_cuda_cache so the two never evict each other.
+_WHISPER_CUDA_CACHE_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "logs", "whisper_cuda_cache")
+try:
+    os.makedirs(_WHISPER_CUDA_CACHE_DIR, exist_ok=True)
+    if "CUDA_CACHE_PATH" not in os.environ:
+        os.environ["CUDA_CACHE_PATH"] = _WHISPER_CUDA_CACHE_DIR
+    try:
+        _cache_max = int(os.environ.get("CUDA_CACHE_MAXSIZE", "268435456"))
+    except (TypeError, ValueError):
+        _cache_max = 0
+    if 0 <= _cache_max < 1073741824:
+        os.environ["CUDA_CACHE_MAXSIZE"] = "1073741824"
+except OSError as _e:
+    logging.warning(f"⚠️ Could not prepare Whisper CUDA cache dir: {_e}")
+
+import whisper
 
 whisper_bp = Blueprint('whisper', __name__)
 
@@ -65,8 +88,11 @@ def correct_transcript(text):
 
 # Load model once at startup - 'base' is fast and accurate enough
 # Change to 'small' or 'medium' for better accuracy at cost of speed
+_t_load = time.perf_counter()
 model = whisper.load_model("base")
-logging.info("✅ Whisper model loaded")
+logging.info(f"✅ Whisper model loaded on {next(model.parameters()).device} "
+             f"in {time.perf_counter() - _t_load:.2f}s")
+_first_transcribe_done = False
 
 # Allow only alphanumeric chars in the extension we derive from upload
 # filenames — guards against path-separator injection (e.g. a filename like
@@ -84,7 +110,9 @@ def _safe_ext(orig_name):
 
 @whisper_bp.route('/api/whisper/transcribe', methods=['POST'])
 def transcribe():
+    global _first_transcribe_done
     tmp_path = None
+    t_req = time.perf_counter()
     try:
         if 'audio' not in request.files:
             return jsonify({'error': 'No audio file provided'}), 400
@@ -99,14 +127,25 @@ def transcribe():
             tmp_path = tmp.name
 
         logging.info(f"🎤 Transcribing audio: {tmp_path}")
+        t_saved = time.perf_counter()
 
         # Transcribe with Whisper
         result = model.transcribe(tmp_path, language='en')
         transcript = result['text'].strip()
+        t_infer = time.perf_counter()
 
         # Post-process: correct known misheard words
         transcript = correct_transcript(transcript)
 
+        # One line per request so a slow transcription shows which stage it was.
+        logging.info(
+            f"⏱️ STT timing: save={t_saved - t_req:.2f}s "
+            f"transcribe={t_infer - t_saved:.2f}s "
+            f"post={time.perf_counter() - t_infer:.2f}s "
+            f"total={time.perf_counter() - t_req:.2f}s "
+            f"device={next(model.parameters()).device} "
+            f"first_in_process={not _first_transcribe_done}")
+        _first_transcribe_done = True
         logging.info(f"✅ Transcript: {transcript}")
         return jsonify({'transcript': transcript})
 

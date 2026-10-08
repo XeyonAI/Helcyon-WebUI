@@ -15,6 +15,9 @@ import re
 import threading
 import time
 import uuid
+import sys
+import tempfile
+import user_config
 from pathlib import Path
 from user_config import load_user_config_section, save_user_config_section
 from urllib.parse import quote
@@ -72,6 +75,8 @@ _omnivoice_client_lock = None
 _omnivoice_generate_lock = None
 _voice_forge_results = {}
 _voice_forge_results_lock = threading.Lock()
+_voice_forge_preferences_lock = threading.Lock()
+_voice_forge_export_lock = threading.Lock()
 
 
 def _pro_only():
@@ -909,6 +914,75 @@ def get_voice_forge_settings():
 
 @tts_bp.route('/voice-forge/settings', methods=['POST'])
 def save_voice_forge_settings():
+    return _pro_only()
+
+
+def _voice_forge_preferences_path():
+    return Path(user_config.USERS_DIR) / 'voice_forge.json'
+
+
+def _load_voice_forge_preferences():
+    path = _voice_forge_preferences_path()
+    if not path.exists():
+        return {'templates': {}}
+    with path.open('r', encoding='utf-8') as handle:
+        data = json.load(handle)
+    if not isinstance(data, dict) or not isinstance(data.get('templates'), dict):
+        raise ValueError('Invalid Voice Forge preferences')
+    return data
+
+
+def _write_voice_forge_preferences(data):
+    path = _voice_forge_preferences_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix='.voice_forge_', suffix='.tmp', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+@tts_bp.route('/voice-forge/templates', methods=['GET', 'POST', 'DELETE'])
+def voice_forge_templates():
+    return _pro_only()
+
+
+def _voice_forge_save_dialog(initial_directory, initial_name):
+    # Tk must own its main thread. A short-lived child also avoids touching Flask's
+    # request threads or the Electron launcher and works in a local browser.
+    script = """import json, sys, tkinter as tk
+from tkinter import filedialog
+root = tk.Tk()
+root.withdraw()
+root.attributes('-topmost', True)
+try:
+    path = filedialog.asksaveasfilename(parent=root, title='Save Voice To...',
+        initialdir=sys.argv[1] or None, initialfile=sys.argv[2],
+        defaultextension='.wav', filetypes=[('WAV audio', '*.wav')])
+    print(json.dumps(path))
+finally:
+    root.destroy()
+"""
+    completed = subprocess.run([sys.executable, '-c', script, initial_directory, initial_name],
+                               capture_output=True, text=True, check=True,
+                               creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+    return json.loads(completed.stdout)
+
+
+def _valid_voice_forge_wav_name(name):
+    stem = Path(name).stem
+    return (name.lower().endswith('.wav') and bool(stem) and
+            not re.search(r'[<>:"/\\|?*\x00-\x1f]', name) and
+            not stem.endswith((' ', '.')) and
+            not re.fullmatch(r'(?i)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?', stem))
+
+
+@tts_bp.route('/voice-forge/export', methods=['POST'])
+def export_voice_forge_result():
+    # A remote browser must never open a dialog or write files on the HWUI host.
     return _pro_only()
 
 

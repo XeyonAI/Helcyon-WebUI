@@ -10,6 +10,7 @@ SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "settings.json")
 THEMES_DIR = os.path.join(os.path.dirname(__file__), "themes")
 
 FREE_THEMES = {"claude", "gemini"}
+
 def _pro_only():
     return jsonify({"error": "This feature is available in HWUI Pro.", "pro_required": True}), 403
 
