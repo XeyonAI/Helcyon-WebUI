@@ -2,6 +2,8 @@
 
 ## The complete ecosystem for local AI.
 
+**Current version: 3.41** — see [What's new in 3.41](#-whats-new-in-341) below.
+
 Helcyon-WebUI is an integrated workspace for chatting with, managing, organising, and evaluating local AI models.
 
 Build characters, manage long-term memory, organise projects, search the web, work with documents, compare responses, and benchmark models—all from one application.
@@ -19,10 +21,10 @@ Build characters, manage long-term memory, organise projects, search the web, wo
 <p align="center">
   <img src="static/images/benchmark_2.png" alt="Integrated Benchmark — Results Dashboard" width="48%" />
   &nbsp;&nbsp;
-  <img src="static/images/Theme_designer.jpg" alt="Theme Designer — Pro Edition" width="48%" />
+  <img src="static/images/Theme_designer.jpg" alt="Theme Designer — Pro Edition only" width="48%" />
 </p>
 
-A clean, powerful web interface built specifically for [llama.cpp](https://github.com/ggerganov/llama.cpp) servers. HWUI gets out of the way and lets you focus on conversations with your AI — no bloat, no unnecessary complexity — while giving you the tools to organise, remember, and compare models properly.
+A clean, powerful web interface built around [llama.cpp](https://github.com/ggerganov/llama.cpp) servers, with optional support for OpenAI-compatible APIs, Ollama and KoboldCpp. HWUI gets out of the way and lets you focus on conversations with your AI — no bloat, no unnecessary complexity — while giving you the tools to organise, remember, and compare models properly.
 
 Designed alongside the [Helcyon](https://huggingface.co/XeyonAI) model series for seamless web search, document, and memory integration—but works great with any local LLM.
 
@@ -32,20 +34,39 @@ Designed alongside the [Helcyon](https://huggingface.co/XeyonAI) model series fo
 
 HWUI is more than a chat interface—it’s a complete workspace for local AI.
 
-- **Chat** — streaming responses, message editing/regeneration, chat branching, multi-character conversations
+- **Chat** — streaming responses, message editing/regeneration, Continue, chat branching, multi-character conversations
 - **Characters** — a full creator with personality, tone, scenario, example dialogue, and author's notes
 - **Memory** — characters recall past conversations and facts across chats
 - **Projects** — organise chats by topic and inject documents (PDF, DOCX, MD, TXT, ODT) directly into context
 - **Web Search** — real-time search built in, the model decides when to search, no toggles required
-- **Benchmark** — an integrated model-comparison workspace: build prompt packs, write rubrics, browse past results, and track models on a dashboard and leaderboard, all from inside HWUI
+- **Voice** — text-to-speech through separately installed engines (F5-TTS, Chatterbox, XTTS, Qwen3-TTS, OmniVoice) and Whisper speech-to-text voice input
+- **Mobile** — a phone-friendly web page, with optional Random Check-in notifications
+- **Benchmark** — an integrated model-comparison workspace: build prompt packs, browse past results, and track models on a dashboard and leaderboard, all from inside HWUI
 
-The Benchmark workspace here is the **integrated Helcyon-Bench experience built into HWUI itself** — a native Config-page workspace, not the standalone [Helcyon-Bench](https://github.com/XeyonAI) Streamlit tool. Every "Benchmark" feature described below refers to this integrated version.
+The Benchmark workspace here is the **integrated Helcyon-Bench experience built into HWUI itself** — a native Config-page workspace. A small standalone Streamlit version of Helcyon-Bench is also bundled in `helcyon-bench/` (see its own README); the results it saves appear in the integrated Benchmark browser and dashboard.
+
+---
+
+## 🆕 What's new in 3.41
+
+Version 3.40 was skipped, so 3.41 follows 3.38 and includes everything since. Highlights available in this Free edition:
+
+- **Continue now really continues** a reply instead of starting a new answer, across local and cloud providers
+- **Loading indicators** — model load time and a "Preparing / Generating / Finishing reply" status above the chat box
+- **Better reactions** — a wider set, never laughing at sad or vulnerable messages, with a cooldown so they stay occasional
+- **Stop Sequences** (local models) — an optional box in Config → Sampling; empty by default
+- **Faster first reply** after loading a local model, and sharper memory recall
+- **New Advanced Settings layout** — one scrollable page with a side menu
+- **Easier installation** — `setup.bat` installs from one dependency list, verifies the install, keeps a working PyTorch, and picks the right CUDA build for RTX 50-series cards
+- Stray `<>` / `>` characters at the end of replies are now cleaned away
+
+Voice Forge is Pro-only, including its additions in this release (see the Pro section below).
 
 ---
 
 ## 🆓 Free vs 💎 Pro
 
-Everything you need to actually use HWUI — chat, characters, memory, documents, search, and the full Benchmark browsing/editing toolkit — is free and open source. Pro adds the pieces that make Benchmark hands-off and lets you fully customise the look.
+Everything you need to actually use HWUI — chat, characters, memory, documents, search, voice, and the full Benchmark browsing/editing toolkit — is free and open source. Pro adds the pieces that make Benchmark hands-off, lets you fully customise the look, and unlocks Voice Forge.
 
 ### Free Version (This Repository)
 
@@ -62,28 +83,36 @@ Everything you need to actually use HWUI — chat, characters, memory, documents
 - Token Counter — real-time token tracking for messages and character cards
 - Custom System Prompts — full control via `system_prompt.txt` or the System Prompts panel
 - Markdown Rendering — bold, italic, headers, bullet lists, separators, blockquotes
-- Theme Switcher — switch between the two included themes from the Config page
+- Theme Switcher — switch between the two included themes (`claude` and `gemini`) from the Config page
 
 **Memory, projects & search**
 - 🧠 **Memory** — AI recalls and references past conversations across chats
 - 📁 **Projects** — organise chats by topic and inject documents (PDF, DOCX, MD, TXT, ODT) directly into conversation context
 - 🌐 **Web Search** — real-time web search, works automatically with a compatible Helcyon model
 
+**Voice & mobile**
+- Text-to-speech playback with the engines you install separately (F5-TTS, Chatterbox, XTTS, Qwen3-TTS, OmniVoice)
+- Whisper voice input on desktop and mobile
+- Mobile web page with optional Random Check-in notifications
+
 **Benchmark (integrated)**
 - **Prompt Pack Editor** — create and edit the five-prompt test packs used for model comparisons
-- **Rubric Editor** — write and adjust the scoring rubrics the judge grades against
-- **Benchmark Browser** — browse every saved comparison and prompt pack
+- **Benchmark Browser** — browse saved comparison results and prompt packs
 - **Dashboard** — per-model, per-category score breakdowns, strengths/weaknesses, trends
 - **Leaderboard** — Current, Best, and Historical model rankings
+- **Model aliases** — consolidate or rename models so their results line up
 
 ### Pro Version (£20)
 
-Everything in Free, plus the tools that make Benchmark automatic and HWUI fully your own:
+Everything in Free, plus:
 
 - 🎨 **Theme Editor** — create and customise your own themes with a full visual editor: colours, backgrounds, and UI feel
+- 🎙 **Voice Forge** — blend two reference voices (or use one), set the speed, preview the result, save new reusable voices and export them as WAV files
 - 🔁 **Send Prompt / Capture Response workflow** — send a benchmark prompt straight into your active chat and capture the exact reply back into the candidate slot, without copy-pasting
-- 🤖 **Automated Benchmarking** — run the full bidirectional judge across a whole prompt pack in one click
+- 🤖 **Automated Benchmarking** — run the full bidirectional judge across a whole prompt pack in one click, from inside HWUI
 - 💾 **Benchmark Session Management** — save, resume, and manage full benchmark runs across sessions
+
+These features are not included in this repository: the Free edition contains only the code needed to show an upgrade prompt.
 
 👉 **[Get HWUI Pro on Gumroad](https://xeyonai.gumroad.com/l/bsmupk)** — one-time payment, no subscription, yours forever.
 
@@ -91,10 +120,10 @@ Everything in Free, plus the tools that make Benchmark automatic and HWUI fully 
 
 ## 💡 Why HWUI?
 
-- **Complete** — chat, memory, projects, benchmarking and character creation in one place
+- **Complete** — chat, memory, projects, voice, benchmarking and character creation in one place
 - **Clean** — no unnecessary prompt pollution or hidden formatting tricks
 - **Fast** — lightweight Flask backend with a responsive interface
-- **Private** — your data stays local. No telemetry, no cloud, no BS.
+- **Private** — no telemetry. Your data stays on your machine unless you choose to enable a cloud provider or web search.
 
 ---
 
@@ -102,10 +131,12 @@ Everything in Free, plus the tools that make Benchmark automatic and HWUI fully 
 
 ### Requirements
 
-- **Python 3.11+**
+- **Windows 10/11** (the tested platform; see the Linux/Mac note below)
+- **Python 3.10 – 3.12** (3.11 recommended), with "Add python.exe to PATH" ticked
 - A [llama.cpp](https://github.com/ggerganov/llama.cpp) release for your platform (specifically `llama-server`/`llama-server.exe`) — HWUI launches and manages this for you, you just need the binary
 - A GGUF model to load
-- **Recommended:** 8GB+ VRAM for decent performance
+- **Recommended:** an NVIDIA GPU with 8GB+ VRAM
+- **For voice input:** FFmpeg on your PATH (`winget install --id Gyan.FFmpeg`)
 
 ### Setup (Windows)
 
@@ -119,10 +150,10 @@ Everything in Free, plus the tools that make Benchmark automatic and HWUI fully 
 2. **Run the setup script:**
 
    ```bash
-   Setup.bat
+   setup.bat
    ```
 
-   This creates a virtual environment, installs all dependencies (including the correct PyTorch build for your GPU), creates a `C:\HWUI-Models` folder, and generates `settings.json`.
+   This creates a virtual environment, installs PyTorch (an existing working CUDA build is kept; RTX 50-series cards get the CUDA 12.8 build, other NVIDIA cards the CUDA 12.1 build), installs everything in `requirements.txt`, creates the `C:\HWUI-Models` and `C:\HWUI-TTS` folders, generates `settings.json`, and finishes by checking that every package imports. It stops with a clear message if a step fails, and it is safe to run again.
 
 3. **Get `llama-server.exe`:**
 
@@ -138,7 +169,7 @@ Everything in Free, plus the tools that make Benchmark automatic and HWUI fully 
    START_UI.bat
    ```
 
-   This opens `http://127.0.0.1:8081` in your browser automatically.
+   This opens HWUI in your browser automatically. Each installation picks its own free port on first run (usually `http://127.0.0.1:8082`, or the next free port); the address is shown in the console window.
 
 6. **Point HWUI at llama.cpp:**
 
@@ -146,20 +177,23 @@ Everything in Free, plus the tools that make Benchmark automatic and HWUI fully 
 
 ### Setup (Linux/Mac)
 
+HWUI's installer and launcher are Windows batch files and Windows 10/11 is the tested platform. The steps below are provided as-is:
+
 ```bash
 git clone https://github.com/XeyonAI/Helcyon-WebUI.git
 cd Helcyon-WebUI
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt   # install PyTorch separately first — see requirements.txt
+# install PyTorch for your platform first: https://pytorch.org/get-started/locally/
+pip install -r requirements.txt
 python app.py
 ```
 
-Then open `http://localhost:8081` and configure `llama-server` from the Config page as in step 6 above.
+Then open the address printed in the console and configure `llama-server` from the Config page as in step 6 above.
 
 ### Full setup guide
 
-For a more detailed walkthrough — model management, vision/LoRA, TTS engines, Whisper voice input, mobile access, backups, and troubleshooting — see [HWUI_Setup_Guide.docx](HWUI_Setup_Guide.docx).
+For a more detailed walkthrough — model management, vision/LoRA, TTS engines, Whisper voice input, mobile access, backups, and troubleshooting — see [HWUI_Setup_Guide.docx](HWUI_Setup_Guide.docx). Note that the guide may lag behind this README; where they differ, follow this README.
 
 ---
 
@@ -176,6 +210,8 @@ HWUI works with any local model served via llama.cpp:
 - Phi-4
 - Gemma
 - Any other model supported by llama.cpp
+
+Optional extra backends you configure yourself: any OpenAI-compatible API, Ollama, and KoboldCpp.
 
 ---
 
@@ -213,10 +249,8 @@ HWUI's web search works automatically when using a compatible Helcyon model. The
 
 Open the **Benchmark** tab on the Config page to compare models:
 1. Build or edit a five-prompt **Prompt Pack** for the category you want to test (creativity, philosophy, humour, etc.)
-2. Adjust the **Rubric** the judge scores against, if needed
-3. Collect Model A / Model B responses to each prompt (manually in Free; with one-click send/capture in Pro)
-4. Score the pair — automatically with one click in Pro, or by running your own comparison and recording it
-5. Browse results on the **Dashboard** and see overall standings on the **Leaderboard**
+2. Run your comparison. In Free, collect Model A / Model B responses yourself and score them with the bundled standalone tool in `helcyon-bench/` (see its README). Pro does this inside HWUI: send each prompt to your active chat, capture the reply, and run the judge across the whole pack in one click.
+3. Browse the saved results on the **Dashboard** and see overall standings on the **Leaderboard**
 
 ---
 
@@ -228,16 +262,18 @@ Helcyon-WebUI/
 ├── chat_routes.py              # Chat management endpoints
 ├── character_routes.py         # Character management
 ├── project_routes.py           # Projects & document handling
-├── theme_routes.py             # Theme switching (+ Theme Editor, Pro)
+├── tts_routes.py               # Text-to-speech engine integration
+├── whisper_routes.py           # Voice input
+├── theme_routes.py             # Theme switching
 ├── helcyon_bench_routes.py     # Integrated Benchmark endpoints
 ├── helcyon_bench_adapter.py    # Benchmark prompt pack / results adapter
-├── helcyon_bench_judge.py      # Benchmark judging pipeline
-├── helcyon-bench/               # Bundled prompt packs, rubrics, judge engine
-├── settings.json                # Configuration (created by Setup.bat)
+├── helcyon-bench/               # Bundled standalone Benchmark tool, prompt packs, rubrics
+├── settings.json                # Configuration (created by setup.bat)
 ├── system_prompt.txt            # Global system prompt
 ├── requirements.txt              # Python dependencies
-├── Setup.bat                     # Windows installer
+├── setup.bat                     # Windows installer
 ├── START_UI.bat                  # Windows launcher
+├── scripts/check_env.py          # Read-only environment check used by setup.bat
 ├── characters/                   # Character JSON files
 ├── character_cards/              # Exported character cards
 ├── users/                        # User persona data
@@ -257,6 +293,12 @@ Helcyon-WebUI/
 - Make sure a model is loaded on the Config page's Llama.cpp panel
 - Check the **Server Executable Path** points at a real `llama-server`/`llama-server.exe`
 
+**`setup.bat` stops with an error:**
+- Read the message above the failure (network, disk space, or antivirus blocking pip are the usual causes), fix it, and run `setup.bat` again — it is safe to re-run
+
+**Voice input does nothing or errors:**
+- Install FFmpeg and open a new terminal so PATH refreshes (`winget install --id Gyan.FFmpeg`)
+
 **Characters not loading:**
 - Ensure `/characters` has `.json` files
 
@@ -268,7 +310,7 @@ Helcyon-WebUI/
 - Increase the context size (`ctx_size`) in the Llama.cpp panel
 
 **Benchmark tab shows an error on startup:**
-- The `helcyon-bench/` folder (prompt packs, rubrics, judge engine) must be present alongside `app.py` — re-clone or re-download the repository if it's missing
+- The `helcyon-bench/` folder (prompt packs, rubrics) must be present alongside `app.py` — re-clone or re-download the repository if it's missing
 
 ---
 
@@ -288,7 +330,7 @@ HWUI Pro (£20) is available under a separate proprietary license and is not cov
 
 ---
 
-© 2026 XeyonAI. All rights reserved.
+Copyright (C) 2026 XeyonAI
 
 ---
 
@@ -306,7 +348,7 @@ HWUI Pro (£20) is available under a separate proprietary license and is not cov
 - Implement features I don't personally need
 - Answer general coding questions
 
-**Want to support development, unlock the Theme Editor, and automate Benchmark runs?** → [HWUI Pro (£20)](https://xeyonai.gumroad.com/l/bsmupk)
+**Want to support development, unlock the Theme Editor and Voice Forge, and automate Benchmark runs?** → [HWUI Pro (£20)](https://xeyonai.gumroad.com/l/bsmupk)
 
 **Want to modify it yourself?** → Fork the repo! GPL v3 means you're free to build your own version.
 
