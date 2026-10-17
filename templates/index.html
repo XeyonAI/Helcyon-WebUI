@@ -8,7 +8,7 @@
   <script src="/build_scope.js"></script>
   <title>Helcyon-WebUI</title>
   <link rel="stylesheet" href="/style.css?v=27">
-  <link rel="stylesheet" href="/theme-files/claude.css" id="active-theme-link">
+  <link rel="stylesheet" href="/theme-files/midnight.css" id="active-theme-link">
   <script src="/static/text_scale.js?v=3" defer></script>
   <style>
     /* Cog dropdown menu — converted from the old #settings-link <a>.
@@ -108,10 +108,10 @@
     });
     // Always fetch active theme with cache-bust so saved changes appear immediately
     fetch('/themes/list').then(r=>r.json()).then(d=>{
-      const name = d.active || 'claude';
+      const name = d.active || 'midnight';
       const link = document.getElementById('active-theme-link');
       if (link) link.href = '/theme-files/' + name + '.css?v=' + Date.now();
-    }).catch(()=>{}); // silent fail — default claude.css already loaded above
+    }).catch(()=>{}); // silent fail — default midnight.css already loaded above
   </script>
   <!-- Shared desktop/mobile chat core: request, history and reply-cleaning
        rules used by BOTH pages (mobile.html loads the same file). Not deferred —
@@ -6002,11 +6002,6 @@ async function sendPrompt() {
       return;
     }
 
-    if (memoryIntentGate(input)) {
-      await saveMemoryFromChat(input, box);
-      return;
-    }
-     
     if (!currentChatFilename) {
       
       var dropdown = document.getElementById('character-select');
@@ -6057,6 +6052,11 @@ async function sendPrompt() {
         hwuiToast('Failed to create chat.', 'error');
         return;
       }
+    }
+
+    if (memoryIntentGate(input)) {
+      await saveMemoryFromChat(input, box);
+      return;
     }
 
     const chat = document.getElementById('chat');
@@ -6239,7 +6239,7 @@ async function sendPrompt() {
     const compact = text.replace(/\s+/g, ' ');
     if (!compact) return false;
     const MEMORY_INTENT_RE = /\b(?:remember (?:this|that|it|to|my|the)|save (?:this|that|it)(?: to (?:your )?memory)?|save .{0,80}for (?:later|future reference)|(?:make|take) a note|don['’]?t forget|for (?:future|later) reference|add (?:(?:this|that|it) )?to (?:your )?memory|note this down|keep (?:this|that|it) in mind|save to (?:your )?memory|put (?:it |this |that )?(?:in(?:to)?|to) (?:your )?memory|(?:can you )?memorize (?:this|that|it)|keep a record|log (?:this|that|it)|store (?:this|that|it)(?: in memory)?|jot (?:this|that|it) down|note (?:this|that|it) down|(?:please )?save (?:this|that|it))\b/i;
-    const LEADING_MEMORY_INTENT_RE = /^(?:(?:please|can you|could you|would you|i want you to)\s+)*(?:remember (?:this|that|it|to|my|the)|save (?:this|that|it)(?: to (?:your )?memory)?|save .{0,80}for (?:later|future reference)|(?:make|take) a note|don['â€™]?t forget|for (?:future|later) reference|add (?:(?:this|that|it) )?to (?:your )?memory|note this down|keep (?:this|that|it) in mind|save to (?:your )?memory|put (?:it |this |that )?(?:in(?:to)?|to) (?:your )?memory|memorize (?:this|that|it)|keep a record|log (?:this|that|it)|store (?:this|that|it)(?: in memory)?|jot (?:this|that|it) down|note (?:this|that|it) down|save (?:this|that|it))\b/i;
+    const LEADING_MEMORY_INTENT_RE = /^(?:(?:please|can you|could you|would you|will you|i['’]?d like you to|i need you to|i want you to)\s+)*(?:remember (?:this|that|it|to|my|the)|save (?:this|that|it)(?: to (?:your )?memory)?|save .{0,80}for (?:later|future reference)|(?:make|take) a note|don['â€™]?t forget|for (?:future|later) reference|add (?:(?:this|that|it) )?to (?:your )?memory|note this down|keep (?:this|that|it) in mind|save to (?:your )?memory|put (?:it |this |that )?(?:in(?:to)?|to) (?:your )?memory|memorize (?:this|that|it)|keep a record|log (?:this|that|it)|store (?:this|that|it)(?: in memory)?|jot (?:this|that|it) down|note (?:this|that|it) down|save (?:this|that|it))\b/i;
     return LEADING_MEMORY_INTENT_RE.test(compact);
   }
 
@@ -6263,7 +6263,7 @@ async function sendPrompt() {
   function extractMemoryCommandFact(commandText) {
     if (!commandText || typeof commandText !== 'string') return '';
     return commandText.replace(
-      /^(?:(?:please|can you|could you|would you|i want you to)\s+)*(?:remember\s+(?:this|that|it|to|my|the)?|save\s+(?:this|that|it)?(?:\s+to\s+(?:your\s+)?memory)?|make\s+a\s+note\s+(?:that|of)?|take\s+a\s+note\s+(?:that|of)?|note\s+(?:this|that)?\s+down|don['’]?t\s+forget\s+(?:that)?|add\s+(?:this|that|it)?\s+to\s+(?:your\s+)?memory|keep\s+(?:this|that|it)?\s+in\s+mind|memorize\s+(?:this|that|it)?|store\s+(?:this|that|it)?(?:\s+in\s+memory)?|jot\s+(?:this|that|it)?\s+down)[\s,.:;!]*/i,
+      /^(?:(?:please|can you|could you|would you|will you|i['’]?d like you to|i need you to|i want you to)\s+)*(?:remember\s+(?:this|that|it|to|my|the)?|save\s+(?:this|that|it)?(?:\s+to\s+(?:your\s+)?memory)?|make\s+a\s+note\s+(?:that|of)?|take\s+a\s+note\s+(?:that|of)?|note\s+(?:this|that)?\s+down|don['’]?t\s+forget\s+(?:that)?|add\s+(?:this|that|it)?\s+to\s+(?:your\s+)?memory|keep\s+(?:this|that|it)?\s+in\s+mind|memorize\s+(?:this|that|it)?|store\s+(?:this|that|it)?(?:\s+in\s+memory)?|jot\s+(?:this|that|it)?\s+down)[\s,.:;!]*/i,
       ''
     ).trim();
   }
@@ -6281,23 +6281,54 @@ async function sendPrompt() {
       hwuiToast('No character selected.', 'info');
       return;
     }
+
+    if (!window.loadedChat) window.loadedChat = [];
+    const userName = activeUserName || localStorage.getItem('activeUserName') || 'User';
+    const characterName = currentCharacter?.name || currentCharName || character;
+    const userMessageId = createHwuiMessageId();
+    const assistantMessageId = createHwuiMessageId();
+    const userMessage = {
+      role: 'user', content: commandText, speaker: userName,
+      timestamp: new Date().toISOString(), message_id: userMessageId
+    };
+    const assistantMessage = {
+      role: 'assistant', content: 'One moment — saving that to memory…', speaker: characterName,
+      timestamp: new Date().toISOString(), message_id: assistantMessageId,
+      reply_to_message_id: userMessageId
+    };
+    window.loadedChat.push(userMessage, assistantMessage);
+    window._chatDirty = true;
+    renderChatMessages(window.loadedChat);
+
     if (inputBox) {
       inputBox.value = '';
       inputBox.style.height = 'auto';
     }
     clearChatInputDraft();
     hwuiToast('Saving memory...');
+
+    // Persist the user command and in-progress assistant turn before the write.
+    // If that fails, don't create a memory the chat cannot acknowledge durably.
+    const initialChatSave = await autoSaveCurrentChat();
+    if (!initialChatSave?.ok) {
+      assistantMessage.content = 'I couldn’t save this request in chat history, so I haven’t attempted the memory save.';
+      assistantMessage.generation_status = 'error';
+      window._chatDirty = true;
+      renderChatMessages(window.loadedChat);
+      await autoSaveCurrentChat();
+      hwuiToast('Could not save the request to chat history; memory was not saved.', 'error');
+      return;
+    }
+
     try {
       const effectiveHistory = [...history];
-      if (commandText) {
-        effectiveHistory.push({ role: 'user', content: commandText });
-      }
+      if (commandText) effectiveHistory.push({ role: 'user', content: commandText });
       const res = await fetch('/auto_memory/capture', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           character,
-          user_name: activeUserName || localStorage.getItem('activeUserName') || 'Chris',
+          user_name: userName,
           user_text: commandText || 'remember this',
           assistant_text: memoryTranscriptFromMessages(effectiveHistory),
           recent_messages: effectiveHistory,
@@ -6306,20 +6337,43 @@ async function sendPrompt() {
       });
       const result = await res.json().catch(() => ({}));
       if (res.ok && result.status === 'saved') {
+        assistantMessage.content = "Got it, I've saved that to memory.";
         hwuiToast(`Memory saved: ${result.title || 'Saved memory'}`);
         if (typeof loadCharacterMemory === 'function') {
           try { loadCharacterMemory(); } catch (e) {}
         }
       } else if (result.reason === 'duplicate') {
+        assistantMessage.content = 'That memory is already saved.';
         hwuiToast('That memory is already saved.', 'info');
       } else if (result.reason === 'roleplay_project') {
+        assistantMessage.content = 'I couldn’t save that to memory because memory saving is disabled in roleplay projects.';
         hwuiToast('Memory saving is disabled in roleplay projects.', 'info');
       } else {
+        const reason = result.error || result.reason || `HTTP ${res.status || 'error'}`;
+        assistantMessage.content = `I couldn’t save that to memory: ${reason}`;
+        assistantMessage.generation_status = 'error';
         hwuiToast(result.error || result.reason || 'Failed to save memory.', 'error');
       }
     } catch (err) {
       console.error('Save memory failed:', err);
+      assistantMessage.content = `I couldn’t save that to memory because I couldn’t reach the server: ${err.message}.`;
+      assistantMessage.generation_status = 'error';
       hwuiToast('Failed to contact server: ' + err.message, 'error');
+    }
+
+    window._chatDirty = true;
+    renderChatMessages(window.loadedChat);
+    const finalChatSave = await autoSaveCurrentChat();
+    if (!finalChatSave?.ok) {
+      const memoryWasSaved = assistantMessage.content === "Got it, I've saved that to memory.";
+      assistantMessage.content = memoryWasSaved
+        ? "I saved the memory, but couldn't save this acknowledgement to chat history."
+        : `${assistantMessage.content} (I also couldn’t save this reply to chat history.)`;
+      assistantMessage.generation_status = 'error';
+      window._chatDirty = true;
+      renderChatMessages(window.loadedChat);
+      hwuiToast('Chat history could not be updated after the memory request.', 'error');
+      return;
     }
   }
 
@@ -7625,7 +7679,10 @@ async function sendPrompt() {
       return;
     }
     const { continuePrefix, retainedHead } = continueRequest;
-    window.loadedChat.splice(continueRequest.lastAssistantIdx, 1);
+    // The reply leaves history while it is continued. If the request fails it must
+    // go back (see `finally`), or the next autosave would silently delete it.
+    const removedReply = window.loadedChat.splice(continueRequest.lastAssistantIdx, 1)[0];
+    let continueCommitted = false;
     window._chatDirty = true;  // stale-write guard: continue mutates history
 
     // Keep existing bubble — stream directly into it
@@ -7656,6 +7713,7 @@ async function sendPrompt() {
           conversationHistory: chatToSend,
           diagnosticHistoryIds: continueRequest.diagnosticHistoryIds,
           continuePrefix: continuePrefix,
+          continueHead: retainedHead,
           authorNoteOverride: HwuiChatCore.pendingLegacyAuthorNote(localStorage, currentChatFilename),
           extra: { generation_kind: 'continuation' },
         }))
@@ -7769,6 +7827,7 @@ async function sendPrompt() {
         generation_status: 'completed',
         generation_completed_at: continuedAt
       });
+      continueCommitted = true;
       window._chatDirty = true;  // stale-write guard
       console.log('\u2705 Continue: complete');
       await autoSaveCurrentChat();
@@ -7784,6 +7843,9 @@ async function sendPrompt() {
       console.error('\u26a0\ufe0f Continue error:', err);
       chat.innerHTML += '<div class="message error-msg">\u26a0\ufe0f Error continuing chat.</div>';
     } finally {
+      if (!continueCommitted && removedReply) {
+        window.loadedChat.splice(Math.min(continueRequest.lastAssistantIdx, window.loadedChat.length), 0, removedReply);
+      }
       replyReadiness?.stop();
       if (readinessEl) readinessEl.hidden = true;
       window.isSending = false;

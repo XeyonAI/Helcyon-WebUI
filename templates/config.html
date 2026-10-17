@@ -282,7 +282,7 @@
     .config-box-surface > h4:first-child {
       margin-top: 0 !important;
     }
-    /* Random Check-ins: same card vocabulary as Voice Forge (bordered config-box cards,
+    /* Random Check-ins: same card vocabulary as the other config tabs (bordered config-box cards,
        h4 card titles, compact 12px labels, muted 11px hints). Ids and handlers are untouched. */
     #tab-random-checkins .random-checkin-intro {
       padding: 10px 12px; margin: 0 0 16px; border: 1px solid var(--config-box-border, var(--field-border, #293238));
@@ -388,125 +388,6 @@
       #tab-random-checkins .random-checkin-full { grid-column: auto; }
       #tab-random-checkins .random-checkin-quiet-panel { grid-template-columns: 1fr; gap: 14px; }
       #tab-random-checkins .random-checkin-quiet-divider { width: 100%; height: 1px; }
-    }
-    #tab-voice-forge .voice-forge-note {
-      padding: 10px 12px; margin: 0 0 14px;
-      border: 1px solid var(--config-box-border, var(--field-border, #293238));
-      border-radius: 6px; background: var(--config-box-bg, var(--bench-box, #242424));
-      color: var(--text-muted, #aeb8c5); font-size: 12px; line-height: 1.5;
-    }
-    #voice-forge-template-dialog {
-      width: min(360px, calc(100vw - 40px)); padding: 18px;
-      border: 1px solid var(--config-box-border, var(--field-border, #293238));
-      border-radius: 10px; background: var(--config-box-bg, var(--bench-box, #242424));
-      color: var(--text-primary, #ddd); box-sizing: border-box;
-    }
-    #voice-forge-template-dialog::backdrop { background: rgba(0, 0, 0, .6); }
-    #voice-forge-template-dialog label { display: block; margin-bottom: 8px; }
-    #voice-forge-template-dialog input { width: 100%; box-sizing: border-box; }
-    #voice-forge-template-dialog .voice-forge-template-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
-    #tab-voice-forge .voice-forge-sources {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 14px; margin-bottom: 14px;
-    }
-    #tab-voice-forge .voice-forge-card,
-    #tab-voice-forge .voice-forge-tuning-control,
-    #tab-voice-forge .voice-forge-settings-card,
-    #tab-voice-forge .voice-forge-result {
-      border: 1px solid var(--config-box-border, var(--field-border, #293238));
-      border-radius: 10px;
-      background: var(--config-box-bg, var(--bench-box, #242424));
-      box-shadow: inset 0 1px rgba(255,255,255,0.025);
-      box-sizing: border-box;
-    }
-    #tab-voice-forge .voice-forge-card,
-    #tab-voice-forge .voice-forge-settings-card { padding: 16px 18px; }
-    #tab-voice-forge .voice-forge-card { transition: background .18s ease, border-color .18s ease; }
-    #tab-voice-forge .voice-forge-card.is-inactive { background: color-mix(in srgb, var(--config-box-bg, var(--bench-box, #242424)) 72%, #080808); border-color: color-mix(in srgb, var(--config-box-border, var(--field-border, #293238)) 65%, #080808); }
-    #tab-voice-forge .voice-forge-card.is-inactive > :not(.voice-forge-card-heading) { opacity: .38; filter: grayscale(1); }
-    #tab-voice-forge .voice-forge-card.is-inactive .voice-forge-card-heading h4 { color: #858585; }
-    #tab-voice-forge .voice-forge-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
-    #tab-voice-forge .voice-forge-card h4,
-    #tab-voice-forge .voice-forge-settings-card h4 { margin: 0; color: #ddd; font-size: 15px; font-weight: 600; }
-    #tab-voice-forge .voice-forge-card > label,
-    #tab-voice-forge .voice-forge-test-card > label { margin: 8px 0 5px; color: #ccc; font-size: 13px; font-weight: 600; }
-    #tab-voice-forge .voice-forge-mode { display: flex; align-items: center; gap: 8px; color: #aeb8c5; font-size: 11px; }
-    #tab-voice-forge .voice-forge-mode-toggle { position: relative; display: inline-flex; flex: 0 0 auto; width: 48px; height: 26px; cursor: pointer; margin: 0; }
-    #tab-voice-forge .voice-forge-mode-toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-    #tab-voice-forge .voice-forge-mode-toggle-track { position: absolute; inset: 0; border-radius: 999px; background: var(--sidebar-button-hover, #303b45); transition: background .18s ease, box-shadow .18s ease; }
-    #tab-voice-forge .voice-forge-mode-toggle-track::after { content: ""; position: absolute; width: 20px; height: 20px; left: 3px; top: 3px; border-radius: 50%; background: var(--modal-text, #f6f7f8); box-shadow: 0 2px 6px rgba(0,0,0,.35); transition: transform .18s ease; }
-    #tab-voice-forge .voice-forge-mode-toggle input:checked + .voice-forge-mode-toggle-track { background: var(--memory-tab-active-bg, #20b968); box-shadow: 0 0 0 2px color-mix(in srgb, var(--memory-tab-active-bg, #20b968) 20%, transparent); }
-    #tab-voice-forge .voice-forge-mode-toggle input:checked + .voice-forge-mode-toggle-track::after { transform: translateX(22px); }
-    #tab-voice-forge .voice-forge-mode-toggle input:focus-visible + .voice-forge-mode-toggle-track { outline: 2px solid var(--field-border-focus, #8fd9ad); outline-offset: 3px; }
-    #tab-voice-forge .voice-forge-existing-row { display: flex; align-items: center; gap: 8px; }
-    .voice-forge-existing-row select { flex: 1; min-width: 0; }
-    .voice-forge-delete-button { background: #3a1a1a; border-color: #6a2a2a; color: #e88; white-space: nowrap; }
-    .voice-forge-upload-row { display: flex; align-items: center; gap: 8px; }
-    .voice-forge-upload-input { display: none; }
-    .voice-forge-file-button { padding: 7px 11px; background: #1f3a5a; border-color: #315777; color: #c9def0; white-space: nowrap; }
-    .voice-forge-file-button:hover { background: #274967; border-color: #3d6d94; color: #fff; }
-    .voice-forge-file-name { flex: 1; min-width: 0; padding: 7px 9px; border: 1px solid #333; border-radius: 5px; background: #111; color: #777; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .voice-forge-file-name.has-file { color: #ccc; border-color: #465668; }
-    .voice-forge-source-actions { display: flex; gap: 8px; margin-top: 10px; }
-    .voice-forge-source-actions button { padding: 5px 10px; font-size: 12px; }
-    #tab-voice-forge #voice-forge-a-preview,
-    #tab-voice-forge #voice-forge-b-preview {
-      background: #1f5a3a;
-      border-color: #248050;
-      color: #fff;
-    }
-    .voice-forge-or { margin: 8px 0 2px; text-align: center; color: #666; font-size: 11px; }
-    #tab-voice-forge .voice-forge-ratio-card { margin-bottom: 14px; }
-    .voice-forge-ratio-row { display: flex; align-items: center; gap: 12px; margin: 0 0 8px; }
-    .voice-forge-ratio-row input[type="range"] { flex: 1; }
-    .voice-forge-ratio-label { min-width: 88px; color: #bbb; font-size: 12px; }
-    .voice-forge-presets { display: flex; justify-content: center; gap: 8px; margin-bottom: 0; }
-    .voice-forge-presets button { padding: 5px 12px; font-size: 12px; }
-    .voice-forge-tuning-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
-    .voice-forge-tuning-control { padding: 12px 14px; }
-    .voice-forge-tuning-control label { display: flex; justify-content: space-between; margin: 0 0 8px; color: #ccc; font-size: 13px; font-weight: 600; }
-    .voice-forge-tuning-control input[type="range"] { width: 100%; }
-    .voice-forge-tuning-control small { display: block; margin-top: 6px; color: #777; font-size: 11px; }
-    .voice-forge-test-card { margin-bottom: 14px; }
-    #tab-voice-forge .voice-forge-reference-card { margin-bottom: 14px; }
-    #tab-voice-forge .voice-forge-reference-card > small { display: block; margin: 6px 0 12px; color: #888; font-size: 11px; line-height: 1.4; }
-    #tab-voice-forge .voice-forge-reference-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-    #tab-voice-forge .voice-forge-reference-field { min-width: 0; }
-    #tab-voice-forge .voice-forge-reference-field label { display: block; margin: 0 0 6px; color: #ccc; font-size: 13px; font-weight: 600; }
-    #tab-voice-forge .voice-forge-reference-field textarea { width: 100%; box-sizing: border-box; resize: vertical; }
-    #tab-voice-forge .voice-forge-reference-field.is-inactive { opacity: .38; }
-    .voice-forge-result { margin-top: 14px; padding: 16px 18px; }
-    #tab-voice-forge .voice-forge-result > label { margin: 8px 0 5px; color: #ccc; font-size: 13px; font-weight: 600; }
-    .voice-forge-result audio { width: 100%; margin: 4px 0 12px; }
-    .voice-forge-save-row { display: flex; gap: 8px; }
-    .voice-forge-save-row input { flex: 1; }
-    #tab-voice-forge .voice-forge-seed-row {
-      display: grid;
-      grid-template-columns: auto minmax(180px, 1fr) minmax(180px, 1fr);
-      align-items: end;
-      gap: 12px;
-    }
-    #tab-voice-forge .voice-forge-seed-row > label,
-    #tab-voice-forge .voice-forge-seed-row > input,
-    #tab-voice-forge .voice-forge-seed-row > button {
-      align-self: end;
-      margin-top: 0 !important;
-      margin-bottom: 0;
-    }
-    #tab-voice-forge .voice-forge-seed-row > label { color: #ccc; font-size: 13px; font-weight: 600; }
-    #tab-voice-forge .voice-forge-seed-row > input,
-    #tab-voice-forge .voice-forge-seed-row > button {
-      width: 100%;
-      max-width: none;
-    }
-    #voice-forge-status[data-kind="error"] { color: #e88; }
-    #voice-forge-status[data-kind="success"] { color: #7dce91; }
-    @media (max-width: 800px) {
-      .voice-forge-sources { grid-template-columns: 1fr; }
-      .voice-forge-tuning-grid { grid-template-columns: 1fr; }
-      #tab-voice-forge .voice-forge-reference-grid { grid-template-columns: 1fr; }
-      #tab-voice-forge .voice-forge-seed-row { grid-template-columns: 1fr; gap: 6px; }
     }
     #advanced-settings-overlay {
       position: fixed;
@@ -1022,6 +903,25 @@
       box-sizing: border-box;
       font-size: 12px;
     }
+    #local-only-params .sampling-field-row.sampling-stop-row {
+      grid-column: 1 / -1;
+      grid-template-columns: 1fr;
+      gap: 4px;
+    }
+    .sampling-stop-hint { opacity: 0.75; }
+    #sampling-settings-modal textarea#stop_sequences {
+      width: 100%;
+      min-width: 0;
+      padding: 6px 8px;
+      border: 1px solid var(--field-border, #383838);
+      border-radius: 4px;
+      background: var(--field-bg, #111);
+      color: var(--modal-text, #eee);
+      box-sizing: border-box;
+      font-family: monospace;
+      font-size: 12px;
+      resize: vertical;
+    }
     .sampling-local-only-note {
       grid-column: 1 / -1;
       padding: 5px 8px;
@@ -1297,9 +1197,6 @@
     #config-page #tab-random-checkins .random-checkin-field > select {
       max-width: 360px;
     }
-    #config-page #tab-voice-forge #voice-forge-seed {
-      max-width: 180px;
-    }
     /* Keep the compact layout's vertical rhythm deliberate and consistent. */
     #config-page #container .config-tab-panel h3 {
       margin-top: 14px;
@@ -1458,7 +1355,8 @@
       #config-page #advanced-settings-modal .advanced-settings-title { font-size: 17px; margin-bottom: 4px; }
       #config-page #advanced-settings-modal .advanced-settings-subtitle { font-size: 10px; }
       #config-page #advanced-settings-modal .advanced-settings-close {
-        width: 27px; height: 27px; min-height: 27px; font-size: 16px;
+        display: grid; place-items: center;
+        width: 27px; height: 27px; min-height: 27px; padding: 0; font-size: 16px;
       }
       #config-page #advanced-settings-modal .adv-shell {
         grid-template-columns: 224px minmax(0, 1fr); border-radius: 10px;
@@ -1539,14 +1437,14 @@
       }
     }
   </style>
-  <link rel="stylesheet" href="/theme-files/claude.css" id="active-theme-link" />
+  <link rel="stylesheet" href="/theme-files/midnight.css" id="active-theme-link" />
   <script>
     // Swap to actual active theme if different from default
     fetch('/themes/list').then(r=>r.json()).then(d=>{
-      const name = d.active || 'claude';
+      const name = d.active || 'midnight';
       const link = document.getElementById('active-theme-link');
       if (link) link.href = '/theme-files/' + name + '.css?v=' + Date.now();
-    }).catch(()=>{}); // silent fail — default claude.css already loaded above
+    }).catch(()=>{}); // silent fail — default midnight.css already loaded above
   </script>
 </head>
 <body id="config-page">
@@ -1749,6 +1647,10 @@
               <div class="sampling-field-row">
                 <label class="sampling-field-label" for="xtc_threshold">XTC Threshold</label>
                 <input type="number" id="xtc_threshold" step="0.01" min="0" max="1" />
+              </div>
+              <div class="sampling-field-row sampling-stop-row">
+                <label class="sampling-field-label" for="stop_sequences">Stop Sequences <span class="sampling-stop-hint">(optional, one per line — generation ends when the model writes any of them)</span></label>
+                <textarea id="stop_sequences" rows="3" spellcheck="false" placeholder="Leave empty to use the model's normal end-of-turn behaviour"></textarea>
               </div>
             </div>
 
@@ -2590,148 +2492,12 @@
 
       <!-- ===== TAB: VOICE FORGE ===== -->
       <div id="tab-voice-forge" class="config-tab-panel">
-        <h3>🎙 Voice Forge</h3>
-        <div class="voice-forge-note">
-          Experimental Qwen3-TTS feature. Use one voice with its reference spoken text for fuller cloning, or blend two speaker embeddings.
+        <div class="voice-forge-upgrade">
+          <h3>Voice Forge</h3>
+          <p>Create new voices by blending two reference voices, preview them and save them to your voice library.</p>
+          <p>Voice Forge is available in HWUI Pro.</p>
+          <button type="button" onclick="showHwuiProModal('Voice Forge', 'Voice Forge is available in HWUI Pro.')">Learn more</button>
         </div>
-
-        <div class="voice-forge-sources">
-          <section id="voice-forge-a-card" class="voice-forge-card">
-            <div class="voice-forge-card-heading">
-              <h4>Voice A</h4>
-              <div class="voice-forge-mode"><span>Use alone</span>
-                <label class="voice-forge-mode-toggle" aria-label="Generate using only Voice A" title="Generate using only Voice A">
-                  <input id="voice-forge-only-a" type="checkbox" onchange="toggleVoiceForgeOnlyA()">
-                  <span class="voice-forge-mode-toggle-track"></span>
-                </label>
-              </div>
-            </div>
-            <label for="voice-forge-a-select">Existing HWUI voice</label>
-            <div class="voice-forge-existing-row">
-              <select id="voice-forge-a-select" onchange="selectVoiceForgeExisting('A')"><option value="">Loading voices...</option></select>
-              <button id="voice-forge-a-delete" class="voice-forge-delete-button" type="button" onclick="deleteVoiceForgeExisting('A')" disabled>🗑 Delete</button>
-            </div>
-            <div class="voice-forge-or">OR UPLOAD A REFERENCE</div>
-            <label for="voice-forge-a-upload">WAV or MP3</label>
-            <div class="voice-forge-upload-row">
-              <input id="voice-forge-a-upload" class="voice-forge-upload-input" type="file" accept="audio/wav,audio/mpeg,.wav,.mp3" onchange="selectVoiceForgeUpload('A')">
-              <button class="voice-forge-file-button" type="button" onclick="document.getElementById('voice-forge-a-upload').click()">↑ Choose audio</button>
-              <span id="voice-forge-a-filename" class="voice-forge-file-name" title="No file selected">No file selected</span>
-              <button id="voice-forge-a-clear" type="button" onclick="clearVoiceForgeUpload('A')" disabled>✕ Remove</button>
-            </div>
-            <div class="voice-forge-source-actions">
-              <button id="voice-forge-a-preview" type="button" onclick="toggleVoiceForgePreview('A')" disabled>▶ Preview A</button>
-            </div>
-          </section>
-          <section id="voice-forge-b-card" class="voice-forge-card">
-            <div class="voice-forge-card-heading">
-              <h4>Voice B</h4>
-              <div class="voice-forge-mode"><span>Use alone</span>
-                <label class="voice-forge-mode-toggle" aria-label="Generate using only Voice B" title="Generate using only Voice B">
-                  <input id="voice-forge-only-b" type="checkbox" onchange="toggleVoiceForgeOnlyB()">
-                  <span class="voice-forge-mode-toggle-track"></span>
-                </label>
-              </div>
-            </div>
-            <label for="voice-forge-b-select">Existing HWUI voice</label>
-            <div class="voice-forge-existing-row">
-              <select id="voice-forge-b-select" onchange="selectVoiceForgeExisting('B')"><option value="">Loading voices...</option></select>
-              <button id="voice-forge-b-delete" class="voice-forge-delete-button" type="button" onclick="deleteVoiceForgeExisting('B')" disabled>🗑 Delete</button>
-            </div>
-            <div class="voice-forge-or">OR UPLOAD A REFERENCE</div>
-            <label for="voice-forge-b-upload">WAV or MP3</label>
-            <div class="voice-forge-upload-row">
-              <input id="voice-forge-b-upload" class="voice-forge-upload-input" type="file" accept="audio/wav,audio/mpeg,.wav,.mp3" onchange="selectVoiceForgeUpload('B')">
-              <button class="voice-forge-file-button" type="button" onclick="document.getElementById('voice-forge-b-upload').click()">↑ Choose audio</button>
-              <span id="voice-forge-b-filename" class="voice-forge-file-name" title="No file selected">No file selected</span>
-              <button id="voice-forge-b-clear" type="button" onclick="clearVoiceForgeUpload('B')" disabled>✕ Remove</button>
-            </div>
-            <div class="voice-forge-source-actions">
-              <button id="voice-forge-b-preview" type="button" onclick="toggleVoiceForgePreview('B')" disabled>▶ Preview B</button>
-            </div>
-          </section>
-        </div>
-
-        <section class="voice-forge-settings-card voice-forge-reference-card">
-          <h4>Text spoken in the reference recording</h4>
-          <small>Enter the words spoken in the uploaded audio, not the text you want generated. Used in “Use alone” mode. For an existing HWUI voice, leave blank to use its saved transcript; blending uses speaker embeddings only.</small>
-          <div class="voice-forge-reference-grid">
-            <div id="voice-forge-a-reference-field" class="voice-forge-reference-field">
-              <label for="voice-forge-a-ref-text">Voice A spoken text</label>
-              <textarea id="voice-forge-a-ref-text" rows="3" maxlength="10000" placeholder="Exactly what Voice A says in the reference recording…"></textarea>
-            </div>
-            <div id="voice-forge-b-reference-field" class="voice-forge-reference-field">
-              <label for="voice-forge-b-ref-text">Voice B spoken text</label>
-              <textarea id="voice-forge-b-ref-text" rows="3" maxlength="10000" placeholder="Exactly what Voice B says in the reference recording…"></textarea>
-            </div>
-          </div>
-        </section>
-
-        <section id="voice-forge-ratio-controls" class="voice-forge-settings-card voice-forge-ratio-card">
-          <div class="voice-forge-ratio-row">
-            <span id="voice-forge-a-percent" class="voice-forge-ratio-label">A 50%</span>
-            <input id="voice-forge-ratio" type="range" min="0" max="100" value="50" oninput="updateVoiceForgeRatio()" aria-label="Voice A blend percentage">
-            <span id="voice-forge-b-percent" class="voice-forge-ratio-label" style="text-align:right;">B 50%</span>
-          </div>
-          <div class="voice-forge-presets">
-            <button type="button" onclick="setVoiceForgeRatio(75)">75 / 25</button>
-            <button type="button" onclick="setVoiceForgeRatio(50)">50 / 50</button>
-            <button type="button" onclick="setVoiceForgeRatio(25)">25 / 75</button>
-          </div>
-        </section>
-
-        <div class="voice-forge-tuning-grid">
-          <div class="voice-forge-tuning-control">
-            <label for="voice-forge-expression"><span>Expression</span><strong id="voice-forge-expression-value">0.80</strong></label>
-            <input id="voice-forge-expression" type="range" min="0.6" max="1.1" step="0.05" value="0.8" oninput="updateVoiceForgeTuning()">
-            <small>Lower is steadier; higher is more varied and expressive.</small>
-          </div>
-          <div class="voice-forge-tuning-control">
-            <label for="voice-forge-speed"><span>Speed</span><strong id="voice-forge-speed-value">1.00×</strong></label>
-            <input id="voice-forge-speed" type="range" min="0.75" max="1.25" step="0.05" value="1" oninput="updateVoiceForgeTuning()">
-            <small>Pitch-preserving tempo applied to the generated WAV.</small>
-          </div>
-        </div>
-
-        <section class="voice-forge-settings-card voice-forge-test-card">
-          <h4>Test voice</h4>
-          <label for="voice-forge-text">Test text</label>
-          <textarea id="voice-forge-text" rows="5" placeholder="Enter the line the voice should speak...">Hello. This is a test of a newly blended voice.</textarea>
-          <div class="voice-forge-source-actions" style="flex-wrap:wrap; align-items:center;">
-            <select id="voice-forge-template" aria-label="Test text template" style="flex:1; min-width:150px;"><option value="">-- Text template --</option></select>
-            <button type="button" onclick="loadVoiceForgeTemplate()">Load</button>
-            <button type="button" onclick="saveVoiceForgeTemplate()">Save Template</button>
-            <button type="button" onclick="deleteVoiceForgeTemplate()">Delete</button>
-          </div>
-          <button id="voice-forge-save-text" class="config-action-button" type="button" onclick="saveVoiceForgeTestText()" style="margin-top:8px; background-color:#1f3a5a; border-color:#245080; color:white;">💾 Save Test Text as Startup Default</button>
-          <div class="config-inline-field voice-forge-seed-row" style="margin-top:12px;">
-            <label for="voice-forge-seed">Seed <span style="color:#777; font-weight:normal;">(optional)</span></label>
-            <input id="voice-forge-seed" class="config-control-short" type="number" step="1" placeholder="Random">
-            <button id="voice-forge-generate" class="config-action-button" type="button" onclick="generateVoiceForgeBlend()" style="background-color:#1f5a3a; border-color:#248050; color:white;">Generate voice</button>
-          </div>
-          <div id="voice-forge-status" role="status" aria-live="polite" style="min-height:18px; margin-top:10px; font-size:12px; color:#aaa;"></div>
-        </section>
-
-        <section id="voice-forge-result" class="voice-forge-result" hidden>
-          <label for="voice-forge-audio">Generated voice preview</label>
-          <audio id="voice-forge-audio" controls preload="metadata"></audio>
-          <label for="voice-forge-save-name">Save to HWUI Voice Folder</label>
-          <div class="voice-forge-save-row">
-            <input id="voice-forge-save-name" type="text" maxlength="80" placeholder="New voice name">
-            <button id="voice-forge-save" type="button" onclick="saveVoiceForgeVoice()" disabled style="background-color:#1f3a5a; border-color:#245080; color:white; white-space:nowrap;">Save to HWUI Voice Folder</button>
-          </div>
-          <button id="voice-forge-export" type="button" onclick="exportVoiceForgeVoice()" disabled style="margin-top:8px; background-color:#1f3a5a; border-color:#245080; color:white;">Save Voice To...</button>
-        </section>
-        <dialog id="voice-forge-template-dialog" aria-labelledby="voice-forge-template-name-label" oncancel="if (document.getElementById('voice-forge-template-confirm').disabled) event.preventDefault();">
-          <form onsubmit="event.preventDefault(); submitVoiceForgeTemplate();">
-            <label id="voice-forge-template-name-label" for="voice-forge-template-name">Template name</label>
-            <input id="voice-forge-template-name" type="text" maxlength="80" required autocomplete="off" oninput="this.setCustomValidity('')">
-            <div class="voice-forge-template-actions">
-              <button id="voice-forge-template-cancel" type="button" onclick="document.getElementById('voice-forge-template-dialog').close()">Cancel</button>
-              <button id="voice-forge-template-confirm" class="config-action-button" type="submit" style="background-color:#1f3a5a; border-color:#245080; color:white;">Save</button>
-            </div>
-          </form>
-        </dialog>
       </div><!-- end tab-voice-forge -->
 
       <!-- ===== TAB: RANDOM CHECK-INS ===== -->
@@ -2983,7 +2749,7 @@
           <aside class="bench-nav-rail">
             <div class="bench-brand">
               <span class="bench-brand-mark">HB</span>
-              <div><strong>Helcyon-Bench</strong><small>Free tools, Pro automation</small></div>
+              <div><strong>Helcyon-Bench</strong><small>Native Pro workspace</small></div>
             </div>
 
             <section class="bench-rail-section">
@@ -3596,136 +3362,13 @@
     await refreshRandomCheckinMobileDevices();
   }
 
-  let voiceForgeInitialised = false;
-  let voiceForgeSettingsLoaded = false;
-  let voiceForgeResultId = '';
-  let voiceForgeResultTranscript = '';
-  const voiceForgePreviews = {
-    A: { audio: null, objectUrl: '' },
-    B: { audio: null, objectUrl: '' }
-  };
-
-  function voiceForgeSlotElements(slot) {
-    const key = slot.toLowerCase();
-    return {
-      select: document.getElementById(`voice-forge-${key}-select`),
-      upload: document.getElementById(`voice-forge-${key}-upload`),
-      fileName: document.getElementById(`voice-forge-${key}-filename`),
-      clear: document.getElementById(`voice-forge-${key}-clear`),
-      preview: document.getElementById(`voice-forge-${key}-preview`),
-      deleteButton: document.getElementById(`voice-forge-${key}-delete`)
-    };
-  }
-
-  function stopVoiceForgePreview(slot) {
-    const state = voiceForgePreviews[slot];
-    if (state.audio) {
-      state.audio.onended = null;
-      state.audio.onerror = null;
-      state.audio.pause();
-      state.audio.removeAttribute('src');
-      state.audio = null;
-    }
-    if (state.objectUrl) {
-      URL.revokeObjectURL(state.objectUrl);
-      state.objectUrl = '';
-    }
-    const button = voiceForgeSlotElements(slot).preview;
-    if (button) button.textContent = `▶ Preview ${slot}`;
-  }
-
-  function updateVoiceForgeSourceControls(slot) {
-    const elements = voiceForgeSlotElements(slot);
-    const hasUpload = !!elements.upload?.files?.[0];
-    const hasExisting = !!elements.select?.value;
-    if (elements.fileName) {
-      const name = hasUpload ? elements.upload.files[0].name : 'No file selected';
-      elements.fileName.textContent = name;
-      elements.fileName.title = name;
-      elements.fileName.classList.toggle('has-file', hasUpload);
-    }
-    if (elements.clear) elements.clear.disabled = !hasUpload;
-    if (elements.preview) elements.preview.disabled = !hasUpload && !hasExisting;
-    if (elements.deleteButton) elements.deleteButton.disabled = !hasExisting;
-  }
-
-  function selectVoiceForgeExisting(slot) {
-    const elements = voiceForgeSlotElements(slot);
-    if (elements.select.value && elements.upload.files.length) {
-      elements.upload.value = '';
-    }
-    stopVoiceForgePreview(slot);
-    updateVoiceForgeSourceControls(slot);
-  }
-
-  function selectVoiceForgeUpload(slot) {
-    const elements = voiceForgeSlotElements(slot);
-    if (elements.upload.files.length) {
-      elements.select.value = '';
-    }
-    stopVoiceForgePreview(slot);
-    updateVoiceForgeSourceControls(slot);
-  }
-
-  function clearVoiceForgeUpload(slot) {
-    const elements = voiceForgeSlotElements(slot);
-    elements.upload.value = '';
-    stopVoiceForgePreview(slot);
-    updateVoiceForgeSourceControls(slot);
-  }
-
   async function deleteVoiceForgeExisting(slot) { showHwuiProModal("Voice Forge", "Creating and managing voices is available in HWUI Pro."); return; }
 
-  function normaliseVoiceForgeSource(slot) {
-    const elements = voiceForgeSlotElements(slot);
-    if (elements.upload.files.length && elements.select.value) {
-      elements.select.value = '';
-    }
-    updateVoiceForgeSourceControls(slot);
-  }
-
   async function toggleVoiceForgePreview(slot) { showHwuiProModal("Voice Forge", "Voice preview is available in HWUI Pro."); return; }
-
-  function setVoiceForgeStatus(message, kind = '') {
-    const status = document.getElementById('voice-forge-status');
-    if (!status) return;
-    status.textContent = message;
-    status.dataset.kind = kind;
-  }
-
-  function updateVoiceForgeRatio() {
-    const ratio = Number(document.getElementById('voice-forge-ratio')?.value || 50);
-    document.getElementById('voice-forge-a-percent').textContent = `A ${ratio}%`;
-    document.getElementById('voice-forge-b-percent').textContent = `B ${100 - ratio}%`;
-  }
-
-  function setVoiceForgeRatio(value) {
-    document.getElementById('voice-forge-ratio').value = value;
-    updateVoiceForgeRatio();
-  }
-
-  function updateVoiceForgeTuning() {
-    const expression = Number(document.getElementById('voice-forge-expression')?.value || 0.8);
-    const speed = Number(document.getElementById('voice-forge-speed')?.value || 1);
-    document.getElementById('voice-forge-expression-value').textContent = expression.toFixed(2);
-    document.getElementById('voice-forge-speed-value').textContent = `${speed.toFixed(2)}×`;
-  }
 
   async function loadVoiceForgeTestText() { showHwuiProModal("Voice Forge", "Voice Forge settings are available in HWUI Pro."); return; }
 
   async function saveVoiceForgeTestText() { showHwuiProModal("Voice Forge", "Voice Forge settings are available in HWUI Pro."); return; }
-
-  let voiceForgeTemplates = {};
-
-  function renderVoiceForgeTemplates(templates, selected = '') {
-    voiceForgeTemplates = templates;
-    const selector = document.getElementById('voice-forge-template');
-    selector.replaceChildren(new Option('-- Text template --', ''));
-    Object.keys(templates).sort((a, b) => a.localeCompare(b)).forEach(name => selector.add(new Option(name, name)));
-    selector.value = selected;
-  }
-
-  async function refreshVoiceForgeTemplates() { return; }
 
   function loadVoiceForgeTemplate() { showHwuiProModal("Voice Forge", "Voice Forge templates are available in HWUI Pro."); return; }
 
@@ -3738,30 +3381,6 @@
   async function exportVoiceForgeVoice() { showHwuiProModal("Voice Forge", "Exporting generated voices is available in HWUI Pro."); return; }
 
   async function initialiseVoiceForge(force = false) { showHwuiProModal("Voice Forge", "Voice Forge is available in HWUI Pro."); return; }
-
-  function toggleVoiceForgeOnlyA() {
-    if (document.getElementById('voice-forge-only-a').checked) {
-      document.getElementById('voice-forge-only-b').checked = false;
-    }
-    toggleVoiceForgeBlendControls();
-  }
-
-  function toggleVoiceForgeOnlyB() {
-    if (document.getElementById('voice-forge-only-b').checked) {
-      document.getElementById('voice-forge-only-a').checked = false;
-    }
-    toggleVoiceForgeBlendControls();
-  }
-
-  function toggleVoiceForgeBlendControls() {
-    const onlyA = document.getElementById('voice-forge-only-a').checked;
-    const onlyB = document.getElementById('voice-forge-only-b').checked;
-    document.getElementById('voice-forge-ratio-controls').hidden = onlyA || onlyB;
-    document.getElementById('voice-forge-a-card').classList.toggle('is-inactive', onlyB);
-    document.getElementById('voice-forge-b-card').classList.toggle('is-inactive', onlyA);
-    document.getElementById('voice-forge-a-reference-field').classList.toggle('is-inactive', onlyB);
-    document.getElementById('voice-forge-b-reference-field').classList.toggle('is-inactive', onlyA);
-  }
 
   async function generateVoiceForgeBlend() { showHwuiProModal("Voice Forge", "Blending voices is available in HWUI Pro."); return; }
 
@@ -4341,7 +3960,7 @@
       (labels[status] || status.replaceAll('_', ' ')) +
       (inactiveOriginalChat ? ' · original chat inactive' : '');
     statusElement.dataset.captureStatus = status;
-    button.disabled = false;
+    button.disabled = status !== 'ready_to_capture';
     button.textContent = status === 'captured'
       ? 'Captured'
       : 'Capture response';
@@ -5560,7 +5179,7 @@
         send.onclick = () => sendBenchPrompt(pack, item, slot);
         const capture = document.createElement('button');
         capture.type = 'button';
-        capture.disabled = false;
+        capture.disabled = true;
         capture.textContent = `Capture Model ${slot} response`;
         capture.dataset.captureButton = 'true';
         const association = HelcyonBenchPromptTransfer.getAssociation(
@@ -7502,6 +7121,8 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       document.getElementById('xtc_threshold').value = settings.xtc_threshold ?? 0.1;
       document.getElementById('frequency_penalty').value = settings.frequency_penalty ?? 0.0;
       document.getElementById('presence_penalty').value  = settings.presence_penalty  ?? 0.0;
+      document.getElementById('stop_sequences').value = Array.isArray(settings.stop_sequences)
+        ? settings.stop_sequences.join('\n') : '';
       document.getElementById('auto-memory-enabled').checked = settings.auto_memory?.enabled === true;
       // On unless explicitly switched off, so existing installs keep their behaviour.
       document.getElementById('message-reactions-enabled').checked = settings.message_reactions_enabled !== false;
@@ -7519,6 +7140,11 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       // `|| default` idiom, which coerces a legitimate 0 (e.g. top_p:0) to its
       // fallback. See the CHANGES.md "DO NOT revert" note.
       const settings = buildSamplingPresetFromFields();
+      // Stop sequences are a model-specific setting, saved with Save & Apply
+      // but deliberately not part of sampling presets. One per line; the
+      // server drops blank lines and duplicates.
+      settings.stop_sequences = (document.getElementById('stop_sequences').value || '')
+        .split('\n').map(line => line.replace(/\r$/, ''));
       localStorage.removeItem('hwui_active_sampling_preset');
       localStorage.removeItem('hwui_sampling_preset_baseline');
       const res = await fetch("/save_sampling_settings", {
@@ -8343,22 +7969,6 @@ async function toggleFontFavourite(select, button) {
   updateFontFavouriteButton(button, primaryFontFromStack(select.value));
 }
 
-function collectThemeUpdates() {
-  const updates = {};
-  for (const section of THEME_SECTIONS) {
-    for (const v of section.vars) {
-      const val = getComputedStyle(document.documentElement).getPropertyValue(v.key).trim();
-      if (val) updates[v.key] = val;
-    }
-  }
-  document.querySelectorAll('.cp-swatch-btn').forEach(inp => {
-    if (!updates[inp.dataset.var]) updates[inp.dataset.var] = inp.dataset.hex;
-  });
-  document.querySelectorAll('.theme-font-select').forEach(sel => {
-    if (sel.dataset.var && sel.value) updates[sel.dataset.var] = sel.value;
-  });
-  return updates;
-}
 
 async function getAvailableFontNames() {
   const names = new Set(FALLBACK_FONT_NAMES);
@@ -9638,13 +9248,13 @@ async function saveGlobalPostHistory() {
 <script>
 // ---- Theme Modal open/close ----
 // ---- Theme file management ----
-let _activeThemeName = 'claude';
+let _activeThemeName = 'midnight';
 
 async function loadThemeFileList() {
   try {
     const res = await fetch('/themes/list');
     const data = await res.json();
-    _activeThemeName = data.active || 'claude';
+    _activeThemeName = data.active || 'midnight';
     const sel = document.getElementById('theme-file-select');
     if (!sel) return;
     sel.innerHTML = '';

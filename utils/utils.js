@@ -738,6 +738,9 @@ function formatFileSize(bytes) {
 let ttsEnabled = false;
 let isPlayingAudio = false;
 let currentAudio = null;
+// Bumped by stopAllAudio(). A processQueue run that sees a different value than the one it
+// started with is stale (its audio was stopped or replaced) and must not play anything.
+let ttsRunId = 0;
 let ttsVoice = localStorage.getItem('tts-voice') || 'af_heart';
 let ttsEngine = 'f5';
 
@@ -837,9 +840,13 @@ function stopAllAudio() {
     clearTimeout(replayTimeout);
     replayTimeout = null;
   }
+  ttsRunId++;
   if (currentAudio) {
-    currentAudio.pause();
+    const stopping = currentAudio;
     currentAudio = null;
+    stopping.pause();
+    // A paused element never fires 'ended', so release the waiting playback promise by hand.
+    if (typeof stopping.onended === 'function') stopping.onended();
   }
   ttsQueue = [];
   ttsProcessing = false;
@@ -880,6 +887,10 @@ function normaliseDecimalsForTTS(text) {
 // TTS engine never reads code aloud. State (`ttsInsideCodeBlock`,
 // `ttsBacktickTail`) persists across chunks because a code block can span
 // many chunks and the ``` fence itself can split at a chunk boundary.
+function ttsInlineCodeIsStray(span) {
+  return span.length > 120 || /\n/.test(span) || /[.!?]["')\]]*\s+\S/.test(span);
+}
+
 function stripCodeForTTS(chunk) {
   // Re-attach any backticks held back from the previous chunk
   chunk = ttsBacktickTail + chunk;
@@ -887,8 +898,11 @@ function stripCodeForTTS(chunk) {
 
   // If the chunk ends in 1 or 2 trailing backticks, hold them back — they
   // might be the leading bytes of a ``` fence completed in the next chunk.
-  const trail = chunk.match(/`{1,2}$/);
-  if (trail) {
+  // A trailing run of 3 is already a whole fence: holding two of them back left
+  // a lone backtick that was dropped as code content, so a closing fence that
+  // arrived as its own chunk never closed and muted the rest of the reply.
+  const trail = chunk.match(/`+$/);
+  if (trail && trail[0].length < 3) {
     ttsBacktickTail = trail[0];
     chunk = chunk.slice(0, -trail[0].length);
   }
@@ -911,7 +925,22 @@ function stripCodeForTTS(chunk) {
     if (ttsInsideCodeBlock) { i++; continue; }
     // Inline code: single backtick → next single backtick on same chunk
     if (chunk[i] === '`') {
+      // A backtick between two letters is an apostrophe typed as one (don`t), not code.
+      const before = out ? out[out.length - 1] : ttsSentenceBuffer.slice(-1);
+      if (/[A-Za-z]/.test(before || '') && /[A-Za-z]/.test(chunk[i + 1] || '')) {
+        out += "'";
+        i++;
+        continue;
+      }
       const close = chunk.indexOf('`', i + 1);
+      // Inline code is short and stays inside one sentence. A "span" that runs across a line
+      // break or a sentence end is really a stray backtick in prose; drop just the mark so the
+      // sentences after it are still spoken (otherwise two stray backticks mute everything
+      // between them, and one never closed mutes the rest of the reply).
+      if (ttsInlineCodeIsStray(close === -1 ? chunk.slice(i + 1) : chunk.slice(i + 1, close))) {
+        i++;
+        continue;
+      }
       if (close === -1) {
         // No close yet — hold the opening ` and following text for next chunk
         ttsBacktickTail = chunk.substring(i) + ttsBacktickTail;
@@ -1080,6 +1109,8 @@ function bufferTextForTTS(chunk) {
 // F5 sounds better with longer chunks (more pacing context)
 // Chatterbox needs short chunks to keep latency low
 let TTS_MAX_CHUNK_LENGTH = 300; // default to F5-friendly until engine is known
+// A WAV this small holds at most ~20 ms of 24 kHz audio: a header with no speech in it.
+const TTS_MIN_AUDIO_BYTES = 1024;
 
 async function initTTSEngine() {
   try {
@@ -1357,12 +1388,15 @@ function flushTTSBuffer() {
   // Flush anything left in the buffer (no newline at end, no punctuation). It goes
   // through splitAndQueue so it gets the same abbreviation-aware split, cleanup and
   // clause-boundary cuts as every other sentence.
-  const remaining = ttsSentenceBuffer.trim();
+  // A single backtick still waiting for its partner at stream end never got one, so it was a
+  // stray mark, not code: speak the text it was holding (minus the marks) rather than losing
+  // the end of the reply. An unclosed ``` fence is real code and stays unspoken.
+  const heldTail = ttsInsideCodeBlock ? '' : ttsBacktickTail.replace(/`/g, '');
+  const remaining = (ttsSentenceBuffer + heldTail).trim();
   ttsSentenceBuffer = '';
   if (remaining.length > 2) splitAndQueue(remaining, 'flush');
   ttsSentenceBuffer = '';
-  // Drop any held-back backtick fragments — never spoken aloud regardless
-  // of whether the closing ``` ever arrived.
+  // Whatever is left of the backtick state is never spoken aloud.
   ttsBacktickTail = '';
   ttsInsideCodeBlock = false;
   ttsLinkTagTail = '';
@@ -1387,6 +1421,9 @@ async function processQueue() {
   if (ttsProcessing) return;
   ttsProcessing = true;
 
+  const runId = ttsRunId;
+  const isStale = () => runId !== ttsRunId;
+
   const btn = document.getElementById('tts-toggle-btn');
   if (btn) btn.classList.add('speaking');
 
@@ -1395,7 +1432,7 @@ async function processQueue() {
   async function fetchAudio(item, firstChunk = false) {
     const sentence = typeof item === 'string' ? item : item.text;
     const meta = typeof item === 'string' ? undefined : item.meta;
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const response = await fetch('/api/tts/generate', {
           method: 'POST',
@@ -1404,15 +1441,19 @@ async function processQueue() {
         });
         if (response.ok) {
           const blob = await response.blob();
-          return URL.createObjectURL(blob);
+          // A header-only WAV is a 200 that carries no speech; playing it would skip the
+          // sentence without a trace, so it counts as a failed attempt.
+          if (blob.size > TTS_MIN_AUDIO_BYTES) return URL.createObjectURL(blob);
+          console.warn(`⚠️ TTS returned empty audio (attempt ${attempt + 1}): "${sentence.substring(0, 40)}"`);
+        } else {
+          console.warn(`⚠️ TTS fetch ${response.status} (attempt ${attempt + 1}): "${sentence.substring(0, 40)}"`);
         }
-        console.warn(`⚠️ TTS fetch ${response.status} (attempt ${attempt + 1}): "${sentence.substring(0, 40)}"`);
       } catch (err) {
         console.warn(`⚠️ TTS fetch error (attempt ${attempt + 1}):`, err);
       }
-      if (attempt === 0) await new Promise(r => setTimeout(r, 200));
+      if (attempt < 2) await new Promise(r => setTimeout(r, 200));
     }
-    console.error('❌ TTS fetch failed after retry');
+    console.error(`❌ TTS produced no audio after retries — this sentence will NOT be spoken: "${sentence}"`);
     return null;
   }
 
@@ -1440,10 +1481,17 @@ async function processQueue() {
   }
 
   while (true) {
+    if (isStale()) return;
     if (!ttsEnabled) break;
 
     // Wait for the next audio in the buffer
     const audioUrl = prefetchBuffer.length > 0 ? await prefetchBuffer.shift() : null;
+
+    // Stopped or restarted while this fetch was in flight: a newer run owns playback now.
+    if (isStale()) {
+      if (audioUrl) URL.revokeObjectURL(audioUrl);
+      return;
+    }
 
     // Immediately start fetching more to keep buffer full
     while (prefetchBuffer.length < prefetchDepth && ttsQueue.length > 0) {
@@ -1453,6 +1501,8 @@ async function processQueue() {
     if (audioUrl) {
       // Play current sentence — while playing, poll for new queue items and prefetch them
       await new Promise((resolve) => {
+        // Only one audio element may exist at a time.
+        if (currentAudio) { try { currentAudio.pause(); } catch (e) {} }
         currentAudio = new Audio(audioUrl);
         currentAudio.playbackRate = 1.0;
         isPlayingAudio = true;
@@ -1464,33 +1514,30 @@ async function processQueue() {
           }
         }, 50);
 
-        currentAudio.onended = () => {
+        const thisAudio = currentAudio;
+        // Handlers only touch shared state if this element is still the current one.
+        const release = () => {
           clearInterval(prefetchInterval);
           URL.revokeObjectURL(audioUrl);
-          isPlayingAudio = false;
-          currentAudio = null;
+          if (currentAudio === thisAudio) {
+            isPlayingAudio = false;
+            currentAudio = null;
+          }
           resolve();
         };
-        currentAudio.onerror = () => {
-          clearInterval(prefetchInterval);
-          URL.revokeObjectURL(audioUrl);
-          isPlayingAudio = false;
-          currentAudio = null;
-          resolve();
-        };
-        currentAudio.play().catch(() => {
-          clearInterval(prefetchInterval);
-          isPlayingAudio = false;
-          currentAudio = null;
-          resolve();
-        });
+        thisAudio.onended = release;
+        thisAudio.onerror = release;
+        thisAudio.play().catch(release);
       });
+      if (isStale()) return;
 
       // Keep buffer topped up after each sentence plays
       while (prefetchBuffer.length < prefetchDepth && ttsQueue.length > 0) {
         prefetchBuffer.push(fetchAudio(ttsQueue.shift()));
       }
     }
+
+    if (isStale()) return;
 
     // Check if we're done
     if (prefetchBuffer.length === 0 && ttsQueue.length === 0) {
@@ -1499,6 +1546,7 @@ async function processQueue() {
       } else {
         // Wait for more sentences from streaming
         await new Promise(r => setTimeout(r, 25));
+        if (isStale()) return;
         if (ttsQueue.length > 0) {
           while (prefetchBuffer.length < prefetchDepth && ttsQueue.length > 0) {
             prefetchBuffer.push(fetchAudio(ttsQueue.shift()));

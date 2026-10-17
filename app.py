@@ -7,6 +7,8 @@ from message_reactions import (
     REACTION_DECISION_SCHEMA, RECENT_CONTEXT_MESSAGES, strip_reaction_markers,
     reaction_cooldown_active,
 )
+from response_sanitiser import strip_trailing_empty_marker, strip_trailing_empty_marker_stream
+from continue_reply import continuation_turns, trim_continuation_echo
 from urllib.parse import urlparse
 import psutil
 from contextlib import nullcontext
@@ -253,23 +255,17 @@ os.makedirs(_LLAMA_SLOT_SAVE_PATH, exist_ok=True)
 _LLAMA_SLOT_TRACE_LOCK = threading.Lock()
 _LLAMA_SLOT_TRACE_LAST = {}
 
-# Free omits Dev stall-diagnostic tooling; retain a no-op for shared call sites.
-class _NoopStallWatch:
-    def __init__(self): self.started_wall = time.time()
-    def mark(self, *args, **kwargs): return time.time() - self.started_wall
-    def finish(self, *args, **kwargs): return None
-    def identity(self): return {"post_started_at": self.started_wall}
-    def elapsed(self): return time.time() - self.started_wall
-    def note_non_json(self, *args, **kwargs): return None
-
-class _NoopStallDiagnostics:
-    def current_launch(self):
-        return {"launch_id": "free-noop", "pid": None, "ready_at": datetime.now().isoformat()}
-    def new_launch(self, *args, **kwargs): return globals().get("_LLAMA_SERVER_LOG_PATH")
-    def start_watch(self, *args, **kwargs): return _NoopStallWatch()
-    def __getattr__(self, name): return lambda *a, **k: None
-
-_STALL_DIAG = _NoopStallDiagnostics()
+# GPU/host state at the moments a slow prompt evaluation can be explained:
+# llama-server launch/ready, a request with no visible content 6 s after its
+# POST (then every 20 s, at most 4 times), Stop, and first content after a
+# stall. Observational only; probes run off the streaming thread. Written to
+# logs/gpu_stall_trace.jsonl. See llama_stall_diagnostics.py.
+from llama_stall_diagnostics import StallDiagnostics
+_STALL_DIAG = StallDiagnostics(
+    _LOG_DIR,
+    api_url_getter=lambda: globals().get("API_URL"),
+    model_getter=lambda: globals().get("CURRENT_MODEL"),
+)
 
 
 def _llama_slot_trace(event, **fields):
@@ -619,6 +615,24 @@ def _complete_missing_message_reaction(response):
     """
     if request.path != "/chat" or request.method != "POST" or response.status_code != 200:
         return response
+
+    # Every /chat generator (local, chat-search, web-search, cloud) ends here, so this is
+    # the one place a standalone trailing `<>` line or orphaned final `>` is removed before
+    # display and saving.
+    # Continue over a chat-message transport (cloud, provider, llama.cpp messages API)
+    # is a fresh generation told to carry on; tidy any echoed words at the join.
+    _continue_join = getattr(_hwui_g, "_continue_by_messages_prefix", None)
+    if _continue_join is not None and response.mimetype == "text/event-stream":
+        response.response = trim_continuation_echo(response.response, _continue_join)
+    if response.mimetype == "text/event-stream":
+        response.response = strip_trailing_empty_marker_stream(response.response)
+    elif response.is_json:
+        _reply = response.get_json(silent=True)
+        if isinstance(_reply, dict) and isinstance(_reply.get("text"), str):
+            _clean = strip_trailing_empty_marker(_reply["text"])
+            if _clean != _reply["text"]:
+                _reply["text"] = _clean
+                response.set_data(json.dumps(_reply, ensure_ascii=False))
 
     def strip_model_markers():
         if response.mimetype == "text/event-stream":
@@ -2480,6 +2494,30 @@ def _qwen35_reprompt_messages(context, augmented_text, note):
     )
 
 
+# Nemo ChatML has no private reasoning channel. Prefill a closed OOC note
+# inside the open assistant turn; only the continuation is generated/streamed.
+def _active_model_is_nemo_chatml(current_model, configured_model, models_dir=""):
+    path = _resolve_model_file(current_model, models_dir)
+    if not path:
+        path = _resolve_model_file(configured_model, models_dir) if not current_model else None
+    return bool(path and _read_gguf_architecture(path) == "llama"
+                and _read_gguf_string_metadata(path, "tokenizer.ggml.model") == "gpt2"
+                and _read_gguf_string_metadata(path, "tokenizer.ggml.pre") in ("tekken", "pixtral"))
+
+
+def _nemo_response_intent_text(note):
+    text = re.sub(r"<\|[^>]*\|>", "", str(note or ""))
+    text = re.sub(r"</?think>|\[/?(?:THINK|INST)\]", "", text, flags=re.IGNORECASE)
+    return text.replace("\x00", "").replace("[", "(").replace("]", ")").strip()
+
+
+def _nemo_apply_response_intent(prompt, intent):
+    # Fail closed for Continue or an unexpected generation boundary.
+    if not intent or not prompt.endswith("<|im_start|>assistant\n"):
+        return prompt
+    return prompt + "[OOC: " + intent + "]\n\n"
+
+
 # ── Qwen3.5 Response Intent (experimental; settings.json "qwen_response_intent") ─
 # The Author's Note is delivered as the assistant's own private reasoning for
 # this turn: Qwen3.5's native template renders an assistant turn's
@@ -2546,7 +2584,7 @@ def _qwen35_intent_echo_needles(intent):
 def _strip_response_intent_echo_stream(src, intent):
     """Backstop: drop a verbatim echo of this turn's Response Intent.
 
-    The intent is prompt text in the reasoning block, so it is never generated;
+    The intent is prompt prefill text, so it is never generated;
     this only catches the model re-typing it. No-op when no intent was applied.
     """
     needles = _qwen35_intent_echo_needles(intent)
@@ -4212,6 +4250,78 @@ def get_stop_tokens():
         # stream and fires when the model writes a newline before any < character, killing
         # responses mid-sentence. "<|im_end|>" alone catches real ChatML leakage.
         return ["<|im_end|>", "<|im_start|>"]
+
+
+# User-configured stop sequences (Config → Sampling → Stop Sequences), stored
+# in settings.json as "stop_sequences": [str, ...]. Empty by default, in which
+# case payloads are left exactly as before. They are sent to llama.cpp's own
+# `stop` parameter (both /completion and /v1/chat/completions honour it, and
+# llama.cpp withholds partial matches while streaming), so generation really
+# halts — the reply text is never post-trimmed by HWUI. Entries are literal
+# strings; blank / whitespace-only lines are dropped because a whitespace stop
+# would end almost every reply on its first space or newline.
+_STOP_SEQUENCES_MAX_COUNT = 16
+_STOP_SEQUENCES_MAX_CHARS = 200
+
+
+def normalize_stop_sequences(value):
+    """Return a clean, de-duplicated list of stop strings from a list or text."""
+    if isinstance(value, str):
+        value = value.split("\n")
+    if not isinstance(value, (list, tuple)):
+        return []
+    cleaned = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        item = item.rstrip("\r")
+        if not item.strip() or len(item) > _STOP_SEQUENCES_MAX_CHARS:
+            continue
+        if item not in cleaned:
+            cleaned.append(item)
+        if len(cleaned) >= _STOP_SEQUENCES_MAX_COUNT:
+            break
+    return cleaned
+
+
+def get_configured_stop_sequences():
+    """Read the user's stop sequences from settings.json ([] when unset/invalid)."""
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            settings = json.load(f)
+    except Exception:
+        return []
+    if not isinstance(settings, dict):
+        return []
+    return normalize_stop_sequences(settings.get("stop_sequences", []))
+
+
+def apply_configured_stop_sequences(payload, stop_sequences=None):
+    """Return payload with the configured stops appended to its `stop` list.
+
+    Existing template stops keep their order and come first. With no configured
+    sequences the original payload object is returned untouched (no `stop` key
+    is added to payloads that never had one).
+    """
+    if not isinstance(payload, dict):
+        return payload
+    if stop_sequences is None:
+        stop_sequences = get_configured_stop_sequences()
+    stop_sequences = normalize_stop_sequences(stop_sequences)
+    if not stop_sequences:
+        return payload
+    existing = payload.get("stop")
+    if isinstance(existing, str):
+        existing = [existing]
+    elif not isinstance(existing, list):
+        existing = []
+    merged = list(existing)
+    for item in stop_sequences:
+        if item not in merged:
+            merged.append(item)
+    configured = dict(payload)
+    configured["stop"] = merged
+    return configured
 
 
 # Hard ban on the Tekken reserved special-token dead zone. Ids 14–999 ALL
@@ -8880,6 +8990,7 @@ def stream_model_response(payload, request_id=None):
     global abort_generation
     abort_generation = False  # Reset flag at start
     _trace_request_id = request_id or "?"
+    payload = apply_configured_stop_sequences(payload)
 
     if app.debug:
         print("\n🧩 FULL PAYLOAD SENDING TO MODEL:", flush=True)
@@ -9469,6 +9580,12 @@ def stream_vision_response(
     if not _reasoning_continuation:
         # A continuation is the same turn: do not clear a Stop pressed meanwhile.
         abort_generation = False
+
+    # User stop sequences ride on llama.cpp's own `stop` field. Looked up via
+    # globals() so this generator stays callable from the isolated-exec tests.
+    _apply_stops = globals().get("apply_configured_stop_sequences")
+    if callable(_apply_stops):
+        payload = _apply_stops(payload)
 
     # Dev A/B LEAN_ST only (see _serialize_ministral_st_tekken). The key is a
     # literal so payloads without it — every LEGACY/LEAN/other request — never
@@ -16305,6 +16422,11 @@ def chat():
 
     # If not provided, fall back to loading from file
     active_chat = _load_chat_from_disk(active_chat, data, user_name, user_display_name, character_name)
+    # Earlier replies saved with a stray trailing `<>` line must not be shown to the model
+    # again as history, or it learns to copy the marker.
+    active_chat = [dict(m, content=strip_trailing_empty_marker(m["content"]))
+                   if isinstance(m, dict) and m.get("role") == "assistant" and isinstance(m.get("content"), str)
+                   else m for m in active_chat]
     _generated_image_followup = _is_completed_generated_image_followup(active_chat)
 
     if not character_name:
@@ -16428,6 +16550,17 @@ def chat():
             _req_settings.get("llama_models_dir", ""),
         )
     )
+    _nemo_intent = ""
+    if (_legacy_local_chatml and not _is_qwen35_model
+            and not _current_image_parts
+            and str(_req_settings.get("llama_args", {}).get("chat_template", "chatml")).strip().lower() == "chatml"
+            and not str(data.get("continue_prefix") or "").strip()
+            and _active_model_is_nemo_chatml(
+                CURRENT_MODEL, _req_settings.get("llama_last_model", ""),
+                _req_settings.get("llama_models_dir", ""))):
+        _nemo_intent = _nemo_response_intent_text(substitute_placeholders(
+            _response_intent_note, _char_label, _user_label))
+
     if _is_qwen35_model:
         print("🧭 Qwen3.5 architecture detected — dedicated Qwen3.5 instruction branch", flush=True)
 
@@ -16606,7 +16739,7 @@ def chat():
     _ph_pre = char_data.get("post_history", "").strip()
     if _ph_pre:
         _reply_packet_overhead += rough_token_count(_ph_pre) + 10
-    _an_pre = _qwen35_author_note if _is_qwen35_model else _effective_author_note
+    _an_pre = _response_intent_note if _nemo_intent else (_qwen35_author_note if _is_qwen35_model else _effective_author_note)
     if _an_pre:
         _reply_packet_overhead += rough_token_count(_an_pre) + 20  # +20 for [OOC: Author note — …] wrapper
     _cn_pre = char_data.get("character_note", "").strip()
@@ -17324,7 +17457,7 @@ def chat():
             )
             _governing_items.append(_reply_instr_items[-1])
 
-        _legacy_author_note = _qwen35_author_note if _is_qwen35_model else _effective_author_note
+        _legacy_author_note = "" if _nemo_intent else (_qwen35_author_note if _is_qwen35_model else _effective_author_note)
         if _legacy_author_note:
             _legacy_author_note = re.sub(r'<\|im_start\|>\w*', '', _legacy_author_note)
             _legacy_author_note = re.sub(r'<\|im_end\|>', '', _legacy_author_note).strip()
@@ -17508,12 +17641,46 @@ def chat():
             body = prompt_parts[-1][len(prefix):-len(suffix)]
             leading_blocks, user_body = _split_leading_instruction_blocks(body)
             reference_blocks, user_body = _split_final_user_material(user_body)
-            final_instr_items = leading_blocks + reference_blocks + _reply_instr_items
+            # Reference material (attached document, search results) stays ahead of
+            # the user's typed words. The [OOC: ...] guidance packet goes AFTER them,
+            # still inside the final user turn and still ending with Global
+            # Post-History, so it remains depth-0. Leading the turn with a run of
+            # bracketed OOC blocks made the model open its own reply in the same
+            # register and echo paraphrases of the packet ("[OOC: End current
+            # response...]", "[The speaking style from STYLE_EXAMPLES...]").
+            # Replaying the same first-turn Nemo prompt, 48 seeds each: guidance
+            # first leaked 10/48, guidance after the user's words 0/48.
+            final_instr_items = leading_blocks + _reply_instr_items
             packet = "\n\n".join(final_instr_items)
-            prompt_parts[-1] = prefix + packet + "\n\n" + user_body + suffix
-            print(f"📌 [OOC] final-turn instruction packet ordered before user text "
-                  f"({len(packet)} chars, {len(final_instr_items)} item(s); "
-                  f"Global Post-History last)")
+            _pre_user = "\n\n".join(reference_blocks)
+            if not (_is_ministral_for_examples or _is_qwen35_model or _is_jinja_model):
+                # Raw ChatML /completion path only (Nemo-class models). The packet
+                # is its own system turn immediately BEFORE the final user turn, so
+                # the user's actual words are the last thing ahead of generation.
+                # Packet-after-user-words stopped the leak but buried the 30-odd
+                # token message under ~530 tokens of guidance; Nemo then answered
+                # the previous turn (replaying the real Jake/Marcus -> coffee ->
+                # Sarah chat, 40 seeds: packet-after 14/40 addressed Sarah and 37/40
+                # carried old topics; this layout 39/40 and 9/40). First-turn leaks
+                # stayed 0/20, same as packet-after. Guidance-first (the original
+                # shape) leaked 10/48 earlier, so it is not restored.
+                prompt_parts[-1] = (
+                    "<|im_start|>system\n" + packet + "\n<|im_end|>\n"
+                    + prefix + (_pre_user + "\n\n" if _pre_user else "")
+                    + user_body + suffix
+                )
+                print(f"📌 [OOC] final-turn instruction packet sent as system turn before user turn "
+                      f"({len(packet)} chars, {len(final_instr_items)} item(s); "
+                      f"Global Post-History last)")
+            else:
+                # Ministral / Qwen3.5 / jinja-template paths: unchanged from before.
+                prompt_parts[-1] = (
+                    prefix + (_pre_user + "\n\n" if _pre_user else "")
+                    + user_body + "\n\n" + packet + suffix
+                )
+                print(f"📌 [OOC] final-turn instruction packet ordered after user text "
+                      f"({len(packet)} chars, {len(final_instr_items)} item(s); "
+                      f"Global Post-History last)")
         else:
             print(f"⚠️ Last prompt_part is not a user turn — [OOC] skipped "
                   f"({len(_reply_instr_items)} item(s) would have been added)")
@@ -17526,6 +17693,10 @@ def chat():
     # toggle — `<|im_start|>assistant\n` must always be appended for /completion
     # against ChatML models.
     continue_prefix = data.get("continue_prefix", "").strip()
+    # The reply text before the 200-char prefix. Only chat-message transports use
+    # it (they send the whole partial reply); the raw prompt path needs the tail.
+    continue_head = str(data.get("continue_head") or "")
+    _hwui_g._continue_by_messages_prefix = None
     if continue_prefix:
         # True continue — model picks up exactly where it left off
         prompt_parts.append(f"<|im_start|>assistant\n{continue_prefix}")
@@ -17826,6 +17997,10 @@ def chat():
         _rp, _src = _render_qwen35_prompt(_msgs, enable_thinking=False)
         print(f"🧭 Qwen3.5 re-prompt rendered via {_src} (roles={[m['role'] for m in _msgs]})", flush=True)
         return _rp
+
+    prompt = _nemo_apply_response_intent(prompt, _nemo_intent)
+    if _nemo_intent:
+        print(f"🧭 Nemo Response Intent: assistant OOC prefill ({len(_nemo_intent)} chars); generation starts after its closing bracket", flush=True)
 
     print("\n===== FINAL PROMPT SENT TO MODEL =====")
     print(prompt[:1500])  # print first 1500 chars for sanity check
@@ -18264,6 +18439,13 @@ def chat():
                     _oai_notice[0] = (f"*({_oai_provider.label} can't view images here, so the image "
                                       f"was not sent.)*" + chr(10) * 2)
 
+            if continue_prefix:
+                # Continue: these APIs cannot pre-fill the reply, so send the
+                # partial reply and ask the model to carry on.
+                _oai_messages = _oai_messages + continuation_turns(
+                    continue_head, continue_prefix, neutralize_chatml_tokens)
+                _hwui_g._continue_by_messages_prefix = data.get("continue_prefix", "")
+
             # ── Web-search toggle (OpenAI branch only) ───────────────
             # Read use_web_search here so the OpenAI path can route through
             # _web_search_stream_openai when enabled. The local path reads the
@@ -18400,6 +18582,10 @@ def chat():
                 _ant_messages,
                 system=_ant_system,
             )
+            if continue_prefix:
+                _ant_messages = _ant_messages + continuation_turns(
+                    continue_head, continue_prefix, neutralize_chatml_tokens)
+                _hwui_g._continue_by_messages_prefix = data.get("continue_prefix", "")
             _ant_dynamic_sources = ["current_datetime"]
             if project_instructions and project_instructions.strip():
                 _ant_dynamic_sources.append("project_instructions")
@@ -18673,7 +18859,10 @@ def chat():
                 )
                 if _ministral_intent:
                     _ministral_intent_skip = (
-                        "reasoning is on for this turn — a pre-closed reasoning "
+                        "this is a Continue request — the reply is carried on by a "
+                        "trailing user turn, which cannot follow an assistant prefill"
+                        if continue_prefix
+                        else "reasoning is on for this turn — a pre-closed reasoning "
                         "block cannot coexist with the model's own reasoning"
                         if _local_reasoning_enabled
                         else "image turn" if _native_ministral_image_turn
@@ -19210,6 +19399,10 @@ def chat():
                     if _tm.get("role") == "user":
                         _tm["content"] = (_tm.get("content", "").rstrip() + "\n\n" + _jinja_reply_packet).strip()
                         break
+            if continue_prefix:
+                _text_messages = _text_messages + continuation_turns(
+                    continue_head, continue_prefix, neutralize_chatml_tokens)
+                _hwui_g._continue_by_messages_prefix = data.get("continue_prefix", "")
             print(f"🧹 ChatML nuked from {len(_text_messages)} messages", flush=True)
 
             try:
@@ -19862,6 +20055,7 @@ def chat():
                 )
                 _cs_parts.append("<|im_start|>assistant\n")
                 _cs_prompt = "\n".join(_cs_parts[:-1]) + "\n" + _cs_parts[-1]
+                _cs_prompt = _nemo_apply_response_intent(_cs_prompt, _nemo_intent)
                 if _qwen35_context is not None:
                     _cs_prompt = _qwen35_reprompt(
                         _augmented_msg,
@@ -19909,7 +20103,7 @@ def chat():
             try:
                 resp = Response(
                     stream_with_context(_strip_response_intent_echo_stream(
-                        _chat_search_intent_stream(), _qwen35_intent_applied
+                        _chat_search_intent_stream(), _qwen35_intent_applied or _nemo_intent
                     )),
                     content_type="text/event-stream; charset=utf-8",
                 )
@@ -20028,6 +20222,7 @@ def chat():
             )
             _search_prompt_parts.append("<|im_start|>assistant\n")
             _search_prompt = "\n".join(_search_prompt_parts[:-1]) + "\n" + _search_prompt_parts[-1]
+            _search_prompt = _nemo_apply_response_intent(_search_prompt, _nemo_intent)
             if _qwen35_context is not None:
                 _search_prompt = _qwen35_reprompt(
                     augmented_user_msg,
@@ -20578,9 +20773,9 @@ def chat():
                         yield from _run_search_and_reprompt(_ws_query)
                         return
                     if _ooc_guard_active and _ooc_holdback:
-                        _lead = _ooc_holdback.lstrip()
-                        if not _re.match(r'^\[\s*OOC\b', _lead, _re.IGNORECASE):
-                            _post += _ooc_holdback
+                        # The outer OOC net recovers answers inside an unclosed
+                        # leading block. Do not discard its input before it runs.
+                        _post += _ooc_holdback
                     # Flush real text; drop any trailing unclosed/forming
                     # [WEB SEARCH: fragment so it can never leak.
                     _safe = _ws_safe_split(_post)
@@ -20705,7 +20900,7 @@ def chat():
             try:
                 resp = Response(
                     stream_with_context(_guard_document_reply(_strip_ooc_stream(
-                        _strip_response_intent_echo_stream(_web_search_stream(), _qwen35_intent_applied)
+                        _strip_response_intent_echo_stream(_web_search_stream(), _qwen35_intent_applied or _nemo_intent)
                     ))),
                     content_type="text/event-stream; charset=utf-8",
                 )
@@ -20957,6 +21152,7 @@ def chat():
                         )
                         _cs_parts.append("<|im_start|>assistant\n")
                         _cs_prompt = "\n".join(_cs_parts[:-1]) + "\n" + _cs_parts[-1]
+                        _cs_prompt = _nemo_apply_response_intent(_cs_prompt, _nemo_intent)
                         if _qwen35_context is not None:
                             _cs_prompt = _qwen35_reprompt(
                                 _aug,
@@ -21027,8 +21223,8 @@ def chat():
                             else:
                                 _cs_tail2 = combined
                         if not _cs_halted2[0] and _ooc_guard_active2[0] and _ooc_holdback2[0].strip():
-                            if not _re3_inner.match(r'^\[\s*OOC\b', _ooc_holdback2[0].lstrip(), _re3_inner.IGNORECASE):
-                                yield _ooc_holdback2[0]
+                            # Delegate an unclosed leading block to the outer net.
+                            yield _ooc_holdback2[0]
                             _ooc_holdback2[0] = ""
                             _ooc_guard_active2[0] = False
                         if not _cs_halted2[0] and _cs_tail2:
@@ -21045,11 +21241,10 @@ def chat():
                         print(f"✅ [_filtered_stream] Stream complete. Total accumulated: {total_yielded} chars", flush=True)
                     if not _halted[0]:
                         # Opening guard never resolved (e.g. a truncated leading bracket).
-                        # Drop it only if it still looks like an unclosed OOC block;
-                        # otherwise release so genuine content isn't silently lost.
+                        # Let the outer OOC net recover any genuine answer inside
+                        # an unclosed leading block; closed blocks stay suppressed.
                         if _ooc_guard_active[0] and _ooc_holdback[0].strip():
-                            if not _re3_inner.match(r'^\[\s*OOC\b', _ooc_holdback[0].lstrip(), _re3_inner.IGNORECASE):
-                                yield _ooc_holdback[0]
+                            yield _ooc_holdback[0]
                             _ooc_holdback[0] = ""
                             _ooc_guard_active[0] = False
                         _tail = _re3_inner.sub(r'\n(?:user|assistant|system)\b[^\n]*$', '', _tail, flags=_re3_inner.IGNORECASE)
@@ -21080,7 +21275,7 @@ def chat():
 
                 resp = Response(
                     stream_with_context(_guard_document_reply(_strip_ooc_stream(
-                        _strip_response_intent_echo_stream(_filtered_stream(), _qwen35_intent_applied)
+                        _strip_response_intent_echo_stream(_filtered_stream(), _qwen35_intent_applied or _nemo_intent)
                     ))),
                     content_type="text/event-stream; charset=utf-8",
                 )
@@ -22961,7 +23156,9 @@ def load_sampling_settings():
         "xtc_probability": 0.0,
         "xtc_threshold": 0.1,
         "frequency_penalty": 0.0,
-        "presence_penalty": 0.0
+        "presence_penalty": 0.0,
+        # Empty = llama.cpp only uses the template's own stop tokens.
+        "stop_sequences": []
     }
 
 
@@ -22989,6 +23186,8 @@ def get_sampling_settings():
 @app.route("/save_sampling_settings", methods=["POST"])
 def save_sampling_settings():
     data = request.get_json()
+    if isinstance(data, dict) and "stop_sequences" in data:
+        data["stop_sequences"] = normalize_stop_sequences(data["stop_sequences"])
     # Read existing settings first so we don't wipe llama paths / other fields
     try:
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:

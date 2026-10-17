@@ -169,3 +169,5 @@ def get_legacy_instruction_layer():
     if _CURRENT_EXAMPLE_DIALOGUE_SENTENCES not in layer:
         raise RuntimeError("EXAMPLE DIALOGUE wording changed; update the legacy mapping")
     return layer.replace(_CURRENT_EXAMPLE_DIALOGUE_SENTENCES, _LEGACY_EXAMPLE_DIALOGUE_SENTENCE)
+
+

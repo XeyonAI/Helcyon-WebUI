@@ -6,7 +6,8 @@ import re
 
 REACTION_CHOICES = {
     "none": None, "laugh": "😂", "love": "❤️", "like": "👍",
-    "dislike": "👎", "surprise": "😮", "sad": "😢",
+    "surprise": "😮", "sad": "😢", "smirk": "😏", "smile": "😊",
+    "relieved": "😌", "grimace": "😬",
 }
 REACTION_DECISION_INSTRUCTION = (
     "You decide whether the user's latest message should get an emoji reaction, like a "
@@ -32,8 +33,13 @@ REACTION_DECISION_INSTRUCTION = (
     "towards you, never for the user's own distress or bad news), like (a major "
     "achievement or celebration, never bad news or distress), surprise (an astonishing "
     "or unbelievable event, good or bad), sad (grief, loss, bad news, or a major "
-    "emotional disclosure of loneliness, depression or pain), dislike (intense anger or "
-    "outrage). When the user is opening up about their own pain, the only possible "
+    "emotional disclosure of loneliness, depression or pain), smirk (a cheeky, teasing or "
+    "mischievous moment, or sly flirtation, never for distress), smile (a warm, happy or "
+    "wholesome moment, a small personal win or something sweet, never for bad news), "
+    "relieved (relief after worry or stress, a problem finally solved or a scare that "
+    "turned out fine), grimace (an awkward, cringey or embarrassing moment, or something "
+    "painfully awkward that went wrong, never for grief or serious distress). Pick the "
+    "single best fit, and use none rather than a poor match. When the user is opening up about their own pain, the only possible "
     "reactions are sad or none; none is the safer choice. For routine and notable "
     "messages the reaction is none. Output only JSON."
 )

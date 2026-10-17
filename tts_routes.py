@@ -38,8 +38,6 @@ QWEN_FAST_SERVER_URL   = 'http://127.0.0.1:8767'
 QWENTTS_CPP_SERVER_URL = 'http://127.0.0.1:8768'
 OMNIVOICE_SERVER_URL    = 'http://127.0.0.1:8001'
 DEFAULT_VOICE = 'Sol'
-VOICE_FORGE_DEFAULT_TEXT = 'Hello. This is a test of a newly blended voice.'
-VOICE_FORGE_TEST_TEXT_FILENAME = '_voice_forge_test_text.txt'
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.json')
 VOICE_GROUPS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'voice_groups.json')  # legacy path
 QWENTTS_VOICES_DIR = Path(os.getenv(
@@ -69,14 +67,39 @@ QWEN_DEFAULT_MAX_NEW_TOKENS = 2048     # qt_tts_default_params; HWUI sends no ma
 QWEN_RVQ_CODE_BITS = 11                # tts-server.cpp RVQ_CODE_BITS
 QWEN_RVQ_CODEBOOKS = 16                # 12 Hz codec code groups
 TTS_DIAG_TEXT_LIMIT = 600
+# qwentts.cpp can finish a generation with no audio (EOS sampled at step 0) and still answer
+# HTTP 200 with a header-only WAV (src/tts-server.h encodes the empty buffer as-is). Spoken
+# English runs ~12-20 characters per second, so above 40 the audio cannot hold the text.
+TTS_EMPTY_AUDIO_MIN_SECONDS = 0.1
+TTS_IMPLAUSIBLE_CHARS_PER_SECOND = 40
+TTS_EMPTY_AUDIO_RETRIES = 2
 _ref_frames_cache = {}
+
+
+class _LiveStderrHandler(logging.StreamHandler):
+    """Writes to whatever sys.stderr is at emit time, so app.py's console/hwui_full.log tee sees it."""
+    def __init__(self):
+        super().__init__()
+
+    @property
+    def stream(self):
+        return sys.stderr
+
+    @stream.setter
+    def stream(self, _value):
+        pass
+
+
+# The root logger is left at WARNING, so plain logging.info() never reaches a log file. The
+# per-chunk TTS-CHUNK lines are the evidence trail for skipped/short audio, so they get their own
+# logger with its own handler (records still propagate, e.g. to assertLogs in the tests).
+_tts_diag_log = logging.getLogger('hwui.tts')
+_tts_diag_log.setLevel(logging.INFO)
+if not any(isinstance(h, _LiveStderrHandler) for h in _tts_diag_log.handlers):
+    _tts_diag_log.addHandler(_LiveStderrHandler())
 _omnivoice_client = None
 _omnivoice_client_lock = None
 _omnivoice_generate_lock = None
-_voice_forge_results = {}
-_voice_forge_results_lock = threading.Lock()
-_voice_forge_preferences_lock = threading.Lock()
-_voice_forge_export_lock = threading.Lock()
 
 
 def _pro_only():
@@ -146,78 +169,6 @@ def save_settings(data):
         return False
 
 
-def _voice_forge_test_text_path():
-    return QWENTTS_VOICES_DIR / VOICE_FORGE_TEST_TEXT_FILENAME
-
-
-def _repair_voice_forge_mojibake(text):
-    """Repair common UTF-8-as-Windows-1252 text from the legacy setting."""
-    repaired = text
-    markers = ('\u00c3', '\u00c2', '\u00e2', '\u20ac\u2122', '\ufffd')
-    for _ in range(2):
-        direct = repaired.replace('\u00e2\u20ac\u2122', '\u2019').replace('\u20ac\u2122', '\u2019')
-        if direct != repaired:
-            repaired = direct
-            continue
-        if not any(marker in repaired for marker in markers):
-            break
-        try:
-            candidate = repaired.encode('cp1252').decode('utf-8')
-        except (UnicodeEncodeError, UnicodeDecodeError):
-            candidate = repaired
-        if candidate == repaired:
-            break
-        repaired = candidate
-    return repaired
-
-
-def _write_voice_forge_test_text(text):
-    """Atomically persist Voice Forge's test text in the shared voice folder."""
-    path = _voice_forge_test_text_path()
-    temporary = None
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        import tempfile
-        fd, temporary = tempfile.mkstemp(
-            suffix='.tmp', prefix=f'.{VOICE_FORGE_TEST_TEXT_FILENAME}.', dir=path.parent, text=True
-        )
-        with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as handle:
-            handle.write(text + '\n')
-        os.replace(temporary, path)
-        return True
-    except Exception as exc:
-        if temporary:
-            try:
-                os.unlink(temporary)
-            except OSError:
-                pass
-        logging.error(f'❌ Failed to save Voice Forge test text: {exc}')
-        return False
-
-
-def _load_voice_forge_test_text():
-    """Read the shared UTF-8 text, migrating the old settings value once."""
-    path = _voice_forge_test_text_path()
-    if path.is_file():
-        try:
-            text = path.read_text(encoding='utf-8-sig').strip()
-            if text:
-                repaired = _repair_voice_forge_mojibake(text)
-                if repaired != text:
-                    _write_voice_forge_test_text(repaired)
-                return repaired
-            return None
-        except (OSError, UnicodeError) as exc:
-            logging.error(f'⚠️ Could not read Voice Forge test text: {exc}')
-            return None
-
-    legacy = get_settings().get('voice_forge_test_text')
-    if isinstance(legacy, str) and legacy.strip():
-        text = _repair_voice_forge_mojibake(legacy.strip())
-        _write_voice_forge_test_text(text)
-        return text
-    return None
-
 def get_engine():
     return get_settings().get('tts_engine', 'f5')
 
@@ -271,62 +222,6 @@ def _f5_local_voices():
     except OSError as exc:
         logging.error(f'F5 voice scan failed in {F5_VOICES_DIR}: {exc}')
         return []
-
-
-def _voice_forge_upload_as_wav(upload):
-    """Return a requests-compatible WAV upload, decoding MP3 in HWUI when needed."""
-    raw = upload.read()
-    filename = Path(upload.filename or 'voice.wav').name
-    if raw[:4] == b'RIFF':
-        return filename, raw, 'audio/wav'
-    try:
-        import numpy as np
-        import soundfile as sf
-        import librosa
-
-        audio, sample_rate = sf.read(BytesIO(raw), dtype='float32', always_2d=False)
-        audio = np.asarray(audio, dtype=np.float32)
-        if audio.ndim == 2:
-            audio = audio.mean(axis=1)
-        if sample_rate != 24000:
-            audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=24000)
-        encoded = BytesIO()
-        sf.write(encoded, audio, 24000, format='WAV', subtype='PCM_16')
-        return f'{Path(filename).stem}.wav', encoded.getvalue(), 'audio/wav'
-    except Exception as exc:
-        raise ValueError(f'Could not decode Voice Forge upload {filename!r}: {exc}') from exc
-
-
-def _voice_forge_apply_speed(wav_bytes, speed):
-    if not math.isfinite(speed) or not 0.75 <= speed <= 1.25:
-        raise ValueError('Voice Forge speed must be between 0.75 and 1.25')
-    if abs(speed - 1.0) < 1e-6:
-        return wav_bytes
-    ffmpeg = shutil.which('ffmpeg')
-    if not ffmpeg:
-        raise RuntimeError('Voice Forge speed adjustment requires FFmpeg with the Rubber Band filter')
-    # Speech-oriented time stretching; keep pitch and channel alignment intact.
-    audio_filter = (
-        f'rubberband=tempo={speed:.8f}:pitch=1:window=short:'
-        'transients=mixed:detector=soft:phase=laminar:channels=together'
-    )
-    try:
-        result = subprocess.run(
-            [ffmpeg, '-hide_banner', '-loglevel', 'error', '-nostdin',
-             '-i', 'pipe:0', '-map', '0:a:0', '-af', audio_filter,
-             '-c:a', 'pcm_s16le', '-f', 'wav', 'pipe:1'],
-            input=wav_bytes, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            timeout=120, check=False,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
-        )
-        if result.returncode:
-            detail = result.stderr.decode('utf-8', errors='replace').strip()[:500]
-            raise RuntimeError(detail or 'FFmpeg could not apply Rubber Band time stretching')
-        if not result.stdout.startswith(b'RIFF') or result.stdout[8:12] != b'WAVE':
-            raise RuntimeError('FFmpeg returned invalid WAV audio')
-        return result.stdout
-    except (OSError, subprocess.TimeoutExpired, RuntimeError) as exc:
-        raise RuntimeError(f'Voice Forge speed adjustment failed: {exc}') from exc
 
 
 def _generate_omnivoice(text, voice, language='English'):
@@ -617,6 +512,12 @@ def _qwentts_reference_frames(voice):
         return None, 'reference_unreadable'
 
 
+def _wav_is_empty(content):
+    """True when `content` is a parseable PCM WAV holding less than TTS_EMPTY_AUDIO_MIN_SECONDS of audio."""
+    info = _wav_pcm_info(content)
+    return bool(info) and info[3] < info[0] * TTS_EMPTY_AUDIO_MIN_SECONDS
+
+
 def _qwen_generation_budget(engine, voice):
     """(frames, basis, talker_max_seq, ref_frames): the exact number of frames the server can generate
     for this voice before its talker cache ends the utterance; frames is None (with the reason in
@@ -664,6 +565,17 @@ def _log_tts_chunk(engine, voice, sent_text, meta, samples, sample_rate, seed=No
         end, end_check = 'natural_or_unknown', 'frames_exceed_budget'   # assumptions broken; do not trust
     else:
         end, end_check = 'natural_or_unknown', 'frames_below_budget'
+    # Separate from `end` (which is only about the talker cache cap): can this audio hold the text?
+    audio_check = 'unknown'
+    # HWUI never queues a chunk of 2 characters or fewer (buildTTSChunks), so only longer text is judged.
+    if samples is not None and sample_rate and len(sent_text) > 2:
+        seconds = samples / sample_rate
+        if seconds < TTS_EMPTY_AUDIO_MIN_SECONDS:
+            audio_check = 'empty_audio'
+        elif len(sent_text) / seconds > TTS_IMPLAUSIBLE_CHARS_PER_SECOND:
+            audio_check = 'implausibly_short'
+        else:
+            audio_check = 'ok'
     record = {
         'engine': engine,
         'voice': voice,
@@ -680,9 +592,11 @@ def _log_tts_chunk(engine, voice, sent_text, meta, samples, sample_rate, seed=No
         'ref_frames': ref_frames,
         'end': end,
         'end_check': end_check,
+        'audio_check': audio_check,
         'gen_s': round(elapsed, 2) if elapsed is not None else None,
     }
-    log = logging.warning if end == 'probable_cache_cap' else logging.info
+    suspect = end == 'probable_cache_cap' or audio_check in ('empty_audio', 'implausibly_short')
+    log = _tts_diag_log.warning if suspect else _tts_diag_log.info
     log('TTS-CHUNK ' + json.dumps(record, ensure_ascii=False))
 
 
@@ -737,6 +651,20 @@ def generate_tts():
                 json=payload,
                 timeout=180,
             )
+            # An empty generation is a 200 with no speech in it; left alone the sentence is
+            # silently skipped. An unseeded request draws a fresh seed each time, so asking
+            # again is a genuine second attempt (a pinned diagnostic seed would just repeat).
+            retries = 0
+            while (response.status_code == 200 and seed is None and retries < TTS_EMPTY_AUDIO_RETRIES
+                   and _wav_is_empty(response.content)):
+                retries += 1
+                logging.warning(f'TTS [{engine}] returned empty audio for {text[:60]!r}; '
+                                f'regenerating (retry {retries}/{TTS_EMPTY_AUDIO_RETRIES})')
+                response = requests.post(
+                    f'{server_url}/v1/audio/speech',
+                    json=payload,
+                    timeout=180,
+                )
             if response.status_code == 200:
                 try:
                     pcm = _wav_pcm_info(response.content)
@@ -917,67 +845,9 @@ def save_voice_forge_settings():
     return _pro_only()
 
 
-def _voice_forge_preferences_path():
-    return Path(user_config.USERS_DIR) / 'voice_forge.json'
-
-
-def _load_voice_forge_preferences():
-    path = _voice_forge_preferences_path()
-    if not path.exists():
-        return {'templates': {}}
-    with path.open('r', encoding='utf-8') as handle:
-        data = json.load(handle)
-    if not isinstance(data, dict) or not isinstance(data.get('templates'), dict):
-        raise ValueError('Invalid Voice Forge preferences')
-    return data
-
-
-def _write_voice_forge_preferences(data):
-    path = _voice_forge_preferences_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix='.voice_forge_', suffix='.tmp', dir=path.parent)
-    try:
-        with os.fdopen(fd, 'w', encoding='utf-8') as handle:
-            json.dump(data, handle, ensure_ascii=False, indent=2)
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
-
-
 @tts_bp.route('/voice-forge/templates', methods=['GET', 'POST', 'DELETE'])
 def voice_forge_templates():
     return _pro_only()
-
-
-def _voice_forge_save_dialog(initial_directory, initial_name):
-    # Tk must own its main thread. A short-lived child also avoids touching Flask's
-    # request threads or the Electron launcher and works in a local browser.
-    script = """import json, sys, tkinter as tk
-from tkinter import filedialog
-root = tk.Tk()
-root.withdraw()
-root.attributes('-topmost', True)
-try:
-    path = filedialog.asksaveasfilename(parent=root, title='Save Voice To...',
-        initialdir=sys.argv[1] or None, initialfile=sys.argv[2],
-        defaultextension='.wav', filetypes=[('WAV audio', '*.wav')])
-    print(json.dumps(path))
-finally:
-    root.destroy()
-"""
-    completed = subprocess.run([sys.executable, '-c', script, initial_directory, initial_name],
-                               capture_output=True, text=True, check=True,
-                               creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
-    return json.loads(completed.stdout)
-
-
-def _valid_voice_forge_wav_name(name):
-    stem = Path(name).stem
-    return (name.lower().endswith('.wav') and bool(stem) and
-            not re.search(r'[<>:"/\\|?*\x00-\x1f]', name) and
-            not stem.endswith((' ', '.')) and
-            not re.fullmatch(r'(?i)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?', stem))
 
 
 @tts_bp.route('/voice-forge/export', methods=['POST'])
@@ -999,93 +869,6 @@ def get_voice_forge_reference():
 @tts_bp.route('/voice-forge/voice', methods=['DELETE'])
 def delete_voice_forge_voice():
     return _pro_only()
-
-
-def _generate_voice_forge_single(fields, files, slot):
-    """Use the normal clone adapter, retaining reference codes and transcript."""
-    text = fields.get('text', '').strip()
-    transcript = fields.get(f'ref_text_{slot.lower()}', '').strip()
-    try:
-        expression = float(fields.get('expression', '0.8'))
-        speed = float(fields.get('speed', '1'))
-        seed = int(fields.get('seed', '-1'))
-    except (TypeError, ValueError):
-        return jsonify({'error': 'Invalid Voice Forge expression, speed or seed'}), 400
-    if not text or len(text) > 10000:
-        return jsonify({'error': 'Enter test text of at most 10000 characters'}), 400
-    if len(transcript) > 10000:
-        return jsonify({'error': 'Reference spoken text is too long'}), 400
-    if (not math.isfinite(expression) or not 0.6 <= expression <= 1.1 or
-            not math.isfinite(speed) or not 0.75 <= speed <= 1.25 or abs(seed) > 9_000_000_000_000_000_000):
-        return jsonify({'error': 'Voice Forge expression, speed or seed is out of range'}), 400
-
-    result_id = uuid.uuid4().hex
-    temporary_voice = ''
-    voice = fields.get(f'voice_{slot.lower()}', '')
-    upload = files.get(f'voice_{slot.lower()}_audio')
-    try:
-        if upload or transcript:
-            if upload:
-                reference_wav = upload[1]
-            else:
-                reference_path = _qwentts_voice_files(voice)
-                if reference_path is None:
-                    return jsonify({'error': f'Choose or upload Voice {slot}'}), 400
-                reference_wav = reference_path.read_bytes()
-            if len(reference_wav) > QWENTTS_MAX_REFERENCE_BYTES:
-                return jsonify({'error': 'Voice Forge reference audio is too large'}), 400
-            temporary_voice = f'__voice_forge_{result_id}'
-            registration = {
-                'name': temporary_voice,
-                'wav_b64': base64.b64encode(reference_wav).decode('ascii'),
-            }
-            if transcript:
-                registration['ref_text'] = transcript
-            registered = requests.post(
-                f'{QWEN_FAST_SERVER_URL}/v1/audio/voices', json=registration, timeout=(10, 120),
-            )
-            if registered.status_code != 200:
-                return jsonify({'error': _qwentts_error_message(registered, 'Voice Forge registration failed')}), registered.status_code
-            voice = temporary_voice
-        elif voice:
-            _ensure_qwentts_voice_registered(voice, QWEN_FAST_SERVER_URL)
-        else:
-            return jsonify({'error': f'Choose or upload Voice {slot}'}), 400
-
-        speech = requests.post(
-            f'{QWEN_FAST_SERVER_URL}/v1/audio/speech',
-            json={
-                'input': text, 'voice': voice, 'response_format': 'wav', 'speed': 1.0,
-                'seed': seed, 'max_new_tokens': 512, 'top_k': 50,
-                'temperature': expression, 'top_p': 0.95, 'repetition_penalty': 1.05,
-            },
-            timeout=(10, 180),
-        )
-        if speech.status_code != 200:
-            return jsonify({'error': _qwentts_error_message(speech, 'Voice Forge generation failed')}), speech.status_code
-        audio = _voice_forge_apply_speed(speech.content, speed)
-        filename = f'voice_forge_{result_id}.wav'
-        with _voice_forge_results_lock:
-            if len(_voice_forge_results) >= 8:
-                _voice_forge_results.pop(next(iter(_voice_forge_results)))
-            _voice_forge_results[result_id] = {'filename': filename, 'audio': audio}
-        return jsonify({
-            'status': 'ok', 'result_id': result_id,
-            'audio_url': f'/api/tts/voice-forge/audio/{filename}',
-            'blend_ratio': 100 if slot == 'A' else 0,
-            'seed': seed, 'expression': expression, 'speed': speed,
-        })
-    finally:
-        if temporary_voice:
-            try:
-                cleanup = requests.delete(
-                    f'{QWEN_FAST_SERVER_URL}/v1/audio/voices/{quote(temporary_voice, safe="")}',
-                    timeout=(5, 30),
-                )
-                if cleanup.status_code not in (200, 404):
-                    logging.warning('Voice Forge temporary voice cleanup returned %s', cleanup.status_code)
-            except requests.RequestException:
-                logging.warning('Voice Forge temporary voice cleanup failed', exc_info=True)
 
 
 @tts_bp.route('/voice-forge/blend', methods=['POST'])

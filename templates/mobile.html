@@ -571,6 +571,7 @@ function mobileChatRequestBody(requestCharacter,requestId,options={}){
     diagnosticHistoryIds:options.diagnosticHistoryIds||chatHistory.map(message=>message?.message_id||null),
     genuineUserSend:options.genuineUserSend===true,
     continuePrefix:options.continuePrefix,
+    continueHead:options.continueHead,
   });
   body.request_id=requestId;
   body.generation_kind=options.generationKind||'normal';
@@ -777,7 +778,7 @@ function memoryIntentGate(userMsg){
   if(!compact)return false;
   const MEMORY_INTENT_RE=/\b(?:remember (?:this|that|it|to|my|the)|save (?:this|that|it)(?: to (?:your )?memory)?|save .{0,80}for (?:later|future reference)|(?:make|take) a note|don['’]?t forget|for (?:future|later) reference|add (?:(?:this|that|it) )?to (?:your )?memory|note this down|keep (?:this|that|it) in mind|save to (?:your )?memory|put (?:it |this |that )?(?:in(?:to)?|to) (?:your )?memory|(?:can you )?memorize (?:this|that|it)|keep a record|log (?:this|that|it)|store (?:this|that|it)(?: in memory)?|jot (?:this|that|it) down|note (?:this|that|it) down|(?:please )?save (?:this|that|it))\b/i;
   const LEADING_MEMORY_INTENT_RE=/^(?:please\s+|can you\s+|could you\s+|would you\s+|i want you to\s+)?(?:remember (?:this|that|it|to|my|the)|save (?:this|that|it)(?: to (?:your )?memory)?|save .{0,80}for (?:later|future reference)|(?:make|take) a note|don['â€™]?t forget|for (?:future|later) reference|add (?:(?:this|that|it) )?to (?:your )?memory|note this down|keep (?:this|that|it) in mind|save to (?:your )?memory|put (?:it |this |that )?(?:in(?:to)?|to) (?:your )?memory|memorize (?:this|that|it)|keep a record|log (?:this|that|it)|store (?:this|that|it)(?: in memory)?|jot (?:this|that|it) down|note (?:this|that|it) down|save (?:this|that|it))\b/i;
-  const directCommand = compact.replace(/^(?:(?:please|can you|could you|would you|i want you to)\s+)*/i,'');
+   const directCommand = compact.replace(/^(?:(?:please|can you|could you|would you|will you|i['’]?d like you to|i need you to|i want you to)\s+)*/i,'');
   const DIRECT_MEMORY_COMMAND_RE=/^(?:remember (?:this|that|it|to|my|the)|save (?:this|that|it)(?: to (?:your )?memory)?|save .{0,80}for (?:later|future reference)|(?:make|take) a note|don['â€™]?t forget|for (?:future|later) reference|add (?:(?:this|that|it) )?to (?:your )?memory|note this down|keep (?:this|that|it) in mind|save to (?:your )?memory|put (?:it |this |that )?(?:in(?:to)?|to) (?:your )?memory|memorize (?:this|that|it)|keep a record|log (?:this|that|it)|store (?:this|that|it)(?: in memory)?|jot (?:this|that|it) down|note (?:this|that|it) down|save (?:this|that|it))\b/i;
   return DIRECT_MEMORY_COMMAND_RE.test(directCommand);
 }
@@ -798,7 +799,7 @@ function memoryTranscriptFromMessages(messages){
 function extractMemoryCommandFact(commandText){
   if(!commandText||typeof commandText!=='string')return '';
   return commandText.replace(
-    /^(?:(?:please|can you|could you|would you|i want you to)\s+)*(?:remember\s+(?:this|that|it|to|my|the)?|save\s+(?:this|that|it)?(?:\s+to\s+(?:your\s+)?memory)?|make\s+a\s+note\s+(?:that|of)?|take\s+a\s+note\s+(?:that|of)?|note\s+(?:this|that)?\s+down|don['’]?t\s+forget\s+(?:that)?|add\s+(?:this|that|it)?\s+to\s+(?:your\s+)?memory|keep\s+(?:this|that|it)?\s+in\s+mind|memorize\s+(?:this|that|it)?|store\s+(?:this|that|it)?(?:\s+in\s+memory)?|jot\s+(?:this|that|it)?\s+down)[\s,.:;!]*/i,
+     /^(?:(?:please|can you|could you|would you|will you|i['’]?d like you to|i need you to|i want you to)\s+)*(?:remember\s+(?:this|that|it|to|my|the)?|save\s+(?:this|that|it)?(?:\s+to\s+(?:your\s+)?memory)?|make\s+a\s+note\s+(?:that|of)?|take\s+a\s+note\s+(?:that|of)?|note\s+(?:this|that)?\s+down|don['’]?t\s+forget\s+(?:that)?|add\s+(?:this|that|it)?\s+to\s+(?:your\s+)?memory|keep\s+(?:this|that|it)?\s+in\s+mind|memorize\s+(?:this|that|it)?|store\s+(?:this|that|it)?(?:\s+in\s+memory)?|jot\s+(?:this|that|it)?\s+down)[\s,.:;!]*/i,
     ''
   ).trim();
 }
@@ -807,24 +808,76 @@ async function saveMemoryFromChat(commandText){
   const history=recentVisibleChatForMemory();
   const fact=extractMemoryCommandFact(commandText);
   if(!history.length&&!fact){showToast('No conversation or fact to save to memory yet');setStatus('Ready');return;}
-  const memoryCharacter=await mobileRequestCharacter();
-  if(!memoryCharacter){setStatus('Ready');return;}
-  setStatus('Saving memory...');
-  showToast('Saving memory...');
+  if(mobileSending){showToast('Still generating — please wait');return;}
+  mobileSending=true;setSendBusy(true);
+  let ackMsg=null,ackBubble=null;
   try{
+    const memoryCharacter=await mobileRequestCharacter();
+    if(!memoryCharacter){mobileSending=false;setSendBusy(false);setStatus('Ready');return;}
+
+    const userTs=new Date().toISOString();
+    const userEntry={role:'user',content:commandText,speaker:userName,timestamp:userTs,message_id:HwuiChatCore.createMessageId()};
+    addBubble('user',userName,commandText,userTs,userEntry);
+    chatHistory.push(userEntry);
+    const ackText='One moment — saving that to memory…';
+    ackMsg={role:'assistant',content:ackText,speaker:characterName,timestamp:new Date().toISOString(),message_id:HwuiChatCore.createMessageId(),reply_to_message_id:userEntry.message_id};
+    ackBubble=addBubble('ai',characterName,ackText,ackMsg.timestamp,ackMsg);
+    chatHistory.push(ackMsg);
+    setStatus('Saving memory...');
+    showToast('Saving memory...');
+
+    // Keep the request and acknowledgement durable before writing memory.
+    if(!await saveChatToDisk()){
+      ackMsg.content='I couldn’t save this request in chat history, so I haven’t attempted the memory save.';
+      ackMsg.generation_status='error';
+      _setDocAckBubbleText(ackBubble,ackMsg.content);
+      await saveChatToDisk();
+      showToast('Could not save the request to chat history; memory was not saved.');
+      mobileSending=false;setSendBusy(false);setStatus('Ready');
+      return;
+    }
+
     const effectiveHistory=[...history];
     if(commandText)effectiveHistory.push({role:'user',content:commandText});
     const res=await fetch('/auto_memory/capture',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({character:memoryCharacter,user_name:userName,user_text:commandText||'remember this',assistant_text:memoryTranscriptFromMessages(effectiveHistory),recent_messages:effectiveHistory,force_save:true})});
     const result=await res.json().catch(()=>({}));
-    if(res.ok&&result.status==='saved')showToast('Memory saved: '+(result.title||'Saved memory'));
-    else if(result.reason==='duplicate')showToast('That memory is already saved');
-    else if(result.reason==='roleplay_project')showToast('Memory saving is disabled in roleplay projects');
-    else showToast('Failed to save memory: '+(result.error||result.reason||'unknown error'));
-    setStatus('Ready');
-    return;
-  }catch(e){showToast('⚠️ Error: '+e.message);}
-  setStatus('Ready');
+    if(res.ok&&result.status==='saved'){
+      ackMsg.content="Got it, I've saved that to memory.";
+      showToast('Memory saved: '+(result.title||'Saved memory'));
+    }else if(result.reason==='duplicate'){
+      ackMsg.content='That memory is already saved.';
+      showToast('That memory is already saved');
+    }else if(result.reason==='roleplay_project'){
+      ackMsg.content='I couldn’t save that to memory because memory saving is disabled in roleplay projects.';
+      showToast('Memory saving is disabled in roleplay projects');
+    }else{
+      const reason=result.error||result.reason||'HTTP '+(res.status||'error');
+      ackMsg.content='I couldn’t save that to memory: '+reason;
+      ackMsg.generation_status='error';
+      showToast('Failed to save memory: '+reason);
+    }
+  }catch(e){
+    if(ackMsg){
+      ackMsg.content='I couldn’t save that to memory because I couldn’t reach the server: '+e.message+'.';
+      ackMsg.generation_status='error';
+      _setDocAckBubbleText(ackBubble,ackMsg.content);
+    }
+    showToast('⚠️ Error: '+e.message);
+  }
+  if(ackMsg){
+    _setDocAckBubbleText(ackBubble,ackMsg.content);
+    if(!await saveChatToDisk()){
+      const memoryWasSaved=ackMsg.content==="Got it, I've saved that to memory.";
+      ackMsg.content=memoryWasSaved
+        ? "I saved the memory, but couldn't save this acknowledgement to chat history."
+        : ackMsg.content+' (I also couldn’t save this reply to chat history.)';
+      ackMsg.generation_status='error';
+      _setDocAckBubbleText(ackBubble,ackMsg.content);
+      showToast('Chat history could not be updated after the memory request.');
+    }
+  }
+  mobileSending=false;setSendBusy(false);setStatus('Ready');
 }
 
 function recentVisibleChatForDocument(){
@@ -1944,8 +1997,11 @@ function flushPendingBatch(){
 function stripCodeForTTS(chunk){
   chunk=ttsBacktickTail+chunk;
   ttsBacktickTail='';
-  const trail=chunk.match(/`{1,2}$/);
-  if(trail){ttsBacktickTail=trail[0];chunk=chunk.slice(0,-trail[0].length);}
+  // Hold a trailing run of 1-2 backticks (a fence may complete next chunk). A run of 3 is a
+  // whole fence: holding two of them back left a lone backtick dropped as code content, so a
+  // closing fence arriving as its own chunk never closed and muted the rest of the reply.
+  const trail=chunk.match(/`+$/);
+  if(trail&&trail[0].length<3){ttsBacktickTail=trail[0];chunk=chunk.slice(0,-trail[0].length);}
   let out='',i=0;
   while(i<chunk.length){
     if(chunk[i]==='`'&&chunk[i+1]==='`'&&chunk[i+2]==='`'){
@@ -1959,13 +2015,22 @@ function stripCodeForTTS(chunk){
     }
     if(ttsInsideCodeBlock){i++;continue;}
     if(chunk[i]==='`'){
+      // A backtick between two letters is an apostrophe typed as one (don`t), not code.
+      const before=out?out[out.length-1]:ttsSentenceBuffer.slice(-1);
+      if(/[A-Za-z]/.test(before||'')&&/[A-Za-z]/.test(chunk[i+1]||'')){out+="'";i++;continue;}
       const close=chunk.indexOf('`',i+1);
+      // Inline code is short and stays inside one sentence; a "span" crossing a line break or a
+      // sentence end is a stray backtick in prose. Drop just the mark so later sentences are spoken.
+      if(ttsInlineCodeIsStray(close===-1?chunk.slice(i+1):chunk.slice(i+1,close))){i++;continue;}
       if(close===-1){ttsBacktickTail=chunk.substring(i)+ttsBacktickTail;return out;}
       i=close+1;continue;
     }
     out+=chunk[i];i++;
   }
   return out;
+}
+function ttsInlineCodeIsStray(span){
+  return span.length>120||/\n/.test(span)||/[.!?]["')\]]*\s+\S/.test(span);
 }
 
 function stripStreamingAnchorsForTTS(chunk){
@@ -2060,11 +2125,12 @@ function bufferTextForTTS(chunk){
 
 function flushTTSBuffer(){
   if(!ttsEnabled)return;
-  const remaining=ttsSentenceBuffer.trim();
+  // A lone backtick still waiting for a partner at stream end was a stray mark, not code: speak
+  // the text it held (minus the marks). An unclosed ``` fence is real code and stays unspoken.
+  const heldTail=ttsInsideCodeBlock?'':ttsBacktickTail.replace(/`/g,'');
+  const remaining=(ttsSentenceBuffer+heldTail).trim();
   ttsSentenceBuffer='';
   if(remaining.length>2)batchAndQueue(remaining,'flush');
-  // Drop any held-back backtick fragments — never spoken aloud regardless
-  // of whether the closing ``` ever arrived.
   ttsBacktickTail='';
   ttsInsideCodeBlock=false;
   ttsLinkTagTail='';
@@ -2795,6 +2861,7 @@ async function continueResponse() {
         conversationHistory: continueRequest.conversationHistory,
         diagnosticHistoryIds: continueRequest.diagnosticHistoryIds,
         continuePrefix: continueRequest.continuePrefix,
+        continueHead: continueRequest.retainedHead,
         generationKind: 'continuation',
       })), signal: requestController.signal });
     if (!res.ok) { showTyping(false); showToast('⚠️ Server error during continue'); setStatus('Error'); return; }

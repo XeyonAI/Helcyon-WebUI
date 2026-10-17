@@ -34,7 +34,7 @@
   // This remains the curated list rendered by the manual picker. Assistant
   // markers are validated separately below so model-generated reactions are
   // not constrained by the picker choices.
-  const REACTION_EMOJIS = Object.freeze(['😂', '❤️', '👍', '👎', '😮', '😢']);
+  const REACTION_EMOJIS = Object.freeze(['😂', '❤️', '👍', '😮', '😢', '😏', '😊', '😌', '😬']);
   const REACTION_MARKER_RE = /<!--[ \t]*HWUI_REACTION[ \t]*:[ \t]*([\s\S]*?)[ \t]*-->/giu;
   const REACTION_ANY_MARKER_RE = /<!--[ \t]*HWUI_REACTION[ \t]*:[\s\S]*?-->/giu;
   const REACTION_MARKER_OPEN_RE = /<!--[ \t]*HWUI_REACTION[ \t]*:/giu;
@@ -965,6 +965,9 @@
       body.prompt_diagnostic_history_ids = fields.diagnosticHistoryIds.slice();
     }
     if (typeof fields.continuePrefix === 'string') body.continue_prefix = fields.continuePrefix;
+    // The reply text before the prefix; chat-message transports (cloud, provider,
+    // llama.cpp messages API) send the whole partial reply, the raw prompt path ignores it.
+    if (typeof fields.continueHead === 'string' && fields.continueHead) body.continue_head = fields.continueHead;
     if (typeof fields.authorNoteOverride === 'string' && fields.authorNoteOverride.trim()) {
       body.author_note = fields.authorNoteOverride;
     }

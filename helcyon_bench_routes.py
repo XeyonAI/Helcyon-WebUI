@@ -17,41 +17,16 @@ from helcyon_bench_adapter import (
     rename_model_alias,
     update_prompt_pack,
 )
-from chat_routes import _parse_chat_file
-from helcyon_bench_capture import (
-    CaptureError,
-    capture_association,
-    delete_benchmark_session,
-    list_benchmark_sessions,
-    load_benchmark_session,
-    load_integrated_session,
-    persist_captured_response,
-    register_association,
-    resolve_association,
-    save_benchmark_session,
-    save_integrated_session,
-    update_association_status,
-)
-from helcyon_bench_judge import (
-    ApiError,
-    ConfigError,
-    IntegratedJudgeError,
-    JudgeError,
-    judge_run_manager,
-    load_judge_settings,
-    refresh_judge_models,
-    save_judge_api_key,
-    test_judge_connection,
-)
 
 
 helcyon_bench_bp = Blueprint("helcyon_bench", __name__)
 
 
-@helcyon_bench_bp.route("/api/helcyon-bench/prompt-packs", methods=["GET"])
 def _pro_only():
     return jsonify({"error": "This feature is available in HWUI Pro.", "pro_required": True}), 403
 
+
+@helcyon_bench_bp.route("/api/helcyon-bench/prompt-packs", methods=["GET"])
 def prompt_packs():
     return jsonify({"prompt_packs": load_prompt_packs()})
 
@@ -166,10 +141,7 @@ def delete_benchmark_model_runs():
 
 @helcyon_bench_bp.route("/api/helcyon-bench/session", methods=["GET"])
 def get_integrated_benchmark_session():
-    try:
-        return jsonify({"session": load_integrated_session()})
-    except CaptureError as error:
-        return jsonify({"error": str(error), "code": error.code}), 500
+    return jsonify({"session": {}})
 
 
 @helcyon_bench_bp.route("/api/helcyon-bench/session", methods=["PUT"])
@@ -179,7 +151,7 @@ def save_integrated_benchmark_session():
 
 @helcyon_bench_bp.route("/api/helcyon-bench/saved-sessions", methods=["GET"])
 def get_saved_benchmark_sessions():
-    return jsonify({"sessions": list_benchmark_sessions()})
+    return jsonify({"sessions": []})
 
 
 @helcyon_bench_bp.route("/api/helcyon-bench/saved-sessions", methods=["POST"])
@@ -228,60 +200,22 @@ def capture_benchmark_response(association_id):
 
 @helcyon_bench_bp.route("/api/helcyon-bench/judge/settings", methods=["GET"])
 def get_judge_settings():
-    return jsonify(
-        load_judge_settings(
-            request.args.get("endpoint", ""),
-            request.args.get("model", ""),
-        )
-    )
+    return _pro_only()
 
 
 @helcyon_bench_bp.route("/api/helcyon-bench/judge/api-key", methods=["POST"])
 def set_judge_api_key():
-    data = request.get_json(silent=True) or {}
-    try:
-        settings = save_judge_api_key(
-            str(data.get("endpoint") or ""),
-            str(data.get("api_key") or ""),
-        )
-        return jsonify({"settings": settings, "message": "Judge API key saved."})
-    except (ConfigError, IntegratedJudgeError, OSError) as error:
-        return jsonify({"error": str(error)}), 422
+    return _pro_only()
 
 
 @helcyon_bench_bp.route("/api/helcyon-bench/judge/models", methods=["POST"])
 def get_judge_models():
-    data = request.get_json(silent=True) or {}
-    try:
-        return jsonify(refresh_judge_models(str(data.get("endpoint") or "")))
-    except (ApiError, ConfigError, IntegratedJudgeError, OSError) as error:
-        return jsonify(
-            {
-                "error": str(error),
-                "raw_response": getattr(error, "raw_response", None),
-                "status_code": getattr(error, "status_code", None),
-            }
-        ), 502
+    return _pro_only()
 
 
 @helcyon_bench_bp.route("/api/helcyon-bench/judge/test", methods=["POST"])
 def test_integrated_judge_connection():
-    data = request.get_json(silent=True) or {}
-    try:
-        return jsonify(
-            test_judge_connection(
-                str(data.get("endpoint") or ""),
-                str(data.get("model") or ""),
-            )
-        )
-    except (ApiError, ConfigError, IntegratedJudgeError, OSError) as error:
-        return jsonify(
-            {
-                "error": str(error),
-                "raw_response": getattr(error, "raw_response", None),
-                "status_code": getattr(error, "status_code", None),
-            }
-        ), 502
+    return _pro_only()
 
 
 @helcyon_bench_bp.route("/api/helcyon-bench/judge/runs", methods=["POST"])
@@ -294,10 +228,7 @@ def start_integrated_judge_run():
     methods=["GET"],
 )
 def get_integrated_judge_run(job_id):
-    try:
-        return jsonify({"job": judge_run_manager.get(job_id)})
-    except IntegratedJudgeError as error:
-        return jsonify({"error": str(error)}), 404
+    return _pro_only()
 
 
 @helcyon_bench_bp.route(
@@ -305,7 +236,4 @@ def get_integrated_judge_run(job_id):
     methods=["DELETE"],
 )
 def cancel_integrated_judge_run(job_id):
-    try:
-        return jsonify({"job": judge_run_manager.cancel(job_id)})
-    except IntegratedJudgeError as error:
-        return jsonify({"error": str(error)}), 404
+    return _pro_only()
