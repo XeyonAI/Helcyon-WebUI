@@ -551,6 +551,40 @@
     return /[<*]$/.test(value) ? value.slice(0, -1) : value;
   }
 
+  function ttsEndsInsideFencedCode(text) {
+    let fenceChar = '';
+    let fenceLength = 0;
+    for (const rawLine of String(text || '').split('\n')) {
+      const line = rawLine.replace(/\r$/, '');
+      if (!fenceChar) {
+        const opener = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[^\r\n]*$/);
+        if (opener) {
+          fenceChar = opener[1][0];
+          fenceLength = opener[1].length;
+        }
+        continue;
+      }
+      const closer = line.match(/^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/);
+      if (closer && closer[1][0] === fenceChar && closer[1].length >= fenceLength) {
+        fenceChar = '';
+        fenceLength = 0;
+      }
+    }
+    return Boolean(fenceChar);
+  }
+
+  function stripTTSTrailingKissMarker(text, final) {
+    const value = String(text || '');
+    // A kiss sign-off is a standalone x/xx token at the end of a reply. Keep
+    // code samples literal; the normal reply renderer preserves fenced blocks.
+    if (ttsEndsInsideFencedCode(value)) return value;
+    const suffix = value.match(/(^|[\s.!?,;:…])([xX]+)(\s*)([.!?,;:…]*)$/u);
+    if (!suffix) return value;
+    const before = value.slice(0, suffix.index);
+    const separator = /[.!?,;:…]/u.test(suffix[1]) ? suffix[1] : '';
+    return before + separator + (final ? suffix[4] : '');
+  }
+
   // ── The ONE text the speech path may say ────────────────────────────────
   // Regression 2026-09-19: a reply rendered clean in the UI while TTS audibly
   // spoke internal <STORED_FACTS> memory content. Both pages fed TTS from the
@@ -575,7 +609,9 @@
     const base = stripChatMLOutsideCodeBlocks(
       String(accumulatedAnswer || ''), charName, userName, { streaming: !final }
     );
-    const cleaned = final ? base : withholdUnresolvedScaffolding(base);
+    const cleaned = stripTTSTrailingKissMarker(
+      final ? base : withholdUnresolvedScaffolding(base), final
+    );
     const previous = Math.max(0, Number(spokenLength) || 0);
     // The cursor NEVER moves backwards. Held text makes `cleaned` shrink and
     // then grow again; clamping the cursor down to the shrunken length made

@@ -438,7 +438,69 @@ window.addEventListener('DOMContentLoaded',async()=>{
   if(deepLink)await openMobileDeepLink(deepLink);
   scrollToBottom();
   initMobilePush();
+  mobileCheckServer();
 });
+
+// ── Server reachability: recover on launch and resume without a manual refresh ──
+// A PWA launched from the home screen (or resumed after the phone slept) often
+// makes its first requests before the network / Tailscale VPN is usable. Those
+// requests fail once, leaving "Failed to load chats". Instead of polling, check
+// once on launch and on resume/online events; retry with backoff only while the
+// server is actually unreachable and the page is visible.
+let mobileServerOk=true,mobileNeedsReload=false,mobileProbeRunning=false,mobileProbeTimer=null,mobileProbeDelay=1000,mobileLastProbe=0,mobileProbeFailed=false;
+async function mobileProbeServer(){
+  const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),5000);
+  try{const r=await fetch('/manifest.webmanifest',{cache:'no-store',signal:ctl.signal});return r.ok;}
+  catch(e){return false;}
+  finally{clearTimeout(timer);}
+}
+async function mobileCheckServer(){
+  if(mobileProbeRunning)return;
+  mobileProbeRunning=true;mobileLastProbe=Date.now();
+  clearTimeout(mobileProbeTimer);mobileProbeTimer=null;
+  try{
+    if(await mobileProbeServer()){
+      mobileProbeDelay=1000;
+      const recovered=mobileProbeFailed;mobileProbeFailed=false;
+      if(!mobileServerOk||mobileNeedsReload){
+        mobileServerOk=true;
+        // Nothing was loaded and no chat is open: a clean reload is lossless.
+        if(mobileNeedsReload&&!mobileChatFilename&&!mobileSending&&mobileMayAutoReload()){location.reload();return;}
+        mobileNeedsReload=false;
+        const st=document.getElementById('header-status');
+        if(st&&st.textContent==='Reconnecting…')setStatus('Ready');
+        checkMobileBackend();
+        if(recovered&&document.getElementById('chat-panel').style.display!=='none')loadChatList();
+      }
+      return;
+    }
+    mobileServerOk=false;mobileNeedsReload=true;mobileProbeFailed=true;
+    const st=document.getElementById('header-status');
+    if(st&&!mobileSending)setStatus('Reconnecting…');
+    if(!document.hidden){
+      mobileProbeTimer=setTimeout(mobileCheckServer,mobileProbeDelay);
+      mobileProbeDelay=Math.min(mobileProbeDelay*2,10000);
+    }
+  }finally{mobileProbeRunning=false;}
+}
+// At most one automatic reload per 30 s, so a server that is up but erroring cannot loop.
+function mobileMayAutoReload(){
+  try{
+    const last=Number(sessionStorage.getItem('hwuiAutoReloadAt')||0);
+    if(Date.now()-last<30000)return false;
+    sessionStorage.setItem('hwuiAutoReloadAt',String(Date.now()));
+  }catch(e){}
+  return true;
+}
+// A startup load failed: treat the server as suspect and let the probe decide.
+function mobileNoteLoadFailure(){
+  if(mobileChatFilename)return;
+  mobileServerOk=false;mobileNeedsReload=true;mobileCheckServer();
+}
+function mobileResumeCheck(){if(!document.hidden&&Date.now()-mobileLastProbe>2000)mobileCheckServer();}
+document.addEventListener('visibilitychange',mobileResumeCheck);
+window.addEventListener('pageshow',mobileResumeCheck);
+window.addEventListener('online',()=>{mobileProbeDelay=1000;mobileCheckServer();});
 
 // Back button intercept — go to chat list if in a chat, otherwise let browser handle it
 window.addEventListener('popstate',async(e)=>{
@@ -1437,7 +1499,7 @@ async function loadChatList(){
   el.innerHTML='<div style="padding:16px;color:var(--text-dim);text-align:center;">Loading...</div>';
   try{
     const res=await fetch('/chats/list');
-    if(!res.ok){el.innerHTML='<div style="padding:16px;color:#e88;">Failed to load chats</div>';return;}
+    if(!res.ok){el.innerHTML='<div style="padding:16px;color:#e88;">Failed to load chats</div>';mobileNoteLoadFailure();return;}
     const chats=await res.json();
     if(!chats.length){el.innerHTML='<div style="padding:16px;color:var(--text-dim);text-align:center;">No chats yet</div>';return;}
 
@@ -1501,7 +1563,7 @@ async function loadChatList(){
       item.addEventListener('mouseleave',lpCancel);
       el.appendChild(item);
     });
-  }catch(e){el.innerHTML='<div style="padding:16px;color:#e88;">Error: '+e.message+'</div>';}
+  }catch(e){el.innerHTML='<div style="padding:16px;color:#e88;">Error: '+e.message+'</div>';mobileNoteLoadFailure();}
 }
 
 function extractCharFromFilename(filename){

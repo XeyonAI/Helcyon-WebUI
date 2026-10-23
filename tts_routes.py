@@ -4,9 +4,6 @@ from flask import Blueprint, request, jsonify, send_file, Response, stream_with_
 import requests
 from io import BytesIO
 import logging
-import math
-import shutil
-import subprocess
 import json
 import os
 import base64
@@ -14,13 +11,10 @@ import struct
 import re
 import threading
 import time
-import uuid
 import sys
 import tempfile
-import user_config
 from pathlib import Path
 from user_config import load_user_config_section, save_user_config_section
-from urllib.parse import quote
 
 from tts_path_config import apply_tts_path_overrides
 from qwentts_cpp_server import QWEN_FAST_TALKER_MAX_SEQ, QWENTTS_CPP_TALKER_MAX_SEQ
@@ -102,9 +96,6 @@ _omnivoice_client_lock = None
 _omnivoice_generate_lock = None
 
 
-def _pro_only():
-    return jsonify({'error': 'This feature is available in HWUI Pro.', 'pro_required': True}), 403
-
 def get_settings():
     """Read settings.json. Returns {} on any read error — callers that
     can't distinguish empty-config from read-failure should use this.
@@ -169,6 +160,13 @@ def save_settings(data):
         return False
 
 
+
+
+
+
+
+
+
 def get_engine():
     return get_settings().get('tts_engine', 'f5')
 
@@ -222,6 +220,10 @@ def _f5_local_voices():
     except OSError as exc:
         logging.error(f'F5 voice scan failed in {F5_VOICES_DIR}: {exc}')
         return []
+
+
+
+
 
 
 def _generate_omnivoice(text, voice, language='English'):
@@ -835,6 +837,10 @@ def get_voices():
 # --------------------------------------------------
 # VOICE FORGE (experimental, Qwen-only and isolated from normal TTS routes)
 # --------------------------------------------------
+def _pro_only():
+    return jsonify({"error": "This feature is available in HWUI Pro.", "pro_required": True}), 403
+
+
 @tts_bp.route('/voice-forge/settings', methods=['GET'])
 def get_voice_forge_settings():
     return _pro_only()
@@ -845,9 +851,19 @@ def save_voice_forge_settings():
     return _pro_only()
 
 
+
+
+
+
+
+
 @tts_bp.route('/voice-forge/templates', methods=['GET', 'POST', 'DELETE'])
 def voice_forge_templates():
     return _pro_only()
+
+
+
+
 
 
 @tts_bp.route('/voice-forge/export', methods=['POST'])
@@ -869,6 +885,8 @@ def get_voice_forge_reference():
 @tts_bp.route('/voice-forge/voice', methods=['DELETE'])
 def delete_voice_forge_voice():
     return _pro_only()
+
+
 
 
 @tts_bp.route('/voice-forge/blend', methods=['POST'])

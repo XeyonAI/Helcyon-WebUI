@@ -1,5 +1,6 @@
 {
   "port": null,
+  "model_template_modes": {},
   "tts_engine": "f5",
   "qwen_tts_fast_server": "",
   "qwentts_cpp_server": "",

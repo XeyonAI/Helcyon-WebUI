@@ -1,17 +1,16 @@
 # Helcyon-WebUI Free - Python dependencies for the main HWUI environment (venv\)
 #
-# Recommended: run setup.bat instead of installing this file directly. It creates the
-# virtual environment, installs the right PyTorch CUDA build for your GPU first, installs
-# this file, and verifies every import.
+# Recommended: run setup.bat instead of installing this
+# file directly. The setup scripts create the virtual environment, install the right PyTorch
+# CUDA build for your GPU first, install this file, and verify every import.
 #
 # PyTorch is deliberately NOT listed here. It is needed by openai-whisper (voice input) and
 # must match your GPU/CUDA, so install it first from https://pytorch.org/get-started/locally/
 # (setup.bat does this automatically), then run:  pip install -r requirements.txt
 # Listing it here could replace a working CUDA build with the generic PyPI one.
 #
-# Text-to-speech engines (Qwen3-TTS, F5, Chatterbox, XTTS, Kokoro) run as separate servers
-# in their own environments and are NOT installed by this file. Whisper voice input also
-# needs FFmpeg on PATH.
+# Text-to-speech engines (Qwen3-TTS, F5, Chatterbox, XTTS, Kokoro) run as separate servers in their own environments. They are NOT installed by this file.
+#
 
 # Web server
 flask>=3.0
@@ -30,10 +29,13 @@ Pillow>=10.0
 faster-whisper>=1.0
 openai-whisper
 
-# Audio file reading used by the Qwen3-TTS integration
+# Audio handling for optional speech and TTS integrations (soundfile, librosa, numpy, scipy)
+numpy
+scipy>=1.11
 soundfile>=0.12.1
+librosa>=0.10
 
-# OmniVoice engine client
+# OmniVoice engine client (tts_routes.py)
 gradio_client>=1.8.0
 
 # GPU VRAM read-out in the status bar (optional; the app works without it)

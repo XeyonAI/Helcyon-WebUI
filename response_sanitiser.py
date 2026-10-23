@@ -21,6 +21,8 @@ after a ``>`` quote are kept.
 
 import codecs
 import re
+from functools import wraps
+from response_pipeline import reasoning_isolated
 
 _MARKER = "<>"
 _TRAILING_MARKER_RE = re.compile(r"(?:\s*\n|^)[ \t]*<>\s*$")
@@ -86,7 +88,7 @@ def _hold_start(buf):
     return start
 
 
-def strip_trailing_empty_marker_stream(source):
+def _strip_trailing_empty_marker_stream(source):
     """Pass a streamed reply through with a standalone trailing ``<>`` line or
     orphaned final ``>`` removed.
 
@@ -120,3 +122,10 @@ def strip_trailing_empty_marker_stream(source):
         close = getattr(source, "close", None)
         if close:
             close()
+
+
+@wraps(_strip_trailing_empty_marker_stream)
+def strip_trailing_empty_marker_stream(source):
+    # Reasoning (between the stream's THINK sentinels) is passed through
+    # untouched; the cleaner only ever sees the visible answer.
+    return reasoning_isolated(_strip_trailing_empty_marker_stream)(source)

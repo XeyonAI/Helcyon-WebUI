@@ -76,11 +76,11 @@
     #tab-hf-models .hf-view { display: none; }
     #tab-hf-models .hf-view.active { display: block; }
     #tab-hf-models .bench-app-shell { min-height: calc(100vh - 150px); }
-    #tab-hf-models h2 { margin: 2.5px 0 4px; color: var(--bench-text); font-size: clamp(19px, 2.2vw, 25px); line-height: 1.1; }
-    #tab-hf-models h4 { margin: 0 0 2.5px; color: var(--bench-muted); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
+    #tab-hf-models h2 { margin: 2.5px 0 4px; color: var(--bench-text); font-size: clamp(23px, 2.65vw, 30px); line-height: 1.1; }
+    #tab-hf-models h4 { margin: 0 0 2.5px; color: var(--bench-muted); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; }
     #tab-hf-models .bench-page-header p { color: var(--bench-muted); margin: 0; max-width: 593px; }
     #tab-hf-models button {
-      width: auto; min-height: 26.5px; margin: 0; padding: 5.5px 9.5px; border: 1px solid var(--bench-border);
+      width: auto; min-height: 32px; margin: 0; padding: 6.5px 11.5px; border: 1px solid var(--bench-border); font-size: 16.5px;
       border-radius: 4.5px; background: var(--icon-button-bg); color: var(--bench-text); cursor: pointer;
     }
     #tab-hf-models button:hover:not(:disabled) { border-color: var(--bench-focus); background: var(--icon-button-hover); }
@@ -93,7 +93,7 @@
     #tab-hf-models .hf-go:hover:not(:disabled) { background: #27804a; border-color: #48bd70; }
     #tab-hf-models .hf-danger { border-color: #6a2a2a; color: #e88; }
     #tab-hf-models input[type="text"], #tab-hf-models input[type="password"], #tab-hf-models select {
-      box-sizing: border-box; width: 100%; margin: 0; background: var(--bench-input-bg);
+      box-sizing: border-box; width: 100%; margin: 0; background: var(--bench-input-bg); font-size: 16.5px;
       border: 1px solid var(--bench-border); color: var(--bench-text); border-radius: 4.5px;
     }
     #tab-hf-models .bench-view-tab { position: relative; width: 100%; text-align: left; background: transparent; border-color: transparent; color: var(--bench-muted); }
@@ -101,25 +101,25 @@
     #tab-hf-models .bench-view-tab.active, #tab-hf-models .bench-view-tab.active:hover:not(:disabled) { background: var(--bench-accent); border-color: var(--bench-focus); color: var(--bench-accent-text); }
     #tab-hf-models .hf-count {
       position: absolute; top: 6px; right: 7px; min-width: 14px; padding: 0 4.5px; border-radius: 7px;
-      background: #1f6a3b; color: #f2fff5; font-size: 10px; font-weight: 700; text-align: center; line-height: 14px;
+      background: #1f6a3b; color: #f2fff5; font-size: 12px; font-weight: 700; text-align: center; line-height: 17px;
     }
     #tab-hf-models .hf-count[hidden] { display: none; }
     #tab-hf-models details.bench-rail-section > summary { cursor: pointer; list-style: none; }
     #tab-hf-models details.bench-rail-section > summary::-webkit-details-marker { display: none; }
-    #tab-hf-models .hf-rail-path { overflow-wrap: anywhere; font-size: 10px; color: var(--bench-text); }
-    #tab-hf-models .hf-note { font-size: 10px; color: var(--bench-muted); line-height: 1.5; margin: 3px 0 0; }
+    #tab-hf-models .hf-rail-path { overflow-wrap: anywhere; font-size: 12px; color: var(--bench-text); }
+    #tab-hf-models .hf-note { font-size: 12px; color: var(--bench-muted); line-height: 1.5; margin: 3px 0 0; }
     #tab-hf-models .hf-note.error { color: #f66; }
     #tab-hf-models a { color: #7ab4f5; }
     #tab-hf-models a:hover { color: #a8cdfa; }
 
     /* Search */
     #tab-hf-models .hf-searchbar { display: flex; gap: 8px; align-items: stretch; margin-bottom: 9.5px; }
-    #tab-hf-models .hf-searchbar input { flex: 1; min-width: 0; height: 36px; font-size: 12.5px; padding: 0 11px; border-radius: 6px; }
-    #tab-hf-models .hf-searchbar button { height: 36px; min-width: 93.5px; font-size: 12px; border-radius: 6px; }
+    #tab-hf-models .hf-searchbar input { flex: 1; min-width: 0; height: 43px; font-size: 15.5px; padding: 0 11px; border-radius: 6px; }
+    #tab-hf-models .hf-searchbar button { height: 43px; min-width: 114px; font-size: 14.5px; border-radius: 6px; }
     #tab-hf-models .hf-filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12.5px; }
-    #tab-hf-models .hf-filters select { width: auto; min-height: 25px; height: 25px; padding: 0 6px; font-size: 10px; }
+    #tab-hf-models .hf-filters select { width: auto; min-height: 31px; height: 31px; padding: 0 6px; font-size: 12px; }
     #tab-hf-models .hf-chip {
-      min-height: 23.5px !important; padding: 3px 8.5px !important; border-radius: 11.5px !important; font-size: 10px;
+      min-height: 29px !important; padding: 4px 10.5px !important; border-radius: 11.5px !important; font-size: 12px;
       background: transparent !important; color: var(--bench-muted) !important;
     }
     #tab-hf-models .hf-chip[aria-pressed="true"] { background: var(--bench-accent) !important; color: var(--bench-accent-text) !important; border-color: var(--bench-focus) !important; }
@@ -133,69 +133,69 @@
     #tab-hf-models .hf-detail-pane { position: sticky; top: 6px; }
     #tab-hf-models .hf-results { display: flex; flex-direction: column; gap: 4.5px; }
     #tab-hf-models .hf-card {
-      display: block; width: 100%; height: 76px; min-height: 76px !important; overflow: hidden; text-align: left;
+      display: block; width: 100%; height: 92px; min-height: 92px !important; overflow: hidden; text-align: left;
       padding: 6px 9.5px !important; border-radius: 6px !important; flex: 0 0 auto;
       background: var(--bench-card-bg) !important; border: 1px solid var(--bench-border); border-left: 3px solid transparent;
     }
     #tab-hf-models .hf-card:hover { border-color: var(--bench-focus); }
     #tab-hf-models .hf-card.selected { border-color: var(--bench-focus); border-left-color: #35a85d; background: var(--bench-elevated-bg) !important; }
-    #tab-hf-models .hf-card-author { display: block; font-size: 10px; line-height: 1.25; color: var(--bench-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #tab-hf-models .hf-card-name { display: block; font-size: 12px; line-height: 1.3; font-weight: 700; color: var(--bench-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #tab-hf-models .hf-card-author { display: block; font-size: 12px; line-height: 1.25; color: var(--bench-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #tab-hf-models .hf-card-name { display: block; font-size: 14.5px; line-height: 1.3; font-weight: 700; color: var(--bench-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #tab-hf-models .hf-pills { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5.5px; }
     #tab-hf-models .hf-card .hf-pills { flex-wrap: nowrap; overflow: hidden; gap: 3px; margin-top: 4px; }
-    #tab-hf-models .hf-card .hf-pill { flex: 0 0 auto; padding: 0 5.5px; font-size: 10px; line-height: 12.5px; }
+    #tab-hf-models .hf-card .hf-pill { flex: 0 0 auto; padding: 0 5.5px; font-size: 12px; line-height: 15.5px; }
     #tab-hf-models .hf-pill {
-      display: inline-block; max-width: 100%; padding: 1px 6px; border-radius: 8px; font-size: 10px; line-height: 14px;
+      display: inline-block; max-width: 100%; padding: 1px 6px; border-radius: 8px; font-size: 12px; line-height: 17px;
       border: 1px solid var(--bench-border); color: var(--bench-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     #tab-hf-models .hf-pill.gguf { border-color: #2a6a4a; color: #6f6; }
     #tab-hf-models .hf-pill.vision { border-color: #3a5a8a; color: #7ab4f5; }
     #tab-hf-models .hf-pill.warn { border-color: #6a4a1a; color: #e0a060; }
-    #tab-hf-models .hf-stats { display: flex; flex-wrap: wrap; gap: 2.5px 11px; margin-top: 5.5px; font-size: 10px; color: var(--bench-muted); }
-    #tab-hf-models .hf-card .hf-stats { flex-wrap: nowrap; overflow: hidden; gap: 0 8.5px; margin-top: 4px; font-size: 10px; line-height: 11px; height: 11.5px; white-space: nowrap; }
-    #tab-hf-models .hf-card .hf-stats span { display: block; height: 11.5px; line-height: 11px; overflow: hidden; }
-    #tab-hf-models .hf-empty { padding: 28px 14px; text-align: center; color: var(--bench-muted); line-height: 1.6; }
-    #tab-hf-models .hf-empty strong { display: block; color: var(--bench-text); font-size: 12.5px; margin-bottom: 3px; }
+    #tab-hf-models .hf-stats { display: flex; flex-wrap: wrap; gap: 2.5px 11px; margin-top: 5.5px; font-size: 12px; color: var(--bench-muted); }
+    #tab-hf-models .hf-card .hf-stats { flex-wrap: nowrap; overflow: hidden; gap: 0 8.5px; margin-top: 4px; font-size: 12px; line-height: 13px; height: 14px; white-space: nowrap; }
+    #tab-hf-models .hf-card .hf-stats span { display: block; height: 14px; line-height: 13px; overflow: hidden; }
+    #tab-hf-models .hf-empty { padding: 28px 14px; text-align: center; color: var(--bench-muted); font-size: 16.5px; line-height: 1.6; }
+    #tab-hf-models .hf-empty strong { display: block; color: var(--bench-text); font-size: 15.5px; margin-bottom: 3px; }
     #tab-hf-models .hf-skeleton { height: 64px; border-radius: 7px; background: linear-gradient(90deg, var(--bench-card-bg), var(--bench-elevated-bg), var(--bench-card-bg)); background-size: 200% 100%; animation: hf-shimmer 1.2s infinite; }
     @keyframes hf-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 
     /* Detail */
     #tab-hf-models .hf-detail { padding: 12.5px; }
-    #tab-hf-models .hf-detail h3 { margin: 2px 0 0; font-size: 17px; color: var(--bench-text); overflow-wrap: anywhere; }
-    #tab-hf-models .hf-detail-links { display: flex; gap: 9.5px; margin: 4.5px 0 0; font-size: 10px; }
-    #tab-hf-models .hf-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(93.5px, 1fr)); gap: 6px; margin: 11px 0; }
-    #tab-hf-models .hf-fact { padding: 6px 8px; border: 1px solid var(--bench-border); border-radius: 6px; background: var(--bench-card-bg); min-width: 0; }
-    #tab-hf-models .hf-fact span { display: block; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--bench-muted); }
-    #tab-hf-models .hf-fact strong { display: block; font-size: 11px; color: var(--bench-text); overflow-wrap: anywhere; }
+    #tab-hf-models .hf-detail h3 { margin: 2px 0 0; font-size: 20.5px; color: var(--bench-text); overflow-wrap: anywhere; }
+    #tab-hf-models .hf-detail-links { display: flex; gap: 9.5px; margin: 4.5px 0 0; font-size: 12px; }
+    #tab-hf-models .hf-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(114px, 1fr)); gap: 6px; margin: 11px 0; }
+    #tab-hf-models .hf-fact { padding: 8px 10px; border: 1px solid var(--bench-border); border-radius: 6px; background: var(--bench-card-bg); min-width: 0; }
+    #tab-hf-models .hf-fact span { display: block; font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--bench-muted); }
+    #tab-hf-models .hf-fact strong { display: block; font-size: 13px; color: var(--bench-text); overflow-wrap: anywhere; }
     #tab-hf-models .hf-section-title { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin: 12.5px 0 4.5px; }
     /* Every quant/file row is the same height; columns are fixed so size and Download line up. */
     #tab-hf-models .hf-file {
-      display: grid; grid-template-columns: 87.5px minmax(0, 1fr) 53px 64px; column-gap: 8px; align-items: center;
-      height: 37.5px; box-sizing: border-box; padding: 0 8px; margin-bottom: 4px; overflow: hidden;
+      display: grid; grid-template-columns: 106px minmax(0, 1fr) 64px 77px; column-gap: 10px; align-items: center;
+      height: 46px; box-sizing: border-box; padding: 0 10px; margin-bottom: 4px; overflow: hidden;
       border: 1px solid var(--bench-border); border-radius: 6px; background: var(--bench-card-bg);
     }
     #tab-hf-models .hf-file.installed { border-color: #2a6a4a; }
-    #tab-hf-models .hf-quant { display: flex; flex-direction: column; justify-content: center; min-width: 0; font-weight: 800; font-size: 12px; line-height: 1.2; letter-spacing: -.01em; color: var(--bench-text); }
+    #tab-hf-models .hf-quant { display: flex; flex-direction: column; justify-content: center; min-width: 0; font-weight: 800; font-size: 14.5px; line-height: 1.2; letter-spacing: -.01em; color: var(--bench-text); }
     #tab-hf-models .hf-quant-text, #tab-hf-models .hf-file-name-text { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #tab-hf-models .hf-quant small { display: block; font-size: 9.5px !important; line-height: 1.2; font-weight: 500; color: var(--bench-muted); letter-spacing: 0; white-space: nowrap; }
-    #tab-hf-models .hf-file-name { display: flex; align-items: center; gap: 4.5px; min-width: 0; font-size: 10px; color: var(--bench-muted); }
+    #tab-hf-models .hf-quant small { display: block; font-size: 11.5px !important; line-height: 1.2; font-weight: 500; color: var(--bench-muted); letter-spacing: 0; white-space: nowrap; }
+    #tab-hf-models .hf-file-name { display: flex; align-items: center; gap: 4.5px; min-width: 0; font-size: 12px; color: var(--bench-muted); }
     #tab-hf-models .hf-file-name-text { flex: 1 1 auto; }
-    #tab-hf-models .hf-file-name .hf-pill { flex: 0 0 auto; padding: 0 5.5px; font-size: 10px; line-height: 12.5px; }
-    #tab-hf-models .hf-file-size { font-weight: 700; font-size: 11px; color: var(--bench-text); white-space: nowrap; text-align: right; }
-    #tab-hf-models .hf-file button { width: 64px; height: 22px; min-height: 22px; padding: 0; font-size: 10px; white-space: nowrap; }
+    #tab-hf-models .hf-file-name .hf-pill { flex: 0 0 auto; padding: 0 5.5px; font-size: 12px; line-height: 15.5px; }
+    #tab-hf-models .hf-file-size { font-weight: 700; font-size: 13px; color: var(--bench-text); white-space: nowrap; text-align: right; }
+    #tab-hf-models .hf-file button { width: 77px; height: 26px; min-height: 26px; padding: 0; font-size: 12px; white-space: nowrap; }
     /* HWUI-style tooltip for truncated names (one shared element, positioned by script) */
     .hf-tip {
       position: fixed; z-index: 10000; max-width: min(380px, calc(100vw - 24px)); box-sizing: border-box; padding: 5.5px 8px;
       color: var(--model-msg-text, #cdd6e0); background: var(--config-box-bg, var(--bench-box, #242424));
       border: 1px solid var(--config-box-border, var(--field-border, #3a4650)); border-radius: 4.5px;
-      box-shadow: 0 6px 22px rgba(0,0,0,.55); font-size: 10px; line-height: 1.4; overflow-wrap: anywhere;
+      box-shadow: 0 6px 22px rgba(0,0,0,.55); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere;
       opacity: 0; visibility: hidden; pointer-events: none; transform: translateY(-3px);
       transition: opacity .12s ease, transform .12s ease, visibility .12s;
     }
     .hf-tip.show { opacity: 1; visibility: visible; transform: translateY(0); }
-    #tab-hf-models .hf-quant-guide { margin-top: 9.5px; font-size: 10px; color: var(--bench-muted); }
+    #tab-hf-models .hf-quant-guide { margin-top: 9.5px; font-size: 12px; color: var(--bench-muted); }
     #tab-hf-models .hf-quant-guide summary { cursor: pointer; color: var(--bench-text); }
-    #tab-hf-models .hf-check { display: flex; align-items: center; gap: 4.5px; font-size: 10px; color: var(--bench-muted); margin: 0; }
+    #tab-hf-models .hf-check { display: flex; align-items: center; gap: 4.5px; font-size: 12px; color: var(--bench-muted); margin: 0; }
     #tab-hf-models .hf-check input { width: auto; }
 
     /* Downloads and Installed */
@@ -209,13 +209,13 @@
     #tab-hf-models .hf-progress > div { height: 100%; background: #2a9a5a; width: 0; transition: width .3s; }
     #tab-hf-models .hf-progress > div.err { background: #a33; }
     #tab-hf-models .hf-progress > div.pulse { animation: hf-shimmer 1.2s infinite; background: linear-gradient(90deg,#2a9a5a,#48bd70,#2a9a5a); background-size: 200% 100%; }
-    #tab-hf-models .hf-status-line { display: flex; flex-wrap: wrap; gap: 3px 11px; font-size: 10px; color: var(--bench-muted); }
+    #tab-hf-models .hf-status-line { display: flex; flex-wrap: wrap; gap: 3px 11px; font-size: 12px; color: var(--bench-muted); }
     #tab-hf-models .hf-status-line .ok { color: #6f6; }
     #tab-hf-models .hf-status-line .bad { color: #f66; }
     #tab-hf-models .hf-folder { border: 1px solid var(--bench-border); border-radius: 7px; background: var(--bench-card-bg); margin-bottom: 8px; }
     #tab-hf-models .hf-folder-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 11px; border-bottom: 1px solid var(--bench-border); }
     #tab-hf-models .hf-folder-head strong { overflow-wrap: anywhere; }
-    #tab-hf-models .hf-folder-file { padding: 5.5px 11px; font-size: 11px; color: var(--bench-text); overflow-wrap: anywhere; border-top: 1px solid var(--bench-border); }
+    #tab-hf-models .hf-folder-file { padding: 5.5px 11px; font-size: 13px; color: var(--bench-text); overflow-wrap: anywhere; border-top: 1px solid var(--bench-border); }
     #tab-hf-models .hf-folder-file:first-of-type { border-top: 0; }
 
     @media (max-width: 1250px) {
@@ -226,40 +226,40 @@
     @media (max-width: 780px) {
       #tab-hf-models .hf-searchbar { flex-direction: column; }
       #tab-hf-models .hf-searchbar button { width: 100%; }
-      #tab-hf-models .hf-file { grid-template-columns: minmax(0, 1fr) 50px 62.5px; grid-template-areas: 'q s b' 'n n n'; height: 54.5px; row-gap: 3px; align-content: center; }
+      #tab-hf-models .hf-file { grid-template-columns: minmax(0, 1fr) 62px 77px; grid-template-areas: 'q s b' 'n n n'; height: 66px; row-gap: 3px; align-content: center; }
       #tab-hf-models .hf-file .hf-quant { grid-area: q; }
       #tab-hf-models .hf-file .hf-file-size { grid-area: s; }
-      #tab-hf-models .hf-file button { grid-area: b; width: 62.5px; }
+      #tab-hf-models .hf-file button { grid-area: b; width: 77px; }
       #tab-hf-models .hf-file .hf-file-name { grid-area: n; }
       #tab-hf-models .hf-job-head { flex-direction: column; }
     }
     /* Compact scale for the Bench-derived shell. Scoped to the HF workspace only: style.css's Bench
-       rules (and the surrounding Config page) are untouched. Geometry ~0.78x, type ~0.84x with a 10px floor. */
+       rules (and the surrounding Config page) are untouched. Geometry is compact; successive readability passes raise HF text and grow tight controls accordingly. */
     /* Inner navigation rail: identical sizing to Helcyon-Bench's rail (only the content area is compact).
        Several Bench rail rules are scoped to #tab-helcyon-bench, so the same values are restated here. */
     #tab-hf-models .bench-app-shell { grid-template-columns: 238px minmax(0, 1fr); border-radius: 12px; }
     #tab-hf-models .bench-nav-rail { gap: 18px; padding: 20px 14px; }
     #tab-hf-models .bench-brand { gap: 10px; padding: 0 4px 10px; }
-    #tab-hf-models .bench-brand-mark { width: 38px; height: 38px; flex: 0 0 38px; border-radius: 10px; font-size: 15px; }
-    #tab-hf-models .bench-brand strong { font-size: 15px; line-height: 1.5; }
-    #tab-hf-models .bench-nav-rail small { font-size: 11px !important; line-height: 1.5; }
+    #tab-hf-models .bench-brand-mark { width: 38px; height: 38px; flex: 0 0 38px; border-radius: 10px; font-size: 18px; }
+    #tab-hf-models .bench-brand strong { font-size: 18px; line-height: 1.5; }
+    #tab-hf-models .bench-nav-rail small { font-size: 13px !important; line-height: 1.5; }
     #tab-hf-models .bench-rail-section { gap: 7px; padding-top: 14px; }
-    #tab-hf-models .bench-rail-section h4 { margin: 0 0 3px; font-size: 11px; }
+    #tab-hf-models .bench-rail-section h4 { margin: 0 0 3px; font-size: 13px; }
     #tab-hf-models .bench-view-tab { padding: 4px 10px; border-radius: 6px; }
-    #tab-hf-models .bench-view-tab span { font-size: 15px; font-weight: 400; line-height: 1.5; }
-    #tab-hf-models .bench-view-tab small { font-size: 11px !important; line-height: 1.5; }
-    #tab-hf-models .bench-nav-rail input { height: 40px; font-size: 15px; padding: 0 10px; border-radius: 6px; }
-    #tab-hf-models .bench-nav-rail button:not(.bench-view-tab) { font-size: 14px; min-height: 34px; padding: 7px 11px; border-radius: 6px; }
-    #tab-hf-models .hf-rail-path { font-size: 12px; }
-    #tab-hf-models .hf-count { top: 8px; right: 9px; min-width: 18px; padding: 0 6px; border-radius: 9px; font-size: 11px; line-height: 18px; }
+    #tab-hf-models .bench-view-tab span { font-size: 18px; font-weight: 400; line-height: 1.5; }
+    #tab-hf-models .bench-view-tab small { font-size: 13px !important; line-height: 1.5; }
+    #tab-hf-models .bench-nav-rail input { height: 40px; font-size: 18px; padding: 0 10px; border-radius: 6px; }
+    #tab-hf-models .bench-nav-rail button:not(.bench-view-tab) { font-size: 17px; min-height: 34px; padding: 7px 11px; border-radius: 6px; }
+    #tab-hf-models .hf-rail-path { font-size: 14.5px; }
+    #tab-hf-models .hf-count { top: 8px; right: 9px; min-width: 22px; padding: 0 8px; border-radius: 11px; font-size: 13px; line-height: 22px; }
     #tab-hf-models .bench-workspace { padding: clamp(12px, 1.6vw, 22px); }
     #tab-hf-models .bench-page-header { margin-bottom: 14px; }
-    #tab-hf-models .bench-eyebrow { font-size: 9.5px; }
-    #tab-hf-models .bench-page-header p { font-size: 11.5px; line-height: 1.45; }
-    #tab-hf-models .hf-pane-head strong, #tab-hf-models .hf-job-title strong, #tab-hf-models .hf-folder-head strong { font-size: 11.5px; }
-    #tab-hf-models .hf-job-title small, #tab-hf-models .hf-pane-head small { font-size: 10px !important; }
-    #tab-hf-models .hf-detail small, #tab-hf-models .hf-filters small { font-size: 10px !important; }
-    #tab-hf-models .bench-page-header button { min-height: 26px; font-size: 11px; }
+    #tab-hf-models .bench-eyebrow { font-size: 11.5px; }
+    #tab-hf-models .bench-page-header p { font-size: 14px; line-height: 1.45; }
+    #tab-hf-models .hf-pane-head strong, #tab-hf-models .hf-job-title strong, #tab-hf-models .hf-folder-head strong { font-size: 14px; }
+    #tab-hf-models .hf-job-title small, #tab-hf-models .hf-pane-head small { font-size: 12px !important; }
+    #tab-hf-models .hf-detail small, #tab-hf-models .hf-filters small { font-size: 12px !important; }
+    #tab-hf-models .bench-page-header button { min-height: 31px; font-size: 13px; }
     /* Shared Config section surface, matching Random Check-ins panels. */
     .config-box-surface {
       border: 1px solid var(--config-box-border, var(--field-border, #293238));
@@ -282,8 +282,7 @@
     .config-box-surface > h4:first-child {
       margin-top: 0 !important;
     }
-    /* Random Check-ins: same card vocabulary as the other config tabs (bordered config-box cards,
-       h4 card titles, compact 12px labels, muted 11px hints). Ids and handlers are untouched. */
+    /* Random Check-ins use the shared bordered-card style and compact labels. */
     #tab-random-checkins .random-checkin-intro {
       padding: 10px 12px; margin: 0 0 16px; border: 1px solid var(--config-box-border, var(--field-border, #293238));
       border-radius: 6px; background: var(--config-box-bg, var(--bench-box, #242424));
@@ -569,19 +568,19 @@
     }
 
     /* Backend selector: large 2x2 choice cards. Selected state is explicit. */
-    .backend-mode-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; align-items: stretch; }
+    #advanced-settings-modal .backend-mode-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9.6px; margin-bottom: 12px; align-items: stretch; }
     #config-page #advanced-settings-modal button.backend-mode-btn:not(.advanced-settings-close):not(.adv-tab) {
-      display: flex; align-items: center; gap: 10px; width: 100%; height: auto !important; min-height: 62px !important;
-      margin: 0 !important; padding: 9px 11px !important; text-align: left; cursor: pointer; border-radius: 9px !important;
-      background: #151515; border: 1px solid #2d3238; color: #aab2bb; font-size: 12px !important;
+      display: flex; align-items: center; gap: 12px; width: 100%; height: auto !important; min-height: 74.4px !important;
+      margin: 0 !important; padding: 11px 13.2px !important; text-align: left; cursor: pointer; border-radius: 10.8px !important;
+      background: #151515; border: 1px solid #2d3238; color: #aab2bb; font-size: 14.4px !important;
       transition: background .15s ease, border-color .15s ease, color .15s ease;
     }
     #config-page #advanced-settings-modal button.backend-mode-btn:not(.advanced-settings-close):not(.adv-tab):hover { border-color: #3d4a57; background: #1a1d20; }
     #config-page #advanced-settings-modal button.backend-mode-btn:not(.advanced-settings-close):not(.adv-tab):focus-visible { outline: 2px solid #2a6a4a; outline-offset: 1px; }
-    #advanced-settings-modal .backend-mode-btn .bm-icon { font-size: 30px; line-height: 1; flex: 0 0 auto; }
-    #advanced-settings-modal .backend-mode-btn .bm-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-    #advanced-settings-modal .backend-mode-btn .bm-name { font-size: 14px; font-weight: 700; color: #e4e8ec; line-height: 1.2; }
-    #advanced-settings-modal .backend-mode-btn .bm-sub { font-size: 10.5px; color: #7d8794; line-height: 1.3; overflow-wrap: anywhere; }
+    #advanced-settings-modal .backend-mode-btn .bm-icon { font-size: 36px; line-height: 1; flex: 0 0 auto; }
+    #advanced-settings-modal .backend-mode-btn .bm-text { display: flex; flex-direction: column; gap: 2.4px; min-width: 0; }
+    #advanced-settings-modal .backend-mode-btn .bm-name { font-size: 16.8px; font-weight: 700; color: #e4e8ec; line-height: 1.2; }
+    #advanced-settings-modal .backend-mode-btn .bm-sub { font-size: 12.6px; color: #7d8794; line-height: 1.3; overflow-wrap: anywhere; }
     #config-page #advanced-settings-modal button.backend-mode-btn.is-selected:not(.advanced-settings-close):not(.adv-tab) { box-shadow: 0 1px 8px rgba(0,0,0,0.35); }
     #advanced-settings-modal .backend-mode-btn.is-selected .bm-sub { color: inherit; opacity: .85; }
     #config-page #advanced-settings-modal button.backend-mode-btn[data-mode="local"].is-selected:not(.advanced-settings-close):not(.adv-tab) { background: #1a3a2a; border-color: #2a6a4a; color: #6f6; }
@@ -595,10 +594,10 @@
     #advanced-settings-modal .advanced-settings-card label span,
     #advanced-settings-modal .advanced-settings-card label a,
     #advanced-settings-modal .advanced-settings-card code { font-size: inherit; line-height: inherit; }
-    #advanced-settings-modal .backend-cfg-title { font-size: 13px; font-weight: 700; color: #e4e8ec; margin-bottom: 4px; line-height: 1.3; }
+    #advanced-settings-modal .backend-cfg-title { font-size: 15.6px; font-weight: 700; color: #e4e8ec; margin-bottom: 4.8px; line-height: 1.3; }
     /* Pills/chips are spans, so the global 15px rule also overrode their authored 10px. */
     #advanced-settings-modal .provider-pill,
-    #advanced-settings-modal .provider-cap { font-size: 10px; line-height: 1.35; }
+    #advanced-settings-modal .provider-cap { font-size: 12px; line-height: 1.35; }
     #config-page #advanced-settings-modal .adv-rail button.adv-tab {
       display: flex;
       flex-direction: column;
@@ -716,7 +715,7 @@
     .provider-pill.live { border-color: #2a6a4a; color: #6f6; background: rgba(42,106,74,0.2); }
     .provider-pill.warn { border-color: #6a4a1a; color: #e0a060; }
     .provider-hint { margin: 0 0 8px; }
-    .provider-warning { font-size: 11px; color: #e0a060; margin-bottom: 6px; line-height: 1.4; }
+    #advanced-settings-modal .provider-warning { font-size: 13.2px; color: #e0a060; margin-bottom: 7.2px; line-height: 1.4; }
     .provider-caps { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
     .provider-cap { font-size: 10px; padding: 2px 7px; border-radius: 10px; border: 1px solid #333; color: #666; background: #151515; }
     .provider-cap.on { border-color: #2a6a4a; color: #6f6; background: #1a2a22; }
@@ -1344,65 +1343,71 @@
         flex-basis: auto !important;
       }
     }
-    /* Advanced Settings compact scale: like the HF workspace, use explicit
-       scoped CSS sizing (about 0.8x spacing and 0.84x type, with a 10px floor).
-       No page zoom or transforms; the shared settings visual language stays intact. */
+    /* Advanced Settings readability follow-up: increase the compact modal sizing
+       by about 20%, without changing its section grid or desktop rail width. */
     @media (min-width: 769px) {
-      #config-page #advanced-settings-modal { padding: 17px; --adv-pad: 17px; }
+      #config-page #advanced-settings-modal { padding: 20.4px; --adv-pad: 20.4px; }
       #config-page #advanced-settings-modal .advanced-settings-header {
-        gap: 12px; padding-bottom: 12px; margin-bottom: 14px;
+        gap: 14.4px; padding-bottom: 14.4px; margin-bottom: 16.8px;
       }
-      #config-page #advanced-settings-modal .advanced-settings-title { font-size: 17px; margin-bottom: 4px; }
-      #config-page #advanced-settings-modal .advanced-settings-subtitle { font-size: 10px; }
+      #config-page #advanced-settings-modal .advanced-settings-title { font-size: 20.4px; margin-bottom: 4.8px; }
+      #config-page #advanced-settings-modal .advanced-settings-subtitle { font-size: 12px; }
       #config-page #advanced-settings-modal .advanced-settings-close {
         display: grid; place-items: center;
-        width: 27px; height: 27px; min-height: 27px; padding: 0; font-size: 16px;
+        width: 32.4px; height: 32.4px; min-height: 32.4px; padding: 0; font-size: 19.2px;
       }
       #config-page #advanced-settings-modal .adv-shell {
-        grid-template-columns: 224px minmax(0, 1fr); border-radius: 10px;
+        grid-template-columns: 224px minmax(0, 1fr); border-radius: 12px;
       }
-      #config-page #advanced-settings-modal .adv-rail { gap: 6px; padding: 9px 8px; }
+      #config-page #advanced-settings-modal .adv-rail { gap: 7.2px; padding: 10.8px 9.6px; }
       #config-page #advanced-settings-modal .adv-rail button.adv-tab {
-        min-height: 40px !important; padding: 7px 10px !important; border-radius: 6px !important;
+        min-height: 48px !important; padding: 8.4px 12px !important; border-radius: 7.2px !important;
       }
-      #config-page #advanced-settings-modal .adv-rail button.adv-tab span { font-size: 12px; }
-      #config-page #advanced-settings-modal .adv-rail button.adv-tab small { font-size: 10px !important; }
-      #config-page #advanced-settings-modal .adv-content { padding: clamp(12px, 1.6vw, 20px); gap: 16px 10px; }
-      #config-page #advanced-settings-modal .adv-page-head { margin-bottom: 8px; }
-      #config-page #advanced-settings-modal .adv-page-head h2 { font-size: 14px; }
-      #config-page #advanced-settings-modal .adv-page-head p { font-size: 10.5px; }
+      #config-page #advanced-settings-modal .adv-rail button.adv-tab span { font-size: 14.4px; }
+      #config-page #advanced-settings-modal .adv-rail button.adv-tab small { font-size: 12px !important; }
+      #config-page #advanced-settings-modal .adv-content { padding: clamp(14.4px, 1.92vw, 24px); gap: 19.2px 12px; }
+      #config-page #advanced-settings-modal .adv-page-head { gap: 2.4px 12px; margin-bottom: 9.6px; padding-bottom: 7.2px; }
+      #config-page #advanced-settings-modal .adv-page-head h2 { font-size: 16.8px; }
+      #config-page #advanced-settings-modal .adv-page-head p { font-size: 12.6px; }
       #config-page #advanced-settings-modal .adv-grid,
-      #config-page #advanced-settings-modal .advanced-settings-grid { gap: 9.5px; }
-      #config-page #advanced-settings-modal .adv-stack { gap: 9.5px; }
-      #config-page #advanced-settings-modal .adv-backend-bar { margin-bottom: 9.5px; }
-      #config-page #advanced-settings-modal .adv-help { font-size: 10px; margin-bottom: 8px; }
-      #config-page #advanced-settings-modal .adv-muted { font-size: 10px; }
-      #config-page #advanced-settings-modal .adv-row { gap: 5px; margin-bottom: 5px; }
-      #config-page #advanced-settings-modal .adv-status { font-size: 10.5px; min-height: 14px; margin: 3px 0 6px; }
-      #config-page #advanced-settings-modal .adv-subtle-title { margin: 8px 0 5px; letter-spacing: .8px; }
-      #config-page #advanced-settings-modal .adv-check { gap: 6px; font-size: 11px; margin: 5px 0; }
-      #config-page #advanced-settings-modal .adv-check input { width: 13px; height: 13px; }
-      #config-page #advanced-settings-modal .advanced-settings-card { padding: 11px; border-radius: 7px; }
-      #config-page #advanced-settings-modal .advanced-settings-card h3 { font-size: 13px; margin-bottom: 9px; }
-      #config-page #advanced-settings-modal .advanced-settings-card label { font-size: 10px !important; }
+      #config-page #advanced-settings-modal .advanced-settings-grid { gap: 11.4px; }
+      #config-page #advanced-settings-modal .adv-stack { gap: 11.4px; }
+      #config-page #advanced-settings-modal .adv-backend-bar { margin-bottom: 11.4px; }
+      #config-page #advanced-settings-modal .adv-help { font-size: 12px; margin-bottom: 9.6px; }
+      #config-page #advanced-settings-modal .adv-muted { font-size: 12px; }
+      #config-page #advanced-settings-modal .adv-row { gap: 6px; margin-bottom: 6px; }
+      #config-page #advanced-settings-modal .adv-status { font-size: 12.6px; min-height: 16.8px; margin: 3.6px 0 7.2px; }
+      #config-page #advanced-settings-modal .adv-subtle-title { font-size: 12px; margin: 9.6px 0 6px; letter-spacing: .96px; }
+      #config-page #advanced-settings-modal .adv-check { gap: 7.2px; font-size: 13.2px; margin: 6px 0; }
+      #config-page #advanced-settings-modal .adv-check input { width: 15.6px; height: 15.6px; }
+      #config-page #advanced-settings-modal .advanced-settings-card { padding: 13.2px; border-radius: 8.4px; }
+      #config-page #advanced-settings-modal .advanced-settings-card h3 { font-size: 15.6px; margin-bottom: 10.8px; }
+      #config-page #advanced-settings-modal .advanced-settings-card label { font-size: 12px !important; }
+      #config-page #advanced-settings-modal .advanced-settings-card label.adv-check { font-size: 13.2px !important; }
+      #config-page #advanced-settings-modal button.backend-mode-btn:not(.advanced-settings-close):not(.adv-tab) {
+        min-height: 74.4px !important; padding: 10.8px 13.2px !important; font-size: 14.4px !important;
+      }
+      #config-page #advanced-settings-modal .backend-mode-btn .bm-icon { font-size: 36px; }
+      #config-page #advanced-settings-modal .backend-mode-btn .bm-name { font-size: 16.8px; }
+      #config-page #advanced-settings-modal .backend-mode-btn .bm-sub { font-size: 12.6px; }
       #config-page #advanced-settings-modal input:not([type="checkbox"]):not([type="range"]):not([type="hidden"]),
       #config-page #advanced-settings-modal select,
       #config-page #advanced-settings-modal button:not(.advanced-settings-close):not(.adv-tab) {
-        height: 27px !important; min-height: 27px !important; padding: 0 6px !important;
-        border-radius: 4px !important; font-size: 11px !important;
+        height: 32.4px !important; min-height: 32.4px !important; padding: 0 7.2px !important;
+        border-radius: 4.8px !important; font-size: 13.2px !important;
       }
       #config-page #advanced-settings-modal button:not(.advanced-settings-close):not(.adv-tab) {
-        height: 26px !important; min-height: 26px !important;
+        height: 31.2px !important; min-height: 31.2px !important;
       }
     }
     /* Provider tiles share one responsive grid and a fixed row height. Titles
        and descriptions wrap to bounded lines; tags stay anchored at the bottom. */
     #advanced-settings-modal .provider-tiles {
-      align-items: stretch; grid-auto-rows: 92px; gap: 7px; margin-bottom: 8px;
+      align-items: stretch; grid-auto-rows: 110.4px; gap: 8.4px; margin-bottom: 9.6px;
     }
     #advanced-settings-modal .provider-tile {
       display: flex; flex-direction: column; height: 100%; min-height: 0;
-      box-sizing: border-box; overflow: hidden; padding: 9px 10px;
+      box-sizing: border-box; overflow: hidden; padding: 10.8px 12px;
     }
     #advanced-settings-modal .provider-tile-name {
       display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1;
@@ -1413,27 +1418,60 @@
       overflow: hidden; overflow-wrap: anywhere; line-height: 1.3;
     }
     #advanced-settings-modal .provider-tile-tags {
-      max-height: 22px; overflow: hidden; margin-top: auto; padding-top: 4px; gap: 3px;
+      max-height: 26.4px; overflow: hidden; margin-top: auto; padding-top: 4.8px; gap: 3.6px;
     }
     @media (min-width: 769px) {
-      #advanced-settings-modal .provider-tiles { grid-auto-rows: 78px; gap: 6px; }
-      #advanced-settings-modal .provider-tile { padding: 8px 9px; }
-      #advanced-settings-modal .provider-tile-name { font-size: 11px; }
-      #advanced-settings-modal .provider-tile-sub { font-size: 10px; }
+      #advanced-settings-modal .provider-tiles { grid-auto-rows: 93.6px; gap: 7.2px; }
+      #advanced-settings-modal .provider-tile { padding: 9.6px 10.8px; }
+      #advanced-settings-modal .provider-tile-name { font-size: 13.2px; }
+      #advanced-settings-modal .provider-tile-sub { font-size: 12px; }
     }
     @media (max-width: 860px) {
       #config-page #advanced-settings-modal .adv-shell { grid-template-columns: minmax(0, 1fr); }
-      #config-page #advanced-settings-modal .adv-rail { margin: 0; }
+      #config-page #advanced-settings-modal .adv-rail { gap: 9.6px; padding: 12px; margin: 0; }
       #config-page #advanced-settings-modal .adv-rail button.adv-tab {
-        min-height: 36px !important; padding: 6px 12px !important; white-space: nowrap;
+        min-height: 43.2px !important; padding: 7.2px 14.4px !important; white-space: nowrap;
       }
     }
     @media (max-width: 768px) {
-      #config-page #advanced-settings-modal { padding: 16px; --adv-pad: 16px; }
+      #config-page #advanced-settings-modal { padding: 19.2px; --adv-pad: 19.2px; }
+      #config-page #advanced-settings-modal .advanced-settings-header { gap: 19.2px; padding-bottom: 19.2px; margin-bottom: 21.6px; }
+      #config-page #advanced-settings-modal .advanced-settings-title { font-size: 24px; margin-bottom: 6px; }
+      #config-page #advanced-settings-modal .advanced-settings-subtitle { font-size: 14.4px; }
+      #config-page #advanced-settings-modal .advanced-settings-close { width: 38.4px; height: 38.4px; min-height: 38.4px; font-size: 21.6px; }
+      #config-page #advanced-settings-modal .adv-rail button.adv-tab span { font-size: 15.6px; }
+      #config-page #advanced-settings-modal .adv-content { padding: clamp(16.8px, 2.4vw, 31.2px); gap: 21.6px 14.4px; }
+      #config-page #advanced-settings-modal .adv-page-head { gap: 2.4px 12px; margin-bottom: 10.8px; padding-bottom: 7.2px; }
+      #config-page #advanced-settings-modal .adv-page-head h2 { font-size: 18px; }
+      #config-page #advanced-settings-modal .adv-page-head p { font-size: 13.2px; }
+      #config-page #advanced-settings-modal .adv-grid,
+      #config-page #advanced-settings-modal .advanced-settings-grid,
+      #config-page #advanced-settings-modal .adv-stack { gap: 14.4px; }
+      #config-page #advanced-settings-modal .adv-backend-bar { margin-bottom: 14.4px; }
+      #config-page #advanced-settings-modal .adv-help { font-size: 13.2px; margin-bottom: 12px; }
+      #config-page #advanced-settings-modal .adv-muted { font-size: 13.2px; }
+      #config-page #advanced-settings-modal .adv-row { gap: 7.2px; margin-bottom: 7.2px; }
+      #config-page #advanced-settings-modal .adv-status { font-size: 14.4px; min-height: 19.2px; margin: 4.8px 0 9.6px; }
+      #config-page #advanced-settings-modal .adv-subtle-title { font-size: 12px; margin: 12px 0 7.2px; letter-spacing: 1.2px; }
+      #config-page #advanced-settings-modal .adv-check { gap: 9.6px; font-size: 14.4px; margin: 7.2px 0; }
+      #config-page #advanced-settings-modal .adv-check input { width: 18px; height: 18px; }
+      #config-page #advanced-settings-modal .advanced-settings-card { padding: 16.8px; border-radius: 10.8px; }
+      #config-page #advanced-settings-modal .advanced-settings-card h3 { font-size: 18px; margin-bottom: 14.4px; }
+      #config-page #advanced-settings-modal .advanced-settings-card label { font-size: 13.2px !important; }
+      #config-page #advanced-settings-modal .advanced-settings-card label.adv-check { font-size: 14.4px !important; }
+      #config-page #advanced-settings-modal .provider-tile-name { font-size: 15.6px; }
+      #config-page #advanced-settings-modal .provider-tile-sub { font-size: 13.2px; }
+      #config-page #advanced-settings-modal button.backend-mode-btn:not(.advanced-settings-close):not(.adv-tab) {
+        min-height: 74.4px !important; padding: 10.8px 13.2px !important; font-size: 14.4px !important;
+      }
+      #config-page #advanced-settings-modal .backend-mode-btn .bm-icon { font-size: 36px; }
+      #config-page #advanced-settings-modal .backend-mode-btn .bm-name { font-size: 16.8px; }
+      #config-page #advanced-settings-modal .backend-mode-btn .bm-sub { font-size: 12.6px; }
       #config-page #advanced-settings-modal input:not([type="checkbox"]):not([type="range"]):not([type="hidden"]),
       #config-page #advanced-settings-modal select,
       #config-page #advanced-settings-modal button:not(.advanced-settings-close):not(.adv-tab) {
-        height: 30px !important; min-height: 30px !important; font-size: 12px !important;
+        height: 36px !important; min-height: 36px !important; padding: 0 9.6px !important;
+        border-radius: 3.6px !important; font-size: 14.4px !important;
       }
     }
   </style>
@@ -1773,6 +1811,14 @@
                 </select>
               </div>
               <div style="grid-column:1 / -1;">
+                <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Chat template for this model <span id="model-template-mode-name" style="color:#666;"></span></label>
+                <select id="model-template-mode" onchange="saveModelTemplateMode()" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
+                  <option value="auto">Auto - use the model's own template when it has a working one</option>
+                  <option value="chatml">Force ChatML - send this model raw ChatML</option>
+                </select>
+                <div id="model-template-mode-status" style="font-size:10px; color:#777; margin-top:2px; min-height:12px;">Saved per model file. Takes effect on the next message; reload the model to relaunch it with the matching template. Ministral, Qwen3.5, Gemma 4 and Mellum models ignore this.</div>
+              </div>
+              <div style="grid-column:1 / -1;">
                 <label style="font-size:10px; color:#888; display:block; margin-bottom:2px;">Ministral Template</label>
                 <select id="llama-ministral-template-mode" style="width:100%; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:4px 6px; font-size:12px;">
                   <option value="native">Native template - current behaviour</option>
@@ -2014,7 +2060,7 @@
             <div style="display:flex; align-items:center; gap:6px; margin-bottom:12px;">
               <input id="llama-mmproj-path" type="text" placeholder="C:\path\to\model.mmproj.gguf" style="flex:1; box-sizing:border-box; background:#111; border:1px solid #333; color:#ccc; border-radius:4px; padding:3px 6px; font-size:11px; height:24px;">
               <button onclick="browseFile('llama-mmproj-path','gguf')" title="Browse for an mmproj .gguf file" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0; font-size:13px; cursor:pointer; width:26px; height:24px; flex-shrink:0; display:flex; align-items:center; justify-content:center;">&#128193;</button>
-              <button onclick="attachMmproj()" title="Save the mmproj path and apply it to the current local model configuration" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Attach</button>
+              <button onclick="attachMmproj()" title="Save the mmproj path and apply it to the current local model configuration. Leave the path empty to find the projector named after the current model" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Attach</button>
               <button onclick="detachMmproj()" title="Clear the mmproj path so the projector is detached from future model launches" style="background:#1a2a3a; border:1px solid #345; color:#aaa; border-radius:4px; padding:0 8px; font-size:11px; cursor:pointer; height:24px; flex-shrink:0; white-space:nowrap;">Detach</button>
             </div>
 
@@ -2087,6 +2133,7 @@
                 <div class="adv-help">Restores settings.json from settings.default.json. This cannot be undone.</div>
             <button onclick="resetToDefault()" title="Wipe settings.json and restore from settings.default.json" style="background:#3a1a1a; border:1px solid #6a2a2a; color:#e88; width:100%; font-size:12px; padding:5px 0; border-radius:3px; cursor:pointer; margin-bottom:10px;">&#8634; Reset All Settings to Default</button>
               </section>
+
             </div>
           </div>
         </div>
@@ -2267,7 +2314,7 @@
         margin-bottom: 20px;
       ">
         <h3 style="margin-top: 0; font-size: 16px; color: #fff;">Token Usage</h3>
-        
+
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px;">
           <div>
             <span style="color: #aaa;">Description:</span>
@@ -2294,7 +2341,7 @@
             <span id="tokens-example-dialogue" class="token-count">0</span>
           </div>
         </div>
-        
+
         <div style="
           margin-top: 15px;
           padding-top: 15px;
@@ -2340,14 +2387,14 @@
           <label>Export Current Character as PNG Card</label>
           <button id="export-char-btn" style="background-color: #1f3a5a; border-color: #245080; color: white;">⬇️ Export Character</button>
         </div>
-        
+
         <!-- Import Button -->
         <div class="import-group">
           <label>Import Character from PNG Card</label>
           <input type="file" id="import-char-input" accept=".png" style="display: none;">
           <button id="import-char-btn" style="background-color: #3a4a5a; border-color: #4a5a6a; color: white;">⬆️ Import Character</button>
         </div>
-        
+
         <small style="color: #aaa; display: block; margin-top: 10px;">
           PNG cards contain both the image and all character data. Compatible with SillyTavern and other UIs.
         </small>
@@ -3362,6 +3409,15 @@
     await refreshRandomCheckinMobileDevices();
   }
 
+  let voiceForgeInitialised = false;
+  let voiceForgeSettingsLoaded = false;
+  let voiceForgeResultId = '';
+  let voiceForgeResultTranscript = '';
+  const voiceForgePreviews = {
+    A: { audio: null, objectUrl: '' },
+    B: { audio: null, objectUrl: '' }
+  };
+
   async function deleteVoiceForgeExisting(slot) { showHwuiProModal("Voice Forge", "Creating and managing voices is available in HWUI Pro."); return; }
 
   async function toggleVoiceForgePreview(slot) { showHwuiProModal("Voice Forge", "Voice preview is available in HWUI Pro."); return; }
@@ -3369,6 +3425,10 @@
   async function loadVoiceForgeTestText() { showHwuiProModal("Voice Forge", "Voice Forge settings are available in HWUI Pro."); return; }
 
   async function saveVoiceForgeTestText() { showHwuiProModal("Voice Forge", "Voice Forge settings are available in HWUI Pro."); return; }
+
+  let voiceForgeTemplates = {};
+
+  async function refreshVoiceForgeTemplates() { return; }
 
   function loadVoiceForgeTemplate() { showHwuiProModal("Voice Forge", "Voice Forge templates are available in HWUI Pro."); return; }
 
@@ -6521,13 +6581,13 @@
         option.textContent = name;
         select.appendChild(option);
       });
-      
+
       if (characters.length) {
         const lastChar = localStorage.getItem('lastCharacter');
         const defaultChar = (lastChar && characters.includes(lastChar)) ? lastChar : characters[0];
-        
+
         console.log('📂 Config page loading character:', defaultChar);
-        
+
         await loadCharacter(defaultChar);
         document.getElementById("character-select").value = defaultChar;
         loadCharacterMemory();
@@ -6547,9 +6607,9 @@
   async function loadCharacter(name) {
     const select = document.getElementById("character-select");
     select.value = name;
-    
+
     localStorage.setItem('lastCharacter', name);
-    
+
     currentCharacter = {};
     try {
       const response = await fetch(`/characters/${encodeURIComponent(name)}.json?cacheBust=${Date.now()}`);
@@ -6817,12 +6877,12 @@
 document.getElementById('export-char-btn').addEventListener('click', async function() {
   const dropdown = document.getElementById('character-select');
   const charName = dropdown.value;
-  
+
   if (!charName) {
     hwuiToast('Please select a character first.', 'info');
     return;
   }
-  
+
   try {
     // Trigger download
     window.location.href = `/export_character/${encodeURIComponent(charName)}`;
@@ -6840,47 +6900,47 @@ document.getElementById('import-char-btn').addEventListener('click', function() 
 
 document.getElementById('import-char-input').addEventListener('change', async function(e) {
   const file = e.target.files[0];
-  
+
   if (!file) return;
-  
+
   if (!file.name.toLowerCase().endsWith('.png')) {
     hwuiToast('Please select a PNG file.', 'info');
     return;
   }
-  
+
   try {
     const formData = new FormData();
     formData.append('file', file);
-    
+
     const res = await fetch('/import_character', {
       method: 'POST',
       body: formData
     });
-    
+
     const result = await res.json();
-    
+
     if (result.error) {
       hwuiToast('Import failed: ' + result.error, 'error');
       return;
     }
-    
+
     console.log(`✅ Imported character: ${result.name}`);
     // result.name is the new storage key; display_name is the card's Name. They
     // differ when the Name was already taken (the key gets " (2)" etc.).
     const importedAs = (result.display_name && result.display_name !== result.name)
       ? ` as "${result.name}" (Name: ${result.display_name})` : '';
     hwuiToast(`Character "${result.display_name || result.name}" imported${importedAs} successfully!`, 'success');
-    
+
     // Reload character list and select the new character
     await loadCharacterList();
     document.getElementById('character-select').value = result.name;
     await loadCharacter(result.name);
-    
+
   } catch (err) {
     console.error('Import error:', err);
     hwuiToast('Failed to import character: ' + err.message, 'error');
   }
-  
+
   // Reset file input
   e.target.value = '';
 });
@@ -6893,36 +6953,36 @@ document.getElementById('import-char-input').addEventListener('change', async fu
 document.getElementById('delete-char-btn').addEventListener('click', async function() {
   const dropdown = document.getElementById('character-select');
   const charName = dropdown.value;
-  
+
   if (!charName) {
     hwuiToast('Please select a character first.', 'info');
     return;
   }
-  
+
   // Confirm deletion
   if (!await hwuiConfirm(`Are you sure you want to permanently delete "${charName}"?\n\nThis will delete:\n- Character data\n- Character image\n- All chats for this character across every project\n- All associated files\n\nThis cannot be undone.`)) {
     return;
   }
-  
+
   try {
     const res = await fetch(`/delete_character/${encodeURIComponent(charName)}`, {
       method: 'DELETE'
     });
-    
+
     const result = await res.json();
-    
+
     if (result.error) {
       hwuiToast('Delete failed: ' + result.error, 'error');
       return;
     }
-    
+
     console.log(`✅ Deleted character: ${charName}`);
     const deletedChats = Number(result.deleted_chats || 0);
     hwuiToast(`Character "${charName}" and ${deletedChats} related chat${deletedChats === 1 ? '' : 's'} deleted successfully.`, 'success');
-    
+
     // Reload character list and clear the form
     await loadCharacterList();
-    
+
     // Clear all input fields
     document.getElementById('character-name').value = '';
     document.getElementById('main-prompt').value = '';
@@ -6938,7 +6998,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     document.getElementById('example-dialog').value = '';
     document.getElementById('image').value = '';
     document.getElementById('preview-img').style.display = 'none';
-    
+
   } catch (err) {
     console.error('Delete error:', err);
     hwuiToast('Failed to delete character: ' + err.message, 'error');
@@ -7006,7 +7066,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       if (data.error) throw new Error(data.error);
       document.getElementById("user-display").value = data.display_name || name;
       document.getElementById("user-bio").value = data.bio || "";
-      
+
       // ✅ Load user image preview
       const preview = document.getElementById("user-image-preview");
       if (data.image) {
@@ -7026,17 +7086,17 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     const name = document.getElementById("userSelect").value;
     const display_name = document.getElementById("user-display").value.trim();
     const bio = document.getElementById("user-bio").value.trim();
-    
+
     // ✅ Handle image upload
     const fileInput = document.getElementById("user-image-upload");
     let image = "";
-    
+
     if (fileInput && fileInput.files.length > 0) {
       const formData = new FormData();
       formData.append("file", fileInput.files[0]);
       formData.append("character_name", name);
       formData.append("is_user", "true"); // ⚠️ Prevents collision with character images
-      
+
       try {
         const uploadRes = await fetch("/upload_image", { method: "POST", body: formData });
         const uploadResult = await uploadRes.json();
@@ -7047,11 +7107,11 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
         console.error("Image upload failed:", err);
       }
     }
-    
+
     try {
       const payload = { display_name, bio };
       if (image) payload.image = image;
-      
+
       const res = await fetch(`/save_user/${name}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -7078,11 +7138,11 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
         body: JSON.stringify({ user: name }),
       });
       const result = await res.json();
-      
+
       if (result.success) {
         // ✅ ADD THIS LINE - Update localStorage so chat page knows
         localStorage.setItem('activeUserName', name);
-        
+
         hwuiToast(`Active user set to "${name}"`, 'success');
       } else {
         hwuiToast("Error setting active user: " + (result.error || "Unknown error"), 'error');
@@ -7093,14 +7153,14 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
     }
   }
 
- 
-  
+
+
   // --- SETTINGS MANAGEMENT (FIXED) ---
   async function loadSettings() {
     try {
       const res = await fetch("/get_sampling_settings");
       const settings = await res.json();
-      
+
       // Use ?? so that 0 values display correctly (|| would treat 0 as falsy)
       document.getElementById('temperature').value    = settings.temperature       ?? 0.8;
       document.getElementById('max_tokens').value     = settings.max_tokens        ?? 4096;
@@ -7126,7 +7186,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       document.getElementById('auto-memory-enabled').checked = settings.auto_memory?.enabled === true;
       // On unless explicitly switched off, so existing installs keep their behaviour.
       document.getElementById('message-reactions-enabled').checked = settings.message_reactions_enabled !== false;
-      
+
       console.log('✅ Loaded sampling settings:', settings);
     } catch (err) {
       console.error("Failed to load settings:", err);
@@ -7152,7 +7212,7 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(settings)
       });
-      
+
       if (res.ok) {
         hwuiToast("✅ Settings saved successfully!", 'success');
       } else {
@@ -7285,80 +7345,80 @@ document.getElementById('delete-char-btn').addEventListener('click', async funct
       });
     }
   });
-  
+
 
   // ==================== DUPLICATE CHARACTER ====================
   document.addEventListener('DOMContentLoaded', function() {
     const duplicateBtn = document.getElementById('duplicate-char-btn');
-    
+
     if (duplicateBtn) {
       duplicateBtn.addEventListener('click', async function() {
         const select = document.getElementById('character-select');
         const currentChar = select.value;
-        
+
         if (!currentChar) {
           hwuiToast('Please select a character to duplicate.', 'info');
           return;
         }
-        
+
         if (!await hwuiConfirm(`Duplicate "${currentChar}"?`)) {
           return;
         }
-        
+
         try {
           const res = await fetch(`/duplicate_character/${encodeURIComponent(currentChar)}`, {
             method: 'POST'
           });
-          
+
           const data = await res.json();
-          
+
           if (data.error) {
             hwuiToast('Error: ' + data.error, 'error');
             return;
           }
-          
+
           console.log('✅ Character duplicated:', data.new_name);
-          
+
           // Reload character list
           await loadCharacterList();
-          
+
           // Switch to the new duplicate
           select.value = data.new_name;
-          
+
           // Trigger change event to load the character
           select.dispatchEvent(new Event('change'));
-          
+
           hwuiToast(`Character duplicated as "${data.new_name}"`, 'success');
-          
+
         } catch (err) {
           console.error('❌ Duplicate failed:', err);
           hwuiToast('Failed to duplicate character.', 'error');
         }
       });
     }
-  });  
-    
+  });
+
   // ==================== RENAME CHARACTER ====================
 document.getElementById('rename-char-btn').addEventListener('click', async function() {
   const dropdown = document.getElementById('character-select');
   const oldName = dropdown.value;
-  
+
   if (!oldName) {
     hwuiToast('Please select a character first.', 'info');
     return;
   }
-  
+
   const newName = await hwuiPrompt(`Rename "${oldName}" to:`, oldName);
-  
+
   if (!newName || newName.trim() === '') {
     return;
   }
-  
+
   if (newName.trim() === oldName) {
     hwuiToast('Name unchanged.', 'info');
     return;
   }
-  
+
   try {
     const res = await fetch('/rename_character', {
       method: 'POST',
@@ -7368,29 +7428,29 @@ document.getElementById('rename-char-btn').addEventListener('click', async funct
         new_name: newName.trim()
       })
     });
-    
+
     const data = await res.json();
-    
+
     if (data.error) {
       hwuiToast('Error: ' + data.error, 'error');
       return;
     }
-    
+
     console.log('✅ Character renamed:', data.new_name);
     hwuiToast(`Character renamed to "${data.new_name}"`, 'success');
-    
+
     // Reload character list and select the renamed one
     await loadCharacterList();
     dropdown.value = data.new_name;
     await loadCharacter(data.new_name);
-    
+
   } catch (err) {
     console.error('❌ Rename failed:', err);
     hwuiToast('Failed to rename character.', 'error');
   }
 });
-  
-  
+
+
 // ==================== TOKEN COUNTER (DEBUG VERSION) ====================
 let tokenCountTimeout = null;
 
@@ -7425,16 +7485,16 @@ function applyFieldColour(elementId, count) {
 
 function updateTokenCount() {
   console.log('🔵 updateTokenCount() called');
-  
+
   // Clear existing timeout
   if (tokenCountTimeout) {
     clearTimeout(tokenCountTimeout);
   }
-  
+
   // Debounce - wait 300ms after user stops typing
   tokenCountTimeout = setTimeout(async () => {
     console.log('🔵 Making API call to /count_tokens');
-    
+
     try {
       // Gather all character field values
       const data = {
@@ -7445,26 +7505,26 @@ function updateTokenCount() {
         post_history: document.getElementById('post-history')?.value || '',
         character_note: document.getElementById('character-note')?.value || ''
       };
-      
+
       console.log('📦 Data being sent:', data);
-      
+
       // Call backend
       const res = await fetch('/count_tokens', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
       });
-      
+
       console.log('📡 Response status:', res.status);
-      
+
       const counts = await res.json();
       console.log('📊 Token counts received:', counts);
-      
+
       if (counts.error) {
         console.error('❌ Token count error:', counts.error);
         return;
       }
-      
+
       // Update displays
       applyFieldColour('tokens-description', counts.description);
       applyFieldColour('tokens-main-prompt', counts.main_prompt);
@@ -7473,15 +7533,15 @@ function updateTokenCount() {
       applyFieldColour('tokens-character-note', counts.character_note);
       applyFieldColour('tokens-example-dialogue', counts.example_dialogue);
       document.getElementById('tokens-total').textContent = counts.total;
-      
+
       console.log('✅ Display updated successfully');
-      
+
       // Color coding for total
       const totalEl = document.getElementById('tokens-total');
       const statusEl = document.getElementById('token-status');
-      
+
       totalEl.className = 'token-count';
-      
+
       if (counts.total < 1000) {
         totalEl.style.color = '#28a745';  // Green
         statusEl.textContent = '✔ Optimal';
@@ -7495,7 +7555,7 @@ function updateTokenCount() {
         statusEl.textContent = '⚠ Very High';
         statusEl.style.color = '#dc3545';
       }
-      
+
     } catch (err) {
       console.error('❌ Token count failed:', err);
     }
@@ -7505,7 +7565,7 @@ function updateTokenCount() {
 // Attach event listeners when config page loads
 document.addEventListener('DOMContentLoaded', function() {
   console.log('🟢 DOMContentLoaded - Setting up token counter');
-  
+
   // Get all the character editor fields
   const fields = [
     'description',
@@ -7515,7 +7575,7 @@ document.addEventListener('DOMContentLoaded', function() {
     'post-history',
     'character-note'
   ];
-  
+
   // Attach listeners to all fields
   fields.forEach(fieldId => {
     const field = document.getElementById(fieldId);
@@ -7526,7 +7586,7 @@ document.addEventListener('DOMContentLoaded', function() {
       console.warn('⚠️ Field not found:', fieldId);
     }
   });
-  
+
   // Initial count on load
   console.log('🔵 Running initial token count');
   updateTokenCount();
@@ -7541,14 +7601,14 @@ async function createNewUser() {
   const displayName = document.getElementById('new-user-display').value.trim();
   const bio = document.getElementById('new-user-bio').value.trim();
   const fileInput = document.getElementById('new-user-image-upload');
-  
+
   if (!name) {
     hwuiToast('User name is required.', 'info');
     return;
   }
-  
+
   let image = "";
-  
+
   // Upload image if provided
   if (fileInput && fileInput.files.length > 0) {
     const formData = new FormData();
@@ -7578,29 +7638,29 @@ async function createNewUser() {
         image: image
       })
     });
-    
+
     const result = await res.json();
-    
+
     if (result.error) {
       hwuiToast('Error creating user: ' + result.error, 'error');
       return;
     }
-    
+
     console.log('✅ User created:', name);
     hwuiToast(`User persona "${name}" created successfully!`, 'success');
-    
+
     // Clear the form
     document.getElementById('new-user-name').value = '';
     document.getElementById('new-user-display').value = '';
     document.getElementById('new-user-bio').value = '';
     if (fileInput) fileInput.value = '';
     document.getElementById('new-user-image-preview').style.display = 'none';
-    
+
     // Reload user list and select the new user
     await loadUserList();
     document.getElementById('userSelect').value = name;
     await loadUserDetails(name);
-    
+
   } catch (err) {
     console.error('Failed to create user:', err);
     hwuiToast('Failed to create user.', 'error');
@@ -7628,40 +7688,40 @@ function previewNewUserImage(input) {
 async function deleteUserPersona() {
   const userSelect = document.getElementById('userSelect');
   const userName = userSelect.value;
-  
+
   if (!userName) {
     hwuiToast('Please select a user to delete.', 'info');
     return;
   }
-  
+
   // Confirm deletion
   if (!await hwuiConfirm(`Are you sure you want to permanently delete user persona "${userName}"?\n\nThis cannot be undone.`)) {
     return;
   }
-  
+
   try {
     const res = await fetch(`/delete_user/${userName}`, {
       method: 'DELETE'
     });
-    
+
     const result = await res.json();
-    
+
     if (result.error) {
       hwuiToast('Delete failed: ' + result.error, 'error');
       return;
     }
-    
+
     console.log('✅ Deleted user:', userName);
     hwuiToast(`User persona "${userName}" deleted successfully.`, 'success');
-    
+
     // Clear the form
     document.getElementById('user-display').value = '';
     document.getElementById('user-bio').value = '';
     document.getElementById('user-image-preview').style.display = 'none';
-    
+
     // Reload user list
     await loadUserList();
-    
+
   } catch (err) {
     console.error('Delete error:', err);
     hwuiToast('Failed to delete user.', 'error');
@@ -7969,7 +8029,6 @@ async function toggleFontFavourite(select, button) {
   updateFontFavouriteButton(button, primaryFontFromStack(select.value));
 }
 
-
 async function getAvailableFontNames() {
   const names = new Set(FALLBACK_FONT_NAMES);
   if ('queryLocalFonts' in window) {
@@ -8268,8 +8327,41 @@ async function loadLlamaConfig() {
     document.getElementById('llama-reasoning-enabled').checked = a.reasoning === 'on';
     document.getElementById('anthropic-thinking').checked = !!data.anthropic_thinking;
     populateLlamaPresetDropdown();
+    loadModelTemplateMode();
   } catch(e) {
     console.error('Failed to load llama config:', e);
+  }
+}
+
+// Per-model chat-template mode ("auto" | "chatml"), stored in settings.json
+// as model_template_modes[file name]. Defaults to the last-loaded model.
+let modelTemplateModeFile = '';
+async function loadModelTemplateMode() {
+  const select = document.getElementById('model-template-mode');
+  if (!select) return;
+  try {
+    const data = await (await fetch('/get_model_template_mode')).json();
+    modelTemplateModeFile = data.model || '';
+    select.value = data.mode === 'chatml' ? 'chatml' : 'auto';
+    select.disabled = !modelTemplateModeFile;
+    document.getElementById('model-template-mode-name').textContent = modelTemplateModeFile ? '(' + modelTemplateModeFile + ')' : '(no model loaded)';
+  } catch(e) { /* non-fatal - leave the default */ }
+}
+
+async function saveModelTemplateMode() {
+  const select = document.getElementById('model-template-mode');
+  const status = document.getElementById('model-template-mode-status');
+  if (!modelTemplateModeFile) return;
+  try {
+    const res = await fetch('/save_model_template_mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: modelTemplateModeFile, mode: select.value }) });
+    const data = await res.json();
+    status.style.color = data.status === 'ok' ? '#6dbf8a' : '#e88';
+    status.textContent = data.status === 'ok'
+      ? (select.value === 'chatml' ? 'Saved: Force ChatML for ' : 'Saved: Auto for ') + modelTemplateModeFile + '. Reload the model to relaunch it with the matching template.'
+      : 'Not saved: ' + data.error;
+  } catch(e) {
+    status.style.color = '#e88';
+    status.textContent = 'Not saved: ' + e;
   }
 }
 
@@ -11360,8 +11452,22 @@ function previewThemeVar(varName, value) {
   checkAnthropicIndicator();
 
   async function attachMmproj() {
-    const path = document.getElementById('llama-mmproj-path').value.trim();
+    let path = document.getElementById('llama-mmproj-path').value.trim();
     try {
+      if (!path) {
+        // Empty field: find the projector that belongs to the current model.
+        const det = await (await fetch('/auto_detect_mmproj', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({})
+        })).json();
+        if (!det.mmproj_path) {
+          hwuiToast('No projector found for the current model. Browse for the mmproj file instead.', 'error');
+          return;
+        }
+        path = det.mmproj_path;
+        document.getElementById('llama-mmproj-path').value = path;
+      }
       const res = await fetch('/save_mmproj_path', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

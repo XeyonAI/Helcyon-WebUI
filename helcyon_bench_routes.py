@@ -141,7 +141,10 @@ def delete_benchmark_model_runs():
 
 @helcyon_bench_bp.route("/api/helcyon-bench/session", methods=["GET"])
 def get_integrated_benchmark_session():
-    return jsonify({"session": {}})
+    try:
+        return jsonify({"session": load_integrated_session()})
+    except CaptureError as error:
+        return jsonify({"error": str(error), "code": error.code}), 500
 
 
 @helcyon_bench_bp.route("/api/helcyon-bench/session", methods=["PUT"])
@@ -151,7 +154,7 @@ def save_integrated_benchmark_session():
 
 @helcyon_bench_bp.route("/api/helcyon-bench/saved-sessions", methods=["GET"])
 def get_saved_benchmark_sessions():
-    return jsonify({"sessions": []})
+    return jsonify({"sessions": list_benchmark_sessions()})
 
 
 @helcyon_bench_bp.route("/api/helcyon-bench/saved-sessions", methods=["POST"])

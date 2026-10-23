@@ -63,7 +63,7 @@ if "%TORCH_RC%"=="3" if not defined NVSMI (
     goto :torch_done
 )
 :: CUDA build selection. RTX 50-series (compute capability 12.x) needs cu128 or newer;
-:: older GPUs use cu121. Override by setting HWUI_CUDA_TAG (e.g. cu126) before running.
+:: older GPUs use cu121. Override by setting HWUI_CUDA_TAG before running.
 if defined HWUI_CUDA_TAG goto :tag_done
 set "HWUI_CUDA_TAG=cu121"
 if not defined NVSMI goto :tag_done
@@ -159,16 +159,7 @@ where ffmpeg >nul 2>&1
 if errorlevel 1 (
     echo.
     echo NOTE: FFmpeg was not found on PATH. Voice input ^(Whisper^) needs it to read audio.
-    echo       Voice Forge speed control needs the FULL FFmpeg build ^(includes Rubber Band^):
-    echo           winget install --id Gyan.FFmpeg
     echo       Then open a new terminal so PATH refreshes.
-) else (
-    ffmpeg -hide_banner -filters 2>nul | findstr /c:"rubberband" >nul
-    if errorlevel 1 (
-        echo.
-        echo NOTE: FFmpeg was found but has no Rubber Band filter. Voice Forge speed control
-        echo       will not work until you install the full build: winget install --id Gyan.FFmpeg
-    )
 )
 
 echo.

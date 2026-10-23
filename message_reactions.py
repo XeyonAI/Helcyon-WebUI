@@ -166,63 +166,223 @@ def complete_reaction_stream(source, decide, cancelled=lambda: False, trace=lamb
                 close()
 
 
-_MARKER_PREFIX = "<!--hwui_reaction:"
 _MARKER_MAX_CHARS = 200   # a longer "marker" is ordinary text, not held back forever
+_HOLD_LIMIT = 220         # never hold more than this many characters waiting for a marker to finish
+
+# A reaction body is one or more emoji clusters, or the word "none" (what the selector itself emits).
+_CLUSTER = (r"(?:[\U0001F1E6-\U0001F1FF]{2}|[0-9#*]️?⃣|"
+            + _PIECE + r"(?:‍" + _PIECE + r")*)")
+_BODY_RE = re.compile(r"(?:" + _CLUSTER + r"(?:[ \t]*" + _CLUSTER + r")*|none\b)", re.I)
+# A body that has started but could still grow: lone regional indicator, keycap start,
+# dangling joiner/selector, or a prefix of "none".
+_PARTIAL_BODY_RE = re.compile(
+    r"(?:[\U0001F1E6-\U0001F1FF]|[0-9#*]️?|" + _PIECE + r"(?:‍(?:" + _PIECE + r")?)*‍?|n|no|non)$",
+    re.I)
+_EMOJI_CONTINUATION = "‍️\U0001F3FB\U0001F3FC\U0001F3FD\U0001F3FE\U0001F3FF"
+
+_COMMENT_OPEN_RE = re.compile(r"<!--[ \t]*HWUI_REACTION[ \t]*(:?)[ \t]*", re.I)
+_ESCAPED_OPEN_RE = re.compile(r"&lt;!--[ \t]*HWUI_REACTION[ \t]*:?[ \t]*", re.I)
+_BRACKET_OPEN_RE = re.compile(r"\[[ \t]*HWUI_REACTION[ \t]*:?[ \t]*", re.I)
+_BARE_OPEN_RE = re.compile(r"HWUI_REACTION[ \t]*:[ \t]*", re.I)
+_STRICT_CLOSE_RE = re.compile(r"[^\n]{0,%d}?[ \t]*-->" % _MARKER_MAX_CHARS)
+_LENIENT_CLOSE_RE = re.compile(r"(?:--!>|—>|–>|->|-->)")
+_CLOSER_FRAGMENT_RE = re.compile(r"[ \t]*(?:--!|--|-|\u2014|\u2013)(?=[ \t]*(?:\r?\n|$))")
+_ESCAPED_CLOSE_RE = re.compile(r"--&gt;")
+_TOKENS = {"<": "<!--hwui_reaction", "&": "&lt;!--hwui_reaction", "[": "[hwui_reaction", "h": "hwui_reaction"}
+_KEEP = ("keep", 0)
+_HOLD = ("hold", 0)
 
 
-def _may_be_marker(text):
-    """True while `text` (starting at a '<') could still turn into a reaction marker."""
-    if len(text) > _MARKER_MAX_CHARS:
-        return False
-    squashed = re.sub(r"[ \t]+", "", text.lower())
-    return _MARKER_PREFIX.startswith(squashed) or bool(_OPEN_MARKER_RE.match(text))
+def _squash(text):
+    return re.sub(r"[ \t]+", "", text).lower()
+
+
+def _still_opening(text, char):
+    """True while ``text`` could still grow into the opening token of a marker form."""
+    token = _TOKENS[char.lower()]
+    squashed = _squash(text)
+    return len(squashed) <= len(token) and token.startswith(squashed)   # equal = token done, colon pending
+
+
+def _closer_could_follow(stail, closers):
+    return any(c.startswith(stail) and len(stail) < len(c) for c in closers)
+
+
+def _body_then(rest, close_re, closers, final):
+    """Parse ``BODY ws* CLOSER`` at the start of ``rest``.
+
+    Returns ("cut", chars_consumed), ("hold", 0), ("unclosed", chars_of_body) or ("keep", 0).
+    """
+    body = _BODY_RE.match(rest)
+    if not body:
+        if not final and (rest.strip(" \t") == "" or _PARTIAL_BODY_RE.fullmatch(rest.lstrip(" \t"))):
+            return _HOLD
+        return _KEEP
+    tail = rest[body.end():]
+    stail = tail.lstrip(" \t")
+    closer = close_re.match(stail)
+    if closer:
+        return ("cut", body.end() + (len(tail) - len(stail)) + closer.end())
+    if not final:
+        if stail == "" or stail[0] in _EMOJI_CONTINUATION or _closer_could_follow(stail, closers):
+            return _HOLD
+    # A closer that was cut short ("😂 -" or "😂 --" at the end of the line) belongs to the marker.
+    fragment = _CLOSER_FRAGMENT_RE.match(tail)
+    return ("unclosed", body.end() + (fragment.end() if fragment else 0))
+
+
+def _match_comment(text, final):
+    head = _COMMENT_OPEN_RE.match(text)
+    if not head:
+        return _HOLD if not final and _still_opening(text, "<") else _KEEP
+    colon, rest = bool(head.group(1)), text[head.end():]
+    if colon:
+        strict = _STRICT_CLOSE_RE.match(rest)
+        if strict:   # legacy single-line form, any body
+            return ("cut", head.end() + strict.end())
+    kind, size = _body_then(rest, _LENIENT_CLOSE_RE, ("-->", "--!>", "—>", "–>", "->"), final)
+    if kind == "cut":
+        return ("cut", head.end() + size)
+    if kind == "unclosed":   # head + emoji/none are the marker; whatever follows is the reply
+        return ("cut", head.end() + size)
+    if kind == "hold":
+        return _HOLD
+    if colon:   # "<!-- HWUI_REACTION:" followed by something that is not a reaction: drop only the opener
+        if not final and "\n" not in rest:
+            # The legacy single-line form accepts any body, so its closer may
+            # still arrive. Deciding now would make the result depend on where
+            # the stream happened to be split.
+            return _HOLD
+        return ("cut", head.end())
+    return _KEEP
+
+
+def _match_wrapped(text, final, open_re, close_re, closers, char):
+    head = open_re.match(text)
+    if not head:
+        return _HOLD if not final and _still_opening(text, char) else _KEEP
+    kind, size = _body_then(text[head.end():], close_re, closers, final)
+    if kind == "cut":
+        return ("cut", head.end() + size)
+    return _HOLD if kind == "hold" else _KEEP     # an unclosed escaped/bracketed form is prose
+
+
+def _match_bare(text, final):
+    head = _BARE_OPEN_RE.match(text)
+    if not head:
+        return _HOLD if not final and _still_opening(text, "h") else _KEEP
+    rest = text[head.end():]
+    body = _BODY_RE.match(rest)
+    if not body:
+        return _HOLD if not final and (rest == "" or _PARTIAL_BODY_RE.fullmatch(rest)) else _KEEP
+    tail = rest[body.end():]
+    if not final and (tail == "" or tail[0] in _EMOJI_CONTINUATION or not tail.strip(" \t")):
+        return _HOLD
+    if tail.strip(" \t") == "" or re.match(r"[ \t]*\r?\n", tail):
+        return ("cut", head.end() + body.end())     # on its own line: a marker
+    return _KEEP                                    # "HWUI_REACTION:😂 is how it looks" is prose
+
+
+def _match_marker(text, final, line_start):
+    """Classify ``text`` (which starts at a candidate character).
+
+    ("cut", n)  the first n characters are a reaction marker; remove them.
+    ("hold", 0) could still become a marker; wait for more text.
+    ("keep", 0) ordinary text; pass the first character through.
+    Whatever follows a marker is never part of it, so a malformed marker can
+    cost at most its own head: it can no longer swallow the reply (RX-2) and
+    recognisable variants are removed (RX-3).
+    """
+    if not final and len(text) > _HOLD_LIMIT:
+        return _KEEP
+    first = text[0]
+    if first == "<":
+        return _match_comment(text, final)
+    if first == "&":
+        return _match_wrapped(text, final, _ESCAPED_OPEN_RE, _ESCAPED_CLOSE_RE, ("--&gt;",), "&")
+    if first == "[":
+        return _match_wrapped(text, final, _BRACKET_OPEN_RE, re.compile(r"\]"), ("]",), "[")
+    return _match_bare(text, final) if line_start else _KEEP
+
+
+def _scan(pending, final, previous):
+    """Remove complete markers from ``pending``.
+
+    Returns (clean_text, still_pending, text_before_first_removal or None). ``previous`` is the last
+    character already emitted ("" at the very start); it decides whether a bare
+    ``HWUI_REACTION:X`` sits at the start of a line.
+    """
+    out = []
+    before = None
+    i = emitted_to = 0
+    prev = previous
+    while i < len(pending):
+        char = pending[i]
+        line_start = prev in ("", "\n")
+        if char in "<&[" or (char in "Hh" and line_start):
+            kind, size = _match_marker(pending[i:], final, line_start)
+            if kind == "cut":
+                out.append(pending[emitted_to:i])
+                if before is None:
+                    before = "".join(out)
+                i += size
+                emitted_to = i
+                continue          # ``prev`` is unchanged: the marker leaves no text behind
+            if kind == "hold":
+                out.append(pending[emitted_to:i])
+                return "".join(out), pending[i:], before
+        prev = char
+        i += 1
+    out.append(pending[emitted_to:])
+    return "".join(out), "", before
 
 
 def strip_reaction_markers(source):
-    """Pass a reply through with every <!-- HWUI_REACTION:... --> marker removed.
+    """Pass a reply through with every reaction marker removed.
 
-    Used when message reactions are switched off, so a marker the chat model emits
-    on its own can never become a reaction. Markers split across chunks are held
-    back only while they could still be one; all other text passes straight through.
-    Whitespace right after a marker at the very start of the reply is dropped too,
-    as the browser parser already does. Closing this generator closes the source.
+    Used when message reactions are switched off or the selector decides, so a
+    marker the chat model emits on its own can never become a reaction.
+
+    Recognised: ``<!-- HWUI_REACTION:X -->`` (any single-line body), the same
+    with a damaged closer (``--!>``, ``->``, an en/em dash), missing colon or no
+    closer at all, HTML-escaped and ``[bracketed]`` forms, and a bare
+    ``HWUI_REACTION:X`` alone on its line, where X is an emoji or ``none``.
+    A malformed marker costs only its own head; the reply that follows it is
+    always delivered. Text that merely resembles a marker (``HWUI_REACTION`` in
+    prose, ordinary HTML comments, ``<`` and ``[`` in code) passes through.
+
+    Markers split across chunks are held back only while they could still be
+    one (bounded by _HOLD_LIMIT characters); everything else streams straight
+    through. Whitespace right after a marker at the very start of the reply is
+    dropped, as the browser parser already does. Closing this generator closes
+    the source.
     """
     pending = ""
     decoder = codecs.getincrementaldecoder("utf-8")("replace")  # for byte chunks
     started = False       # any visible text emitted yet
     skip_space = False    # a leading marker was just removed
+    last = ""             # last character emitted, for line-start tests
     try:
         for chunk in source:
             if isinstance(chunk, (bytes, bytearray)):
                 chunk = decoder.decode(bytes(chunk))
             pending += chunk
-            out = ""
-            while True:
-                match = _MARKER_RE.search(pending)
-                if match:
-                    out += pending[:match.start()]
-                    pending = pending[match.end():]
-                    if not (started or out):
-                        skip_space = True
-                    continue
-                hold = next((i for i in range(len(pending))
-                             if pending[i] == "<" and _may_be_marker(pending[i:])), None)
-                if hold is None:
-                    out += pending
-                    pending = ""
-                else:
-                    out += pending[:hold]
-                    pending = pending[hold:]
-                break
+            out, pending, before = _scan(pending, False, last)
+            if before is not None and not (started or before.strip()):
+                skip_space = True
             if skip_space and out:
                 out = out.lstrip()
             if out:
                 skip_space = False
                 started = True
+                last = out[-1]
                 yield out
         pending += decoder.decode(b"", final=True)
-        if pending and not _OPEN_MARKER_RE.match(pending):
-            yield pending.lstrip() if skip_space else pending
+        out, _rest, before = _scan(pending, True, last)
+        if before is not None and not (started or before.strip()):
+            skip_space = True
+        if out:
+            yield out.lstrip() if skip_space else out
     finally:
         close = getattr(source, "close", None)
         if close:
