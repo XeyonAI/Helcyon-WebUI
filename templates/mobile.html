@@ -9,7 +9,7 @@
   <!-- Shared desktop/mobile chat core (same file index.html loads): request,
        history and reply-cleaning rules, so identical chat state produces the
        same model input from either page. -->
-  <script src="/static/hwui_chat_core.js?v=2"></script>
+  <script src="/static/hwui_chat_core.js?v=4"></script>
   <script src="/static/text_scale.js" defer></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -100,8 +100,8 @@ const marked={parse:function(txt){
     if(!lines.length)return;
     let first=lines[0];
     if(/^(\s*[-*_]){3,}\s*$/.test(first)&&lines.length===1){html+='<hr>';return;}
-    let hm=first.match(/^(#{1,3}) (.+)/);
-    if(hm){html+='<strong>'+inline(hm[2])+'</strong>';return;}
+    let hm=first.match(/^(#{1,6}) (.+)/);
+    if(hm){html+='<h'+hm[1].length+'>'+inline(hm[2])+'</h'+hm[1].length+'>';return;}
     if(lines.every(function(l){return /^[-*+] /.test(l);})){
       html+='<ul>'+lines.map(function(l){return '<li>'+inline(l.replace(/^[-*+] /,''))+'</li>';}).join('')+'</ul>';return;
     }
@@ -200,6 +200,21 @@ const marked={parse:function(txt){
     .ai .msg-bubble p { margin-bottom: 1.4em; white-space: pre-wrap; }
     .ai .msg-bubble p:last-child { margin-bottom: 0; }
     .ai .msg-bubble br { display: inline; margin: 0; }
+    .msg-bubble h1, .msg-bubble h2, .msg-bubble h3,
+    .msg-bubble h4, .msg-bubble h5, .msg-bubble h6 {
+      margin: 0.65em 0 0.25em;
+      line-height: 1.25;
+      color: inherit;
+    }
+    .msg-bubble h1 { font-size: 1.35em; }
+    .msg-bubble h2 { font-size: 1.18em; }
+    .msg-bubble h3 { font-size: 1.08em; }
+    .msg-bubble h4 { font-size: 1em; }
+    .msg-bubble h5 { font-size: 0.96em; }
+    .msg-bubble h6 { font-size: 0.92em; }
+    .msg-bubble > h1:first-child, .msg-bubble > h2:first-child,
+    .msg-bubble > h3:first-child, .msg-bubble > h4:first-child,
+    .msg-bubble > h5:first-child, .msg-bubble > h6:first-child { margin-top: 0.1em; }
     .mobile-reaction-badge { display:inline-flex; align-items:center; justify-content:center; min-width:23px; height:23px; margin-top:3px; padding:0 6px; border:1px solid var(--border); border-radius:999px; background:var(--surface2); font-size:15px; line-height:1; }
     .mobile-reaction-row { display:flex; align-items:center; gap:5px; margin-top:3px; padding:0 4px; position:relative; }
     .mobile-reaction-row button { background:none; border:0; color:var(--text-dim); border-radius:5px; padding:3px 5px; font-size:12px; cursor:pointer; }
@@ -396,6 +411,7 @@ function setSendBusy(busy){
 }
 let mediaRecorder=null,audioChunks=[],isRecording=false,audioProcessTimer=null;
 let ttsQueue=[],ttsProcessing=false,ttsProcessingRun=0,currentAudio=null,isPlayingAudio=false,ttsOnComplete=null;
+let mobileTTSFetchControllers=new Set(),mobileTTSObjectUrls=new Set(),mobileTTSNavigationCleanupPending=false;
 let mobileTTSEngine='f5',mobileQwenCtx=null,mobileQwenNext=0,mobileQwenSources=[],mobileQwenAbort=null,mobileQwenLiveRun=0;
 let replayTimeout=null;
 let ttsSentenceBuffer='',ttsStreamingComplete=false;
@@ -512,8 +528,6 @@ window.addEventListener('popstate',async(e)=>{
   }
 });
 
-// Stop audio when app goes to background or tab is hidden
-document.addEventListener('visibilitychange',()=>{if(document.hidden)stopAllAudio();});
 // Stop audio when page is unloaded (browser close, navigation away)
 window.addEventListener('pagehide',()=>stopAllAudio());
 
@@ -553,6 +567,10 @@ async function loadCharacterList(){
 async function switchCharacter(name){
   if(window._mobilePreferredModelLoading)return;
   if(!name)return;
+  if(name!==mobileSelectedCharKey){
+    abortMobileRequest('switch-character');
+    stopMobileTTSForConversationChange();
+  }
   characterName=name;
   mobileSelectedCharKey=name;
   mobileCharReadyKey=null;  // not sendable until this card has loaded
@@ -839,9 +857,9 @@ function memoryIntentGate(userMsg){
   const compact=text.replace(/\s+/g,' ');
   if(!compact)return false;
   const MEMORY_INTENT_RE=/\b(?:remember (?:this|that|it|to|my|the)|save (?:this|that|it)(?: to (?:your )?memory)?|save .{0,80}for (?:later|future reference)|(?:make|take) a note|don['’]?t forget|for (?:future|later) reference|add (?:(?:this|that|it) )?to (?:your )?memory|note this down|keep (?:this|that|it) in mind|save to (?:your )?memory|put (?:it |this |that )?(?:in(?:to)?|to) (?:your )?memory|(?:can you )?memorize (?:this|that|it)|keep a record|log (?:this|that|it)|store (?:this|that|it)(?: in memory)?|jot (?:this|that|it) down|note (?:this|that|it) down|(?:please )?save (?:this|that|it))\b/i;
-  const LEADING_MEMORY_INTENT_RE=/^(?:please\s+|can you\s+|could you\s+|would you\s+|i want you to\s+)?(?:remember (?:this|that|it|to|my|the)|save (?:this|that|it)(?: to (?:your )?memory)?|save .{0,80}for (?:later|future reference)|(?:make|take) a note|don['â€™]?t forget|for (?:future|later) reference|add (?:(?:this|that|it) )?to (?:your )?memory|note this down|keep (?:this|that|it) in mind|save to (?:your )?memory|put (?:it |this |that )?(?:in(?:to)?|to) (?:your )?memory|memorize (?:this|that|it)|keep a record|log (?:this|that|it)|store (?:this|that|it)(?: in memory)?|jot (?:this|that|it) down|note (?:this|that|it) down|save (?:this|that|it))\b/i;
+  const LEADING_MEMORY_INTENT_RE=/^(?:please\s+|can you\s+|could you\s+|would you\s+|i want you to\s+)?(?:remember (?:this|that|it|to|my|the)|save (?:this|that|it)(?: to (?:your )?memory)?|save .{0,80}for (?:later|future reference)|(?:make|take) a note|don['’]?t forget|for (?:future|later) reference|add (?:(?:this|that|it) )?to (?:your )?memory|note this down|keep (?:this|that|it) in mind|save to (?:your )?memory|put (?:it |this |that )?(?:in(?:to)?|to) (?:your )?memory|memorize (?:this|that|it)|keep a record|log (?:this|that|it)|store (?:this|that|it)(?: in memory)?|jot (?:this|that|it) down|note (?:this|that|it) down|save (?:this|that|it))\b/i;
    const directCommand = compact.replace(/^(?:(?:please|can you|could you|would you|will you|i['’]?d like you to|i need you to|i want you to)\s+)*/i,'');
-  const DIRECT_MEMORY_COMMAND_RE=/^(?:remember (?:this|that|it|to|my|the)|save (?:this|that|it)(?: to (?:your )?memory)?|save .{0,80}for (?:later|future reference)|(?:make|take) a note|don['â€™]?t forget|for (?:future|later) reference|add (?:(?:this|that|it) )?to (?:your )?memory|note this down|keep (?:this|that|it) in mind|save to (?:your )?memory|put (?:it |this |that )?(?:in(?:to)?|to) (?:your )?memory|memorize (?:this|that|it)|keep a record|log (?:this|that|it)|store (?:this|that|it)(?: in memory)?|jot (?:this|that|it) down|note (?:this|that|it) down|save (?:this|that|it))\b/i;
+  const DIRECT_MEMORY_COMMAND_RE=/^(?:remember (?:this|that|it|to|my|the)|save (?:this|that|it)(?: to (?:your )?memory)?|save .{0,80}for (?:later|future reference)|(?:make|take) a note|don['’]?t forget|for (?:future|later) reference|add (?:(?:this|that|it) )?to (?:your )?memory|note this down|keep (?:this|that|it) in mind|save to (?:your )?memory|put (?:it |this |that )?(?:in(?:to)?|to) (?:your )?memory|memorize (?:this|that|it)|keep a record|log (?:this|that|it)|store (?:this|that|it)(?: in memory)?|jot (?:this|that|it) down|note (?:this|that|it) down|save (?:this|that|it))\b/i;
   return DIRECT_MEMORY_COMMAND_RE.test(directCommand);
 }
 
@@ -1074,6 +1092,7 @@ async function handleStream(res,requestId=null,options={}){
   let reactionDiagnosticParserLogged=false;
   if(reactionDiagnosticId)console.info('🧪 REACTION DIAGNOSTIC response identified',{request_id:reactionDiagnosticId,source_message_id:options.replyToMessageId});
   const responseRun=++mobileTTSRun;
+  mobileTTSNavigationCleanupPending=false;
   mobileQwenOwnerRun=0;mobileQwenMode=null;
   const seedText=options.seedText||'';
   const reader=res.body.getReader(),decoder=new TextDecoder();let fullText=seedText;let rawAll=seedText;let prevAns=seedText.length;let ttsSpokenLen=HwuiChatCore.ttsSpeakableDelta(seedText,0,{charName:characterName,userName:userName}).spokenLength;let thinkEl=null;let modelReaction=null;let modelReactionAttached=false;
@@ -1152,7 +1171,7 @@ async function handleStream(res,requestId=null,options={}){
     // length above is measured the same way for Continue.
     const speakable=HwuiChatCore.ttsSpeakableDelta(reactionAnswer.text,ttsSpokenLen,{charName:characterName,userName:userName});
     ttsSpokenLen=speakable.spokenLength;
-    if(ttsEnabled&&speakable.text)bufferTextForTTS(speakable.text);
+    if(ttsEnabled&&responseRun===mobileTTSRun&&speakable.text)bufferTextForTTS(speakable.text);
     scrollToBottom();
   }
   while(true){
@@ -1208,6 +1227,7 @@ async function handleStream(res,requestId=null,options={}){
       stopAllAudio(); // resets button via querySelector inside stopAllAudio
       return;
     }
+    mobileTTSNavigationCleanupPending=false;
     // Mark this button as the active one so stopAllAudio/processQueue can find it
     document.querySelectorAll('.mobile-replay-btn.active').forEach(b=>setReplayBtnIdle(b));
     setReplayBtnActive(replayBtn2);
@@ -1265,11 +1285,11 @@ async function handleStream(res,requestId=null,options={}){
     const firstUserMsg=chatHistory.find(m=>m.role==='user'&&!m.is_opening_line);
     if(firstUserMsg)autoNameMobileChat(firstUserMsg.content||'');
   }
-  if(ttsEnabled){
+  if(ttsEnabled&&responseRun===mobileTTSRun){
     // Mark button active and flush — button resets when processQueue finishes or stopAllAudio is called
     setReplayBtnActive(replayBtn2);
     // Final release — see the desktop equivalent and ttsSpeakableDelta.
-    if(ttsEnabled){
+    if(ttsEnabled&&responseRun===mobileTTSRun){
       const lastSpeakable=HwuiChatCore.ttsSpeakableDelta(finalReactionOutput.text,ttsSpokenLen,{charName:characterName,userName:userName,final:true});
       ttsSpokenLen=lastSpeakable.spokenLength;
       if(lastSpeakable.text)bufferTextForTTS(lastSpeakable.text);
@@ -1396,7 +1416,7 @@ function applyMobileModelReaction(reaction,sourceMessageId){
 function speakText(text){
   lastSpokenText=text;
   stopAllAudio();
-  ++mobileTTSRun;
+  mobileTTSNavigationCleanupPending=false;
   const lines=text.replace(/\*\*/g,'').replace(/\*/g,'').replace(/_/g,'').replace(/#{1,6}\s/g,'').split('\n');
   for(const line of lines){const t=line.trim();if(t.length>2)splitAndQueue(t);}
   ttsStreamingComplete=true;
@@ -1406,6 +1426,12 @@ function speakText(text){
     else{ttsOnComplete=null;resolve();}
   });
 }
+
+// This page's project was deleted or renamed elsewhere: reload onto the current one.
+window.onHwuiProjectUnavailable=function(){
+  showToast('This chat’s project is no longer available — reloading');
+  setTimeout(()=>window.location.reload(),1500);
+};
 
 async function loadProjects(){
   try{
@@ -1465,7 +1491,7 @@ async function restoreMobileChat(){
 
 async function openChatList(){
   abortMobileRequest('open-chat-list');
-  stopAllAudio();
+  stopMobileTTSForConversationChange();
   document.getElementById('chat-panel').style.display='flex';
   document.getElementById('chat').style.display='none';
   document.getElementById('input-area').style.display='none';
@@ -1589,6 +1615,7 @@ function extractCharFromFilename(filename){
 
 async function loadMobileChat(filename, title){
   if(window._mobilePreferredModelLoading)return;
+  if(filename!==mobileChatFilename)stopMobileTTSForConversationChange();
   closeChatList();
   // Push state so the phone's back button returns to the chat list
   history.pushState({view:'chat',filename:filename},'');
@@ -1638,6 +1665,7 @@ async function loadMobileChat(filename, title){
 }
 
 async function clearMobileChat(){
+  stopMobileTTSForConversationChange();
   closeChatList();
   // Clear UI
   chatHistory=[];
@@ -1666,6 +1694,8 @@ async function clearMobileChat(){
 }
 
 async function newMobileChat(){
+  abortMobileRequest('new-chat');
+  stopMobileTTSForConversationChange();
   closeChatList();
   history.pushState({view:'chat',filename:null},'');
   mobileChatFilename=null;
@@ -2234,19 +2264,21 @@ async function fetchMobileQwenWav(sentence,run,liveRun,meta){
   if(run!==mobileTTSRun||liveRun!==mobileQwenLiveRun)return null;
   for(let attempt=0;attempt<2;attempt++){
     const controller=new AbortController();
+    mobileTTSFetchControllers.add(controller);
     mobileQwenAbort=controller;
     try{
       const response=await fetch('/api/tts/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:sentence,voice:ttsVoice||'Sol',meta}),signal:controller.signal});
       if(response.ok){
         const blob=await response.blob();
         if(run!==mobileTTSRun||liveRun!==mobileQwenLiveRun)return null;
-        return URL.createObjectURL(blob);
+        return createMobileTTSObjectURL(blob);
       }
       console.warn(`Qwen Fast WAV fetch ${response.status} (attempt ${attempt+1})`);
     }catch(e){
       if(e.name==='AbortError')throw e;
       console.warn(`Qwen Fast WAV fetch error (attempt ${attempt+1}):`,e);
     }finally{
+      mobileTTSFetchControllers.delete(controller);
       if(mobileQwenAbort===controller)mobileQwenAbort=null;
     }
     if(attempt===0)await new Promise(r=>setTimeout(r,200));
@@ -2268,7 +2300,7 @@ async function processMobileQwenLiveWav(){
     try{audioUrl=await nextAudio;}catch(e){if(e.name!=='AbortError')console.error('Qwen Fast WAV failed:',e);break;}
     nextAudio=null;
     if(!audioUrl)continue;
-    if(!ttsEnabled||run!==mobileTTSRun||liveRun!==mobileQwenLiveRun){URL.revokeObjectURL(audioUrl);continue;}
+    if(!ttsEnabled||run!==mobileTTSRun||liveRun!==mobileQwenLiveRun){revokeMobileTTSObjectURL(audioUrl);continue;}
 
     await new Promise(resolve=>{
       const audio=new Audio(audioUrl);
@@ -2284,9 +2316,9 @@ async function processMobileQwenLiveWav(){
         if(cleaned)return;
         cleaned=true;
         clearInterval(prefetchInterval);
-        URL.revokeObjectURL(audioUrl);
+        revokeMobileTTSObjectURL(audioUrl);
         if(currentAudio===audio)currentAudio=null;
-        isPlayingAudio=false;
+        if(currentAudio===null)isPlayingAudio=false;
         resolve();
       };
       audio.onended=cleanup;
@@ -2317,11 +2349,16 @@ async function processQueue(){
 
   async function fetchAudio(sentence,meta){
     for(let attempt=0;attempt<2;attempt++){
+      if(run!==mobileTTSRun)return null;
+      const controller=new AbortController();
+      mobileTTSFetchControllers.add(controller);
       try{
-        const response=await fetch('/api/tts/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:sentence,voice:ttsVoice||'Sol',meta})});
-        if(response.ok){const blob=await response.blob();return URL.createObjectURL(blob);}
+        const response=await fetch('/api/tts/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:sentence,voice:ttsVoice||'Sol',meta}),signal:controller.signal});
+        if(response.ok){const blob=await response.blob();if(run!==mobileTTSRun)return null;return createMobileTTSObjectURL(blob);}
         console.warn(`TTS fetch ${response.status} (attempt ${attempt+1})`);
-      }catch(err){console.warn(`TTS fetch error (attempt ${attempt+1}):`,err);}
+      }catch(err){if(err.name==='AbortError'||run!==mobileTTSRun)return null;console.warn(`TTS fetch error (attempt ${attempt+1}):`,err);}
+      finally{mobileTTSFetchControllers.delete(controller);}
+      if(run!==mobileTTSRun)return null;
       if(attempt===0)await new Promise(r=>setTimeout(r,200));
     }
     return null;
@@ -2337,19 +2374,23 @@ async function processQueue(){
   while(true){
     if(!ttsEnabled)break;
     const audioUrl=prefetchBuffer.length>0?await prefetchBuffer.shift():null;
+    if(run!==mobileTTSRun){if(audioUrl)revokeMobileTTSObjectURL(audioUrl);return;}
     topUp();
     if(audioUrl){
       await new Promise((resolve)=>{
-        currentAudio=new Audio(audioUrl);
+        const audio=new Audio(audioUrl);
+        currentAudio=audio;
         isPlayingAudio=true;
         // Keep the fetch pipeline saturated while audio plays — new
         // sentences arriving from the streaming buffer need to start
         // fetching immediately, not wait for playback to end.
         const prefetchInterval=setInterval(topUp,50);
-        const cleanup=()=>{clearInterval(prefetchInterval);URL.revokeObjectURL(audioUrl);isPlayingAudio=false;currentAudio=null;resolve();};
-        currentAudio.onended=cleanup;
-        currentAudio.onerror=cleanup;
-        currentAudio.play().catch(cleanup);
+        let cleaned=false;
+        const cleanup=()=>{if(cleaned)return;cleaned=true;clearInterval(prefetchInterval);revokeMobileTTSObjectURL(audioUrl);if(currentAudio===audio){isPlayingAudio=false;currentAudio=null;}resolve();};
+        audio.onended=cleanup;
+        audio.onerror=cleanup;
+        audio.onpause=cleanup;
+        audio.play().catch(cleanup);
       });
       topUp();
     }
@@ -2364,6 +2405,7 @@ async function processQueue(){
     }
   }
 
+  if(run!==mobileTTSRun)return;
   ttsProcessing=false;
   isPlayingAudio=false;
   const cb=ttsOnComplete;ttsOnComplete=null;if(cb)cb();
@@ -2387,10 +2429,30 @@ function setReplayBtnIdle(btn){
   btn.style.animation='';
 }
 
+function createMobileTTSObjectURL(blob){
+  const url=URL.createObjectURL(blob);
+  mobileTTSObjectUrls.add(url);
+  return url;
+}
+function revokeMobileTTSObjectURL(url){
+  if(mobileTTSObjectUrls.delete(url))URL.revokeObjectURL(url);
+}
+
 function stopAllAudio(){
+  ++mobileTTSRun;
   if(replayTimeout){clearTimeout(replayTimeout);replayTimeout=null;}
-  if(currentAudio){try{currentAudio.pause();currentAudio=null;}catch(e){}}
+  mobileTTSFetchControllers.forEach(controller=>controller.abort());
+  mobileTTSFetchControllers.clear();
+  if(currentAudio){
+    const stopping=currentAudio;
+    currentAudio=null;
+    try{stopping.pause();}catch(e){}
+    try{stopping.onpause&&stopping.onpause();}catch(e){}
+    try{stopping.onended&&stopping.onended();}catch(e){}
+  }
   stopMobileQwen();
+  mobileTTSObjectUrls.forEach(url=>URL.revokeObjectURL(url));
+  mobileTTSObjectUrls.clear();
   ttsQueue=[];
   ttsProcessing=false;
   isPlayingAudio=false;
@@ -2403,6 +2465,13 @@ function stopAllAudio(){
   ttsLinkTagTail='';
   const replayBtn=document.querySelector('.mobile-replay-btn.active');
   if(replayBtn)setReplayBtnIdle(replayBtn);
+}
+
+function stopMobileTTSForConversationChange(){
+  if(mobileTTSNavigationCleanupPending)return false;
+  mobileTTSNavigationCleanupPending=true;
+  stopAllAudio();
+  return true;
 }
 
 
@@ -2431,6 +2500,7 @@ function addBubble(role,sender,text,isoTimestamp,message=null){
         stopAllAudio();
         return;
       }
+      mobileTTSNavigationCleanupPending=false;
       document.querySelectorAll('.mobile-replay-btn.active').forEach(b=>setReplayBtnIdle(b));
       setReplayBtnActive(replayBtn);
       replayTimeout=setTimeout(()=>{

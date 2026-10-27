@@ -536,7 +536,7 @@ html:root:not(:has(#hwui-bg-style:not(:empty))) .chat-page #chat {
   border-radius: 6px;
   margin: 4px 0;
   padding: 4px 10px;
-  padding-right: 52px;
+  padding-right: 80px;   /* delete, edit and move buttons */
   color: var(--memory-entry-text, #cccccc);
   font-size: 13px;
   position: relative;
@@ -1270,6 +1270,31 @@ button {
   line-height: 1.3;
 }
 
+/* Keep Markdown headings readable without letting browser-default heading
+   sizes overwhelm the body text in long assistant replies. Relative sizes
+   preserve the active chat font and theme. */
+.model-text h1, .model-text-cont h1, .user-text h1 { font-size: 1.35em; }
+.model-text h2, .model-text-cont h2, .user-text h2 { font-size: 1.18em; }
+.model-text h3, .model-text-cont h3, .user-text h3 { font-size: 1.08em; }
+.model-text h4, .model-text-cont h4, .user-text h4 { font-size: 1em; }
+.model-text h5, .model-text-cont h5, .user-text h5 { font-size: 0.96em; }
+.model-text h6, .model-text-cont h6, .user-text h6 { font-size: 0.92em; }
+
+.model-text > h1:first-child,
+.model-text > h2:first-child,
+.model-text > h3:first-child,
+.model-text > h4:first-child,
+.model-text > h5:first-child,
+.model-text > h6:first-child,
+.model-text-cont > h1:first-child,
+.model-text-cont > h2:first-child,
+.model-text-cont > h3:first-child,
+.model-text-cont > h4:first-child,
+.model-text-cont > h5:first-child,
+.model-text-cont > h6:first-child {
+  margin-top: 0.2em;
+}
+
 /* Tighten hr inside chat bubbles */
 .model-text hr, .user-text hr, .model-text-cont hr {
   border: none;
@@ -1484,45 +1509,6 @@ button {
   color: var(--bench-muted);
   font-size: 11px;
 }
-.bench-api-key-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 44px;
-  gap: 0;
-  align-items: start;
-}
-.bench-api-key-row input {
-  min-width: 0;
-  width: 100% !important;
-  height: 40px !important;
-  min-height: 40px !important;
-  margin: 0 !important;
-  padding-block: 0 !important;
-  border-radius: 6px 0 0 6px !important;
-}
-#tab-helcyon-bench .bench-api-key-row button {
-  display: grid;
-  place-items: center;
-  width: 44px !important;
-  height: 40px !important;
-  min-height: 40px !important;
-  margin: 0 !important;
-  padding: 0 !important;
-  border-left: 0;
-  border-radius: 0 6px 6px 0;
-  background: var(--bench-input-bg) !important;
-  border-color: var(--bench-border) !important;
-  color: var(--bench-text) !important;
-}
-.bench-eye-show[hidden],
-.bench-eye-hide[hidden] { display: none !important; }
-#tab-helcyon-bench .bench-judge-save-key {
-  background: var(--bench-success);
-  color: var(--bench-accent-text);
-  font-weight: 700;
-}
-#bench-judge-message { display: block; white-space: pre-line; }
-#bench-judge-message.success { color: var(--bench-success); }
-#bench-judge-message.error { color: var(--bench-error); }
 .bench-view-tab {
   display: flex;
   flex-direction: column;
@@ -1909,18 +1895,6 @@ button {
   gap: 10px;
 }
 .bench-response-heading small { color: var(--bench-muted); }
-.bench-capture-state[data-capture-status="ready_to_capture"],
-.bench-capture-state[data-capture-status="captured"] {
-  color: var(--bench-success);
-}
-.bench-capture-state[data-capture-status="invalidated"],
-.bench-capture-state[data-capture-status="cancelled"],
-.bench-capture-state[data-capture-status="error"] {
-  color: var(--bench-error);
-}
-.bench-capture-state[data-capture-status="generating"] {
-  color: var(--bench-warning);
-}
 .bench-response-area {
   min-height: 190px;
   margin: 9px 0;
@@ -2262,159 +2236,6 @@ button {
   overflow: auto;
 }
 
-@keyframes benchJudgingGradientFlow {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
-}
-@keyframes benchJudgingShimmer {
-  from { transform: translateX(-160%); }
-  to { transform: translateX(420%); }
-}
-@keyframes benchJudgingSpin {
-  to { transform: rotate(360deg); }
-}
-@keyframes benchJudgingPulse {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.45); opacity: .72; }
-}
-@keyframes benchJudgingFloat {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-5px); }
-}
-.bench-judging-overlay {
-  position: fixed;
-  inset: 60px 0 0 var(--chat-sidebar-width, 330px);
-  z-index: 1400;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  box-sizing: border-box;
-  padding: 48px 24px 24px;
-  background: rgba(6, 8, 12, .35);
-  backdrop-filter: blur(1px);
-}
-.bench-judging-overlay[hidden] { display: none; }
-.bench-judging-frame {
-  width: min(36rem, calc(100vw - 2rem));
-  padding: 2px;
-  border-radius: 16px;
-  background: linear-gradient(120deg, #ff5a5f, #f5b84b, #55d68f, #7ea6d9, #c77dff, #ff5a5f);
-  background-size: 300% 300%;
-  animation: benchJudgingGradientFlow 6s ease infinite, benchJudgingFloat 5s ease-in-out infinite;
-  box-shadow: 0 18px 54px rgba(0, 0, 0, .5), 0 0 34px rgba(126, 166, 217, .28);
-}
-.bench-judging-card {
-  padding: 18px 20px 19px;
-  border-radius: 14px;
-  background: rgba(15, 19, 24, .97);
-  color: #f4f7fb;
-}
-.bench-judging-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-#tab-helcyon-bench .bench-judging-head h3 {
-  margin: 0;
-  font-size: 17px;
-  font-weight: 700;
-  background: linear-gradient(90deg, #f5b84b, #7ea6d9, #55d68f, #f5b84b);
-  background-size: 250% 100%;
-  background-clip: text;
-  color: transparent;
-  animation: benchJudgingGradientFlow 4s ease infinite;
-}
-.bench-judging-spinner {
-  width: 18px;
-  height: 18px;
-  flex: 0 0 18px;
-  box-sizing: border-box;
-  border: 3px solid rgba(126, 166, 217, .25);
-  border-top-color: #f5b84b;
-  border-right-color: #7ea6d9;
-  border-radius: 50%;
-  animation: benchJudgingSpin .9s linear infinite;
-}
-.bench-judging-hint {
-  margin: 5px 0 0;
-  color: #93a4bb;
-  font-size: 13px;
-}
-.bench-judging-label-row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 13px;
-  margin-top: 15px;
-}
-#bench-judging-label {
-  min-height: 1.1em;
-  color: #c6d3e4;
-  font-size: 14px;
-  overflow-wrap: anywhere;
-}
-#bench-judging-percent {
-  flex: none;
-  color: #f5b84b;
-  font-size: 16px;
-  font-variant-numeric: tabular-nums;
-}
-.bench-judging-track {
-  position: relative;
-  height: 12px;
-  margin-top: 8px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgba(126, 166, 217, .16);
-}
-.bench-judging-fill {
-  position: relative;
-  width: 3%;
-  height: 100%;
-  overflow: hidden;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #ff5a5f, #f5b84b, #55d68f, #7ea6d9, #c77dff);
-  background-size: 220% 100%;
-  animation: benchJudgingGradientFlow 3.2s linear infinite;
-  transition: width .45s cubic-bezier(.22, 1, .36, 1);
-  box-shadow: 0 0 14px rgba(245, 184, 75, .45);
-}
-.bench-judging-shimmer {
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 32%;
-  background: linear-gradient(110deg, transparent, rgba(255, 255, 255, .4), transparent);
-  animation: benchJudgingShimmer 1.5s ease-in-out infinite;
-}
-.bench-judging-dots {
-  display: flex;
-  justify-content: center;
-  gap: 8px;
-  min-height: 10px;
-  margin-top: 14px;
-}
-.bench-judging-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: rgba(126, 166, 217, .25);
-  transition: background .3s ease, box-shadow .3s ease;
-}
-.bench-judging-dot-done {
-  background: #55d68f;
-  box-shadow: 0 0 8px rgba(85, 214, 143, .6);
-}
-.bench-judging-dot-active {
-  background: #f5b84b;
-  box-shadow: 0 0 10px rgba(245, 184, 75, .8);
-  animation: benchJudgingPulse 1s ease-in-out infinite;
-}
-#tab-helcyon-bench .bench-judging-cancel {
-  display: block;
-  margin: 16px auto 0;
-}
-
 @media (max-width: 1400px) {
   :root { --chat-sidebar-width: 290px; }
   #config-page.bench-config-active #container {
@@ -2463,7 +2284,6 @@ button {
   .bench-target-strip p { grid-column: 1; }
   .bench-active-meta { justify-content: flex-start; }
   .bench-prompt-heading-actions { align-items: stretch; justify-content: flex-start; }
-  .bench-judging-overlay { inset: 60px 0 0; padding: 32px 12px 18px; }
   .bench-leaderboard-toolbar label { width: 100%; }
   .bench-leaderboard-card {
     grid-template-columns: 48px 1fr;
@@ -5267,9 +5087,6 @@ button#stop-btn {
 
 #chat {
   padding-bottom: 140px !important;
-}
-#chat.bench-control-visible {
-  padding-bottom: 210px !important;
 }
 
 /* Outer wrapper — transparent, just centres the pill */

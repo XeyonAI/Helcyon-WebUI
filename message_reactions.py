@@ -67,6 +67,9 @@ _PICTOGRAPH = r"(?![\U0001F3FB-\U0001F3FF])[\U0001F300-\U0001FAFF\u2600-\u27BF©
 _PIECE = _PICTOGRAPH + r"(?:\uFE0F|[\U0001F3FB-\U0001F3FF])?"
 _EMOJI_RE = re.compile(r"^(?:[\U0001F1E6-\U0001F1FF]{2}|[0-9#*]\uFE0F?\u20E3|"
                        + _PIECE + r"(?:\u200D" + _PIECE + r")*)$")
+# A complete Gemma 4 thought channel at the very start of a decision (see
+# parse_reaction_decision). Unclosed or later blocks are left for json.loads to reject.
+_GEMMA4_THOUGHT_PREFIX_RE = re.compile(r"\A\s*<\|channel>thought[\s\S]*?<channel\|>\s*")
 _THINK_RE = re.compile(
     r"\x02\x02THINK\x02\x02[\s\S]*?(?:\x02\x02/THINK\x02\x02|$)"
     r"|<think>[\s\S]*?(?:</think>|$)|\[THINK\][\s\S]*?(?:\[/THINK\]|$)", re.I
@@ -81,6 +84,21 @@ def _recent_line(item):
     reaction = item.get("reaction")
     tag = f" [you reacted {reaction}]" if reaction and item.get("role") != "assistant" else ""
     return f"{speaker}{tag}: {text}"
+
+
+CARD_REACTIONS_ENABLED = "message_reactions_enabled"
+SETTING_REACTIONS_ENABLED = "message_reactions_enabled"
+
+
+def reactions_enabled(card, settings):
+    """The character card's own switch; a card without one follows the global setting.
+
+    The global setting (absent = on) predates the per-character switch, so cards
+    saved before it existed keep their behaviour until the editor changes them.
+    """
+    if isinstance(card, dict) and isinstance(card.get(CARD_REACTIONS_ENABLED), bool):
+        return card[CARD_REACTIONS_ENABLED]
+    return (settings or {}).get(SETTING_REACTIONS_ENABLED, True) is not False
 
 
 def reaction_cooldown_active(recent):
@@ -116,8 +134,15 @@ def parse_reaction_decision(raw):
 
     Only a "strong" significance may carry a reaction; routine and notable
     messages are none whatever label came with them.
+
+    A leading, closed Gemma 4 thought block is not part of the decision.
+    Gemma 4's template ends a thinking-off prompt with an empty, pre-closed
+    thought ("<|channel>thought\\n<channel|>"); llama-server parses that prompt
+    tail together with the reply, and with the request's reasoning_format
+    "none" it returns the block as content ahead of the JSON. Every Gemma 4
+    decision then failed json.loads (Personal, 21-26 Oct: no reactions).
     """
-    decision = json.loads(raw)
+    decision = json.loads(_GEMMA4_THOUGHT_PREFIX_RE.sub("", raw, count=1))
     if not isinstance(decision, dict) or set(decision) != {"significance", "reaction"}:
         raise ValueError("Invalid reaction decision shape")
     significance, choice = decision["significance"], decision["reaction"]

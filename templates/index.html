@@ -116,7 +116,7 @@
   <!-- Shared desktop/mobile chat core: request, history and reply-cleaning
        rules used by BOTH pages (mobile.html loads the same file). Not deferred —
        page scripts below call HwuiChatCore during load. -->
-  <script src="/static/hwui_chat_core.js?v=2"></script>
+  <script src="/static/hwui_chat_core.js?v=4"></script>
   <!-- JS Utils -->
   <script src="/utils/utils.js" defer></script>
   <script>
@@ -421,6 +421,8 @@
     .tm-doc-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #7dffc0; }
     .tm-doc-tokens { flex: 0 0 auto; color: #38f4a4; font-weight: 700; white-space: nowrap; }
     .tm-doc-empty { color: #2f8f6b; padding-top: 2px; }
+    .tm-src-title { margin-top: 6px; }
+    .tm-src-list { color: #2f8f6b; white-space: normal; line-height: 1.35; max-height: 48px; overflow-y: auto; }
   </style>
   <div id="token-monitor" aria-hidden="true">
     <div class="tm-panels">
@@ -464,6 +466,10 @@
         <div id="tm-documents" class="tm-doc-list">
           <div class="tm-doc-empty">No documents injected</div>
         </div>
+        <div class="tm-row tm-title tm-src-title">
+          <span>▌ OTHER CONTEXT</span>
+        </div>
+        <div id="tm-sources" class="tm-src-list">––</div>
       </div>
     </div>
   </div>
@@ -480,7 +486,8 @@
       const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
 
       set('tm-ctx', _tmFmt(ctx));
-      set('tm-prompt', pt === null ? '––––' : _tmFmt(pt));
+      // Image tokens are encoded by the server, so an image turn's count is text only.
+      set('tm-prompt', pt === null ? '––––' : _tmFmt(pt) + (d.image_tokens_excluded ? '+img' : ''));
 
       const pct = (pt !== null && ctx > 0) ? Math.min(100, Math.round(pt / ctx * 100)) : 0;
       const bar = document.getElementById('tm-bar');
@@ -535,6 +542,17 @@
             docsHost.appendChild(row);
           });
         }
+      }
+
+      // Every other source the server reports for the last turn (memory, card,
+      // project instructions, history...): labels only, never their text. This
+      // is where knowledge that did not come from a document shows up.
+      const srcHost = document.getElementById('tm-sources');
+      if (srcHost) {
+        const sources = Array.isArray(d.context_sources) ? d.context_sources : [];
+        srcHost.textContent = sources.length
+          ? sources.map(src => String(src.source || '').replace(/_/g, ' ')).filter(Boolean).join(' · ')
+          : '––';
       }
     }
 
@@ -1158,7 +1176,7 @@
     </div>
   </div>
 </div>
-  <script src="/static/helcyon_bench_integration.js?v=9"></script>
+  <script src="/static/helcyon_bench_integration.js?v=10"></script>
   <!-- Sidebar Logic -->
 
 <script>
@@ -1195,6 +1213,10 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
   let isCreatingNewChat = false;
   let chatLoadGeneration = 0;
   let chatLoadPromise = null;
+  // A character switch in progress (loadCharacter / switchToCharacter). sendPrompt
+  // waits for it, so a message can never pair the newly selected character with the
+  // previous character's chat, history or Author's Note (the server refuses that too).
+  let characterLoadPromise = null;
   const CHAT_INPUT_DRAFT_KEY = 'hwui_chat_input_draft';
   let randomCheckinTimer = null;
   let randomCheckinTimerToken = 0;
@@ -1210,367 +1232,17 @@ console.log('🔥🔥🔥 CACHE CLEARED - PAGE LOADED 🔥🔥🔥');
     return HwuiChatCore.createMessageId();
   }
 
-  function activeBenchSubmissionForSource(sourceUserMessageId) {
-    try {
-      const context = JSON.parse(
-        localStorage.getItem(HelcyonBenchPromptTransfer.CONTEXT_KEY) || 'null'
-      );
-      return context &&
-        context.source_user_message_id === sourceUserMessageId
-        ? context
-        : null;
-    } catch (error) {
-      return null;
-    }
-  }
-
-  async function registerBenchSubmission(context) { showHwuiProModal("Helcyon-Bench", "Live benchmark capture is available in HWUI Pro."); return; }
-
-  async function updateBenchGenerationState(sourceUserMessageId, status, assistantMessageId) {
-    let context = activeBenchSubmissionForSource(sourceUserMessageId);
-    if (!context || !context.association_id) return;
-    // Mirror generation_status locally: this call exists to track the server's
-    // generation_status PATCH, and leaving the old mirror behind creates a
-    // contradictory record ({status:'error', generation_status:'submitted'})
-    // that startup cleanup treats as live while the badge renders Error.
-    HelcyonBenchPromptTransfer.updateAssociation(
-      localStorage,
-      context.association_id,
-      {
-        status,
-        generation_status: status,
-        ...(assistantMessageId ? { expected_assistant_message_id: assistantMessageId } : {})
-      }
-    );
-    const patchStatus = () => fetch(
-      `/api/helcyon-bench/capture-associations/${encodeURIComponent(context.association_id)}/status`,
-      {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          status,
-          ...(assistantMessageId ? { assistant_message_id: assistantMessageId } : {})
-        })
-      }
-    );
-    try {
-      const response = await patchStatus();
-      if (!response.ok) {
-        const failure = await response.json().catch(() => ({}));
-        // A missing server association means the original registration failed
-        // (e.g. a transient save race). Re-register the submitted turn once so
-        // the completed response stays capturable.
-        if (
-          failure.code === 'association_missing' &&
-          context.source_user_message_id &&
-          !context.reregister_attempted
-        ) {
-          HelcyonBenchPromptTransfer.updateAssociation(
-            localStorage,
-            context.association_id,
-            { reregister_attempted: true }
-          );
-          context = { ...context, reregister_attempted: true };
-          if (await registerBenchSubmission(context)) {
-            HelcyonBenchPromptTransfer.updateAssociation(
-              localStorage,
-              context.association_id,
-              { status, generation_status: status }
-            );
-            await patchStatus();
-          }
-        }
-      }
-    } catch (error) {
-      console.warn('Benchmark capture state update failed:', error);
-    }
-    refreshBenchChatControl();
-  }
-
-  function activeBenchChatAssociation() {
-    const context = HelcyonBenchPromptTransfer.getContext(localStorage);
-    if (
-      context &&
-      context.status !== 'invalidated' &&
-      (!currentChatFilename || benchAssociationMatchesCurrentChat(context))
-    ) {
-      return context;
-    }
-    if (!currentChatFilename) return null;
-    const associations = Object.values(
-      HelcyonBenchPromptTransfer.getAssociations(localStorage)
-    ).filter(association =>
-      association &&
-      association.status !== 'invalidated' &&
-      association.generation_status !== 'invalidated' &&
-      benchAssociationMatchesCurrentChat(association)
-    );
-    associations.sort((left, right) => {
-      const leftTime = Date.parse(
-        left.captured_at || left.submitted_at || left.created_at || ''
-      ) || 0;
-      const rightTime = Date.parse(
-        right.captured_at || right.submitted_at || right.created_at || ''
-      ) || 0;
-      return rightTime - leftTime;
-    });
-    return associations.length
-      ? HelcyonBenchPromptTransfer.restoreContext(localStorage, associations[0])
-      : null;
-  }
-
-  function consumePendingBenchPrompt({ notifyMismatch = true } = {}) {
-    const input = document.getElementById('user-input');
-    const transfer = HelcyonBenchPromptTransfer.consume(
-      localStorage,
-      currentChatFilename,
-      input
-    );
-    if (transfer.ok) {
-      const association = HelcyonBenchPromptTransfer.getContext(localStorage);
-      resizeChatInput(input);
-      input.focus();
-      renderBenchChatControl(association);
-      settleBenchChatScroll(association);
-      hwuiToast('Benchmark prompt placed in the chat input. Edit it if needed, then click Generate.', 'success', 2200, 'top');
-    } else if (notifyMismatch && transfer.reason === 'chat-mismatch') {
-      hwuiToast('Benchmark prompt was not inserted because the active chat changed.', 'info');
-    }
-    return transfer;
-  }
-
-  function scrollBenchAssociationIntoView(association = activeBenchChatAssociation()) {
-    if (!association || !benchAssociationMatchesCurrentChat(association)) return false;
-    const chat = document.getElementById('chat');
-    if (!chat) return false;
-    const chatIsScrollable = chat.scrollHeight > chat.clientHeight + 1;
-    const scrollRoot = chatIsScrollable
-      ? chat
-      : (document.scrollingElement || document.documentElement);
-    const sourceId = String(association.source_user_message_id || '');
-    const target = sourceId
-      ? [...chat.querySelectorAll('[data-message-id]')].find(
-          element => element.dataset.messageId === sourceId
-        )
-      : null;
-    if (target && chatIsScrollable) {
-      const targetBottom = target.offsetTop + target.offsetHeight + 24;
-      scrollRoot.scrollTop = Math.max(0, Math.min(
-        targetBottom - scrollRoot.clientHeight,
-        scrollRoot.scrollHeight - scrollRoot.clientHeight
-      ));
-    } else if (target) {
-      const inputTop = document.getElementById('input-area')?.getBoundingClientRect().top
-        || window.innerHeight;
-      const targetBottom = target.getBoundingClientRect().bottom;
-      scrollRoot.scrollTop = Math.max(0, Math.min(
-        scrollRoot.scrollTop + targetBottom - inputTop + 24,
-        scrollRoot.scrollHeight - scrollRoot.clientHeight
-      ));
-    } else {
-      scrollRoot.scrollTop = scrollRoot.scrollHeight;
-    }
-    return Boolean(target);
-  }
-
-  function settleBenchChatScroll(association = activeBenchChatAssociation()) {
-    if (!association || !benchAssociationMatchesCurrentChat(association)) return;
-    const chat = document.getElementById('chat');
-    if (!chat) return;
-    let frame = 0;
-    let lastHeight = -1;
-    let stableFrames = 0;
-    const settle = () => {
-      if (!benchAssociationMatchesCurrentChat(association)) return;
-      scrollBenchAssociationIntoView(association);
-      const height = chat.scrollHeight;
-      stableFrames = height === lastHeight ? stableFrames + 1 : 0;
-      lastHeight = height;
-      frame += 1;
-      if (stableFrames < 2 && frame < 60) requestAnimationFrame(settle);
-    };
-    requestAnimationFrame(settle);
-  }
-
-  function benchAssociationMatchesCurrentChat(association) {
-    if (!association || !currentChatFilename) return false;
-    if (association.chat_id && currentChatId) return association.chat_id === currentChatId;
-    const resolved = association.resolved_chat_filename || association.target_chat_filename || '';
-    return resolved === currentChatFilename;
-  }
-
-  function benchChatStateLabel(association, sameChat) {
-    const slot = association?.candidate_model_slot || '';
-    if (!sameChat) return `Benchmark belongs to ${association?.resolved_chat_filename || association?.target_chat_filename || 'another chat'}`;
-    const labels = {
-      loaded_into_chat: 'Benchmark prompt loaded',
-      submitted: `Submitted for Model ${slot}`,
-      generating: 'Generating benchmark response',
-      ready_to_capture: `Ready to capture for Model ${slot}`,
-      captured: `Captured for Model ${slot}`,
-      cancelled: 'Capture unavailable: generation cancelled',
-      error: 'Capture unavailable: generation failed'
-    };
-    return labels[association?.status] || labels[association?.generation_status] || 'Benchmark prompt loaded';
-  }
-
-  function renderBenchChatControl(association) {
-    const control = document.getElementById('bench-chat-control');
-    if (!control) return;
-    const sameChat = benchAssociationMatchesCurrentChat(association);
-    const status = association?.status || association?.generation_status || '';
-    const usefulStates = new Set([
-      'loaded_into_chat',
-      'submitted',
-      'generating',
-      'ready_to_capture',
-      'captured',
-      'cancelled',
-      'error'
-    ]);
-    if (!association || !sameChat || !usefulStates.has(status)) {
-      control.hidden = true;
-      document.getElementById('chat')?.classList.remove('bench-control-visible');
-      window._activeBenchChatAssociation = null;
-      return;
-    }
-    const slot = association.candidate_model_slot || '';
-    const promptLabel = association.prompt_number
-      ? `Prompt ${association.prompt_number}${association.test_title ? ` · ${association.test_title}` : ''}`
-      : association.test_title || association.test_id || 'Benchmark prompt';
-    const packLabel = association.benchmark_name || association.benchmark_id || 'Helcyon-Bench';
-    document.getElementById('bench-chat-context').textContent =
-      `${packLabel} · ${promptLabel} · Model ${slot}`;
-    document.getElementById('bench-chat-state').textContent =
-      benchChatStateLabel(association, sameChat);
-    const capture = document.getElementById('bench-chat-capture');
-    capture.hidden = !(sameChat && (association.status === 'ready_to_capture' || association.generation_status === 'ready_to_capture'));
-    capture.disabled = capture.hidden;
-    const manuallyHidden = HelcyonBenchPromptTransfer.isPanelHidden(
-      localStorage,
-      association.association_id
-    );
-    control.hidden = manuallyHidden;
-    document.getElementById('chat')?.classList.toggle('bench-control-visible', !manuallyHidden);
-    control.classList.toggle('bench-chat-control-ready', !capture.hidden);
-    control.classList.remove('bench-chat-control-wrong-chat');
-    window._activeBenchChatAssociation = association;
-  }
-
-  async function refreshBenchChatControl() {
-    let association = activeBenchChatAssociation();
-    if (!association) {
-      renderBenchChatControl(null);
-      return null;
-    }
-    if (association.association_id && !['queued', 'loaded_into_chat', 'invalidated'].includes(association.status)) {
-      try {
-        const response = await fetch(
-          `/api/helcyon-bench/capture-associations/${encodeURIComponent(association.association_id)}/status`,
-          { cache: 'no-store' }
-        );
-        const result = await response.json();
-        if (result.association) {
-          const updates = {
-            ...result.association,
-            status: result.status || result.association.generation_status || association.status,
-            error: result.error || ''
-          };
-          association = HelcyonBenchPromptTransfer.updateAssociation(
-            localStorage,
-            association.association_id,
-            updates
-          ) || { ...association, ...updates };
-        } else if (result.code !== 'association_missing' && result.error) {
-          // Display-only: never durably downgrade the association from an
-          // error payload without its server record — resolve failures can be
-          // transient and 'association_missing' just means not registered yet.
-          association = { ...association, status: result.status || association.status, error: result.error };
-        }
-      } catch (error) {
-        association = { ...association, status: 'error', error: 'Capture readiness could not be checked.' };
-      }
-    }
-    renderBenchChatControl(association);
-    return association;
-  }
-
-  async function loadIntegratedBenchSession() {
-    let state = {};
-    try {
-      state = JSON.parse(localStorage.getItem(HelcyonBenchPromptTransfer.FORM_STATE_KEY) || '{}');
-    } catch (error) {}
-    try {
-      const response = await fetch('/api/helcyon-bench/session', { cache: 'no-store' });
-      const result = await response.json();
-      if (response.ok && result.session) state = { ...state, ...result.session };
-    } catch (error) {}
-    return state;
-  }
-
-  async function saveIntegratedBenchSession(state) { showHwuiProModal("Helcyon-Bench", "Saving benchmark sessions is available in HWUI Pro."); return; }
-
-  async function returnToActiveBench() { showHwuiProModal("Helcyon-Bench", "Returning a live chat response to Bench is available in HWUI Pro."); return; }
-
-  function hideActiveBenchPanel() {
-    const association = window._activeBenchChatAssociation || activeBenchChatAssociation();
-    if (!association) return;
-    HelcyonBenchPromptTransfer.setPanelHidden(localStorage, association.association_id, true);
-    renderBenchChatControl(association);
-  }
-
-  async function showActiveBenchPanel() {
-    const pending = consumePendingBenchPrompt({ notifyMismatch: false });
-    if (pending.reason === 'input-not-empty') {
-      hwuiToast(
-        'A benchmark prompt is waiting, but the chat input already contains text. Send or clear that text first.',
-        'info',
-        5000
-      );
-      return;
-    }
-    let association = await refreshBenchChatControl();
-    if (!association || !benchAssociationMatchesCurrentChat(association)) {
-      hwuiToast(
-        'No saved benchmark context was found for this chat. Return to Bench and send a prompt here first.',
-        'info',
-        5000
-      );
-      return;
-    }
-    if (association.status === 'queued') {
-      // The pending transfer record was lost but its queued association
-      // survives — reload the prompt into the input so Generate can proceed.
-      const input = document.getElementById('user-input');
-      const inputText = String(input?.value || '').trim();
-      const promptText = String(association.prompt_text || '');
-      if (inputText && inputText !== promptText.trim()) {
-        hwuiToast(
-          'A benchmark prompt is waiting, but the chat input already contains text. Send or clear that text first.',
-          'info',
-          5000
-        );
-        return;
-      }
-      if (input && !inputText) {
-        input.value = promptText;
-        resizeChatInput(input);
-      }
-      association = HelcyonBenchPromptTransfer.updateAssociation(
-        localStorage,
-        association.association_id,
-        { status: 'loaded_into_chat' }
-      ) || { ...association, status: 'loaded_into_chat' };
-    }
-    HelcyonBenchPromptTransfer.restoreContext(localStorage, association);
-    HelcyonBenchPromptTransfer.setPanelHidden(localStorage, association.association_id, false);
-    renderBenchChatControl(association);
-    if (document.getElementById('bench-chat-control')?.hidden) {
-      hwuiToast('This chat has no active benchmark response to capture.', 'info', 5000);
-    }
-  }
-
+  async function updateBenchGenerationState() { return; }
+  async function registerBenchSubmission() { showHwuiProModal("Helcyon-Bench", "Live benchmark capture is available in HWUI Pro."); return; }
+  async function saveIntegratedBenchSession() { showHwuiProModal("Helcyon-Bench", "Saving benchmark sessions is available in HWUI Pro."); return; }
+  async function returnToActiveBench() { showHwuiProModal("Helcyon-Bench", "Returning live chat responses to Bench is available in HWUI Pro."); return; }
+  function hideActiveBenchPanel() { showHwuiProModal("Helcyon-Bench", "Live benchmark capture is available in HWUI Pro."); }
+  async function showActiveBenchPanel() { showHwuiProModal("Helcyon-Bench", "Live benchmark capture is available in HWUI Pro."); return; }
   async function captureActiveBenchResponse() { showHwuiProModal("Helcyon-Bench", "Capturing live chat responses is available in HWUI Pro."); return; }
+  function consumePendingBenchPrompt() { return { ok: false }; }
+  function refreshBenchChatControl() { return Promise.resolve(null); }
+  function activeBenchChatAssociation() { return null; }
+  function settleBenchChatScroll() { return; }
 
   function getChatInputDraftContext() {
     const dropdown = document.getElementById('character-select');
@@ -2666,11 +2338,6 @@ if (typeof marked === "undefined") {
       const name = data.model || 'No model loaded';
       const label = data.label || name;
       const noModel = name === 'No model loaded';
-      HelcyonBenchPromptTransfer.pruneAssociationsForTarget(localStorage, {
-        chat: currentChatFilename || '',
-        chat_id: currentChatId || '',
-        model: noModel ? '__no_model__' : name
-      });
 
       const nameSpan = document.getElementById('model-display-name');
       if (nameSpan) { nameSpan.textContent = noModel ? 'No model loaded' : label; nameSpan.style.color = noModel ? '#a05050' : '#ccc'; }
@@ -3085,11 +2752,6 @@ if (typeof marked === "undefined") {
       if (nameSpanU) { nameSpanU.textContent = 'No model loaded'; nameSpanU.style.color = '#a05050'; }
       const actualElU = document.getElementById('picker-actual-model');
       if (actualElU) { actualElU.textContent = ''; actualElU.style.display = 'none'; }
-      HelcyonBenchPromptTransfer.pruneAssociationsForTarget(localStorage, {
-        chat: currentChatFilename || '',
-        chat_id: currentChatId || '',
-        model: '__no_model__'
-      });
       status.textContent = '✅ Unloaded';
       setTimeout(() => closeModelPicker(), 1000);
     } catch(e) {
@@ -3876,6 +3538,16 @@ if (typeof marked === "undefined") {
   // LOAD CHARACTER DATA
   // ==================================================
 async function loadCharacter(name, skipChatHistory = false) {
+  const task = _loadCharacterInternal(name, skipChatHistory);
+  characterLoadPromise = task;
+  try {
+    return await task;
+  } finally {
+    if (characterLoadPromise === task) characterLoadPromise = null;
+  }
+}
+
+async function _loadCharacterInternal(name, skipChatHistory = false) {
     const loadGeneration = ++characterLoadGeneration;
     try {
       const res = await fetch('/characters/' + encodeURIComponent(name) + '.json');
@@ -4210,7 +3882,12 @@ function persistChatState() {
       contentDiv.appendChild(actions);
       
       // Open chat on click - USE extractCharacterFromFilename()
-      li.addEventListener('click', () => {
+      li.addEventListener('click', (event) => {
+        // Editing the title replaces the title span with an input inside this
+        // row. Let clicks in that input move/focus the caret without reopening
+        // the chat and triggering the rename input's blur-to-save handler.
+        if (event.target.closest('.rename-input')) return;
+
         const chatList = document.getElementById('chat-list');
         const savedListPosition = captureChatListPosition(chatList, li);
         closeCollapsedChatHistory();
@@ -4398,6 +4075,7 @@ function persistChatState() {
       // The chat now lives in another folder, so an open copy of it would keep
       // autosaving back into THIS folder and recreate the file. Clear the pane.
       if (movedCurrentChat) {
+        stopTTSForConversationChange();
         currentChatFilename = null;
         document.getElementById('chat').innerHTML = '';
         window.loadedChat = [];
@@ -4489,6 +4167,7 @@ function persistChatState() {
       if (!res.ok || result.error) throw new Error(result.error || 'Delete failed');
       setChatColor(chat.filename, null);
       if (deletedCurrentChat) {
+        stopTTSForConversationChange();
         currentChatFilename = null;
         document.getElementById('chat').innerHTML = '';
         window.loadedChat = [];
@@ -4945,6 +4624,16 @@ function persistChatState() {
   // SWITCH TO CHARACTER (update dropdown + load character data)
   // ==================================================
   async function switchToCharacter(characterName) {
+    const task = _switchToCharacterInternal(characterName);
+    characterLoadPromise = task;
+    try {
+      return await task;
+    } finally {
+      if (characterLoadPromise === task) characterLoadPromise = null;
+    }
+  }
+
+  async function _switchToCharacterInternal(characterName) {
     const loadGeneration = ++characterLoadGeneration;
     var dropdown = document.getElementById('character-select');
     
@@ -5005,6 +4694,7 @@ function persistChatState() {
 // OPEN CHAT
 // ==================================================
 async function openChat(filename) {
+  if (filename && filename !== currentChatFilename) stopTTSForConversationChange();
   const loadGeneration = ++chatLoadGeneration;
   const loadTask = _openChatInternal(filename, loadGeneration);
   chatLoadPromise = loadTask;
@@ -5439,7 +5129,6 @@ async function _openChatInternal(filename, loadGeneration) {
     currentChatFilename = filename;
     randomCheckinRestoredChat = { chatKey: filename, at: Date.now() };
     currentChatId = data.chat_id || null;
-    HelcyonBenchPromptTransfer.handleChatChanged(localStorage, currentChatFilename);
     refreshBenchChatControl();
     saveCurrentChatState();
     
@@ -5965,6 +5654,22 @@ async function sendPrompt() {
     window._sendPromptInFlight = true;
     try {
 
+    if (characterLoadPromise) {
+      console.warn('⏳ Character switch still in progress; waiting before submit');
+      hwuiToast('Finishing the character switch before sending…', 'info');
+    }
+    while (characterLoadPromise) {
+      const pendingSwitch = characterLoadPromise;
+      let switched;
+      try { switched = await pendingSwitch; } catch (err) {
+        console.error('❌ Character switch failed; cancelling submit:', err);
+        return;
+      }
+      if (characterLoadPromise && characterLoadPromise !== pendingSwitch) continue;  // a newer switch
+      if (switched === false) return;
+      break;
+    }
+
     if (chatLoadPromise) {
       console.warn('⏳ Chat history is still loading; waiting before submit');
       let chatLoadSucceeded = true;
@@ -6173,21 +5878,6 @@ async function sendPrompt() {
     }
     window._chatDirty = true;  // stale-write guard: user turn added locally
     const sourceUserPosition = window.loadedChat.filter(message => !message.hidden).length - 1;
-    const benchSubmission = HelcyonBenchPromptTransfer.markSubmitted(
-      localStorage,
-      currentChatFilename,
-      input,
-      {
-        source_user_message_id: sourceUserMessageId,
-        source_user_position: sourceUserPosition,
-        chat_id: currentChatId,
-        character: currentCharacterKey || currentCharName || '',
-        submitted_at: userMessageTimestamp
-      }
-    );
-    if (benchSubmission) {
-      renderBenchChatControl(benchSubmission);
-    }
 
     // Clear attached documents after sending — one-shot, now in this turn's content
     if (hasDocs) {
@@ -6204,11 +5894,6 @@ async function sendPrompt() {
     // vanishing on navigation. See changes.md (June 6 2026).
     const initialSave = await autoSaveCurrentChat();
     if (initialSave?.chat_id) currentChatId = initialSave.chat_id;
-    if (benchSubmission) {
-      benchSubmission.chat_id = currentChatId || benchSubmission.chat_id;
-      await registerBenchSubmission(benchSubmission);
-      settleBenchChatScroll(benchSubmission);
-    }
 
     let contextMessages = window.loadedChat;
     
@@ -6485,7 +6170,7 @@ async function sendPrompt() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           character,
-          user_name: activeUserName || localStorage.getItem('activeUserName') || 'Chris',
+          user_name: activeUserName || localStorage.getItem('activeUserName') || 'User',
           user_text: userText,
           assistant_text: assistantText,
           recent_messages: recentMessages
@@ -6552,6 +6237,11 @@ async function sendPrompt() {
       }
       return false;
     }
+
+    // New reply text belongs to the current conversation. Any navigation stop
+    // before this turn changes ttsRunId and prevents its late stream from speaking.
+    ttsNavigationCleanupPending = false;
+    const responseTTSRunId = ttsRunId;
 
     try {
       window.isSending = true;
@@ -6704,6 +6394,11 @@ async function sendPrompt() {
         try {
           const _body = (await response.text()).trim();
           if (_body) _errMsg = _body;
+          // JSON errors (e.g. a chat that belongs to another character) show their message.
+          try {
+            const _json = JSON.parse(_body);
+            if (_json && typeof _json.error === 'string') _errMsg = '⚠️ ' + _json.error;
+          } catch (e) {}
         } catch (e) {}
         const _errDiv = document.createElement('div');
         _errDiv.className = 'message error-msg';
@@ -7155,7 +6850,7 @@ async function sendPrompt() {
         // memory content. ttsSpeakableDelta also withholds any tail that is
         // still an unresolved control construct, because audio cannot be
         // un-spoken the way a rendered character can be re-rendered.
-        if (typeof bufferTextForTTS === 'function') {
+        if (responseTTSRunId === ttsRunId && typeof bufferTextForTTS === 'function') {
           const speakable = HwuiChatCore.ttsSpeakableDelta(
             reactionAnswer.text, ttsSpokenLen, { charName: charName, userName: userName }
           );
@@ -7291,7 +6986,7 @@ async function sendPrompt() {
       // ─────────────────────────────────────────────────────────────────
 
       // Flush remaining TTS buffer after streaming ends
-      if (typeof flushTTSBuffer === 'function') {
+      if (responseTTSRunId === ttsRunId && typeof flushTTSBuffer === 'function') {
         // Final release: hand over anything the streaming holdback was still
         // sitting on, then flush. Without this the reply's last character can
         // be withheld forever.
@@ -9252,16 +8947,18 @@ async function loadCharacterMemory() {
 
       // Backend splits on "# Memory:" so first line IS the title
       const lines = entry.split('\n').map(l => l.trim()).filter(l => l && !l.match(/^---+$/));
-      let title = '', keywords = '', bodyLines = [];
+      let title = '', keywords = '', kind = '', bodyLines = [];
       lines.forEach((line, idx) => {
         if (idx === 0) title = line;
         else if (line.toLowerCase().startsWith('keywords:')) keywords = line.replace(/^keywords:\s*/i, '').trim();
+        else if (/^kind\s*:/i.test(line)) kind = line.replace(/^kind\s*:\s*/i, '').trim().toLowerCase();
         else bodyLines.push(line);
       });
       const body = bodyLines.filter(l => l).join(' ').trim();
 
       const formatted = `
         ${title    ? `<div class="mem-title">${title}</div>` : ''}
+        ${kind === 'lesson' ? `<div class="mem-keywords">📘 Lesson — guidance for how the character responds</div>` : ''}
         ${keywords ? `<div class="mem-keywords">🔑 ${keywords}</div>` : ''}
         ${body     ? `<div class="mem-body">${body}</div>` : ''}
       `.trim();
@@ -9270,6 +8967,8 @@ async function loadCharacterMemory() {
         <div id="memory-view-${i}">
           <button onclick="deleteMemory(${i})">✕</button>
           <button onclick="startEditMemory(${i})" style="right:28px;">✏️</button>
+          <button onclick="moveMemory(${i})" style="right:56px;"
+                  title="${tab === 'global' ? 'Move to this character\'s memory' : 'Move to global memory (shared with characters that use global memory)'}">${tab === 'global' ? '👤' : '🌐'}</button>
           ${formatted}
         </div>
         <div id="memory-edit-${i}" style="display:none;">
@@ -9309,6 +9008,29 @@ async function deleteMemory(index) {
   });
   
   loadCharacterMemory();
+}
+
+// Move one entry between this character's memory and global memory. The entry
+// moves whole, so a lesson stays a lesson in either place.
+async function moveMemory(index) {
+  const tab = window._memoryTab || 'character';
+  const dropdown = document.getElementById('character-select');
+  const character = dropdown ? dropdown.value : (currentCharacterKey || '');
+  if (!character) {
+    hwuiToast('Please select a character first.', 'info');
+    return;
+  }
+  const res = await fetch('/move_character_memory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ character, index, from: tab === 'global' ? 'global' : 'character' })
+  });
+  if (res.ok) {
+    hwuiToast(tab === 'global' ? 'Moved to this character\'s memory.' : 'Moved to global memory.');
+    loadCharacterMemory();
+  } else {
+    hwuiToast('Could not move that memory.', 'error');
+  }
 }
 
 function startEditMemory(index) {
@@ -9794,7 +9516,8 @@ function showAutoMemoryToast(character, title, undoToken) {
         // base_count lets the server reject this flush if the disk has moved
         // past what this tab knew (second line of defence — a beacon can't
         // see the 409, but the newer disk copy survives).
-        var payload = JSON.stringify({ filename: currentChatFilename, messages: msgs, character: charName, base_count: window._chatBaseCount });
+        // withProject: a beacon cannot carry the tab's project header, so it rides in the body.
+        var payload = JSON.stringify(HwuiChatCore.withProject({ filename: currentChatFilename, messages: msgs, character: charName, base_count: window._chatBaseCount }));
         var blob = new Blob([payload], { type: 'application/json' });
         navigator.sendBeacon('/chats/save', blob);
       } catch (e) {
@@ -9914,6 +9637,7 @@ function showAutoMemoryToast(character, title, undoToken) {
     document.getElementById('character-select').addEventListener('change', async function() {
       const selectedChar = this.value;
       console.log('🔄 Character dropdown changed to:', selectedChar);
+      if (selectedChar !== currentCharacterKey) stopTTSForConversationChange();
       
       localStorage.setItem('lastCharacter', selectedChar);
       
@@ -10031,6 +9755,8 @@ function showAutoMemoryToast(character, title, undoToken) {
       console.log('⛔ Already creating a chat, blocked duplicate');
       return;
     }
+
+    stopTTSForConversationChange();
     
     isCreatingNewChat = true; // Lock it
     
@@ -10054,17 +9780,6 @@ function showAutoMemoryToast(character, title, undoToken) {
         return;
       }
 
-      HelcyonBenchPromptTransfer.rebindLoadedTransfer(
-        localStorage,
-        previousChatFilename,
-        data.filename,
-        pendingBenchPromptText
-      );
-      HelcyonBenchPromptTransfer.pruneAssociationsForTarget(localStorage, {
-        chat: data.filename,
-        chat_id: data.chat_id || '',
-        model: ''
-      });
       
       // ✅ Clear memory and DOM FIRST
       window.loadedChat = [];
@@ -10159,6 +9874,12 @@ async function displayRpOpenerInChat() {
 // ==================================================
 let currentEditingProject = null;
 let activeProjectName = null;
+// This tab's project was deleted or renamed in another tab/device: reload so the
+// tab picks up the current project instead of saving into one that is gone.
+window.onHwuiProjectUnavailable = function () {
+  hwuiToast('This chat\'s project is no longer available — reloading.', 'error');
+  setTimeout(() => window.location.reload(), 1500);
+};
 
 async function loadProjects() {
   try {
@@ -10495,6 +10216,7 @@ async function createProject() {
     await loadProjects();
     
     // Clear chat and reload list
+    stopTTSForConversationChange();
     currentChatFilename = null;
     document.getElementById('chat').innerHTML = '';
     window.loadedChat = [];
@@ -10525,6 +10247,8 @@ async function switchProject(projectName) {
       hwuiToast('Error: ' + data.error, 'error');
       return;
     }
+
+    stopTTSForConversationChange();
     
     if (projectName) {
       console.log('📁 Switched to project:', projectName);
@@ -10679,7 +10403,7 @@ async function saveProjectEdit() {
       hwuiToast('Error: ' + data.error, 'error');
       return;
     }
-    
+
     console.log('✅ Project updated:', currentEditingProject);
 
     if (currentEditingProject === activeProjectName && projectTheme) {
@@ -11375,7 +11099,7 @@ document.addEventListener('click', (e) => {
     const res = await fetch('/get_brave_api_key');
     if (!res.ok) return;
     const data = await res.json();
-    const configured = !!(data && data.brave_api_key && String(data.brave_api_key).trim());
+    const configured = !!(data && data.has_key === true);
     if (configured) return;
     const btns = document.querySelectorAll(
       '[onclick*="BraveKey"], [onclick*="brave-key-modal"], #brave-key-btn'

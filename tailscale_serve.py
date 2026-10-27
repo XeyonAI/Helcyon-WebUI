@@ -50,16 +50,10 @@ def find_tailscale():
 
 
 def has_tls_certs(base_dir=_BASE_DIR):
-    """Mirror app.py's cert check: HTTPS only when both cert files exist."""
-    return any(
-        os.path.isfile(os.path.join(base_dir, n + ".crt"))
-        and os.path.isfile(os.path.join(base_dir, n + ".key"))
-        for n in _cert_names(base_dir)
-    )
+    """Same cert rule as app.py (app_runtime_helpers.find_tls_cert_pair)."""
+    from app_runtime_helpers import find_tls_cert_pair
+    return find_tls_cert_pair(base_dir) is not None
 
-
-def _cert_names(base_dir):
-    return sorted({f[:-4] for f in os.listdir(base_dir) if f.endswith(".ts.net.crt")})
 
 
 def desired_target(port, https):

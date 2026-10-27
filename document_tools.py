@@ -708,6 +708,60 @@ DOCUMENT_ACTIONS = ("list", "read", "create", "append", "update", "edit", "save_
                     "delete")
 
 
+# ── Character memory scope (2026-10-24 isolation audit) ───────────────────────
+# The memories root holds EVERY character's "<key>_memory.txt". A request routed
+# from natural language ("read your memory file") could resolve to another
+# character's file. While a chat turn runs, the caller sets the active character
+# and the user's own words; another character's memory file is then refused
+# unless the user named that file or that character. The active character's own
+# file, global_memory.txt and every other file behave as before, and so does any
+# caller that sets no scope.
+import contextlib as _contextlib
+import contextvars as _contextvars
+
+_MEMORY_SCOPE = _contextvars.ContextVar("hwui_document_memory_scope", default=None)
+_CHARACTER_MEMORY_FILE_RE = re.compile(r"(?P<owner>.+)_memory\.(?:txt|md)", re.IGNORECASE)
+
+
+@_contextlib.contextmanager
+def memory_scope(active_character, request_text):
+    """Limit implicit memory-file access to `active_character` for this block."""
+    token = _MEMORY_SCOPE.set({"character": str(active_character or "").strip().casefold(),
+                               "text": " ".join(str(request_text or "").casefold().split())})
+    try:
+        yield
+    finally:
+        _MEMORY_SCOPE.reset(token)
+
+
+def _memory_scope_problem(targets):
+    """Why one of (root, name) targets is another character's memory file, or None."""
+    scope = _MEMORY_SCOPE.get()
+    if not scope or not scope.get("character"):
+        return None
+    for root, name in targets:
+        if not name:
+            continue
+        try:
+            if normalise_root(root) != "memories":
+                continue
+        except DocumentAccessError:
+            continue
+        base = os.path.basename(str(name).replace("\\", "/")).strip()
+        match = _CHARACTER_MEMORY_FILE_RE.fullmatch(base)
+        if not match:
+            continue
+        owner = match.group("owner").strip().casefold()
+        if owner in (scope["character"], "global"):
+            continue
+        named = (base.casefold() in scope["text"] or owner in scope["text"]
+                 or owner.replace("_", " ") in scope["text"])
+        if not named:
+            return ("%s is another character's memory file, so it was not opened. Name that "
+                    "file or character in your message to open it." % base)
+    return None
+
+
 def run_document_action(action, allowed_roots=None, **kwargs):
     """Execute one document action by name, returning the tool-result dict.
 
@@ -746,6 +800,14 @@ def run_document_action(action, allowed_roots=None, **kwargs):
                 print("📄 Document root corrected: %r -> %r for %s"
                       % (kwargs.get("root"), corrected, kwargs["name"]), flush=True)
                 kwargs = dict(kwargs, root=corrected)
+    # Checked after the root correction, so a file corrected INTO memories is covered.
+    scope_problem = _memory_scope_problem([
+        (kwargs.get("root"), kwargs.get("name")),
+        (kwargs.get("new_root") or kwargs.get("root"), kwargs.get("new_name")),
+    ])
+    if scope_problem:
+        print("🛡️ Document action refused: %s" % scope_problem, flush=True)
+        return _fail(scope_problem, root=kwargs.get("root"), name=kwargs.get("name"))
     try:
         if verb == "list":
             return list_documents(kwargs.get("root"))

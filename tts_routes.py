@@ -1,6 +1,7 @@
 """TTS routes for F5-TTS, XTTS, Chatterbox, Qwen3-TTS, and OmniVoice backends."""
 
 from flask import Blueprint, request, jsonify, send_file, Response, stream_with_context
+from log_privacy import redact  # spoken text stays out of logs unless diagnostics are on
 import requests
 from io import BytesIO
 import logging
@@ -169,6 +170,14 @@ def save_settings(data):
 
 def get_engine():
     return get_settings().get('tts_engine', 'f5')
+
+def _qwen_speech_text(text):
+    """Stop Qwen reading an all-caps "I AM" as the time "A.M.".
+
+    The Python Qwen3-TTS-Fast service did this (normalise_text_for_qwen), but the native
+    qwentts.cpp server that now answers both Qwen engines speaks its input verbatim.
+    """
+    return re.sub(r"\bI\s+AM\b", "I am", text)
 
 def get_server_url():
     engine = get_engine()
@@ -629,7 +638,7 @@ def generate_tts():
             return jsonify({'error': 'No text provided'}), 400
 
         server_url = get_server_url()
-        logging.info(f"Generating TTS [{engine}] for: {text[:50]}...")
+        logging.info(f"Generating TTS [{engine}] for: {redact(text, 50)}")
 
         if engine == 'omnivoice':
             audio_data = BytesIO(_generate_omnivoice(text, voice, data.get('language', 'English')))
@@ -642,7 +651,7 @@ def generate_tts():
             _ensure_qwentts_voice_registered(voice, server_url)
             started = time.monotonic()
             payload = {
-                'input': text,
+                'input': _qwen_speech_text(text),
                 'voice': voice,
                 'response_format': 'wav',
             }
@@ -660,7 +669,7 @@ def generate_tts():
             while (response.status_code == 200 and seed is None and retries < TTS_EMPTY_AUDIO_RETRIES
                    and _wav_is_empty(response.content)):
                 retries += 1
-                logging.warning(f'TTS [{engine}] returned empty audio for {text[:60]!r}; '
+                logging.warning(f'TTS [{engine}] returned empty audio for {redact(text, 60)}; '
                                 f'regenerating (retry {retries}/{TTS_EMPTY_AUDIO_RETRIES})')
                 response = requests.post(
                     f'{server_url}/v1/audio/speech',
@@ -727,7 +736,7 @@ def generate_tts_stream():
     try:
         _ensure_qwentts_voice_registered(voice, QWEN_FAST_SERVER_URL)
         payload = {
-            'input': text,
+            'input': _qwen_speech_text(text),
             'voice': voice,
             'response_format': 'pcm',
         }

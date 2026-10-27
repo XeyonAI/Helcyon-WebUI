@@ -1,11 +1,10 @@
 from flask import Flask, request, jsonify, send_from_directory, render_template, Response
-from flask_cors import CORS
 import requests, os, json, re, hashlib, time, subprocess, sys, functools, struct, base64, socket, weakref, atexit, secrets
 import uuid
 from message_reactions import (
     complete_reaction_stream, reaction_decision_messages, parse_reaction_decision,
     REACTION_DECISION_SCHEMA, RECENT_CONTEXT_MESSAGES, strip_reaction_markers,
-    reaction_cooldown_active,
+    reaction_cooldown_active, reactions_enabled,
 )
 from response_sanitiser import strip_trailing_empty_marker, strip_trailing_empty_marker_stream
 from continue_reply import continuation_turns, trim_continuation_echo
@@ -383,7 +382,14 @@ app = Flask(__name__, static_folder="static", template_folder="templates")
 # page refresh pick up the current template, no restart needed.
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 app.jinja_env.auto_reload = True
-CORS(app)
+# No CORS: HWUI's pages are same-origin, and every request first passes the
+# security boundary (origin, device pairing, path and local-only checks).
+import path_safety
+import request_security
+request_security.init_app(app)
+import log_privacy as _log_privacy
+from log_privacy import redact as _redact   # conversation text in log lines (see log_privacy)
+import search_grounding   # shared post-results rule, relevance filter, history cleaning
 
 # Temporary, opt-in runtime provenance for template-selection investigations.
 # Keep this off by default: it is diagnostic output only and does not alter
@@ -446,6 +452,20 @@ def _recent_reaction_context(history, chat_filename):
         if item["role"] == "user" and reactions.get(item["text"]):
             item["reaction"] = reactions[item["text"]].pop()
     return recent
+
+
+def _reaction_character_card(name):
+    """The request character's card, read fresh so a switch or editor save applies
+    to the next message. None when it cannot be resolved (global setting applies)."""
+    try:
+        characters_dir = os.path.join(os.path.dirname(__file__), "characters")
+        key, error = context_scope.resolve_request_character(name, characters_dir)
+        if error:
+            return None
+        with open(os.path.join(characters_dir, f"{key}.json"), "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except Exception:
+        return None
 
 
 def _decide_missing_message_reaction(user_text, settings, local_model, recent=None):
@@ -559,13 +579,14 @@ def _complete_missing_message_reaction(response):
             settings = json.load(handle)
     except Exception:
         return strip_model_markers()
-    if settings.get("message_reactions_enabled", True) is False:
-        # Reactions switched off (Config page): no selector call, no new reaction.
-        # Stored reactions are untouched; the header tells the browser not to clear
-        # one when this turn carries none (e.g. regenerate).
+    data = request.get_json(silent=True) or {}
+    if not reactions_enabled(_reaction_character_card(data.get("character")), settings):
+        # Reactions switched off for this character (Character editor, or the global
+        # setting a card without its own switch follows): no selector call, no new
+        # reaction. Stored reactions are untouched; the header tells the browser not
+        # to clear one when this turn carries none (e.g. regenerate).
         response.headers["X-HWUI-Reactions"] = "off"
         return strip_model_markers()
-    data = request.get_json(silent=True) or {}
     if data.get("continue_prefix") or data.get("generation_kind") == "continuation" or data.get("automatic_event"):
         return strip_model_markers()
     latest = next((m for m in reversed(data.get("conversation_history") or [])
@@ -658,6 +679,8 @@ from document_routes import document_bp
 from push_routes import push_bp
 import checkin_notifications
 import document_tools
+import context_scope
+from context_scope import chat_filename_is_plain as _chat_filename_is_plain
 try:
     from sentinel_routes import sentinel_bp
 except ImportError:
@@ -1142,7 +1165,8 @@ def _doc_query_keywords(user_query):
 # An optional 'Keywords: a, b, c' line at the top of a document — same
 # convention as memory blocks (see _parse_memory_blocks). Lets a doc declare
 # the topics it should be retrieved for, beyond what its filename says.
-_DOC_KEYWORDS_RE = re.compile(r'^keywords\s*:\s*(.*)$', re.IGNORECASE)
+# Markdown emphasis around the label is accepted ("**Keywords:** a, b").
+_DOC_KEYWORDS_RE = re.compile(r'^[*_]*keywords[*_]*\s*:\s*[*_]*\s*(.*?)[*_]*$', re.IGNORECASE)
 
 
 def _extract_doc_keywords(content):
@@ -1150,8 +1174,9 @@ def _extract_doc_keywords(content):
 
     Mirrors the memory-block Keywords convention: case-insensitive, separated
     by , ; or :, trailing punctuation stripped, lower-cased. Only the first
-    few non-empty lines are scanned so a stray 'Keywords:' deeper in the prose
-    is never mistaken for the tag line.
+    six non-empty lines are scanned (room for a title and a few metadata lines
+    such as **Updated:**) so a stray 'Keywords:' deeper in the prose is never
+    mistaken for the tag line.
 
     Returns (keywords_list, content_with_the_line_removed). When no line is
     found returns ([], content) unchanged — untagged docs are unaffected.
@@ -1164,7 +1189,7 @@ def _extract_doc_keywords(content):
         if not line.strip():
             continue
         seen += 1
-        if seen > 4:
+        if seen > 6:
             break
         m = _DOC_KEYWORDS_RE.match(line.strip())
         if m:
@@ -1420,12 +1445,12 @@ def load_project_documents(project_name, user_query="", max_docs=2):
             matches.append((s, fname))
 
     if not matches:
-        print(f"⏭️ No document matched keywords: {query_keywords}")
+        print(f"⏭️ No document matched keywords: {_redact(query_keywords)}")
         return ""
 
     matches.sort(key=lambda item: item[0], reverse=True)
     selected = matches[:max(1, int(max_docs))]
-    print(f"✅ Top document matches: {selected} (keywords={query_keywords})")
+    print(f"✅ Top document matches: {selected} (keywords={_redact(query_keywords)})")
 
     MAX_CHARS_PER_DOC = 8000
     document_sections = []
@@ -1561,8 +1586,13 @@ def load_global_documents(user_query="", user_documents=None, user_name="", moni
             1 for kw in query_keywords
             if re.search(r'\b' + re.escape(kw) + r'\b', fname_norm)
         )
+        # A matched curated phrase counts each meaningful word, short ones
+        # included, so "gemma 4" is two signals ("4" is dropped by the query
+        # tokeniser's length filter, which left the phrase one short of the
+        # two-signal bar). Stopwords still count for nothing ("my history" = 1).
         specific_signal_count += sum(
-            len(_doc_query_keywords(dk))
+            len([t for t in re.findall(r"[a-z0-9]+", dk)
+                 if t not in _DOC_STOPWORDS and t not in _GLOBAL_DOC_LOW_SIGNAL_TERMS])
             for dk in strong_doc_keywords
             if _curated_kw_match(dk, query_lower)
         )
@@ -1573,12 +1603,12 @@ def load_global_documents(user_query="", user_documents=None, user_name="", moni
             matches.append((s, fname))
 
     if not matches:
-        print(f"⭕ Global docs: no strong match (keywords={query_keywords})")
+        print(f"⭕ Global docs: no strong match (keywords={_redact(query_keywords)})")
         return ""
 
     matches.sort(key=lambda item: item[0], reverse=True)
     selected = matches[:2]
-    print(f"🌐 Global doc matches: {selected} (keywords={query_keywords})")
+    print(f"🌐 Global doc matches: {selected} (keywords={_redact(query_keywords)})")
 
     MAX_CHARS_PER_DOC = 12000
     document_sections = []
@@ -3008,6 +3038,126 @@ def _ministral_intent_prefill_supported(cache_key):
     return supported
 
 
+# ── Gemma 4 Response Intent (settings.json "gemma4_response_intent", default on) ─
+# The Ministral/Qwen3.5 mechanism in Gemma 4's own grammar. With thinking off,
+# Gemma 4's template primes every reply with an EMPTY closed thought channel,
+# `<|turn>model\n<|channel>thought\n<channel|>`, and HWUI's Gemma 4 trainers
+# teach exactly that shape. An assistant prefill carrying the note as
+# `reasoning_content` (content "\n\n", the LAST message) fills that same slot:
+# `<|channel>thought\n{note}\n<channel|>` with the model turn left open, so the
+# note is a thought the model has already had, in its own words, and the reply
+# follows it. It is the shape the reasoning-continuation in stream_vision_
+# response already sends to Gemma 4 (live-checked 2026-10-21, development-log).
+# The note is the user's first-person text, never rewritten or wrapped.
+#
+# Not used on reasoning-on turns (a pre-closed thought would replace the
+# model's own thinking) or Continue requests (the reply is carried on by a
+# trailing turn), or when the loaded server does not render the prefill as a
+# closed thought (one /apply-template probe per model). Those turns keep the
+# note in the system message as before, so it is delivered once, never twice.
+_GEMMA4_INTENT_PREFILL_CONTENT = "\n\n"
+
+# Gemma 4 structural tokens (turns, channels, thinking, tools, media) and the
+# special tokens. A note containing any of these could close the thought
+# channel, or open or close a turn, from inside it.
+_GEMMA4_STRUCTURAL_MARKER_RE = re.compile(
+    r"<\|?(?:turn|channel|think|tool|tool_call|tool_response|image|audio|video|\")\|?>"
+    r"|<(?:bos|eos|pad)>",
+    re.IGNORECASE,
+)
+
+
+def _gemma4_response_intent_text(note):
+    """Response Intent text made safe for Gemma 4's thought channel (no structure)."""
+    text = _GEMMA4_STRUCTURAL_MARKER_RE.sub("", str(note or ""))
+    text = re.sub(r"<\|im_start\|>\w*|<\|im_end\|>|<\|endoftext\|>", "", text)
+    return re.sub(r"[ \t]{2,}", " ", text).strip()
+
+
+def _gemma4_response_intent_prefill(intent):
+    """The assistant prefill carrying `intent` as this turn's closed thought, or
+    None when there is no Response Intent. Always the LAST provider message."""
+    value = _gemma4_response_intent_text(intent)
+    if not value:
+        return None
+    return {
+        "role": "assistant",
+        "content": _GEMMA4_INTENT_PREFILL_CONTENT,
+        "reasoning_content": value,
+    }
+
+
+def _gemma4_intent_prefill_render_ok(rendered, intent):
+    """True when `rendered` ends in an open model turn whose thought channel holds
+    exactly `intent`, closed, and nothing after it but whitespace (no end of turn)."""
+    if not isinstance(rendered, str):
+        return False
+    head = "<|turn>model\n<|channel>thought\n" + _gemma4_response_intent_text(intent)
+    index = rendered.rfind(head)
+    return index >= 0 and re.fullmatch(r"\n?<channel\|>\s*", rendered[index + len(head):]) is not None
+
+
+_GEMMA4_INTENT_PREFILL_PROBE = {}
+
+
+def _gemma4_intent_prefill_supported(cache_key):
+    """True when the loaded server renders the prefill as a closed thought.
+
+    One /apply-template probe per model, cached, as for Ministral. Anything but
+    the expected shape (reasoning dropped, a second empty thought, the turn
+    closed) disables the prefill. Unreachable-server errors are not cached.
+    """
+    if cache_key in _GEMMA4_INTENT_PREFILL_PROBE:
+        return _GEMMA4_INTENT_PREFILL_PROBE[cache_key]
+    probe_note = "I'll keep it brief."
+    messages = [
+        {"role": "system", "content": "Probe."},
+        {"role": "user", "content": "Hello."},
+        _gemma4_response_intent_prefill(probe_note),
+    ]
+    try:
+        response = requests.post(
+            f"{API_URL}/apply-template",
+            json={"messages": messages, "chat_template_kwargs": {"enable_thinking": False}},
+            timeout=10,
+        )
+        if response.status_code != 200:
+            print(f"⚠️ Gemma 4 Response Intent probe: /apply-template returned "
+                  f"{response.status_code}", flush=True)
+            return False
+        rendered = response.json().get("prompt")
+    except Exception as exc:
+        print(f"⚠️ Gemma 4 Response Intent probe failed: {exc!r}", flush=True)
+        return False
+    supported = _gemma4_intent_prefill_render_ok(rendered, probe_note)
+    if not supported:
+        print(
+            "⚠️ Gemma 4 Response Intent: this server does not render an assistant "
+            f"reasoning prefill as a closed thought channel (tail {str(rendered)[-80:]!r}) — "
+            "the note stays in the system message",
+            flush=True,
+        )
+    _GEMMA4_INTENT_PREFILL_PROBE[cache_key] = supported
+    return supported
+
+
+def _gemma4_response_intent_skip_reason(intent, continue_prefix, reasoning_enabled, enabled, cache_key):
+    """"" when the Gemma 4 prefill applies this turn, otherwise why it does not."""
+    if not intent:
+        return "no Response Intent"
+    if not enabled:
+        return "gemma4_response_intent is off in settings"
+    if continue_prefix:
+        return ("this is a Continue request — the reply is carried on by a trailing "
+                "turn, which cannot follow an assistant prefill")
+    if reasoning_enabled:
+        return ("thinking is on for this turn — a pre-closed thought cannot "
+                "coexist with the model's own reasoning")
+    if not _gemma4_intent_prefill_supported(cache_key):
+        return "the server does not render the reasoning prefill"
+    return ""
+
+
 def _ministral_clean_template_active(model_path, args):
     return (
         _is_ministral_native_model(model_path)
@@ -3375,6 +3525,66 @@ def _llama_server_log_tail(max_lines=25):
     except OSError:
         return ""
     return "\n".join(lines[-max_lines:]).strip()
+
+
+def _llama_server_logs_payload(log_dir, current_log_path, selected_log=None,
+                               max_lines=500, max_chars=50000):
+    """Return a bounded, read-only view of recent llama-server launch logs."""
+    entries = []
+    try:
+        names = os.listdir(log_dir)
+    except OSError:
+        names = []
+    for name in names:
+        if not (name.startswith("llama_server_") and name.endswith(".log")):
+            continue
+        path = os.path.join(log_dir, name)
+        try:
+            if os.path.isfile(path):
+                entries.append({"name": name, "modified": os.path.getmtime(path)})
+        except OSError:
+            continue
+    entries.sort(key=lambda item: item["modified"], reverse=True)
+    entries = entries[:10]
+
+    if selected_log:
+        if (os.path.basename(selected_log) != selected_log
+                or not selected_log.startswith("llama_server_")
+                or not selected_log.endswith(".log")):
+            return {"error": "Invalid llama-server log selection."}, 400
+        name = selected_log
+    else:
+        current_name = os.path.basename(str(current_log_path or ""))
+        name = current_name if any(item["name"] == current_name for item in entries) else (
+            entries[0]["name"] if entries else ""
+        )
+
+    text = ""
+    if name:
+        path = os.path.join(log_dir, name)
+        try:
+            with open(path, "rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                size = handle.tell()
+                handle.seek(max(0, size - max_chars), os.SEEK_SET)
+                text = handle.read(max_chars).decode("utf-8", "replace")
+            if size > max_chars:
+                text = "[Earlier output omitted]\n" + text
+            text = "\n".join(text.splitlines()[-max_lines:])
+        except OSError:
+            return {"error": "The selected llama-server log is no longer available.",
+                    "entries": entries}, 404
+    return {"entries": entries, "selected": name, "text": text}, 200
+
+
+@app.route("/api/llama_server/logs", methods=["GET"])
+def get_llama_server_logs():
+    payload, status = _llama_server_logs_payload(
+        os.path.join(_LOG_DIR, "llama_server_logs"),
+        _LLAMA_SERVER_LOG_PATH,
+        request.args.get("file"),
+    )
+    return jsonify(payload), status
 
 
 def _llama_exit_diagnostic(exit_code):
@@ -3809,6 +4019,49 @@ def _cap_native_messages_max_tokens(payload, ctx_size, prompt_tokens=None, safet
     return configured
 
 
+_SEARCH_REPLY_FLOOR_TOKENS = 512   # reply room a post-search prompt must leave
+_SEARCH_EVIDENCE_TRIM_NOTE = "\n[Further results omitted to fit the context window.]"
+
+
+def _fit_search_payload_to_context(payload, ctx_size, results_block, rebuild, res, safety_tokens=32):
+    """Fit a post-search native payload into llama.cpp's slot, or None.
+
+    The pre-search max_tokens no longer holds once results are spliced in, so
+    the finished prompt is recounted. If the reply would keep fewer than
+    _SEARCH_REPLY_FLOOR_TOKENS (or its configured length, if smaller), the
+    evidence is cut at a line boundary and recounted (at most three times).
+    Sources whose URL no longer appears in the kept evidence are dropped from
+    `res`, so no link is shown for text the model never saw. Returns
+    (payload with max_tokens capped, kept evidence, res), or None when the
+    evidence cannot fit at all.
+    """
+    ctx_size = int(ctx_size)
+    floor = min(_SEARCH_REPLY_FLOOR_TOKENS, max(1, int(payload.get("max_tokens") or _SEARCH_REPLY_FLOOR_TOKENS)))
+    block = results_block
+    prompt_tokens = _native_messages_prompt_token_count(payload)
+    for _attempt in range(3):
+        over = prompt_tokens + floor + int(safety_tokens) - ctx_size
+        if over <= 0:
+            break
+        # ~4 characters per token, plus a margin for the note and template.
+        keep = len(block) - over * 4 - 200
+        if keep < 400:
+            return None
+        block = block[:keep].rsplit("\n", 1)[0].rstrip() + _SEARCH_EVIDENCE_TRIM_NOTE
+        payload = dict(payload, messages=rebuild(block))
+        prompt_tokens = _native_messages_prompt_token_count(payload)
+    else:
+        if prompt_tokens + floor + int(safety_tokens) > ctx_size:
+            return None
+    if block is not results_block and isinstance(res, dict):
+        kept = lambda items: [i for i in items or [] if isinstance(i, dict) and i.get("url") and i["url"] in block]
+        res = dict(res, pages=kept(res.get("pages")), results=kept(res.get("results")),
+                   top_url=res.get("top_url") if res.get("top_url") and res["top_url"] in block else "")
+        print(f"🔍 Search evidence trimmed to fit the context: {len(results_block)} -> {len(block)} chars",
+              flush=True)
+    return _cap_native_messages_max_tokens(payload, ctx_size, prompt_tokens=prompt_tokens), block, res
+
+
 _LOCAL_MODEL_REQUEST_LOCK = threading.BoundedSemaphore(1)
 
 
@@ -4077,6 +4330,10 @@ def _prompt_diagnostic_finish(raw_completion=None, metadata=None):
         print(f"⚠️ Prompt diagnostic completion update failed: {exc!r}", flush=True)
 
 
+class _CaptureDisabled(Exception):
+    """Internal: skip an opt-in prompt capture that is switched off."""
+
+
 def _prompt_diagnostic_capture_active():
     try:
         return bool(
@@ -4150,10 +4407,13 @@ def _open_locked_local_stream(path, payload, slot_state_out=None):
             payload,
             slot=(slot_state_out.get("slot") if isinstance(slot_state_out, dict) else _prompt_diag_slot),
         )
-        # TEMP diagnostic capture: preserve the full final local chat-completion
-        # request and llama.cpp's rendered prompt without changing the generation
-        # payload. This extra apply-template call is diagnostic only.
-        if path == "/v1/chat/completions" and isinstance(payload.get("messages"), list):
+        # Opt-in diagnostic capture (settings.json "prompt_diagnostic_capture"):
+        # the full final local chat-completion request and llama.cpp's rendered
+        # prompt, without changing the generation payload. It holds the whole
+        # prompt (card, memories, history), so it never runs by default, and the
+        # extra /apply-template call it makes only happens when it runs.
+        if (path == "/v1/chat/completions" and isinstance(payload.get("messages"), list)
+                and _prompt_diagnostic_enabled_for_request()):
             try:
                 capture_path = os.path.join(
                     _LOG_DIR, "TEMP_HWUI_MINISTRAL_FINAL_REQUEST_CAPTURE.json"
@@ -4783,6 +5043,12 @@ def strip_chatml_leakage(text):
     # Full tokens
     text = re.sub(r"<\|im_end\|>", "", text)
     text = re.sub(r"<\|im_start\|>\w*", "", text)
+    # Misspelt complete markers the model writes as plain text, which no stop
+    # string matches ("<|im End|>" ended a live Nemo search reply, 26 Oct).
+    # Only whole markers, closing "|>" included.
+    text = re.sub(r"<\|\s*im[\s_.-]*end(?:ed)?\s*\|>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"<\|\s*im[\s_.-]*start(?:ed)?\s*\|>[ \t]*(?:user|assistant|system)?", "", text,
+                  flags=re.IGNORECASE)
     # Partial tokens at end of string
     text = re.sub(r"<\|im_end?$", "", text)
     text = re.sub(r"<\|im_en$", "", text)
@@ -5462,7 +5728,7 @@ _FRESHNESS_KEYWORDS_DAY = (
 )
 _FRESHNESS_KEYWORDS_WEEK = (
     'this week', 'past week', 'last week', 'recent', 'recently', 'latest',
-    'newest', 'fresh news',
+    'newest', 'fresh news', 'yesterday', 'last night', 'this weekend', 'last weekend',
 )
 
 
@@ -5519,6 +5785,14 @@ def _search_intent_gate(user_msg):
                     {"role": "assistant", "content": "NO_SEARCH"},
                     {"role": "user", "content": "What's that nice BBQ sauce served with Hunters Chicken?"},
                     {"role": "assistant", "content": "SEARCH: Hunters Chicken BBQ sauce"},
+                    {"role": "user", "content": "I watched the new episode last night and loved it. Did you see it?"},
+                    {"role": "assistant", "content": "NO_SEARCH"},
+                    # Named: there is something to look up, and the model has
+                    # not seen it (the unnamed case above has nothing to find).
+                    {"role": "user", "content": "Just finished the season 2 finale of Severance! What did you make of that ending?"},
+                    {"role": "assistant", "content": "SEARCH: Severance season 2 finale"},
+                    {"role": "user", "content": "Did you hear Valve announced something yesterday? What was it?"},
+                    {"role": "assistant", "content": "SEARCH: Valve announcement"},
                     {"role": "user", "content": (user_msg or "")[:2000]},
                 ],
                 "temperature": 0,
@@ -5571,12 +5845,41 @@ def _ministral_is_narration(fragment):
     return not re.search(r"\byou\b", fragment[matches[-1].end():], re.IGNORECASE)
 
 
-# Deliberate opt-in phrases for automatic web search. Keep this list exact:
-# ordinary questions, topical words, and generic lookup verbs must not search.
+# Explicit search requests. Ordinary questions and topical words must not
+# match: those go through the per-character automatic current-topic search
+# (search_grounding.recency_candidate + _search_intent_gate) or not at all.
+#
+# 2026-10-24: the request-shaped lookups people actually type ("search for X",
+# "look it up", "look up what happened", "google the release notes", "check
+# online") were missing, so they never searched. Each of those needs a request
+# shape in front of the verb (start of a sentence or clause, or "you"/"please"/
+# "just"/"go"/"and"/"then"), so noun uses ("the search for meaning", "Google
+# announced"), narrative ("they search for survivors") and "look up at/to" do
+# not match. First-person narration is still filtered by the callers.
+# "web search" used as a noun ("recognise when web search is necessary",
+# "web search decisions", 24 Oct shard request) is the topic, not a request;
+# "use your web search tool" and "web search the finale" still are.
 _WEB_SEARCH_EXPLICIT_RE = (
-    r"\b(?:search\s+online|web\s+search|look\s+up\s+online|"
+    r"(?:\b(?:search\s+online|"
+    r"web\s+search(?!\s+(?:is|was|are|were|should|would|will|might|may|needs?|decisions?|behaviou?r|"
+    r"judge?ments?|training|examples?|shards?|data|capabilit(?:y|ies)|machinery|logic|triggers?|tags?|calls?)\b)|"
+    r"search\s+the\s+web|look\s+up\s+online|"
     r"search\s+on\s+the\s+web|search\s+the\s+internet|look\s+online|"
-    r"look\s+on\s+the\s+internet)\b"
+    r"look\s+on\s+the\s+internet|check\s+online|find\s+(?:it\s+|out\s+)?online)\b|"
+    # "you" may carry an offer or a request in front of the verb: "do you want
+    # to look that up", "you could google it", "would you like to search for
+    # …" (25 Oct: "Do you want to look that up and we'll chat about it"
+    # never searched and GPT-4o told the user to go ahead and search it).
+    # An offer can also be a gerund ("would you mind searching for …", "fancy
+    # looking up …", "how about looking up …") or a reminder ("don't forget to
+    # look up …"); declined requests are filtered by search_grounding.declined_lookup.
+    r"(?:(?:^|[.!?,;:]\s*)|\b(?:you(?:\s+(?:want\s+to|wanna|like\s+to|can|could|would|will|fancy|care\s+to)|"
+    r"(?:'d|’d|\s+would)\s+like\s+to)?|please|pls|just|go|and|then|quickly|now|"
+    r"mind|fancy|about|try|(?:forget|remember)\s+to)\s+)"
+    r"(?:search(?:ing)?\s+(?:for|up)(?=\s+\w)|search(?:ing)?\s+(?:it|that|this|them)\s+up\b|"
+    r"look(?:ing)?\s+(?:it|that|this|them|those|these)\s+up\b|"
+    r"look(?:ing)?\s+up(?=\s+(?!to\b|at\b|into\b|from\b|and\b)\w)|"
+    r"googl(?:e|ing)\s+(?:it|that|this|the|for|whether|if|what|who|when|where|how)\b))"
 )
 
 
@@ -5618,7 +5921,10 @@ _QUERY_NOISE_WORDS = _QUERY_ANAPHORA | frozenset({
     # the opt-in vocabulary itself, so it can never become the topic
     "search", "searching", "online", "web", "internet", "google", "lookup",
     "hey", "hi", "hello", "yeah", "yes", "no", "ok", "okay", "oh", "ah",
-    "um", "erm", "anyway", "though", "really", "very", "quite",
+    # interjections: "Ooh, Silo!" was searched as "Ooh Silo" (26 Oct, live)
+    "ooh", "oooh", "ohh", "ahh", "aah", "aw", "aww", "wow", "whoa", "woah",
+    "omg", "hmm", "huh", "haha", "lol", "yay", "ugh", "yep", "yup", "nope", "nah",
+    "um", "erm", "anyway", "though", "really", "very", "quite", "only",
     "bloody", "fucking", "fuckin", "damn", "shit", "bad", "good", "mad",
 })
 
@@ -5635,30 +5941,54 @@ _QUERY_LEADIN_RE = re.compile(
     re.IGNORECASE,
 )
 
-_QUERY_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'’-]*")
+# Recency words that belong to a named topic ("the new Alien Isolation game").
+_TOPIC_QUALIFIERS = frozenset({"new", "newest", "latest", "next", "upcoming", "recent", "last"})
+
+# Digits count: "Pixel 10 Pro" and "Ministral 3" lost their numbers.
+_QUERY_WORD_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'’-]*")
 
 
-def _query_topic_phrase(text, max_words=4):
+def _query_topic_phrase(text, max_words=4, named=False):
     """Longest contiguous run of topical words in `text`.
 
     Deliberately shallow — no POS tagging, no model call. Noise words break a
     run, so "Fucking petrol prices are bad as well" yields "petrol prices".
-    Returns "" when nothing topical is present.
+    With `named`, only a run that names something counts: a capitalised word
+    that does not open its sentence, or a number ("the Artemis II crew", "new
+    Pixel 10 Pro"), so "Ooh, how was it?" names nothing. Returns "" when
+    nothing (named) is present.
     """
     best = []
+
+    def names_something(index, raw):
+        return ((index > 0 and raw[:1].isupper() and not re.match(r"I(?:$|['’])", raw))
+                or any(c.isdigit() for c in raw))
+
+    def qualifies(run):
+        return not named or any(names_something(index, raw) for index, raw in run)
+
     for sentence in re.split(r"[.!?\n;]+", str(text or "")):
         run = []
-        for raw in _QUERY_WORD_RE.findall(sentence):
+        for index, raw in enumerate(_QUERY_WORD_RE.findall(sentence)):
             word = raw.lower().replace("’", "'").strip("'-")
             if word in _QUERY_NOISE_WORDS or not word:
-                if len(run) > len(best):
+                if len(run) > len(best) and qualifies(run):
                     best = run
                 run = []
             else:
-                run.append(raw)
-        if len(run) > len(best):
+                run.append((index, raw))
+        if len(run) > len(best) and qualifies(run):
             best = run
-    return " ".join(best[:max_words])
+    if named:
+        # The name starts the topic: "I've started watching Silo" is "Silo"
+        # (with the user's turns read first by _history_topic, 26 Oct). A
+        # recency word right before it stays: "the new Alien Isolation game"
+        # without "new" found the 2014 game, not the sequel.
+        start = next((i for i, item in enumerate(best) if names_something(*item)), len(best))
+        while start and best[start - 1][1].lower() in _TOPIC_QUALIFIERS:
+            start -= 1
+        best = best[start:]
+    return " ".join(raw for _index, raw in best[:max_words])
 
 
 def _restore_query_subject(query, context):
@@ -5675,7 +6005,9 @@ def _restore_query_subject(query, context):
     if tail and not any(t in _QUERY_ANAPHORA for t in tokens):
         return tail
 
-    subject = _query_topic_phrase(context)
+    # A named show's instalment outranks a longer run of instalment words:
+    # "season two episode nine" alone was searched without "Dark Matter".
+    subject = search_grounding.instalment_topic(context) or _query_topic_phrase(context)
     if not subject:
         return tail
     if all(w.lower() in tokens for w in subject.split()):
@@ -5696,27 +6028,202 @@ def _restore_query_subject(query, context):
     return f"{subject} {tail}".strip() if tail else subject
 
 
-def _ministral_runtime_search_query(user_msg):
+# A lookup whose object is a pronoun ("look that up", "google it"): the topic
+# was named before it, and what follows is chat ("… and we'll chat about it").
+_PRONOUN_LOOKUP_RE = re.compile(
+    r"\b(?:look|search)(?:ing)?\s+(?:it|that|this|them|those|these)\s+up\b|\bgoogl(?:e|ing)\s+(?:it|that|this)\b",
+    re.IGNORECASE,
+)
+
+
+def _blank_names(text, names):
+    """`text` with each of `names` (and each word of a multi-word name) replaced
+    by "it", which ends a topic run, so a name is never a search topic."""
+    text = str(text or "")
+    for name in names or ():
+        for part in sorted({str(name)} | set(str(name).split()), key=len, reverse=True):
+            if len(part) >= 2:
+                text = re.sub(r"(?<!\w)" + re.escape(part) + r"(?!\w)", "it", text, flags=re.IGNORECASE)
+    return text
+
+
+def _pronoun_lookup_topic(text, match, history=None, names=()):
+    """Query for an explicit `match` in `text` whose object is a pronoun.
+
+    A named show's instalment before the request wins ("Dark Matter season 2
+    episode 9"), then the strongest topic phrase. None when the match is not a
+    pronoun lookup, or nothing before it names a topic but something after it
+    does ("look it up and tell me what Valve announced"): the caller keeps its
+    own extraction. "" when nothing is named on either side ("… and we'll chat
+    about it", "google it for me"): there is no query of its own, so the
+    model's request tag supplies one.
+    """
+    if not match:
+        return None
+    after = text[match.end():].split("\n", 1)[0]
+    # "search online for that and we can chat about it" (25 Oct, Personal):
+    # the opt-in's object is the pronoun after it.
+    # The pronoun stands alone: "for this compatibility test" names its topic.
+    object_after = re.match(
+        r"\s*(?:for|about|on)\s+(?:it|that|this|them|those|these)"
+        r"(?=\s*(?:$|[.,!?;:]|(?:and|then|so|please|for\s+me)\b))",
+        after, re.IGNORECASE)
+    if not _PRONOUN_LOOKUP_RE.search(match.group(0)) and not object_after:
+        return None
+    if object_after:
+        after = after[object_after.end():]
+    before = _blank_names(text[:match.start()], names)
+    topic = _swapped_history_topic(before, history, names)
+    topic = topic or search_grounding.instalment_topic(before) or _query_topic_phrase(before, named=True)
+    if not topic:
+        topic = _history_topic(history, names)
+        if topic:
+            # The show is in an earlier turn, the season in this one: "just
+            # finished season two. can you look it up, i want to know when
+            # season three comes out" after talking about Silo (26 Oct, live).
+            # The season asked about (after the request) outranks the one
+            # narrated before it.
+            words = (search_grounding.instalment_words(after)
+                     or search_grounding.instalment_words(before))
+            if words and not search_grounding.instalment_words(topic):
+                topic = f"{topic} {words}"
+        else:
+            topic = _query_topic_phrase(before)
+    if topic:
+        return topic
+    return None if re.search(r"\b(?!I\b)[A-Z][A-Za-z0-9]|\d", after) else ""
+
+
+# "And what about the US? Look that up too" after a UK inflation search was
+# searched as "UK inflation" ("US" reads as the pronoun), and the next reply
+# invented a US figure (26 Oct, live). The new subject replaces the earlier
+# topic's name and keeps what was being asked about it.
+_WHAT_ABOUT_RE = re.compile(r"\b(?:what|how)\s+about\s+(?:the\s+)?([A-Za-z0-9][^.?!,;\n]*)", re.IGNORECASE)
+
+
+def _swapped_history_topic(before, history, names=()):
+    """"US inflation figure" for "what about the US?" after "UK inflation figure", or ""."""
+    about = _WHAT_ABOUT_RE.search(str(before or ""))
+    if not about:
+        return ""
+    subject = about.group(1).strip()
+    first = subject.split()[0].lower().replace("’", "'")
+    if first in _QUERY_ANAPHORA or search_grounding.instalment_words(subject):
+        return ""  # "what about it?" leans on the earlier topic itself
+    prior = _history_topic(history, names)
+    if not prior or subject.lower() in prior.lower():
+        return ""
+    kept = [word for word in prior.split()
+            if not (word[:1].isupper() or any(c.isdigit() for c in word))]
+    qualifiers = [word for word in kept if word.lower() in _TOPIC_QUALIFIERS]
+    rest = [word for word in kept if word.lower() not in _TOPIC_QUALIFIERS]
+    return " ".join(qualifiers + [subject] + rest)
+
+
+def _history_topic(history, names=()):
+    """The named topic of the last turns, for a request that names none, or "".
+
+    "Do you want to look that up?" after "I just finished season two episode
+    nine of Dark Matter": the topic is in an earlier turn (25 Oct corpus). The
+    last three turns are read newest first; a turn counts only when it names
+    something (an instalment, a capitalised name or a number), so "Ooh, how was
+    it?" is skipped and "I'm so tired today" gives nothing.
+
+    The user's turns come before the character's: a searched reply names dates
+    and sources ("announced for March 12, according to Northlight+"), and "Who's
+    in the cast? Look it up" searched "March season 2" instead of the show the
+    user had asked about (26 Oct, live). A topic only the character named ("the
+    Ministral 3 release notes") is still found.
+    """
+    turns = [m for m in (history or []) if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
+    recent = list(reversed(turns[-3:]))
+    for message in ([m for m in recent if m.get("role") == "user"]
+                    + [m for m in recent if m.get("role") == "assistant"]):
+        content = message.get("content", "")
+        if isinstance(content, list):
+            content = " ".join(str(p.get("text", "")) for p in content
+                               if isinstance(p, dict) and p.get("type") == "text")
+        text = _blank_names(search_grounding.request_text(search_grounding.strip_search_ui(str(content or ""))),
+                            names)
+        topic = search_grounding.instalment_topic(text) or _query_topic_phrase(text, named=True)
+        if topic:
+            return topic
+    return ""
+
+
+def _ministral_runtime_search_query(user_msg, history=None, names=()):
     """Return a search query for clear native-Ministral web intent, else None.
 
     Search is deliberately opt-in: only the exact phrases in
     _WEB_SEARCH_EXPLICIT_RE may produce a query. Everything else stays in
-    the normal chat path.
+    the normal chat path. A declined lookup ("I don't think you want to look
+    that up") produces none. `history` (earlier turns, oldest first) supplies
+    the topic of a request that names none ("Search online then").
     """
-    text = str(user_msg or "").strip()
-    if not text:
+    # Code, quoted tags and pasted training material are not the request.
+    text = search_grounding.request_text(user_msg).strip()
+    if not text or search_grounding.declined_lookup(text):
         return None
 
     explicit = re.search(_WEB_SEARCH_EXPLICIT_RE, text, re.IGNORECASE)
     # Explicit imperative ("search the web for X"). Still suppressed when the
     # user is narrating rather than asking ("I tried to google that earlier").
-    if explicit and not _ministral_is_narration(text[:explicit.start()]):
-        query = text[explicit.end():]
+    # Narration is judged in the request's own sentence: "I just finished Andor
+    # season two. Can you look it up?" narrates first and then asks.
+    # The match itself is included: it can start at the "you" that makes it a
+    # request ("i just finished season two, can you look it up?" matches
+    # "you look it up", 26 Oct).
+    if explicit and not _ministral_is_narration(
+            re.split(r"[.!?]\s+", text[:explicit.start()])[-1] + explicit.group(0)):
+        topic = _pronoun_lookup_topic(text, explicit, history, names)
+        if topic is not None:
+            return topic[:200].rsplit(" ", 1)[0] if len(topic) > 200 else (topic or None)
+        query_tail = text[explicit.end():]
+        query = query_tail.splitlines()[0] if query_tail.splitlines() else ""
+        # A request phrased as "use your web search tool to find X" matches
+        # the opt-in at "web search"; the text after it is control wording,
+        # not part of the search topic. Drop that short tool-call preamble
+        # before sending the query to Brave/DDG.
+        query = re.sub(
+            r"^\s*(?:(?:your|the)\s+)?(?:search\s+)?tool\s+"
+            r"(?:to\s+)?(?:find|look\s+up|search)\s+",
+            "", query, flags=re.IGNORECASE,
+        )
+        query = re.sub(
+            r"^\s*(?:(?:and|then)\s+)?(?:find|look\s+up|look\s+for|search\s+for|"
+            r"check|fetch|retrieve|get)\s+",
+            "", query, flags=re.IGNORECASE,
+        )
         query = re.sub(r"^[\s:,-]*(?:for|on|about)\s+", "", query, flags=re.IGNORECASE)
+        query = re.split(r"(?<=[.!?])\s+(?=[A-Z])", query, maxsplit=1)[0]
         query = re.sub(r"[\s,]*(?:please|for me)[?.!]*$", "", query, flags=re.IGNORECASE)
+        # What to do with the results is not what to search for: "the current
+        # UK inflation rate and give me a detailed rundown with sources" was
+        # searched whole (26 Oct, live); "and tell me what Valve announced".
+        query = re.sub(r"^\s*(?:and|then)\s+(?:give|tell|show|let)\s+me\s+(?:know\s+)?", "", query,
+                       flags=re.IGNORECASE)
+        query = re.sub(r"(?<=\S)[\s,]+(?:and|then)\s+(?:give|tell|show|let)\s+me\b.*$", "", query,
+                       flags=re.IGNORECASE)
         query = query.strip().rstrip("?.!,")
         # The topic may live BEFORE the opt-in phrase; the slice above drops it.
-        query = _restore_query_subject(query, text[:explicit.start()])
+        query = _restore_query_subject(query, _blank_names(text[:explicit.start()], names))
+        # An instalment with no show ("can you look up when season 3 comes out?")
+        # belongs to the show named before the request or in an earlier turn:
+        # searched alone, it came back as Wednesday season 3 in a chat about
+        # Silo (26 Oct, live).
+        words = search_grounding.instalment_words(query)
+        if words and not search_grounding.instalment_topic(query):
+            for source in (lambda: _query_topic_phrase(_blank_names(text[:explicit.start()], names), named=True),
+                           lambda: _history_topic(history, names)):
+                title = source()
+                title = title.replace(search_grounding.instalment_words(title), "").strip() if title else ""
+                if title:
+                    query = f"{title} {words}"
+                    break
+        # Only filler left ("search online then", "check online now"): the
+        # topic is in an earlier turn, or the model's request supplies it.
+        if not _query_topic_phrase(query):
+            query = _history_topic(history, names)
         return query[:200].rsplit(" ", 1)[0] if len(query) > 200 else (query or None)
 
     return None
@@ -5763,6 +6270,7 @@ def do_web_search(query, _deadline=None):
                 next((r["url"] for r in out["results"]), "")
             )
     except Exception as e:
+        out["error"] = "ddg_request_failed"
         print(f"⚠️ DDG search error: {e}")
 
     _fetch_budget = _deadline - time.monotonic()
@@ -5927,6 +6435,7 @@ def do_brave_search(query, api_key, _deadline=None):
             out["summary"] = out["results"][0].get("snippet", "")[:400]
 
     except _ue.HTTPError as e:
+        out["error"] = "brave_http_%s" % e.code
         body = ""
         try:
             body = e.read().decode("utf-8", errors="ignore")[:200]
@@ -5934,6 +6443,7 @@ def do_brave_search(query, api_key, _deadline=None):
             pass
         print(f"⚠️ Brave HTTP {e.code}: {body}", flush=True)
     except Exception as e:
+        out["error"] = "brave_request_failed"
         print(f"⚠️ Brave search error: {e}", flush=True)
 
     return out
@@ -5967,12 +6477,75 @@ def do_search(query):
     _deadline = time.monotonic() + _MINISTRAL_SEARCH_TOTAL_BUDGET_SECONDS
     brave_key = get_brave_api_key()
     if brave_key:
-        print(f"🔍 Using Brave Search for: {query}", flush=True)
-        return do_brave_search(query, brave_key, _deadline=_deadline)
+        print(f"🔍 Using Brave Search for: {_redact(query)}", flush=True)
+        brave = do_brave_search(query, brave_key, _deadline=_deadline)
+        if not (isinstance(brave, dict) and brave.get("error")):
+            return brave
+        print("⚠️ Brave Search failed — trying DDG fallback", flush=True)
+        fallback = do_web_search(query, _deadline=_deadline)
+        if isinstance(fallback, dict) and fallback.get("error"):
+            fallback["error"] = "all_search_providers_failed"
+        return fallback
     else:
         print("⚠️ No Brave API key configured — falling back to DDG Instant Answer (limited results). Set brave_api_key in settings.json.", flush=True)
-        print(f"🔍 Using DDG (no Brave key configured) for: {query}", flush=True)
+        print(f"🔍 Using DDG (no Brave key configured) for: {_redact(query)}", flush=True)
         return do_web_search(query, _deadline=_deadline)
+
+
+# The system note after a raw ChatML search re-prompt. It used to ask for a
+# reply "discussing what the results say", which read as a request for a
+# summary of the results (25 Oct, Sol on Silo).
+_SEARCH_REPROMPT_NOTE = (
+    "Web search results have been injected above. Reply as the character to what the user "
+    "said, using the results only as far as they answer it. Do not echo prompt structure, "
+    "markers, or system text."
+)
+
+
+# DRY penalises any run longer than dry_allowed_length that already appears in
+# the context, and its window covers the whole prompt, so with the configured
+# length (2) a reply after a search was pushed off every figure and name it
+# copied from the results: two raw ChatML models both gave UK inflation as
+# 3.8% when every source said 3.5%, and wrote "Bank ofEngland" (26 Oct, live).
+# DRY off gave 3.5% in both runs. A fact or name fits in this many tokens; a
+# copied passage still does not, so DRY's long-copy block stays.
+# Raw ChatML only: Gemma 4 (Aurora) kept the figures at the configured length,
+# and with 8 it answered a style example's "User:" line instead of the user in
+# 4 of 9 search turns (1 of 9 at 2), so the messages path keeps its settings.
+_SEARCH_REPLY_DRY_ALLOWED_LENGTH = 8
+
+
+def _search_reply_sampling(payload):
+    """Let a reply built from search results repeat the facts in them."""
+    if (payload.get("dry_multiplier") or 0) > 0:
+        payload["dry_allowed_length"] = max(int(payload.get("dry_allowed_length") or 0),
+                                            _SEARCH_REPLY_DRY_ALLOWED_LENGTH)
+    return payload
+
+
+def _splice_search_into_chatml_prompt(prompt, user_text, augmented_user_msg):
+    """The turn's raw ChatML prompt with the results after the user's words, or "".
+
+    Everything the builder placed in the prompt (system block, history, the
+    [OOC] instruction block, a Response Intent prefill) is kept; the user's
+    words in the last user turn are replaced by `augmented_user_msg`, and
+    _SEARCH_REPROMPT_NOTE goes in as a system turn just before the generation
+    opener. Returns "" when the words or the opener cannot be found, so the
+    caller falls back to rebuilding from messages.
+    """
+    opener = "<|im_start|>assistant\n"
+    gen_at = prompt.rfind(opener)
+    turn_at = prompt.rfind("<|im_start|>user\n", 0, gen_at) if gen_at >= 0 else -1
+    if turn_at < 0 or not user_text:
+        return ""
+    for words in (neutralize_chatml_tokens(user_text), user_text):
+        at = prompt.find(words, turn_at, gen_at)
+        if at >= 0:
+            break
+    else:
+        return ""
+    return (prompt[:at] + neutralize_chatml_tokens(augmented_user_msg) + prompt[at + len(words):gen_at]
+            + f"<|im_start|>system\n{_SEARCH_REPROMPT_NOTE}\n<|im_end|>\n" + prompt[gen_at:])
 
 
 def format_search_results(query, res):
@@ -5986,30 +6559,32 @@ def format_search_results(query, res):
     lines = []
     pages = res.get("pages") or []
     seen_urls = {p.get("url") for p in pages if p.get("url")}
+    # Provider markup ("&#8216;", "<strong>") is not evidence.
+    clean = search_grounding.clean_snippet
 
     if res.get("summary"):
-        lines.append(f"Summary: {res['summary']}")
+        lines.append(f"Summary: {clean(res['summary'])}")
 
     if pages:
         lines.append("\nTop sources:")
         for i, p in enumerate(pages, 1):
-            title = (p.get("title") or "").strip()
+            title = clean(p.get("title") or "")
             lines.append(f"\n[{i}] {title}" if title else f"\n[{i}]")
             lines.append(f"URL: {p['url']}")
-            text = (p.get("text") or "")[:1500]
+            text = clean(p.get("text") or "")[:1500]
             if text:
                 lines.append(f"Content:\n{text}")
     elif res.get("top_url"):
         lines.append(f"\nTop result: {res['top_url']}")
         if res.get("top_text"):
-            lines.append(f"Page content:\n{res['top_text'][:1500]}")
+            lines.append(f"Page content:\n{clean(res['top_text'])[:1500]}")
 
     other = [r for r in (res.get("results") or []) if r.get("url") not in seen_urls]
     if other:
         lines.append("\nOther relevant results:")
         for r in other[:8]:
-            lines.append(f"• {r.get('title','')}")
-            snip = r.get("snippet") or ""
+            lines.append(f"• {clean(r.get('title', ''))}")
+            snip = clean(r.get("snippet") or "")
             if snip:
                 lines.append(f"  {snip}")
             age = r.get("age") or ""
@@ -6238,10 +6813,44 @@ _DOCUMENT_ROUTER_PREVIEW_CHARS = 200
 # "content" body) is dropped by the router parser.
 _DOCUMENT_ROUTER_FIELDS = ("root", "name", "new_name", "new_root", "find", "replace", "count",
                            "after")
+# ⚠️ Traced 2026-10-24 (Personal, Gemma 4 Sol): the router answered a create with
+# a correct {"action":"create",...} object and then did not stop - it went on to a
+# second {"action":"append",...} object and the start of the document text, until
+# the token cap. One reply holding two actions is not a verdict, so the parser
+# rightly refused it and nothing was saved. The request is now constrained to ONE
+# object of exactly these fields (llama.cpp ends generation when the object
+# closes); the parser stays strict for any backend that ignores the schema.
+# reasoning_format is left at the server default: with "none", Gemma 4's empty
+# <|channel>thought<channel|> prefix is returned inside the content.
+_DOCUMENT_ROUTER_SCHEMA = {
+    "name": "hwui_document_route",
+    "schema": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["none", *document_tools.DOCUMENT_ACTIONS]},
+            "root": {"type": "string", "enum": list(document_tools.DOCUMENT_ROOTS)},
+            "name": {"type": "string"},
+            "new_name": {"type": "string"},
+            "new_root": {"type": "string", "enum": list(document_tools.DOCUMENT_ROOTS)},
+            "find": {"type": "string"},
+            "replace": {"type": "string"},
+            "count": {"type": "integer"},
+            # ONE existing heading or line. Live 2026-10-24: unconstrained, Gemma 4 put the
+            # new paragraph in here, or repeated "\n\n### Current Status" to the token cap
+            # (then the whole reply was lost as truncated). The cap keeps the object
+            # complete; _document_append_anchor recovers the heading. ("pattern" is not
+            # used: this llama.cpp then fails Gemma 4 requests with HTTP 500.)
+            "after": {"type": "string", "maxLength": 160},
+        },
+        "required": ["action"],
+        "additionalProperties": False,
+    },
+}
 # Actions whose whole text is written by _generate_document_body.
 _DOCUMENT_GENERATED_ACTIONS = ("create", "update")
 # Actions that change files; their results carry the plain-reply rules below.
-_DOCUMENT_WRITE_ACTIONS = ("create", "append", "update", "edit", "save_as", "rename", "delete")
+_DOCUMENT_WRITE_ACTIONS = ("create", "append", "update", "edit", "save_as", "rename", "delete",
+                           "multi_edit")
 # A find/replace longer than this is not a short literal edit. It is never
 # converted into a whole-file rewrite: it becomes an addition when the user
 # asked to add something, a rewrite only on explicit rewrite wording, and is
@@ -6433,6 +7042,47 @@ _DOCUMENT_INTERNAL_TAG_LINE_RE = re.compile(
     r"^[ \t]*\[\s*(?:END\s+)?(?:ATTACHED\s+)?DOCUMENT\b[^\]\n]*\][ \t]*(?:\n|$)",
     re.MULTILINE,
 )
+# A reply sentence saying a document change was made (see
+# _document_failure_contradiction_guard); a negated sentence is an honest failure.
+_DOCUMENT_SUCCESS_CLAIM_RE = re.compile(
+    r"\b(?:i|we)(?:['’]ve|\s+have)?\s+(?:now\s+|just\s+|successfully\s+|also\s+)?"
+    r"(?:added|inserted|appended|saved|updated|changed|edited|created|written|wrote|placed"
+    r"|included|renamed|deleted|removed|made\s+the\s+(?:change|edit))\b"
+    r"|\b(?:changes?|edits?|document|file|paragraph|addition|section|text|line|update)s?\s+"
+    r"(?:(?:has|have)\s+been|was|were|is\s+now|are\s+now)\s+(?:successfully\s+)?"
+    r"(?:saved|added|inserted|updated|changed|applied|created|written|verified|appended|made)\b"
+    r"|\b(?:saved|updated|added)\s+(?:and|&)\s+verified\b",
+    re.IGNORECASE,
+)
+_DOCUMENT_CLAIM_NEGATION_RE = re.compile(
+    r"\b(?:not|never|nothing|no|unable|failed|cannot|can['’]t|couldn['’]t|didn['’]t|wasn['’]t"
+    r"|weren['’]t|haven['’]t|hasn['’]t|won['’]t|isn['’]t|aren['’]t)\b",
+    re.IGNORECASE,
+)
+# Search routing on a document turn (see _document_turn_search_route_text).
+_DOCUMENT_QUOTED_PASSAGE_RE = re.compile(r'"[^"\n]{1,2000}"|“[^”]{1,2000}”|```[\s\S]*?```')
+_DOCUMENT_WEB_SEARCH_ASKED_BEFORE_RE = re.compile(
+    r"\b(?:use|using|do|doing|run|running|perform|with|via|try|start|make)\s+"
+    r"(?:(?:a|an|your|the|my|quick|fresh|new)\s+)*$",
+    re.IGNORECASE,
+)
+_DOCUMENT_WEB_SEARCH_ASKED_AFTER_RE = re.compile(
+    r"\s*(?:tool\b|for\b|on\b|about\b|to\s+(?:find|check|look|get|see)\b|and\s+(?:find|look|get|tell)\b)",
+    re.IGNORECASE,
+)
+# "add a new paragraph saying: "..."" - the quoted text is the addition itself
+# (see _document_dictated_addition).
+_DOCUMENT_DICTATED_ADDITION_RE = re.compile(
+    r"\b(?:add|insert|append|include|put|write)\b[^\"“”\n]{0,160}?"
+    r"(?:\b(?:saying|that\s+says|which\s+says|reading|that\s+reads|which\s+reads|stating"
+    r"|that\s+states|with\s+the\s+(?:text|words?|line|sentence))\b[ \t]*:?|:)[ \t]*"
+    r"[\"“](?P<text>[^\"”]{2,2000})[\"”]",
+    re.IGNORECASE,
+)
+# A writer's own remark that it saved the document (see _clean_generated_document_body).
+_DOCUMENT_SAVE_REMARK_VERB_RE = re.compile(
+    r"\b(?:saved|created|stored|written|located|available)\b|\bis\s+(?:\S+\s+){0,2}?(?:in|at)\b",
+    re.IGNORECASE)
 _DOCUMENT_ROUTER_FAILURE_TEXT = {
     "request_failed": "did not respond",
     "unparseable": "returned malformed or truncated output",
@@ -6460,7 +7110,7 @@ _DOCUMENT_REPLY_RULE_FAILED = (
 # Results that get a server-built confirmation: every write, plus a router
 # failure on a turn that clearly asked for a document operation.
 _DOCUMENT_CONFIRMED_ACTIONS = ("create", "append", "update", "edit", "save_as", "rename",
-                               "delete", "unknown")
+                               "delete", "multi_edit", "unknown")
 _DOCUMENT_ROOT_LABELS = {"global_docs": "Global Documents", "memories": "Memories",
                          "editing": "Document Editing"}
 # ── A document write happens once per logical user turn ──────────────────────
@@ -6481,6 +7131,35 @@ _DOCUMENT_STRUCTURAL_NUMBER_RE = re.compile(
     r"items?|sections?|headings?|examples?|steps?|tips?)\b",
     re.IGNORECASE,
 )
+# Numbered instruction labels describe the request structure, not document
+# content. Strip only line-leading list markers before numeric grounding; any
+# numbers elsewhere in those instruction lines remain protected.
+_DOCUMENT_NUMBERED_LIST_MARKER_RE = re.compile(r"(?m)^[ \t]*\d{1,3}[.)][ \t]+")
+
+
+def _document_request_numeric_content(request_text):
+    request = re.sub(r"\b\w[\w\-]*\.(?:txt|md|json|docx)\b", " ",
+                     str(request_text or ""), flags=re.IGNORECASE)
+    return _DOCUMENT_NUMBERED_LIST_MARKER_RE.sub(" ", request)
+
+
+def _document_numbered_write_operations(message, target_name):
+    """Extract a conservative sequential numbered list of edits to one named file."""
+    if not target_name:
+        return []
+    text = str(message or "")
+    matches = list(re.finditer(r"(?m)^[ \t]*(\d{1,2})[.)][ \t]+", text))
+    if len(matches) < 2 or [int(match.group(1)) for match in matches] != list(range(1, len(matches) + 1)):
+        return []
+    operations = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        operation = text[match.end():end].strip()
+        if (not operation or _document_turn_refuses_files(operation)
+                or not _DOCUMENT_WRITE_VERB_RE.search(operation)):
+            return []
+        operations.append(operation)
+    return operations
 
 
 def _normalise_document_phrase(text):
@@ -6641,7 +7320,8 @@ def _classify_document_intent(user_msg, listing_hint="", canonical_target=None):
         "Never write the document itself - any text is written separately afterwards.\n"
         "append: add new material to an EXISTING file (add a section, paragraph, line, note or "
         "detail; append; insert; include). Give the location and filename, plus \"after\" only "
-        "when the user names the heading or line the new material should follow.\n"
+        "when the user names the heading or line the new material should follow. \"after\" is "
+        "only that existing heading or line, never the new material.\n"
         "edit: a short literal change - the exact short text to find and its short replacement.\n"
         "update: ONLY when the user explicitly asks to rewrite, restructure or replace the whole "
         "document.\n\n"
@@ -6708,6 +7388,8 @@ def _classify_document_intent(user_msg, listing_hint="", canonical_target=None):
         response = _locked_local_json_post(
             "/v1/chat/completions",
             {"model": CURRENT_MODEL or "local", "messages": messages,
+             "response_format": {"type": "json_schema", "json_schema": _DOCUMENT_ROUTER_SCHEMA},
+             "chat_template_kwargs": {"enable_thinking": False},
              "temperature": 0, "max_tokens": _DOCUMENT_ROUTER_MAX_TOKENS, "stream": False},
             30,
             "document_intent",
@@ -7009,13 +7691,14 @@ def _document_addition_token_budget(request_text, prompt_chars=0, ctx_size=None)
     return min(wanted, available)
 
 
-def _clean_generated_document_body(raw):
+def _clean_generated_document_body(raw, name=None):
     """Strip wrapper and control text a model may put around a document.
 
     Removes reasoning blocks, a whole-document code fence, one "Here is…:"
     preamble line, echoed prompt headers (File:/Format:/Document: lines at the
     very start), the existing-document markers used in writer prompts, and any
-    internal [DOCUMENT …] marker line — none of which is document text.
+    internal [DOCUMENT …] marker line — none of which is document text. With the
+    document's name, also an opening or closing line saying where that file was saved.
     """
     text = re.sub(r"<think>[\s\S]*?</think>", "", str(raw or "")).replace("\r\n", "\n").strip()
     fenced = re.fullmatch(r"```[\w+.-]*[ \t]*\n([\s\S]*?)\n?```", text)
@@ -7029,7 +7712,42 @@ def _clean_generated_document_body(raw):
     # One leading line of chat preamble ("Here is the document:") is not document text.
     text = re.sub(r"\A(?:here(?:'s| is)|sure|certainly|okay|ok)\b[^\n]{0,100}:[ \t]*\n+", "",
                   text.strip(), flags=re.IGNORECASE).strip()
+    # ...nor is an opening or closing line saying where THIS file was saved. Traced
+    # 2026-10-24: asked to "save the document and tell me its exact filename and location",
+    # the writer put "The document has been saved as `X.md` in the current working
+    # directory." (or "X.md is saved at `/home/user/...`") at the end or the start of the
+    # file - a false statement inside the saved document. Only a one-line first or last
+    # paragraph that names the document itself and says it was saved is removed.
+    text = _document_strip_save_remark(text, name)
     return text + "\n" if text else ""
+
+
+def _document_strip_save_remark(text, name):
+    """Drop a one-line first/last paragraph that says the named document was saved."""
+    base = os.path.basename(str(name or "")).strip().lower()
+    stem = os.path.splitext(base)[0]
+    names = [base] + ([stem] if re.search(r"[^a-z]", stem) and len(stem) >= 4 else [])
+    if not base:
+        return text
+
+    def is_remark(paragraph):
+        line = paragraph.strip().lower()
+        if "\n" in line or len(line) > 300 or line.startswith(("#", "-", "*")):
+            return False
+        if not any(item and item in line for item in names):
+            return False
+        # "X.md is saved at ...", or the bare path/filename a split remark ends with.
+        return (bool(_DOCUMENT_SAVE_REMARK_VERB_RE.search(line))
+                or not re.search(r"\s", line.strip("`'\"*. ")))
+
+    for _ in range(2):                     # a remark can be split over two paragraphs
+        breaks = list(re.finditer(r"\n[ \t]*\n", text))
+        if breaks and is_remark(text[breaks[-1].end():]):
+            text = text[:breaks[-1].start()].rstrip()
+            breaks = breaks[:-1]
+        if breaks and is_remark(text[:breaks[0].start()]):
+            text = text[breaks[0].end():].strip()
+    return text
 
 
 def _split_document_metadata_header(text):
@@ -7095,8 +7813,7 @@ def _document_grounding_problems(text, request_text, existing_text="", require_r
       Sizing numbers ("3 bullet points", "200 words") are not facts and are
       not required.
     """
-    request = re.sub(r"\b\w[\w\-]*\.(?:txt|md|json|docx)\b", " ", str(request_text or ""),
-                     flags=re.IGNORECASE)
+    request = _document_request_numeric_content(request_text)
     sources = (_document_digit_numbers(request) | _document_digit_numbers(existing_text)
                | _document_number_word_values(request) | _document_number_word_values(existing_text))
     problems = []
@@ -7190,7 +7907,9 @@ def _generate_document_body(request_text, action, name, current_content=None, ct
             "sections, structure, level of detail and length. Output only the document itself, "
             "starting with its first line: no preamble such as \"Here is\", no remarks about files "
             "or saving, no labels or brackets, no closing commentary, and do not wrap the whole "
-            "document in a code block." % (name, fmt)
+            "document in a code block. HWUI tells the user the file's name and location itself, "
+            "so never state where the document is saved, even if the request asks you to."
+            % (name, fmt)
         )
         temperature, rewrite = 0.4, False
     else:
@@ -7232,7 +7951,7 @@ def _generate_document_body(request_text, action, name, current_content=None, ct
                                                 "document_body")
         if not generated["ok"]:
             return generated
-        body = _clean_generated_document_body(generated["raw"])
+        body = _clean_generated_document_body(generated["raw"], name)
         if generated["finish_reason"] == "length":
             print(f"⚠️ Document body hit max_tokens={max_tokens} — not saved", flush=True)
             return {"ok": False, "summary": (
@@ -7309,7 +8028,7 @@ def _generate_document_addition(request_text, name, current_content, ctx_size=No
                                                 0.2 if attempt == 0 else 0.0, "document_addition")
         if not generated["ok"]:
             return generated
-        addition = _clean_generated_document_body(generated["raw"]).strip("\n")
+        addition = _clean_generated_document_body(generated["raw"], name).strip("\n")
         if generated["finish_reason"] == "length":
             return {"ok": False, "summary": (
                 "the addition reached its %d-token limit before it was finished, so nothing was "
@@ -7423,12 +8142,25 @@ def _run_append_document_action(request_text, arguments, allowed_roots=None):
     if not existing.get("ok"):
         return {"ok": False, "summary": "Nothing was added: %s" % existing.get("summary")}
     root_key, rel, current = existing["root"], existing["name"], existing["content"]
+    after = _document_append_anchor(after, request_text, current)
     # Validate the location and format before spending a generation.
     target = document_tools.check_append_target(root_key, rel, after)
     if not target.get("ok"):
         return {"ok": False, "root": root_key, "name": rel,
                 "summary": "Nothing was added to %s: %s" % (rel, target.get("summary"))}
-    generated = _generate_document_addition(request_text, rel, current)
+    # ⚠️ Traced 2026-10-24 (Personal, Gemma 4): "Under the Current Status heading, add a
+    # new paragraph saying: "The Gemma 4 model fleet is ..."" was handed to the addition
+    # writer, which echoed the section's existing sentence and was rejected twice
+    # ("repeats text that is already in the document"). Text the user dictates word for
+    # word is inserted as given; only an addition described in other words is written.
+    dictated = _document_dictated_addition(request_text)
+    if dictated:
+        print(f"📝 Document addition taken verbatim from the request: {len(dictated)} chars",
+              flush=True)
+        generated = {"ok": True, "content": dictated, "max_tokens": 0,
+                     "finish_reason": "verbatim", "seconds": 0.0}
+    else:
+        generated = _generate_document_addition(request_text, rel, current)
     if not generated.get("ok"):
         return {"ok": False, "root": root_key, "name": rel,
                 "summary": "Nothing was added to %s: %s." % (rel, generated.get("summary"))}
@@ -7447,6 +8179,60 @@ def _run_append_document_action(request_text, arguments, allowed_roots=None):
     # server-built confirmation and is never given to the chat model.
     return dict(result, verified=True,
                 generation={key: generated[key] for key in ("max_tokens", "finish_reason", "seconds")})
+
+
+def _document_dictated_addition(request_text):
+    """The exact text the user dictated for an addition, or None.
+
+    One quoted passage introduced as the thing to add ("add a paragraph saying:
+    "..."", "insert a line that reads "...""). Two or more such passages, or none,
+    leave the addition to the writer.
+    """
+    found = [match.group("text").strip()
+             for match in _DOCUMENT_DICTATED_ADDITION_RE.finditer(str(request_text or ""))]
+    found = [text for text in found if len(text.split()) >= 2]
+    return found[0] if len(found) == 1 else None
+
+
+def _document_append_anchor(after, request_text, current_content):
+    """Repair an anchor the router padded with the new text.
+
+    ⚠️ Live 2026-10-24 (Gemma 4): asked to add a line under "Next Steps", the router
+    returned "after": "## Next Steps\\n- voice input will be tested after web search",
+    and the insertion failed because that text is not in the document. Personal's
+    "Under the Current Status heading, add ..." got "## Current Status\\n\\nThe Gemma 4
+    ...", or "## Current Status" followed by the same heading repeated, cut at the cap.
+    When the anchor starts with an existing line, that line is the anchor if it is a
+    heading the user named in the request, or if everything after it is the user's own
+    new text (in the request, not in the document; the last word may be cut off).
+    Anything else is left unchanged, so a wrong anchor still fails safely.
+    """
+    after = str(after or "").strip()
+    if not after:
+        return None
+    existing_lines = {line.strip() for line in str(current_content or "").splitlines()
+                      if line.strip()}
+    if after in existing_lines:
+        return after
+
+    def fold(text):
+        return " ".join(re.sub(r"(?m)^[ \t]*(?:[-*+]|\d+[.)])[ \t]+", "", text).split()).casefold()
+
+    request_folded, document_folded = fold(request_text), fold(current_content)
+    for line in sorted(existing_lines, key=len, reverse=True):
+        if not after.startswith(line):
+            continue
+        heading = re.sub(r"^#{1,6}\s+", "", line).strip() if line.startswith("#") else ""
+        rest = fold(after[len(line):].lstrip(" \t\r\n:-–—"))
+        clipped = rest.rsplit(" ", 1)[0] if " " in rest else ""
+        named_heading = bool(heading) and re.search(
+            r"\b%s\b" % re.escape(fold(heading)), request_folded) is not None
+        users_text = any(part and len(part.split()) >= 3 and part in request_folded
+                         and part not in document_folded for part in (rest, clipped))
+        if named_heading or users_text:
+            print(f"📄 Document append anchor trimmed to its existing line: {_redact(line)}", flush=True)
+            return line
+    return after
 
 
 def _append_document_result_lines(status_block, lines):
@@ -7482,6 +8268,12 @@ def _document_status(action, result):
                      "was not repeated.")
     else:
         lines.append("detail: %s" % result.get("summary", ""))
+    if action == "multi_edit":
+        for index, operation in enumerate(result.get("operations") or [], 1):
+            state = operation.get("status") or ("SUCCESS" if operation.get("ok") else "FAILED")
+            lines.append("operation %d: %s — %s" % (index, state, operation.get("instruction", "")))
+            if operation.get("summary"):
+                lines.append("operation %d detail: %s" % (index, operation["summary"]))
     if result.get("name"):
         lines.append("file: %s" % result["name"])
     if result.get("root"):
@@ -7516,6 +8308,21 @@ def _document_confirmation(result):
     backup = result.get("backup")
     backup_line = "The previous version was backed up as %s." % backup if backup else ""
     parts = []
+    if action == "multi_edit":
+        parts = ["✅ All requested edits to %s%s were saved and verified." % (name, folder)
+                 if result.get("ok") else
+                 "⚠️ The numbered edit sequence for %s%s did not fully complete." % (name, folder)]
+        for index, operation in enumerate(result.get("operations") or [], 1):
+            state = operation.get("status") or ("succeeded" if operation.get("ok") else "failed")
+            parts.append("%d. %s — %s" % (index, state.capitalize(), operation.get("instruction", "")))
+            if operation.get("summary"):
+                parts.append("   %s" % operation["summary"])
+        if not result.get("ok"):
+            parts.append("Completed edits remain saved; no automatic rollback was attempted."
+                         if result.get("write_attempted") else "No changes were made.")
+        if result.get("replayed"):
+            parts.insert(1, "This sequence was already processed for this message and was not run again.")
+        return "\n\n".join(parts) + "\n\n"
     if result.get("ok"):
         if action == "append":
             added = str(result.get("added_text") or "")
@@ -7646,8 +8453,75 @@ def _document_reply_guard(chunks, active=False, fallback=""):
             yield fallback
 
 
-def _run_document_tool_for_turn(user_msg, standing_instructions=""):
-    """Run at most one document action for this turn.
+def _document_turn_search_route_text(text):
+    """The search-routing copy of a document turn's request.
+
+    ⚠️ Traced 2026-10-24 (Personal, Gemma 4): "create a document ... In Next Steps,
+    say that document editing and web search are the next capabilities to evaluate"
+    ran a Brave search for "are the next capabilities to evaluate", and a dictated
+    paragraph ending "... web search reliability." searched for the rest of the
+    message. On a document turn, text the user dictates (a quoted passage) is never a
+    search request, and the bare noun "web search" only opts in when it is asked for
+    ("use your web search tool", "do a web search", "web search for X"). The other
+    opt-in phrases ("search online", "search the internet") are requests already.
+    """
+    text = _DOCUMENT_QUOTED_PASSAGE_RE.sub(" ", str(text or ""))
+
+    def neutralise(match):
+        before = text[max(0, match.start() - 40):match.start()]
+        after = text[match.end():match.end() + 40]
+        if _DOCUMENT_WEB_SEARCH_ASKED_BEFORE_RE.search(before) or \
+                _DOCUMENT_WEB_SEARCH_ASKED_AFTER_RE.match(after):
+            return match.group(0)
+        return "web-search"
+
+    return re.sub(r"\bweb\s+search\b", neutralise, text, flags=re.IGNORECASE)
+
+
+def _document_write_failed(result):
+    """A document write (or an explicit document request) that did not happen."""
+    return (isinstance(result, dict) and not result.get("ok") and not result.get("replayed")
+            and result.get("action") in _DOCUMENT_CONFIRMED_ACTIONS)
+
+
+def _document_reply_claims_success(text):
+    """True when a reply says a document change was made (not merely talked about)."""
+    for sentence in re.split(r"(?<=[.!?:])\s+|\n+", str(text or "")):
+        for claim in _DOCUMENT_SUCCESS_CLAIM_RE.finditer(sentence):
+            # "No changes were saved" is honest; "No worries, I've added it" is not: only a
+            # negation in the claim's own clause, just before it, counts.
+            lead = re.split(r"[,;—–]|\s-\s", sentence[max(0, claim.start() - 25):claim.start()])[-1]
+            if not _DOCUMENT_CLAIM_NEGATION_RE.search(lead):
+                return True
+    return False
+
+
+def _document_failure_contradiction_guard(chunks, result):
+    """Never let the reply to a failed document write say that it succeeded.
+
+    ⚠️ Traced 2026-10-24 (Personal, Gemma 4): the tool reported "Nothing was
+    changed" (the addition was rejected), the model was given status: FAILED and
+    the failure reply rules, and then answered "Under Current Status, I've added:
+    ... The changes were saved and are visible now." The server's confirmation
+    is the authoritative answer; on a failed write the reply is held until it
+    ends and dropped if any sentence claims the change was made. Every other
+    turn, including every successful write, streams untouched.
+    """
+    if not _document_write_failed(result):
+        yield from chunks
+        return
+    held = [str(chunk or "") for chunk in chunks]
+    reply = "".join(held)
+    if _document_reply_claims_success(reply):
+        print("🛡️ Dropped a reply that claimed a failed document change succeeded "
+              f"({len(reply)} chars)", flush=True)
+        return
+    yield from held
+
+
+def _run_document_tool_for_turn(user_msg, standing_instructions="", forced_name=None,
+                               forced_root=None):
+    """Run one document action, or a guarded sequence of numbered edits.
 
     Returns (attached_block, status_block, result).
 
@@ -7709,6 +8583,58 @@ def _run_document_tool_for_turn(user_msg, standing_instructions=""):
               "ask for one — document tool skipped", flush=True)
         return "", "", None
 
+    # The router schema describes one action. For an explicit numbered edit
+    # sequence aimed at one canonical file, route each instruction separately
+    # and commit it through the same validated writer. Stop on the first
+    # unverified operation so dependent later edits cannot run on partial state.
+    named_files = list(dict.fromkeys(re.findall(
+        r"\b\w[\w-]*\.(?:txt|md|json|docx)\b", message, flags=re.IGNORECASE)))
+    sequence_name = (canonical[1] if canonical else named_files[0]
+                     if len(named_files) == 1 else None)
+    operations = (_document_numbered_write_operations(message, sequence_name)
+                  if not forced_name else [])
+    if operations:
+        operation_results = []
+        sequence_root = None
+        for index, operation in enumerate(operations, 1):
+            scoped_request = "Edit the document %s as follows: %s" % (
+                sequence_name, operation)
+            _attached, _status, outcome = _run_document_tool_for_turn(
+                scoped_request, standing_instructions, forced_name=sequence_name,
+                forced_root=sequence_root)
+            succeeded = isinstance(outcome, dict) and bool(outcome.get("ok"))
+            if succeeded and not sequence_root:
+                sequence_root = outcome.get("root")
+            operation_results.append({
+                "instruction": operation,
+                "status": "SUCCESS" if succeeded else "FAILED",
+                "ok": succeeded,
+                "write_attempted": bool(isinstance(outcome, dict) and outcome.get("write_attempted")),
+                "root": (outcome or {}).get("root") if isinstance(outcome, dict) else None,
+                "summary": (outcome or {}).get("summary") if isinstance(outcome, dict)
+                           else "The router did not confirm a document change.",
+            })
+            if not succeeded:
+                operation_results.extend({
+                    "instruction": later, "status": "NOT RUN", "ok": False,
+                    "write_attempted": False,
+                    "summary": "Stopped after the preceding operation failed; no change was attempted.",
+                } for later in operations[index:])
+                break
+        all_ok = all(item.get("ok") for item in operation_results)
+        aggregate = {
+            "action": "multi_edit",
+            "root": next((item.get("root") for item in operation_results if item.get("root")), None),
+            "name": sequence_name,
+            "ok": all_ok,
+            "write_attempted": any(item.get("write_attempted") or item.get("ok")
+                                   for item in operation_results),
+            "operations": operation_results,
+            "summary": ("All %d numbered edits were saved and verified." % len(operations)
+                        if all_ok else "The numbered edit sequence stopped at the first failed operation."),
+        }
+        return "", _document_status("multi_edit", aggregate), aggregate
+
     try:
         listing = document_tools.list_documents()
         hint = "\n".join(
@@ -7751,6 +8677,11 @@ def _run_document_tool_for_turn(user_msg, standing_instructions=""):
         if canonical and action in ("read", "append", "update", "edit", "save_as", "rename",
                                     "delete"):
             arguments["root"], arguments["name"] = canonical
+        elif forced_name and action in ("read", "append", "update", "edit", "save_as", "rename",
+                                        "delete"):
+            arguments["name"] = forced_name
+            if forced_root:
+                arguments["root"] = forced_root
 
         # ── Existing documents are authoritative (2026-09-11) ────────────────
         rewrite_requested = _document_rewrite_requested(message)
@@ -7990,9 +8921,11 @@ def _classify_chat_search_intent(user_msg):
 def _parse_memory_blocks(text):
     """Parse memory file text into structured blocks.
 
-    Returns list of {title, body, keywords} dicts. The title is pulled from
-    the '# Memory:' header line itself; the body has the title and keywords
-    line stripped, so what gets injected into the prompt is just the prose.
+    Returns list of {title, body, keywords, kind} dicts. The title is pulled
+    from the '# Memory:' header line itself; the body has the title, keywords
+    and kind lines stripped, so what gets injected into the prompt is just the
+    prose. `kind` is "" for an ordinary memory and "lesson" for a lesson
+    (a "Kind: lesson" line; see _MEMORY_KIND_LESSON).
     """
     if not text or not text.strip():
         return []
@@ -8005,8 +8938,11 @@ def _parse_memory_blocks(text):
         body_raw = parts[i + 1]
         keywords = []
         body_lines = []
+        kind = ""
         for line in body_raw.splitlines():
-            if line.strip().lower().startswith("keywords:"):
+            if re.match(r"\s*kind\s*:", line, re.IGNORECASE):
+                kind = line.split(":", 1)[1].strip().lower()
+            elif line.strip().lower().startswith("keywords:"):
                 kwstr = line.split(":", 1)[1]
                 # Allow `,` `;` and `:` as separators (parallel to the now-deleted
                 # alternate loader) — strips per-keyword trailing punctuation
@@ -8019,7 +8955,7 @@ def _parse_memory_blocks(text):
             else:
                 body_lines.append(line)
         body = "\n".join(body_lines).strip()
-        blocks.append({"title": title, "body": body, "keywords": keywords})
+        blocks.append({"title": title, "body": body, "keywords": keywords, "kind": kind})
     return blocks
 
 
@@ -8405,7 +9341,9 @@ def _auto_memory_force_fallback_candidate(recent_messages, assistant_text, user_
     if not source:
         source = str(user_text or assistant_text).strip()
         source = _AUTO_MEMORY_COMMAND_PREFIX_RE.sub("", source).strip()
-    source = re.sub(r"^(?:User|Chris)\s*:\s*", "", source, flags=re.IGNORECASE)
+    # Drop a leading speaker label: "User:" or this installation's user name.
+    _speaker = re.escape(str(user_name or "").strip()) if str(user_name or "").strip() else "User"
+    source = re.sub(r"^(?:User|" + _speaker + r")\s*:\s*", "", source, flags=re.IGNORECASE)
     source = re.sub(r"\s+", " ", source).strip()
     source = re.sub(r"^(?:yeah|yes|yep|no|nah)[,.\s]+", "", source, flags=re.IGNORECASE)
 
@@ -8424,7 +9362,9 @@ def _auto_memory_force_fallback_candidate(recent_messages, assistant_text, user_
     for pattern, repl in replacements:
         summary = re.sub(pattern, repl, summary, flags=re.IGNORECASE)
     if summary and not re.match(rf"^{re.escape(user_name)}\b", summary, flags=re.IGNORECASE):
-        summary = f"{user_name} believes that {summary[0].lower() + summary[1:]}"
+        # "believes" only for what the user said was a belief ("I think" etc.
+        # are rewritten above); a plain fact is just something they told us.
+        summary = f"{user_name} noted that {summary[0].lower() + summary[1:]}"
     summary = summary[:700].strip()
 
     words = [
@@ -8451,6 +9391,352 @@ def _auto_memory_force_fallback_candidate(recent_messages, assistant_text, user_
         "summary": summary or f"{user_name} has a saved memory from the recent conversation.",
         "scope": "character",
     }
+
+
+# ── Lessons (Kind: lesson) ────────────────────────────────────────────────
+# A lesson is guidance the user asked the assistant to keep about how to
+# respond ("remember this lesson: when I ask for shards, use CX format"). It is
+# stored in the same memory files as any memory (the character's file by
+# default; moving it to global_memory.txt shares it), marked by a
+# "Kind: lesson" line, and retrieved by its keywords like any other entry.
+# Only an explicit save request creates one: an ordinary correction stays in
+# the conversation and never becomes a standing instruction on its own.
+_MEMORY_KIND_LESSON = "lesson"
+# How a retrieved lesson is labelled in the prompt (every family), and the
+# marker the native renderer reads back.
+_MEMORY_LESSON_LABEL = "lesson for how you respond"
+
+_AUTO_MEMORY_LESSON_RE = re.compile(
+    r"\b(?:this|that|the|a|as\s+a)\s+lesson\b(?!s?\s+(?:is|was|at|on|with|in|tomorrow|today)\b)"
+    r"|\blessons?\s*:|\blessons?\s+learn(?:ed|t)\b"
+    r"|\b(?:remember|make\s+sure|don['’]?t\s+forget)\s+(?:to\s+(?:always|never|not|stop)\b"
+    r"|that\s+you\s+(?:should|must|need|have|always|never|can['’]?t|shouldn['’]?t)\b"
+    r"|you\s+(?:should|must|need\s+to|have\s+to)\b)"
+    r"|\b(?:from\s+now\s+on|going\s+forward|in\s+future|next\s+time)\b[^.!?\n]{0,80}?\byou\b",
+    re.IGNORECASE,
+)
+# Wording around the lesson itself that is not part of it.
+_AUTO_MEMORY_LESSON_FRAME_RE = re.compile(
+    r"^(?:(?:as\s+a|this|that|the|a)\s+)?lessons?(?:\s+learn(?:ed|t))?\s*(?:for\s+(?:next\s+time|the\s+future|later))?"
+    r"\s*(?:[:\-–—,.]|\bis\b|\bthat\b)?\s*",
+    re.IGNORECASE,
+)
+_AUTO_MEMORY_LESSON_FILLER = frozenset({
+    "please", "thanks", "thank", "you", "for", "next", "time", "the", "future", "later",
+    "ok", "okay", "and", "now", "as", "a", "lesson", "this", "that", "it", "from", "on",
+})
+
+
+def _auto_memory_is_lesson_request(user_text):
+    """True when an explicit save request is about how the assistant should respond."""
+    return bool(_AUTO_MEMORY_LESSON_RE.search(str(user_text or "")))
+
+
+# Emoji and pictographs carry tone, not the lesson.
+_AUTO_MEMORY_EMOJI_RE = re.compile("[\U0001F000-\U0001FAFF☀-➿⬀-⯿️‍]+")
+# "...there's a lesson here I'd like you to remember: <lesson>". A lesson cue
+# and a colon in the same clause mark where the lesson itself starts, so the
+# banter in front of it is not part of it.
+_AUTO_MEMORY_LESSON_COLON_RE = re.compile(
+    r"\b(?:lessons?|remember|keep\s+in\s+mind|from\s+now\s+on|going\s+forward|next\s+time|in\s+future)\b"
+    r"[^:\n.!?]{0,80}:\s*",
+    re.IGNORECASE,
+)
+# A message that opens with the guidance itself is already delimited.
+_AUTO_MEMORY_LESSON_LEAD_RE = re.compile(
+    r"^(?:(?:please|ok(?:ay)?|so|and)[\s,]+)*"
+    r"(?:from\s+now\s+on|going\s+forward|in\s+future|next\s+time|always|never|don['’]?t|do\s+not|stop|avoid)\b",
+    re.IGNORECASE,
+)
+# Trailing requests to keep it ("Can you remember that?", "Okay?") are the
+# command, not the lesson.
+_AUTO_MEMORY_LESSON_TAIL_RE = re.compile(
+    r"(?:^|(?<=[.!?]))\s*(?:"
+    r"(?:can|could|will|would)\s+you\s+(?:please\s+)?(?:remember|keep|save|note|store|do)\b[^.!?]{0,60}"
+    r"|(?:please\s+)?(?:remember|save|note|keep|store)\s+(?:this|that|it)\b[^.!?]{0,40}"
+    r"|ok(?:ay)?|got\s+it|alright|deal|thanks?(?:\s+you)?|please"
+    r")[.!?]*\s*$",
+    re.IGNORECASE,
+)
+# Openers and pet names that start a sentence without being part of a lesson.
+_AUTO_MEMORY_LESSON_VOCATIVE_RE = re.compile(
+    r"^(?:(?:ok(?:ay)?|so|but|and|well|right|hey|babe|baby|honey|darling|love|sweetheart|sweetie|hun|mate|dude)"
+    r"\b[\s,.!:;-]*)+",
+    re.IGNORECASE,
+)
+# Words that never make a useful lesson keyword: contractions, discourse
+# filler, pet names and the save vocabulary itself. The Aurora entry of
+# 2026-10-24 was keyed on "you're, hilarious, babe, but, there's, here", which
+# would have injected it into nearly every message and never into a puzzle.
+_AUTO_MEMORY_LESSON_KEYWORD_JUNK = frozenset({
+    "you're", "youre", "you've", "you'll", "you'd", "i'm", "i've", "i'll", "i'd", "it's", "that's",
+    "there's", "here's", "what's", "let's", "here", "there", "but", "and", "really", "actually",
+    "like", "yeah", "yes", "lol", "haha", "babe", "baby", "honey", "darling", "sweetheart", "sweetie",
+    "hun", "mate", "dude", "lesson", "lessons", "remember", "memory", "save", "note", "user",
+    "assistant", "would", "could", "can", "will", "once", "first", "instead", "welcome", "fun",
+})
+# Wording that describes the save instead of stating the lesson. "When the
+# user asked me to solve a puzzle" is a situation, so only asking to keep it
+# counts.
+_AUTO_MEMORY_LESSON_META_RE = re.compile(
+    r"\b(?:asked\s+(?:you|me)\s+to\s+(?:remember|keep|save|note|store)|wants?\s+(?:you|me)\s+to\s+(?:remember|keep)"
+    r"|this\s+lesson|lesson\s+here|asked\s+to\s+remember|save\s+request|memory\s+command|recent\s+context"
+    r"|transcript)\b",
+    re.IGNORECASE,
+)
+# A distilled lesson is the character's own: "I learned that when …, I …". The
+# user is "the user", so "you" would be ambiguous between them.
+_AUTO_MEMORY_LESSON_FIRST_PERSON_RE = re.compile(r"\b(?:I|I'm|I've|I'll|me|my)\b")
+_AUTO_MEMORY_LESSON_SECOND_PERSON_RE = re.compile(r"\b(?:you|your|yours|yourself)\b", re.IGNORECASE)
+# A fallback lesson must be guidance: addressed to the assistant or phrased as
+# an instruction. "My landlord can't be trusted" is a fact about the user.
+_AUTO_MEMORY_LESSON_GUIDANCE_RE = re.compile(
+    r"\b(?:you|your|yourself)\b"
+    r"|^(?:always|never|don['’]?t|do\s+not|avoid|stop|first|use|keep|check|make\s+sure|try|be|answer|reply"
+    r"|ask|give|say|write|when|whenever|if|before|after)\b",
+    re.IGNORECASE,
+)
+_AUTO_MEMORY_NOT_A_LESSON = "NOT_A_LESSON"
+
+
+def _auto_memory_lesson_has_content(text):
+    words = re.findall(r"[A-Za-z0-9'’]+", str(text or "").lower())
+    return len([w for w in words if w not in _AUTO_MEMORY_LESSON_FILLER]) >= 3
+
+
+def _auto_memory_lesson_source(user_text, recent_messages=None):
+    """The lesson the user asked to keep, in their own words, and whether it was delimited.
+
+    Returns (text, delimited). The command's own content wins: the part after
+    a lesson cue and colon ("…a lesson here I'd like you to remember: <lesson>"),
+    or after a leading command ("remember this lesson: <lesson>"), without
+    emoji or a trailing "Can you remember that?". A bare command ("remember
+    that as a lesson") refers to the user's previous message, which is the
+    correction itself; it never falls back to summarising the conversation.
+    `delimited` says the lesson's boundaries came from the user's own wording,
+    which is what makes it safe to keep without a model (see
+    _auto_memory_distil_lesson); a whole message with banter around the
+    lesson is not delimited.
+    """
+    def _content(text):
+        raw = re.sub(r"\s+", " ", _AUTO_MEMORY_EMOJI_RE.sub(" ", str(text or ""))).strip()
+        text = raw
+        delimited = bool(_AUTO_MEMORY_LESSON_LEAD_RE.match(raw))
+        colon = _AUTO_MEMORY_LESSON_COLON_RE.search(text)
+        if colon and _auto_memory_lesson_has_content(text[colon.end():]):
+            text, delimited = text[colon.end():], True
+        for pattern in (_AUTO_MEMORY_COMMAND_PREFIX_RE, _AUTO_MEMORY_LESSON_FRAME_RE):
+            stripped = pattern.sub("", text.strip(), count=1).strip()
+            if stripped != text.strip():
+                text, delimited = stripped, True
+        previous = None
+        while previous != text:
+            previous, text = text, _AUTO_MEMORY_LESSON_TAIL_RE.sub("", text).strip()
+        return (text, delimited) if _auto_memory_lesson_has_content(text) else ("", False)
+
+    own, delimited = _content(user_text)
+    if own:
+        return own[:700], delimited
+    command = str(user_text or "").strip()
+    seen_command = False
+    for message in reversed(recent_messages or []):
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = message.get("content", "")
+        if isinstance(content, list):
+            content = " ".join(str(p.get("text", "")) for p in content
+                               if isinstance(p, dict) and p.get("type") == "text")
+        content = str(content or "").strip()
+        if not seen_command and content == command:
+            seen_command = True
+            continue
+        previous = _content(content)[0]
+        if not previous:
+            plain = re.sub(r"\s+", " ", _AUTO_MEMORY_EMOJI_RE.sub(" ", content)).strip()
+            previous = plain if len(plain.split()) >= 3 else ""
+        # The bare command points at this message, so it is delimited.
+        return previous[:700], bool(previous)
+    return "", False
+
+
+def _auto_memory_lesson_text(user_text, recent_messages=None):
+    """The lesson the user asked to keep, in their own words, or "" (see _auto_memory_lesson_source)."""
+    return _auto_memory_lesson_source(user_text, recent_messages)[0]
+
+
+def _auto_memory_lesson_terms(text):
+    return {w[:5] for w in re.findall(r"[a-z0-9']{4,}", str(text or "").lower())
+            if w not in _MEMORY_CORROBORATION_STOPWORDS}
+
+
+def _auto_memory_lesson_name_alternation(names):
+    return "|".join(re.escape(n.strip()) for n in names or [] if n and len(n.strip()) >= 2)
+
+
+def _auto_memory_lesson_names_re(names):
+    alternation = _auto_memory_lesson_name_alternation(names)
+    return re.compile(r"\b(?:%s)\b" % alternation, re.IGNORECASE) if alternation else None
+
+
+def _auto_memory_lesson_keywords(values, names_re, limit=6):
+    keywords = []
+    for value in values:
+        clean = re.sub(r"[^a-z0-9 '\-]", "", _clean_auto_memory_field(value).lower()).strip(" '-")[:40]
+        if (len(clean) < 3 or clean in _AUTO_MEMORY_LESSON_KEYWORD_JUNK
+                or clean in _AUTO_MEMORY_LESSON_FILLER or clean in keywords
+                or (names_re and names_re.search(clean))):
+            continue
+        keywords.append(clean)
+        if len(keywords) >= limit:
+            break
+    return keywords
+
+
+def _auto_memory_lesson_candidate(title, keywords, lesson):
+    return {
+        "save": True,
+        "title": title[:80],
+        "keywords": keywords,
+        "summary": lesson,
+        "scope": "character",
+        "kind": _MEMORY_KIND_LESSON,
+    }
+
+
+def _auto_memory_lesson_from_model(raw, source, names):
+    """Validate a distilled lesson. Returns a candidate, "not_a_lesson" or None."""
+    raw = str(raw or "")
+    if _AUTO_MEMORY_NOT_A_LESSON in raw.upper():
+        return "not_a_lesson"
+    parsed = _auto_memory_legacy_tag(raw)
+    if not parsed:
+        return None
+    names_re = _auto_memory_lesson_names_re(names)
+    title = _clean_auto_memory_title(parsed.get("title"))
+    title = re.sub(r"^(?:lesson\s*:\s*)+", "", title, flags=re.IGNORECASE).strip(" \"'“”.")
+    lesson = _clean_auto_memory_field(parsed.get("summary")).strip(" \"'“”")
+    keywords = _auto_memory_lesson_keywords(parsed.get("keywords") or [], names_re)
+    opening = " ".join(re.findall(r"[a-z0-9'’]+", source.lower())[:3])
+    shared = _auto_memory_lesson_terms(lesson) & _auto_memory_lesson_terms(source)
+    if (not 20 <= len(lesson) <= 600 or lesson.endswith("?")
+            or _AUTO_MEMORY_EMOJI_RE.search(lesson + title)
+            or _AUTO_MEMORY_LESSON_META_RE.search(lesson)
+            or not _AUTO_MEMORY_LESSON_FIRST_PERSON_RE.search(lesson)
+            or _AUTO_MEMORY_LESSON_SECOND_PERSON_RE.search(lesson)
+            or (names_re and names_re.search(f"{title} {lesson}"))
+            or len(shared) < 2
+            or not 1 <= len(title.split()) <= 7 or len(title) > 60
+            or (opening and " ".join(re.findall(r"[a-z0-9'’]+", title.lower())).startswith(opening))
+            or len(keywords) < 2):
+        return None
+    return _auto_memory_lesson_candidate(title, keywords, lesson)
+
+
+def _auto_memory_lesson_fallback(source, names):
+    """The user's own delimited lesson, kept whole and attributed when distillation is unavailable, or None.
+
+    Stored as: The user taught me: "<the user's words>".
+    """
+    names_re = _auto_memory_lesson_names_re(names)
+    alternation = _auto_memory_lesson_name_alternation(names)
+    lesson = source.strip(" \"'“”")
+    while True:
+        trimmed = _AUTO_MEMORY_LESSON_VOCATIVE_RE.sub("", lesson).strip()
+        if alternation:
+            trimmed = re.sub(r"^(?:%s)\b[\s,.!:;-]*" % alternation, "", trimmed,
+                             flags=re.IGNORECASE).strip()
+        if trimmed == lesson:
+            break
+        lesson = trimmed
+    if (not _auto_memory_lesson_has_content(lesson) or lesson.endswith("?")
+            or re.match(r"(?i)(?:i|my|we|our)\b", lesson)
+            or not _AUTO_MEMORY_LESSON_GUIDANCE_RE.search(lesson)):
+        return None
+    lesson = lesson[0].upper() + lesson[1:]
+    if lesson[-1] not in ".!":
+        lesson += "."
+    stop = _AUTO_MEMORY_LESSON_FILLER | _MEMORY_CORROBORATION_STOPWORDS | {
+        "always", "never", "whenever", "must", "need", "don't", "dont", "make", "sure", "keep", "use",
+        "using", "ask", "asks", "not", "stop", "out", "work", "answer", "answering", "answered",
+    }
+    words = [w for w in re.findall(r"[a-z0-9][a-z0-9'\-]{2,}", lesson.lower()) if w not in stop]
+    keywords = _auto_memory_lesson_keywords(words, names_re, limit=5)
+    if len(keywords) < 2:
+        return None
+    # The user's words, attributed and quoted, pronouns untouched: their "I" is
+    # the user, while a distilled lesson's "I" is the character. Capped so the
+    # closing quote survives the summary's 700-character limit.
+    if len(lesson) > 640:
+        lesson = lesson[:640].rsplit(" ", 1)[0] + "…"
+    return _auto_memory_lesson_candidate(" ".join(w.capitalize() for w in keywords[:3]), keywords,
+                                         f'The user taught me: "{lesson}"')
+
+
+def _auto_memory_distil_lesson(source, delimited, names):
+    """One lesson candidate for an explicit lesson request, and how it was made.
+
+    Returns (candidate, how): how is "model" (distilled by the local model, the
+    same pathway and trained Title/Keywords/Summary format as explicit fact
+    saves), "fallback" (the model was unavailable or its output failed
+    validation, and the user's own lesson was delimited, so it is kept as
+    written), "not_a_lesson" (the model judged it a fact or experience about
+    the user; the caller saves it through the ordinary memory path) or
+    "unclear" (nothing safe to save; the caller tells the user).
+    """
+    prompt = (
+        "Turn the message below into one reusable lesson the assistant has learned about how to respond in future.\n"
+        "Use the trained memory object format exactly. Do not use JSON. Do not use markdown.\n"
+        "Summary: the lesson in the assistant's own first-person voice, one or two natural sentences "
+        "starting \"I learned that\". Say what situation or kind of task it applies to, what was learned, "
+        "and how it changes future replies. Keep every condition and exception the message gives and the "
+        "user's intended meaning. Leave out greetings, jokes, compliments, pet names, people's names, emojis, "
+        "quotation marks and the request to remember. Call the person who gave the lesson \"the user\", "
+        "never \"you\". Do not mention saving or remembering.\n"
+        "Title: two to five words naming the principle, not the first words of the message.\n"
+        "Keywords: three to six lowercase terms for the topics where the lesson applies.\n"
+        f"If the message is a fact, event or experience from the user's own life rather than guidance "
+        f"for how the assistant should respond, output only {_AUTO_MEMORY_NOT_A_LESSON}.\n\n"
+        "Example message: Ha, nice try. Next time I ask for a recipe, give me the ingredient list "
+        "before the method. Can you remember that?\n"
+        "Example output:\nTitle: Ingredients Before Method\nKeywords: recipes, ingredients, cooking\n"
+        "Summary: I learned that when the user asks for a recipe, I should list the ingredients before "
+        "the method.\n\n"
+        "Output exactly this shape:\nTitle: <principle>\nKeywords: <keyword, keyword, keyword>\n"
+        "Summary: <the lesson>\n\nMessage:\n" + source
+    )
+    raw = ""
+    try:
+        response = _locked_local_json_post(
+            "/v1/chat/completions",
+            {
+                "model": CURRENT_MODEL or "local",
+                "messages": [
+                    {"role": "system", "content": "Write exactly one saved memory object using Title, Keywords, and Summary fields."},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0,
+                "max_tokens": 220,
+                "stream": False,
+            },
+            60,
+            "auto_memory_lesson",
+        )
+        response.raise_for_status()
+        raw = response.json()["choices"][0]["message"]["content"]
+    except Exception as exc:
+        print(f"🧠 Lesson distillation unavailable: {exc!r}", flush=True)
+    result = _auto_memory_lesson_from_model(raw, source, names)
+    if result == "not_a_lesson":
+        return None, "not_a_lesson"
+    if result:
+        return result, "model"
+    if raw:
+        print(f"🧠 Lesson distillation rejected ({len(raw)} chars of model output)", flush=True)
+    if delimited:
+        fallback = _auto_memory_lesson_fallback(source, names)
+        if fallback:
+            return fallback, "fallback"
+    return None, "unclear"
 
 
 def _clean_auto_memory_field(text):
@@ -9194,30 +10480,42 @@ def _rank_memory_matches(items, query_text):
     return items
 
 
-def do_chat_search(query, current_filename=None):
+def do_chat_search(query, current_filename=None, character=None, scope=None):
     """
-    Search all chat .txt files for content matching the query keywords.
+    Search chat .txt files for content matching the query keywords.
     Uses AND logic with co-occurrence scoring — all keywords should appear
     near each other. Weak matches are rejected via a minimum score threshold.
     Returns (results_block_string, error_string) — one will be None.
+
+    ⚠️ Scope (2026-10-24 isolation audit): this used to scan every character's
+    chats in every project, so "do you remember…" in a Sol chat could pull
+    another character's private conversation into Sol's context. chat() passes
+    the character and its card's chat_search_scope: "character" (default) =
+    this character's chats in this request's project; "project" = every
+    character in this request's project; "all" = everything, the old behaviour,
+    only when the card opts in. scope=None keeps the old reach for direct callers.
     """
     import re as _re
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    projects_dir = os.path.join(base_dir, "projects")
-    global_chats_dir = os.path.join(base_dir, "chats")
-
-    # Collect all chats directories to scan
-    dirs_to_scan = []
-    if os.path.isdir(global_chats_dir):
-        dirs_to_scan.append(global_chats_dir)
-    if os.path.isdir(projects_dir):
-        for entry in os.listdir(projects_dir):
-            if entry.startswith("_"):
-                continue
-            proj_chats = os.path.join(projects_dir, entry, "chats")
-            if os.path.isdir(proj_chats):
-                dirs_to_scan.append(proj_chats)
+    characters_dir = os.path.join(base_dir, "characters")
+    effective_scope = scope if scope in context_scope.CHAT_SEARCH_SCOPES else "all"
+    if effective_scope == "character" and not character:
+        effective_scope = "project"
+    try:
+        from chat_routes import get_chats_dir
+        request_chats_dir = get_chats_dir()
+    except Exception:
+        request_chats_dir = None
+    dirs_to_scan, owner_filter = context_scope.chat_search_targets(
+        effective_scope, character, request_chats_dir, base_dir, characters_dir)
+    _owner_keys = None
+    if owner_filter:
+        from character_routes import known_character_keys
+        _owner_keys = known_character_keys(characters_dir)
+    print(f"🗂️ Chat search scope: {effective_scope}"
+          + (f" (only {owner_filter}'s chats)" if owner_filter else "")
+          + f" — {len(dirs_to_scan)} folder(s)", flush=True)
 
     # Build keyword list — strip stopwords and recall meta-verbs
     # Defensive backstop: even when the new search-verb gate lets a request
@@ -9246,7 +10544,7 @@ def do_chat_search(query, current_filename=None):
     if not keywords:
         return None, "No usable keywords extracted from query."
 
-    print(f"🗂️ Chat search — keywords: {keywords}", flush=True)
+    print(f"🗂️ Chat search — keywords: {_redact(keywords)}", flush=True)
 
     # Window size for co-occurrence: keywords must all appear within N lines of each other
     COOCCURRENCE_WINDOW = 8
@@ -9265,6 +10563,9 @@ def do_chat_search(query, current_filename=None):
                 continue
             if current_filename and fname == current_filename:
                 continue
+            if owner_filter and not context_scope.chat_file_owned_by(
+                    fname, owner_filter, characters_dir, _owner_keys):
+                continue   # another character's chat: outside this character's scope
 
             filepath = os.path.join(chats_dir, fname)
             try:
@@ -9331,7 +10632,7 @@ def do_chat_search(query, current_filename=None):
             })
 
     if not results:
-        print(f"🗂️ Chat search — no qualifying matches for keywords: {keywords} (min_score={MIN_SCORE})", flush=True)
+        print(f"🗂️ Chat search — no qualifying matches for keywords: {_redact(keywords)} (min_score={MIN_SCORE})", flush=True)
         return None, f"No chat history found matching all of: {', '.join(keywords)}"
 
     results.sort(key=lambda x: x['score'], reverse=True)
@@ -9424,6 +10725,7 @@ def stream_model_response(payload, request_id=None):
     _first_line_seen = False
     _first_token_seen = False
     _first_content_seen = False
+    _marker_hold = ""
     for line in response.iter_lines(chunk_size=1):
         if not _first_line_seen:
             _first_line_seen = True
@@ -9479,7 +10781,17 @@ def stream_model_response(payload, request_id=None):
             if _raw_piece and not _first_token_seen:
                 _first_token_seen = True
                 _watch.mark("first_token")
-            chunk = strip_chatml_leakage(_raw_piece)
+            # A marker arrives over several tokens ("<|", "im", " End", "|>"),
+            # so an unclosed "<|" is held until it closes or runs past a
+            # marker's length; the stripper then sees the whole marker.
+            _marker_hold += _raw_piece
+            _open = _marker_hold.rfind("<|")
+            if _open > _marker_hold.rfind("|>") and len(_marker_hold) - _open < 16:
+                chunk = strip_chatml_leakage(_marker_hold[:_open])
+                _marker_hold = _marker_hold[_open:]
+            else:
+                chunk = strip_chatml_leakage(_marker_hold)
+                _marker_hold = ""
             total_chunks += 1
 
             if chunk:
@@ -9493,12 +10805,16 @@ def stream_model_response(payload, request_id=None):
 
         except Exception as e:
             if isinstance(e, ValueError):
-                print(f"❌ Parse error: {e} | line={line[:80]!r}", flush=True)
+                print(f"❌ Parse error: {e} | line={_redact(line, 80)}", flush=True)
                 _watch.note_non_json(line)
             else:
                 print(f"❌ Parse error: {e}", flush=True)
             continue
 
+    _held_tail = strip_chatml_leakage(_marker_hold)
+    if _held_tail:
+        all_text.append(_held_tail)
+        yield _held_tail
     print(f"\n🎯 DONE: {total_chunks} chunks, {len(''.join(all_text))} chars total", flush=True)
     # 🩺 Log llama.cpp's stop reason — load-bearing diagnostic for cutoffs.
     if last_event:
@@ -9577,7 +10893,7 @@ def stream_model_response(payload, request_id=None):
             # root-caused.
             print("🩺 RAW TAIL (last ≤12 events — token_id(s) :: decoded):", flush=True)
             for _ids, _raw in _recent_tok_trail:
-                print(f"     {_ids!r:>14} :: {_raw!r}", flush=True)
+                print(f"     {_ids!r:>14} :: {_redact(_raw, None)}", flush=True)
         # Flag the specific failure mode this diagnostic was added to catch:
         # model emits EOS after only a handful of tokens in a long conversation.
         if _stop_eos and isinstance(_tok_pred, int) and _tok_pred < 80:
@@ -10415,7 +11731,7 @@ def stream_vision_response(
                 print(
                     f"⚠️ req#{_probe_req_id}: raw [THINK]/[/THINK] marker "
                     f"leaked into delta.content (reasoning parser did not "
-                    f"split it) — stopping generation. chunk={raw_chunk!r}",
+                    f"split it) — stopping generation. chunk={_redact(raw_chunk)}",
                     flush=True,
                 )
                 _last_finish_reason = "ministral_reasoning_leak"
@@ -10485,7 +11801,7 @@ def stream_vision_response(
             if isinstance(e, ValueError):
                 # Non-JSON line (e.g. the ~30 s lines during a slow prompt
                 # evaluation): show what it actually was.
-                print(f"❌ Vision parse error: {e} | line={line[:80]!r}", flush=True)
+                print(f"❌ Vision parse error: {e} | line={_redact(line, 80)}", flush=True)
                 if _watch is not None:
                     _watch.note_non_json(line)
             else:
@@ -10723,22 +12039,9 @@ def _find_ministral_search_tag(buf, start):
     retroactively once its ']' eventually streams in — a span may leak into
     the visible stream, or it may trigger a search, but never both.
     """
-    m = _MINISTRAL_WEB_SEARCH_TAG_OPEN_RE.search(buf, start)
-    if not m:
-        return None
-    depth = 1
-    i = m.end()
-    n = len(buf)
-    while i < n:
-        ch = buf[i]
-        if ch == '[':
-            depth += 1
-        elif ch == ']':
-            depth -= 1
-            if depth == 0:
-                return m.start(), buf[m.end():i].strip(), i + 1
-        i += 1
-    return None
+    # Tags in code, quotes or generated training material are data, never a
+    # request (search_grounding.tag_is_data).
+    return search_grounding.find_closed_search_tag(buf, start)
 
 
 # ── Bare / function-call web-search requests (2026-09-11) ────────────────────
@@ -10829,8 +12132,8 @@ def _find_web_search_control(buf, start=0):
     has already been released can never be matched retroactively.
     """
     for m in _WEB_SEARCH_CONTROL_RE.finditer(buf, start):
-        if buf.count("```", 0, m.start()) % 2:
-            continue  # inside a fenced code block: code, not a request
+        if search_grounding.tag_is_data(buf, m.start()):
+            continue  # in code, quoted, or inside generated training material
         args = buf[m.end():]
         query, closed = _web_search_control_query(args)
         return m.start(), query, closed or "\n" in args
@@ -10867,6 +12170,9 @@ _WEB_SEARCH_NOT_RUN_NOTICE = (
     "\n\n*🔍 No web search was run — ask me to “search online” or do a “web search” "
     "when you want live results.*"
 )
+# The user declined a lookup this turn and the model asked for one anyway.
+# (search_grounding.strip_search_ui removes it from history like the others.)
+_WEB_SEARCH_DECLINED_NOTICE = "\n\n*🔍 No web search was run, as you asked.*"
 _WEB_SEARCH_NO_QUERY_NOTICE = (
     "\n\n*🔍 No web search was run — the search request came through without a query.*"
 )
@@ -10878,7 +12184,10 @@ def _withhold_web_search_control(chunks, show_thinking=False):
     Used on the answer HWUI streams after it has already run this turn's
     search: a second request is never executed (one search per turn), and its
     control text is dropped together with the rest of that generation instead
-    of being shown. Reasoning chunks pass through untouched.
+    of being shown. An echoed or invented results block ("[WEB SEARCH
+    RESULTS]", "[WEB SOURCES]", "[END WEB SEARCH RESULTS]" …,
+    search_grounding.find_results_marker) ends the answer the same way.
+    Reasoning chunks pass through untouched.
     """
     answer = ""
     released = 0
@@ -10895,8 +12204,9 @@ def _withhold_web_search_control(chunks, show_thinking=False):
             continue
         answer += chunk
         control = _find_web_search_control(answer, released)
-        bracket = _MINISTRAL_WEB_SEARCH_TAG_OPEN_RE.search(answer, released)
-        stops = [found for found in (control and control[0], bracket and bracket.start())
+        bracket = search_grounding.find_search_tag(answer, released)
+        marker = search_grounding.find_results_marker(answer, released)
+        stops = [found for found in (control and control[0], bracket and bracket.start(), marker)
                  if found is not None]
         if stops:
             if min(stops) > released:
@@ -10905,12 +12215,42 @@ def _withhold_web_search_control(chunks, show_thinking=False):
             if callable(close):
                 close()
             return
-        safe_end = _web_search_control_hold_start(answer, released)
+        safe_end = min(_web_search_control_hold_start(answer, released),
+                       search_grounding.results_marker_hold_start(answer, released))
         if safe_end > released:
             yield answer[released:safe_end]
             released = safe_end
     if len(answer) > released:
         yield answer[released:]
+
+
+def _auto_search_query(text):
+    """Query for an automatic current-topic search, or None.
+
+    Two stages so ordinary conversation costs nothing: the regex pre-filter
+    (no model call) and, only for a message it passes, the model-judged gate
+    (_search_intent_gate: one short call, fails closed).
+    """
+    if not search_grounding.recency_candidate(text):
+        return None
+    # A question about a named show's season, episode or finale searches
+    # directly: the gate model answers NO_SEARCH to these (see instalment_query).
+    named = search_grounding.instalment_query(text)
+    if named:
+        print(f"🔍 Named instalment question — searching without the gate: {_redact(named)}", flush=True)
+        return named
+    print("🤔 Current-topic question — consulting the search intent gate", flush=True)
+    should_search, gate_query = _search_intent_gate(text)
+    # The gate's query is model-written too (its few-shot examples name
+    # Severance, Valve, bitcoin): it must be about this message.
+    if should_search and gate_query and not search_grounding.query_alignment(gate_query, text)[0]:
+        print(f"💬 Intent gate query does not match the message; not searched: {_redact(gate_query)}", flush=True)
+        return None
+    if should_search and gate_query:
+        print(f"🔍 Automatic current-topic search: {_redact(gate_query)}", flush=True)
+        return gate_query
+    print("💬 Intent gate → NO_SEARCH (automatic current-topic search)", flush=True)
+    return None
 
 
 def stream_ministral_web_search_response(
@@ -10922,8 +12262,17 @@ def stream_ministral_web_search_response(
     trace_context=None,
     search_route_text=None,
     provider_user_text=None,
+    auto_search=False,
+    search_history=None,
+    search_names=(),
+    ctx_size=None,
 ):
-    """Run native Ministral search requests without converting them to ChatML.
+    """Run local messages-API search requests without converting them to ChatML.
+
+    `auto_search` (the card's auto_search_current_topics, already combined by
+    chat() with the turn's own exclusions) lets a current-topic question with
+    no explicit request search too: search_grounding.recency_candidate screens
+    it without a model call, and only then _search_intent_gate decides.
 
     `search_route_text` is the user's typed request, which is all that routing
     reads: the query extractor and the opt-in test. `user_input` may also carry
@@ -10935,10 +12284,32 @@ def stream_ministral_web_search_response(
     applied). The post-search user turn is rebuilt from it, so the answer after
     a search sees exactly the user text the model would have seen without one.
     Omitted, the rebuild falls back to `user_input`.
+
+    A model's own search request is only a proposal: search_grounding.SearchTurn
+    (the same per-turn decision the raw ChatML and cloud paths use) decides
+    whether it may run and checks its query against the request and the real
+    history before anything is retrieved. `ctx_size` (llama.cpp's slot size)
+    recounts the prompt once the results are in and bounds them to fit.
     """
     route_text = user_input if search_route_text is None else search_route_text
-    query = _ministral_runtime_search_query(route_text)
-    allow_model_tag = bool(re.search(_WEB_SEARCH_EXPLICIT_RE, str(route_text or ""), re.IGNORECASE))
+    # "I don't think you want to look that up": no search of any kind this
+    # turn, the model's own request included (25 Oct corpus).
+    declined = search_grounding.declined_lookup(route_text)
+    query = _ministral_runtime_search_query(route_text, search_history, search_names)
+    explicit_turn = bool(re.search(_WEB_SEARCH_EXPLICIT_RE, search_grounding.request_text(route_text),
+                                   re.IGNORECASE)) and not declined
+    if not query and not explicit_turn and auto_search and not declined:
+        query = _auto_search_query(route_text)
+    # The model's own request is a proposal, decided once per turn the same way
+    # on every route. With automatic search on, a current-topic question may
+    # still be searched at the model's request ("including in casual chat",
+    # 25 Oct), but the switch alone authorises nothing: "fhfh" ran a
+    # model-invented search on 26 Oct. Tags in code, quotes or training
+    # material are still data.
+    turn = search_grounding.SearchTurn(route_text, explicit=explicit_turn, automatic=auto_search,
+                                       history=search_history, names=search_names)
+    allow_model_tag = turn.may_propose
+    model_proposed = False
 
     if not query:
         streamed = []
@@ -11043,9 +12414,9 @@ def stream_ministral_web_search_response(
                     yield rolling[yielded_chars:open_start]
                 initial_stream.close()
                 if allow_model_tag:
-                    query = matched_query
+                    query, model_proposed = matched_query, True
                 else:
-                    withheld_notice = _WEB_SEARCH_NOT_RUN_NOTICE
+                    withheld_notice = _WEB_SEARCH_DECLINED_NOTICE if declined else _WEB_SEARCH_NOT_RUN_NOTICE
                 break
             if control is not None:
                 control_start, control_query, control_complete = control
@@ -11056,9 +12427,9 @@ def stream_ministral_web_search_response(
                     continue  # opted-in request still forming: keep withholding it
                 initial_stream.close()
                 if not allow_model_tag:
-                    withheld_notice = _WEB_SEARCH_NOT_RUN_NOTICE
+                    withheld_notice = _WEB_SEARCH_DECLINED_NOTICE if declined else _WEB_SEARCH_NOT_RUN_NOTICE
                 elif control_query:
-                    query = control_query
+                    query, model_proposed = control_query, True
                 else:
                     withheld_notice = _WEB_SEARCH_NO_QUERY_NOTICE
                 control = None
@@ -11075,13 +12446,13 @@ def stream_ministral_web_search_response(
             # The stream ended while an opted-in request was still forming;
             # end of stream ends its line, so its query is as final as it gets.
             if control[1]:
-                query = control[1]
+                query, model_proposed = control[1], True
             else:
                 withheld_notice = _WEB_SEARCH_NO_QUERY_NOTICE
 
         if withheld_notice:
             print("🔍 Model web-search request withheld — "
-                  + ("no opt-in phrase this turn" if not allow_model_tag else "no query"),
+                  + ("no opt-in phrase and automatic search off this turn" if not allow_model_tag else "no query"),
                   flush=True)
             yield withheld_notice
             return
@@ -11092,73 +12463,130 @@ def stream_ministral_web_search_response(
                 yield rolling[yielded_chars:]
             return
 
-    query = str(query).strip()[:200]
+    if model_proposed:
+        # Before retrieval: a model-written query must be about this request
+        # (or, when it refers back, the recent real turns).
+        allowed, why = turn.authorise(query)
+        if not allowed:
+            print(f"🔍 Model web-search request withheld ({why}): {_redact(str(query))}", flush=True)
+            yield search_grounding.PROPOSAL_WITHHELD_NOTICE
+            return
+    query = search_grounding.carry_time_words(str(query).strip(), route_text)[:200]
     if not query:
         return
-    print(f"🔍 Native Ministral web search triggered: {query}", flush=True)
+    print(f"🔍 Native Ministral web search triggered: {_redact(query)}", flush=True)
     yield "\n\n🔍 *Searching...*\n\n"
 
     try:
         res = do_search(query)
+        # Availability is judged on what the provider returned; only the
+        # relevant items (res, from here on) reach the model and the links.
+        provider_res, relevant = res, True
+        if isinstance(res, dict) and not res.get("error"):
+            res, relevant = search_grounding.filter_relevant(query, res)
         results_block = format_search_results(query, res)
     except Exception as exc:
         print(f"❌ Native Ministral search failed: {exc}", flush=True)
-        yield f"⚠️ Search failed: {exc}"
+        yield "⚠️ Web search failed. No verified results are available; please try again later."
         return
 
-    has_results = bool(
-        res.get("summary") or res.get("top_text") or res.get("pages") or res.get("results")
-    )
+    has_results = bool(isinstance(provider_res, dict) and (
+        provider_res.get("summary") or provider_res.get("top_text")
+        or provider_res.get("pages") or provider_res.get("results")
+    ))
+    has_source_urls = bool(isinstance(provider_res, dict) and (
+        provider_res.get("top_url")
+        or any(item.get("url") for item in (provider_res.get("pages") or []) if isinstance(item, dict))
+        or any(item.get("url") for item in (provider_res.get("results") or []) if isinstance(item, dict))
+    ))
+    if isinstance(res, dict) and res.get("error"):
+        print("❌ Search provider failed; no verified results will be shown", flush=True)
+        yield "⚠️ Web search failed. No verified results are available; please try again later."
+        return
+    if not has_results or not has_source_urls:
+        print("🔍 Search returned no usable source URLs", flush=True)
+        yield "🔍 The search returned no usable results or source links, so I can’t verify the requested information."
+        return
+    if not relevant:
+        print("🔍 Search results did not match the query; not passed to the model", flush=True)
+        yield search_grounding.IRRELEVANT_NOTICE
+        return
     # The user's words as the model already received them this turn — never a
     # fresh copy of the raw typed text, which would undo the provider-only
     # vocative removal ("Hey Grok." answered as "Yeah Grok, ...").
     rebuilt_user = str(user_input if provider_user_text is None else provider_user_text).strip()
-    if has_results:
-        augmented_user_msg = (
-            f"{rebuilt_user}\n\n"
-            f"[WEB SEARCH RESULTS FOR: {query}]\n"
-            f"{results_block}\n"
-            "These are real results returned by HWUI for this request. Base factual claims "
-            "only on these results. If a requested detail is absent, say so. Answer naturally "
-            "without mentioning the trigger, tool contract, or result-block structure."
-        )
-    else:
-        augmented_user_msg = (
-            f"{rebuilt_user}\n\n"
-            f"[Web search returned zero results for '{query}'. No live information was returned. "
-            "Tell the user clearly that the search found nothing and do not guess, invent results, "
-            "or answer from prior knowledge as though it came from the search.]"
-        )
+
+    def _messages_with_results(block):
+        if has_results:
+            augmented_user_msg = (
+                f"{rebuilt_user}\n\n"
+                f"[WEB SEARCH RESULTS FOR: {query}]\n"
+                f"{block}\n"
+                f"{search_grounding.results_rule(payload.get('messages'), route_text)}"
+            )
+        else:
+            augmented_user_msg = (
+                f"{rebuilt_user}\n\n"
+                f"[Web search returned zero results for '{query}'. No live information was returned. "
+                "Tell the user clearly that the search found nothing and do not guess, invent results, "
+                "or answer from prior knowledge as though it came from the search.]"
+            )
+        search_messages = [dict(message) for message in payload.get("messages", [])]
+        for index in range(len(search_messages) - 1, -1, -1):
+            if search_messages[index].get("role") == "user":
+                # Keep whatever the builder placed around the user's words — a
+                # user-document prefix before them, the reasoning turn packet (or a
+                # legacy governor) after them — and splice the results in right
+                # after the words themselves.
+                # A current-turn attachment puts the words after the
+                # "CURRENT USER MESSAGE" marker; anchoring there stops a short
+                # request ("Read it") matching inside the reference or the fixed
+                # RESPONSE REQUIREMENT text that follows it.
+                existing_user = str(search_messages[index].get("content", ""))
+                marker = "CURRENT USER MESSAGE - ANSWER THIS NOW\n"
+                marker_end = existing_user.rfind(marker)
+                marker_end = marker_end + len(marker) if marker_end >= 0 else -1
+                if rebuilt_user and existing_user.startswith(rebuilt_user):
+                    at = 0
+                elif rebuilt_user and marker_end >= 0 and existing_user.startswith(rebuilt_user, marker_end):
+                    at = marker_end
+                else:
+                    at = existing_user.rfind(rebuilt_user) if rebuilt_user else -1
+                before, after = (
+                    (existing_user[:at], existing_user[at + len(rebuilt_user):])
+                    if at >= 0 else ("", "")
+                )
+                search_messages[index]["content"] = before + augmented_user_msg + after
+                break
+        return search_messages
 
     search_payload = dict(payload)
-    search_messages = [dict(message) for message in payload.get("messages", [])]
-    for index in range(len(search_messages) - 1, -1, -1):
-        if search_messages[index].get("role") == "user":
-            # Keep whatever the builder placed around the user's words — a
-            # user-document prefix before them, the reasoning turn packet (or a
-            # legacy governor) after them — and splice the results in right
-            # after the words themselves.
-            # A current-turn attachment puts the words after the
-            # "CURRENT USER MESSAGE" marker; anchoring there stops a short
-            # request ("Read it") matching inside the reference or the fixed
-            # RESPONSE REQUIREMENT text that follows it.
-            existing_user = str(search_messages[index].get("content", ""))
-            marker = "CURRENT USER MESSAGE - ANSWER THIS NOW\n"
-            marker_end = existing_user.rfind(marker)
-            marker_end = marker_end + len(marker) if marker_end >= 0 else -1
-            if rebuilt_user and existing_user.startswith(rebuilt_user):
-                at = 0
-            elif rebuilt_user and marker_end >= 0 and existing_user.startswith(rebuilt_user, marker_end):
-                at = marker_end
-            else:
-                at = existing_user.rfind(rebuilt_user) if rebuilt_user else -1
-            before, after = (
-                (existing_user[:at], existing_user[at + len(rebuilt_user):])
-                if at >= 0 else ("", "")
-            )
-            search_messages[index]["content"] = before + augmented_user_msg + after
-            break
+    search_messages = _messages_with_results(results_block)
     search_payload["messages"] = search_messages
+    # The reply budget was set before the search; the results can add
+    # thousands of tokens (4,245 -> 15,460 characters on 26 Oct). Recount the
+    # finished prompt, trim the evidence if the reply would lose its room, and
+    # cap max_tokens from the new count. Looked up via globals() like
+    # _search_reply_sampling below, so the isolated-exec tests still run.
+    _fit = globals().get("_fit_search_payload_to_context")
+    if ctx_size and callable(_fit):
+        fitted = _fit(search_payload, ctx_size, results_block, _messages_with_results, res)
+        if fitted is None:
+            print("🔍 Search results do not fit the remaining context; not passed to the model", flush=True)
+            yield search_grounding.CONTEXT_FULL_NOTICE
+            return
+        search_payload, results_block, res = fitted
+        search_messages = search_payload["messages"]
+    # The reply must be able to repeat the facts in the results. Gemma writes
+    # numbers digit by digit, and with DRY's usual allowed length every year
+    # in the evidence ("2026" x45) penalised the next one: "October 2022" came
+    # out as 2028/2041/2044 in 4/4 runs on GPT-6 Sol, 0/4 with this (26 Oct).
+    # It was kept off this path earlier only for Aurora's search-trained drift.
+    # Looked up via globals() so this generator stays callable from the
+    # isolated-exec tests (as stream_vision_response does for its helpers).
+    _reply_sampling = globals().get("_search_reply_sampling")
+    if callable(_reply_sampling):
+        search_payload = _reply_sampling(search_payload)
 
     response_chunks = []
     search_stream = (
@@ -11201,16 +12629,7 @@ def stream_ministral_web_search_response(
     if not has_results:
         return
     full_response = "".join(response_chunks)
-    source_links = []
-    for page in (res.get("pages") or [])[:3]:
-        url = page.get("url") or ""
-        title = (page.get("title") or url).strip() or url
-        if url and url not in full_response:
-            source_links.append((url, title))
-    if not source_links:
-        top_url = res.get("top_url") or ""
-        if top_url and top_url not in full_response:
-            source_links.append((top_url, top_url))
+    source_links = search_grounding.source_links(res, full_response)
     if source_links:
         yield "\n\n"
         for index, (url, title) in enumerate(source_links):
@@ -11223,14 +12642,8 @@ def stream_ministral_web_search_response(
 # --------------------------------------------------
 # Stream OpenAI API response (cloud backend)
 # --------------------------------------------------
-# TEMPORARY: capture exactly one successful GPT-4o OpenAI stream, then remove
-# this block and the matching capture code below after the provider check.
-_OPENAI_RAW_CAPTURE_LOCK = threading.Lock()
-_OPENAI_RAW_CAPTURE_CLAIMED = False
-
 def stream_openai_response(messages, api_key, model, temperature, max_tokens, top_p, frequency_penalty=0.0, presence_penalty=0.0):
     global abort_generation
-    global _OPENAI_RAW_CAPTURE_CLAIMED
     abort_generation = False
 
     import sys
@@ -11271,17 +12684,8 @@ def stream_openai_response(messages, api_key, model, temperature, max_tokens, to
         yield f"[OpenAI error {response.status_code}: {err}]"
         return
 
-    capture_raw = False
-    if str(model).strip().lower().startswith("gpt-4o"):
-        with _OPENAI_RAW_CAPTURE_LOCK:
-            if not _OPENAI_RAW_CAPTURE_CLAIMED:
-                _OPENAI_RAW_CAPTURE_CLAIMED = True
-                capture_raw = True
-
     total_chunks = 0
     all_text = []
-    capture_delta_index = 0
-    capture_saw_done = False
     for line in response.iter_lines(chunk_size=1):
         if abort_generation:
             print("🛑 OpenAI generation aborted", flush=True)
@@ -11294,20 +12698,11 @@ def stream_openai_response(messages, api_key, model, temperature, max_tokens, to
             if line_str.startswith("data:"):
                 line_str = line_str[5:].strip()
             if line_str == "[DONE]":
-                capture_saw_done = True
                 break
             j = json.loads(line_str)
             delta = j.get("choices", [{}])[0].get("delta", {})
-            raw_delta_content = delta.get("content")
-            chunk = raw_delta_content or ""
+            chunk = delta.get("content") or ""
             total_chunks += 1
-            if capture_raw and raw_delta_content is not None:
-                print(
-                    f"HWUI_OPENAI_RAW_CAPTURE_DELTA index={capture_delta_index} "
-                    f"{json.dumps(raw_delta_content, ensure_ascii=False)}",
-                    flush=True,
-                )
-                capture_delta_index += 1
             if chunk:
                 all_text.append(chunk)
                 yield chunk
@@ -11316,13 +12711,6 @@ def stream_openai_response(messages, api_key, model, temperature, max_tokens, to
             print(f"❌ OpenAI parse error: {e}", flush=True)
             continue
 
-    if capture_raw:
-        print(
-            "HWUI_OPENAI_RAW_CAPTURE_FINAL "
-            f"complete={capture_saw_done} aborted={bool(abort_generation)} "
-            f"{json.dumps(''.join(all_text), ensure_ascii=False)}",
-            flush=True,
-        )
     print(f"\n☁️ OpenAI DONE: {total_chunks} chunks, {len(''.join(all_text))} chars total", flush=True)
 
 
@@ -11358,6 +12746,45 @@ def _rebuild_search_user_turn(original_content, augmented_text):
     return augmented_text
 
 
+def _cloud_pre_search_query(route_text, messages, names=(), auto_search=False, history=None):
+    """HWUI's own search decision for a cloud turn, made before the model is called, or None.
+
+    The OpenAI and Anthropic paths searched only when the model wrote HWUI's
+    [WEB SEARCH: …] tag, a format cloud models are not trained on. In the
+    25 Oct live run gpt-6.1-sol answered all three Dark Matter requests with "I
+    don't have a live web-search tool available in this chat". The same
+    deterministic routing as the local paths now applies: an explicit request
+    (offers, follow-ups and topics from earlier turns included) and, with
+    automatic search on, a named-instalment question search first. The
+    model-judged gate needs the local model, so other current-topic questions
+    still rely on the model's own tag. A declined lookup never searches.
+    """
+    route_text = str(route_text or "")
+    if search_grounding.declined_lookup(route_text):
+        return None
+    if history is None:   # callers pass the real chat history; `messages` may carry more
+        history = _cloud_search_history(messages)
+    query = _ministral_runtime_search_query(route_text, history, names)
+    if not query and auto_search:
+        query = search_grounding.instalment_query(search_grounding.request_text(route_text)) or None
+    return search_grounding.carry_time_words(query, route_text)[:200] if query else None
+
+
+def _cloud_search_history(messages):
+    """Earlier user/assistant turns of a provider message list (fallback when no chat history is given)."""
+    turns = [m for m in (messages or []) if isinstance(m, dict) and m.get("role") in ("user", "assistant")]
+    return turns[:-1] if turns and turns[-1].get("role") == "user" else turns
+
+
+def _cloud_search_turn(route_text, messages, names=(), auto_search=False, history=None):
+    """The per-turn search decision for a cloud wrapper (search_grounding.SearchTurn)."""
+    route_text = str(route_text or "")
+    explicit = bool(re.search(_WEB_SEARCH_EXPLICIT_RE, search_grounding.request_text(route_text), re.IGNORECASE))
+    return search_grounding.SearchTurn(
+        route_text, explicit=explicit, automatic=auto_search,
+        history=_cloud_search_history(messages) if history is None else history, names=names)
+
+
 # --------------------------------------------------
 # OpenAI cloud path — [WEB SEARCH: …] tag wrapper
 # --------------------------------------------------
@@ -11388,7 +12815,8 @@ def _rebuild_search_user_turn(original_content, augmented_text):
 # load-bearing and must not be perturbed.
 def _web_search_stream_openai(messages, api_key, model, temperature, max_tokens,
                               top_p, frequency_penalty, presence_penalty, user_input,
-                              stream_fn=None):
+                              stream_fn=None, search_route_text=None, search_names=(), auto_search=False,
+                              search_history=None):
     global abort_generation
     # stream_fn lets a non-OpenAI provider reuse this tag-detecting wrapper unchanged;
     # it must have stream_openai_response's signature. None = the OpenAI cloud stream.
@@ -11411,6 +12839,9 @@ def _web_search_stream_openai(messages, api_key, model, temperature, max_tokens,
     # tag every time, so the leak is visible and must be suppressed here. The
     # local function stays byte-identical — see the duplication warning on the
     # function header.
+    _route_text = user_input if search_route_text is None else search_route_text
+    _pre_query = _cloud_pre_search_query(_route_text, messages, search_names, auto_search, history=search_history)
+    _turn = _cloud_search_turn(_route_text, messages, search_names, auto_search, history=search_history)
     _streamed = []
     _yielded_chars = 0        # how many chars of the rolling buffer have been yielded
     _tag_found = False
@@ -11429,7 +12860,7 @@ def _web_search_stream_openai(messages, api_key, model, temperature, max_tokens,
         return len(buf)
 
     try:
-        for chunk in stream_openai_response(
+        for chunk in (() if _pre_query else stream_openai_response(
             messages          = messages,
             api_key           = api_key,
             model             = model,
@@ -11438,17 +12869,18 @@ def _web_search_stream_openai(messages, api_key, model, temperature, max_tokens,
             top_p             = top_p,
             frequency_penalty = frequency_penalty,
             presence_penalty  = presence_penalty,
-        ):
+        )):
             _streamed.append(chunk)
             _rolling = "".join(_streamed)
-            _match = _re.search(r"\[WEB SEARCH:\s*(.+?)\]", _rolling, _re.IGNORECASE)
+            # A tag in code, quotes or generated training material is data.
+            _match = search_grounding.find_closed_search_tag(_rolling)
             if _match:
                 _tag_found = True
-                _search_query = _match.group(1).strip()
+                _search_query = _match[1]
                 # Yield anything before the tag start that we haven't already
                 # sent (typically 0 because the tag's '[' is the unclosed
                 # bracket we've been holding back behind).
-                _safe_end = _match.start()
+                _safe_end = _match[0]
                 if _safe_end > _yielded_chars:
                     yield _rolling[_yielded_chars:_safe_end]
                     _yielded_chars = _safe_end
@@ -11471,6 +12903,9 @@ def _web_search_stream_openai(messages, api_key, model, temperature, max_tokens,
         # the intent explicit here.
         abort_generation = False
 
+    if _pre_query:
+        _tag_found, _search_query = True, _pre_query
+        print(f"☁️🔍 [OpenAI] HWUI search before the model: {_redact(_pre_query)}", flush=True)
     if not _tag_found:
         # Stream ended with no tag — flush any text we were holding back behind
         # an unclosed '[' (model emitted '[foo' and the stream ended before
@@ -11480,15 +12915,44 @@ def _web_search_stream_openai(messages, api_key, model, temperature, max_tokens,
             yield _rolling_final[_yielded_chars:]
         return
 
+    # The user declined a lookup this turn: the model's request is not run.
+    if search_grounding.declined_lookup(user_input) or _turn.declined:
+        print("☁️🔍 [OpenAI] Model search request withheld — the user declined a lookup", flush=True)
+        yield _WEB_SEARCH_DECLINED_NOTICE
+        return
     query = _search_query
-    print(f"☁️🔍 [OpenAI] Web search triggered by model tag: {query}", flush=True)
+    if not _pre_query:
+        # The model's tag is a proposal: the same per-turn decision as the local
+        # paths, checked before anything is retrieved.
+        _allowed, _why = _turn.authorise(query)
+        if not _allowed:
+            print(f"☁️🔍 [OpenAI] Model search request withheld ({_why}): {_redact(query)}", flush=True)
+            yield (search_grounding.PROPOSAL_WITHHELD_NOTICE if _turn.may_propose
+                   else _WEB_SEARCH_NOT_RUN_NOTICE)
+            return
+    else:
+        pass
+    print(f"☁️🔍 [OpenAI] Web search triggered by model tag: {_redact(query)}", flush=True)
     yield "\n\n🔍 *Searching...*\n\n"
 
     # ── Phase 2: do the search ──
     try:
         res = do_search(query)
+        _provider_res = res
+        # A failed search is not "nothing found" (that told the model the
+        # topic had no information).
+        if not isinstance(res, dict) or res.get("error"):
+            print("❌ [OpenAI] Search provider failed; no verified results will be shown", flush=True)
+            yield "⚠️ Web search failed. No verified results are available; please try again later."
+            return
+        res, _relevant = search_grounding.filter_relevant(query, res)
+        if not _relevant:
+            print("☁️🔍 [OpenAI] Search results did not match the query; not passed to the model", flush=True)
+            yield search_grounding.IRRELEVANT_NOTICE
+            return
         results_block = format_search_results(query, res)
-        has_results = bool(res.get("summary") or res.get("top_text") or res.get("pages"))
+        # Snippets alone are evidence too (pages can fail to fetch).
+        has_results = bool(res.get("summary") or res.get("top_text") or res.get("pages") or res.get("results"))
         print(f"☁️🔍 [OpenAI] Search done. has_results={has_results}", flush=True)
     except Exception as e:
         print(f"❌ [OpenAI] Search failed: {e}", flush=True)
@@ -11497,26 +12961,13 @@ def _web_search_stream_openai(messages, api_key, model, temperature, max_tokens,
 
     # ── Phase 3: build augmented user message — same template as local path ──
     if has_results:
-        import urllib.parse as _urlparse
-        _src = res.get('top_url', '')
-        if not _src:
-            _src = f"https://search.brave.com/search?q={_urlparse.quote_plus(query)}"
         augmented_user_msg = (
             f"{user_input.strip()}\n\n"
             f"[WEB SEARCH RESULTS FOR: {query}]\n"
             f"{results_block}\n"
-            f"[END WEB SEARCH RESULTS]\n"
-            f"IMPORTANT: Your response MUST be based on the search results above ONLY. "
-            f"Do NOT use your training data or prior knowledge about this topic — "
-            f"the search results are the ground truth. "
-            f"If the results say something that contradicts what you think you know, "
-            f"trust the results. Respond naturally in your own words. "
-            f"Do NOT quote, repeat, echo, or reference the structure of this results block — "
-            f"consume it silently and respond as if you just know this information. "
-            f"Do not include a source link in your response."
+            f"{search_grounding.results_rule(messages, user_input)}"
         )
     else:
-        _src = ""
         augmented_user_msg = (
             f"{user_input.strip()}\n\n"
             f"[Web search returned zero results for '{query}'. "
@@ -11572,18 +13023,10 @@ def _web_search_stream_openai(messages, api_key, model, temperature, max_tokens,
             _response_chunks.append(chunk)
             yield chunk
 
-        if has_results:
-            _full_response = "".join(_response_chunks)
-            _pages = res.get("pages") or []
-            _src_list = []
-            if _pages:
-                for p in _pages[:3]:
-                    u = p.get("url") or ""
-                    t = (p.get("title") or u).strip() or u
-                    if u and u not in _full_response:
-                        _src_list.append((u, t))
-            elif _src and _src not in _full_response:
-                _src_list.append((_src, _src))
+        _full_response = "".join(_response_chunks)
+        # A provider error is not an answer: no sources under it (25 Oct live run).
+        if has_results and not search_grounding.provider_error_reply(_full_response):
+            _src_list = search_grounding.source_links(res, _full_response)
 
             if _src_list:
                 yield "\n\n"
@@ -12043,11 +13486,16 @@ def stream_anthropic_response(messages, api_key, model, temperature, max_tokens,
 # on the sibling functions).
 def _web_search_stream_anthropic(messages, api_key, model, temperature, max_tokens,
                                  top_p, user_input, system=None,
-                                 thinking=False, thinking_budget=2048):
+                                 thinking=False, thinking_budget=2048,
+                                 search_route_text=None, search_names=(), auto_search=False,
+                                 search_history=None):
     global abort_generation
     import re as _re
 
     # ── Phase 1: stream live, watch for [WEB SEARCH: …] tag ──
+    _route_text = user_input if search_route_text is None else search_route_text
+    _pre_query = _cloud_pre_search_query(_route_text, messages, search_names, auto_search, history=search_history)
+    _turn = _cloud_search_turn(_route_text, messages, search_names, auto_search, history=search_history)
     _streamed = []
     _yielded_chars = 0
     _tag_found = False
@@ -12065,7 +13513,7 @@ def _web_search_stream_anthropic(messages, api_key, model, temperature, max_toke
         return len(buf)
 
     try:
-        for chunk in stream_anthropic_response(
+        for chunk in (() if _pre_query else stream_anthropic_response(
             messages    = messages,
             api_key     = api_key,
             model       = model,
@@ -12075,14 +13523,15 @@ def _web_search_stream_anthropic(messages, api_key, model, temperature, max_toke
             system      = system,
             thinking        = thinking,
             thinking_budget = thinking_budget,
-        ):
+        )):
             _streamed.append(chunk)
             _rolling = "".join(_streamed)
-            _match = _re.search(r"\[WEB SEARCH:\s*(.+?)\]", _rolling, _re.IGNORECASE)
+            # A tag in code, quotes or generated training material is data.
+            _match = search_grounding.find_closed_search_tag(_rolling)
             if _match:
                 _tag_found = True
-                _search_query = _match.group(1).strip()
-                _safe_end = _match.start()
+                _search_query = _match[1]
+                _safe_end = _match[0]
                 if _safe_end > _yielded_chars:
                     yield _rolling[_yielded_chars:_safe_end]
                     _yielded_chars = _safe_end
@@ -12098,21 +13547,53 @@ def _web_search_stream_anthropic(messages, api_key, model, temperature, max_toke
     finally:
         abort_generation = False
 
+    if _pre_query:
+        _tag_found, _search_query = True, _pre_query
+        print(f"☁️🔍 [Anthropic] HWUI search before the model: {_redact(_pre_query)}", flush=True)
     if not _tag_found:
         _rolling_final = "".join(_streamed)
         if len(_rolling_final) > _yielded_chars:
             yield _rolling_final[_yielded_chars:]
         return
 
+    # The user declined a lookup this turn: the model's request is not run.
+    if search_grounding.declined_lookup(user_input) or _turn.declined:
+        print("☁️🔍 [Anthropic] Model search request withheld — the user declined a lookup", flush=True)
+        yield _WEB_SEARCH_DECLINED_NOTICE
+        return
     query = _search_query
-    print(f"☁️🔍 [Anthropic] Web search triggered by model tag: {query}", flush=True)
+    if not _pre_query:
+        # The model's tag is a proposal: the same per-turn decision as the local
+        # paths, checked before anything is retrieved.
+        _allowed, _why = _turn.authorise(query)
+        if not _allowed:
+            print(f"☁️🔍 [Anthropic] Model search request withheld ({_why}): {_redact(query)}", flush=True)
+            yield (search_grounding.PROPOSAL_WITHHELD_NOTICE if _turn.may_propose
+                   else _WEB_SEARCH_NOT_RUN_NOTICE)
+            return
+    else:
+        pass
+    print(f"☁️🔍 [Anthropic] Web search triggered by model tag: {_redact(query)}", flush=True)
     yield "\n\n🔍 *Searching...*\n\n"
 
     # ── Phase 2: do the search ──
     try:
         res = do_search(query)
+        _provider_res = res
+        # A failed search is not "nothing found" (that told the model the
+        # topic had no information).
+        if not isinstance(res, dict) or res.get("error"):
+            print("❌ [Anthropic] Search provider failed; no verified results will be shown", flush=True)
+            yield "⚠️ Web search failed. No verified results are available; please try again later."
+            return
+        res, _relevant = search_grounding.filter_relevant(query, res)
+        if not _relevant:
+            print("☁️🔍 [Anthropic] Search results did not match the query; not passed to the model", flush=True)
+            yield search_grounding.IRRELEVANT_NOTICE
+            return
         results_block = format_search_results(query, res)
-        has_results = bool(res.get("summary") or res.get("top_text") or res.get("pages"))
+        # Snippets alone are evidence too (pages can fail to fetch).
+        has_results = bool(res.get("summary") or res.get("top_text") or res.get("pages") or res.get("results"))
         print(f"☁️🔍 [Anthropic] Search done. has_results={has_results}", flush=True)
     except Exception as e:
         print(f"❌ [Anthropic] Search failed: {e}", flush=True)
@@ -12121,26 +13602,13 @@ def _web_search_stream_anthropic(messages, api_key, model, temperature, max_toke
 
     # ── Phase 3: build augmented user message (same template as the other paths) ──
     if has_results:
-        import urllib.parse as _urlparse
-        _src = res.get('top_url', '')
-        if not _src:
-            _src = f"https://search.brave.com/search?q={_urlparse.quote_plus(query)}"
         augmented_user_msg = (
             f"{user_input.strip()}\n\n"
             f"[WEB SEARCH RESULTS FOR: {query}]\n"
             f"{results_block}\n"
-            f"[END WEB SEARCH RESULTS]\n"
-            f"IMPORTANT: Your response MUST be based on the search results above ONLY. "
-            f"Do NOT use your training data or prior knowledge about this topic — "
-            f"the search results are the ground truth. "
-            f"If the results say something that contradicts what you think you know, "
-            f"trust the results. Respond naturally in your own words. "
-            f"Do NOT quote, repeat, echo, or reference the structure of this results block — "
-            f"consume it silently and respond as if you just know this information. "
-            f"Do not include a source link in your response."
+            f"{search_grounding.results_rule(messages, user_input)}"
         )
     else:
-        _src = ""
         augmented_user_msg = (
             f"{user_input.strip()}\n\n"
             f"[Web search returned zero results for '{query}'. "
@@ -12197,18 +13665,10 @@ def _web_search_stream_anthropic(messages, api_key, model, temperature, max_toke
             _response_chunks.append(chunk)
             yield chunk
 
-        if has_results:
-            _full_response = "".join(_response_chunks)
-            _pages = res.get("pages") or []
-            _src_list = []
-            if _pages:
-                for p in _pages[:3]:
-                    u = p.get("url") or ""
-                    t = (p.get("title") or u).strip() or u
-                    if u and u not in _full_response:
-                        _src_list.append((u, t))
-            elif _src and _src not in _full_response:
-                _src_list.append((_src, _src))
+        _full_response = "".join(_response_chunks)
+        # A provider error is not an answer: no sources under it (25 Oct live run).
+        if has_results and not search_grounding.provider_error_reply(_full_response):
+            _src_list = search_grounding.source_links(res, _full_response)
 
             if _src_list:
                 yield "\n\n"
@@ -12526,6 +13986,13 @@ def random_checkins_complete_route():
     return jsonify(payload), 200
 
 
+@app.route("/context_manifest", methods=["GET"])
+def context_manifest():
+    """Recent /chat context manifests: source names, scopes, owners and sizes only —
+    never prompt text (see context_scope.ContextManifest)."""
+    return jsonify({"manifests": context_scope.recent_manifests(request.args.get("limit", 5))})
+
+
 def _chat_inflight_end(rid):
     global _chat_inflight_count
     with _chat_inflight_lock:
@@ -12827,8 +14294,12 @@ def _retrieve_memory(char_data, character_name, user_input, project_rp_mode, _di
             # contradicts the style profile's "plain prose, no markdown".
             # Nothing about retrieval or memory content changes here; only how
             # the chosen blocks are labelled in the prompt.
+            # A lesson says what it is, so no family reads it as a fact about
+            # the user (the native renderer reads the label back).
             chosen_blocks = [
-                f"{item['block']['title']}:\n{item['block']['body']}"
+                (f"{item['block']['title']} ({_MEMORY_LESSON_LABEL}):\n{item['block']['body']}"
+                 if item['block'].get('kind') == _MEMORY_KIND_LESSON
+                 else f"{item['block']['title']}:\n{item['block']['body']}")
                 for item in top
             ]
             print(
@@ -12862,7 +14333,11 @@ def _load_chat_from_disk(active_chat, data, user_name, user_display_name, charac
         current_chat_filename = data.get("current_chat_filename", "")
 
         if current_chat_filename:
-            chat_file_path = os.path.join("chats", current_chat_filename)
+            # The request's own project chats folder (was the legacy root folder,
+            # which never held a project chat), and only a plain file name.
+            from chat_routes import get_chats_dir
+            chat_file_path = (os.path.join(get_chats_dir(), current_chat_filename)
+                              if _chat_filename_is_plain(current_chat_filename) else "")
 
             if os.path.exists(chat_file_path):
                 try:
@@ -13289,6 +14764,77 @@ def _update_injected_documents_monitor(payload, token_counter=None, stats=None, 
     return documents
 
 
+def _messages_without_media(messages):
+    """Text-only copy of a messages array, for counting the rendered prompt.
+
+    Image parts are dropped rather than serialised: the fallback estimate in
+    _native_messages_prompt_token_count would otherwise count base64 bytes as
+    text and report a prompt larger than the whole context.
+    """
+    stripped = []
+    for message in messages or []:
+        content = message.get("content", "") if isinstance(message, dict) else message
+        if isinstance(content, list):
+            content = "\n".join(
+                str(part.get("text", "")) for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+        stripped.append({**message, "content": content} if isinstance(message, dict) else content)
+    return stripped
+
+
+def _publish_prompt_token_stats(prompt_tokens, ctx_size, n_predict, convo_kept, convo_dropped,
+                                model_payload, provenance=None, context_sources=None,
+                                stats=None, **extra):
+    """Replace the Token Monitor snapshot with one local turn's prompt-side figures.
+
+    The single writer for every local transport (raw /completion, every
+    /v1/chat/completions family, image turns). The snapshot is replaced rather
+    than merged so a field this turn did not produce — documents, a reply
+    count — can never be read back from an earlier turn. Reply-side fields are
+    filled in later by the stream functions.
+    """
+    target = _LAST_TOKEN_STATS if stats is None else stats
+    snapshot = {
+        "prompt_tokens": prompt_tokens if isinstance(prompt_tokens, int) else None,
+        "ctx_size": ctx_size,
+        "n_predict": n_predict,
+        "convo_kept": convo_kept,
+        "convo_dropped": convo_dropped,
+        "model": CURRENT_MODEL,
+        "ts": time.time(),
+        "last_gen": None,
+        "last_eval": None,
+        "stop_reason": None,
+        "context_sources": list(context_sources or []),
+    }
+    snapshot.update(extra)
+    _update_injected_documents_monitor(model_payload, stats=snapshot, provenance=provenance)
+    target.clear()
+    target.update(snapshot)
+    return target
+
+
+_MONITOR_NON_CONTEXT_SOURCES = frozenset({
+    "web_search", "chat_search", "project_documents", "global_documents", "document_tool",
+})
+
+
+def _monitor_context_sources(manifest):
+    """Included non-document context sources from a ContextManifest.
+
+    Labels and sizes only, never text. Documents are left out: the Injected
+    Documents list is built from the final payload instead, and web/chat search
+    entries describe availability, not content.
+    """
+    sources = []
+    for entry in ((getattr(manifest, "data", None) or {}).get("sources") or []):
+        if entry.get("included") and entry.get("source") not in _MONITOR_NON_CONTEXT_SOURCES:
+            sources.append({"source": entry.get("source"), "scope": entry.get("scope"),
+                            "chars": entry.get("chars", 0)})
+    return sources
+
+
 # Persona half. This is generic "be a character, not an assistant" guidance and it
 # restates whatever the character card already says about voice, lecturing, and
 # question habits — on the live Dev card it duplicated four separate card lines
@@ -13332,8 +14878,9 @@ _MINISTRAL_NATIVE_PROTECTIONS = (
 # this list AND the per-turn gate below tests against the same list, so the two
 # can never drift apart.
 _MINISTRAL_WEB_SEARCH_OPT_IN_PHRASES = (
-    "search online", "web search", "look up online", "search on the web",
-    "search the internet", "look online", "look on the internet",
+    "search online", "web search", "search the web", "look up online", "search on the web",
+    "search the internet", "look online", "look on the internet", "check online",
+    "search for", "look it up", "google it",
 )
 
 _MINISTRAL_WEB_SEARCH_CONTRACT = (
@@ -13374,12 +14921,16 @@ def _ministral_web_search_contract_needed(user_text):
     anti-fabrication rule does NOT live here — it is in
     _MINISTRAL_NATIVE_PROTECTIONS, which is never gated.
     """
-    haystack = str(user_text or "").lower()
+    haystack = str(user_text or "")
     if not haystack.strip():
         return False
-    if any(phrase in haystack for phrase in _MINISTRAL_WEB_SEARCH_OPT_IN_PHRASES):
+    # The same test the search wrapper applies (not the phrase list, which
+    # only words the contract): "the search for meaning" is not a request,
+    # and neither is "I don't think you want to look that up".
+    if (re.search(_WEB_SEARCH_EXPLICIT_RE, search_grounding.request_text(haystack), re.IGNORECASE)
+            and not search_grounding.declined_lookup(haystack)):
         return True
-    return "web search results" in haystack
+    return "web search results" in haystack.lower()
 
 # ⚠️ REC 1 — ONE global authority sentence for every passive tagged block.
 #
@@ -13718,6 +15269,22 @@ def _ministral_native_retrieved_memory(memory, user_turn, user_name, character_n
             )
         )
 
+        if subject.endswith(f"({_MEMORY_LESSON_LABEL})"):
+            # A lesson is guidance for the assistant, delivered whole: the
+            # background_only/relevant_detail narrowing below is for facts.
+            rendered.append(
+                '<MEMORY_ENTRY owner="assistant" use="lesson" subject="%s">\n'
+                '<OWNER_BINDING>%s</OWNER_BINDING>\n'
+                '<STORED_FACTS>%s</STORED_FACTS>\n'
+                '</MEMORY_ENTRY>' % (
+                    subject[: -len(f"({_MEMORY_LESSON_LABEL})")].strip(),
+                    "A lesson %s asked you to keep about how you respond. Apply it where it "
+                    "fits this turn without mentioning it; it is not a fact about %s."
+                    % (str(user_name or "the user"), str(user_name or "the user")),
+                    body,
+                )
+            )
+            continue
         user_owned = _has_name(body, user_name)
         assistant_owned = _has_name(body, character_name)
         if user_owned and assistant_owned:
@@ -15333,10 +16900,13 @@ def _stream_ministral_lean_st(payload, request_id=None):
         f"parts=[{' | '.join(audit['parts'])}]",
         flush=True,
     )
-    # TEMP capture, same family as TEMP_HWUI_MINISTRAL_FINAL_REQUEST_CAPTURE:
+    # Opt-in capture, same family as TEMP_HWUI_MINISTRAL_FINAL_REQUEST_CAPTURE:
     # the exact prompt string and request body, plus the LEAN messages it came
-    # from so the two serializations can be diffed. Full content goes only here.
+    # from so the two serializations can be diffed. Full content goes only here,
+    # and only when "prompt_diagnostic_capture" is on.
     try:
+        if not _prompt_diagnostic_enabled_for_request():
+            raise _CaptureDisabled()
         capture = {
             "captured_at": datetime.now().astimezone().isoformat(),
             "method": "POST",
@@ -15351,6 +16921,8 @@ def _stream_ministral_lean_st(payload, request_id=None):
             json.dump(capture, capture_file, ensure_ascii=False, indent=2)
         print("🧪 Temporary LEAN_ST request capture saved to "
               "logs/TEMP_HWUI_MINISTRAL_FINAL_REQUEST_CAPTURE_LEAN_ST.json", flush=True)
+    except _CaptureDisabled:
+        pass
     except Exception as capture_exc:
         print(f"⚠️ LEAN_ST request capture failed: {capture_exc!r}", flush=True)
     yield from stream_model_response(body, request_id=request_id)
@@ -15971,11 +17543,16 @@ def _build_system_text(char_data, _char_label, _user_label, user_display_name, u
 
         # (System message size is logged in chat() once the retrieved global
         # documents have been appended; measuring it here left them out.)
-        print("=" * 80)
-        print("DEBUG: SYSTEM_TEXT BEFORE RETRIEVED GLOBAL DOCUMENTS, MEMORY AND TAIL:")
-        print("=" * 80)
-        print(system_text)
-        print("=" * 80)
+        # Full system text is the card, persona and project context: only with
+        # verbose diagnostics on (log_privacy), otherwise just its size.
+        if _log_privacy.content_logging_enabled():
+            print("=" * 80)
+            print("DEBUG: SYSTEM_TEXT BEFORE RETRIEVED GLOBAL DOCUMENTS, MEMORY AND TAIL:")
+            print("=" * 80)
+            print(system_text)
+            print("=" * 80)
+        else:
+            print(f"DEBUG: system text before retrieved global documents, memory and tail: {len(system_text)} chars")
 
     except Exception as e:
         print(f"⚠️ Failed to build character context: {e}")
@@ -16000,7 +17577,7 @@ def _load_user_persona(user_name):
                 print(f"   Display name: {user_display_name}")
                 print(f"   Bio length: {len(user_bio)} chars")
                 if user_bio:
-                    print(f"   Bio preview: {user_bio[:150]}...")
+                    print(f"   Bio preview: {_redact(user_bio, 150)}")
         else:
             print(f"⚠️ User persona file not found: {user_file_path}")
     except Exception as e:
@@ -16008,7 +17585,8 @@ def _load_user_persona(user_name):
     return user_bio, user_display_name
 
 
-def _load_documents(user_input, _attached_doc_present, user_documents=None, user_name="", monitor_provenance=None, automatic_event=False):
+def _load_documents(user_input, _attached_doc_present, user_documents=None, user_name="", monitor_provenance=None, automatic_event=False,
+                    allow_global_documents=True):
     """Load project + global documents for the prompt. Extracted from chat() (phase 1)."""
     project_instructions = ""
     project_documents = ""
@@ -16056,7 +17634,13 @@ def _load_documents(user_input, _attached_doc_present, user_documents=None, user
             # Helper: load a specific file directly by name (no keyword matching)
             def load_pinned_doc_direct(proj_name, fname):
                 proj_dir = os.path.join(os.path.dirname(__file__), "projects")
-                fpath = os.path.join(proj_dir, proj_name, "documents", fname)
+                # The pinned name comes from the project's config.json, which the
+                # API writes; never let it name a file outside documents/.
+                try:
+                    fpath = path_safety.safe_join(os.path.join(proj_dir, proj_name, "documents"), fname)
+                except path_safety.UnsafePathError:
+                    print("⚠️ Pinned doc name is not a plain file name; ignored")
+                    return ""
                 if not os.path.exists(fpath):
                     print(f"⚠️ Pinned doc not found on disk: {fpath}")
                     return ""
@@ -16178,7 +17762,7 @@ def _load_documents(user_input, _attached_doc_present, user_documents=None, user
                 project_documents = load_project_documents(active_project, user_input)
                 if project_documents:
                     print(f"📄 User requested documents - loading {len(project_documents)} chars")
-                    print(f"📄 DOCUMENT CONTENT PREVIEW:\n{project_documents[:1000]}")
+                    print(f"📄 DOCUMENT CONTENT PREVIEW: {_redact(project_documents, 1000)}")
             else:
                 print(f"⭕ Skipped document loading - no doc intent detected")
 
@@ -16194,7 +17778,11 @@ def _load_documents(user_input, _attached_doc_present, user_documents=None, user
     # Load Global Documents (always, regardless of project)
     # --------------------------------------------------
     try:
-        if _global_doc_retrieval_signal(user_input):
+        if not allow_global_documents:
+            # The character's card has opted out (use_global_documents: false).
+            print("⭕ Skipped global document loading - this character does not use "
+                  "Global Documents")
+        elif _global_doc_retrieval_signal(user_input):
             global_docs = load_global_documents(
                 user_input, user_documents, user_name, monitor_provenance
             )
@@ -16337,8 +17925,14 @@ def _resolve_example_dialogue_source(
         and isinstance(configured_templates, list)
         and prompt_name in configured_templates
     )
-    if global_example and not ui_global_source:
+    # A card can opt out of the shared examples (use_global_example_dialogue: false):
+    # then another character's voice never becomes its style. Its own bound prompt's
+    # paired example file is not shared material and still applies as before.
+    shared_ok = context_scope.card_uses_global_example_dialogue(char_data)
+    if global_example and not ui_global_source and shared_ok:
         return global_example, "global"
+    if ui_global_source and not shared_ok:
+        return "", "none"
     if not allow_automatic_fallback and not ui_global_source:
         return "", "none"
 
@@ -16504,9 +18098,7 @@ def chat():
         print(f"⚠️ /chat req#{_my_req_id} settings.json read failed: {_se!r}", flush=True)
         _req_settings = {}
     _ctx_size_req = int(_req_settings.get("llama_args", {}).get("ctx_size", 16384))
-    _mellum_diag_mode = "full"
     # "full" (the default) leaves every path below untouched.
-    _mellum_diag_active = False
     _ignore_eos_req = bool(_req_settings.get("ignore_eos", False))
     _diag_verbose = bool(_req_settings.get("diag_verbose", False))
     _prompt_diagnostics_enabled = bool(_req_settings.get("prompt_diagnostic_capture", False))
@@ -16551,6 +18143,24 @@ def chat():
     data = request.get_json()
     if not isinstance(data, dict):
         return jsonify({"error": "JSON object required"}), 400
+    # ── Character-context boundary (2026-10-24) ─────────────────────────────
+    # Before ANY file is touched for this request (Author's Notes, memory, chat
+    # metadata): the character must be a valid, existing card key, and the chat
+    # must belong to it. A send made while the page is still switching
+    # characters carries the new character with the previous character's chat;
+    # it is refused instead of mixing the two. See context_scope.py.
+    _characters_dir = os.path.join(os.path.dirname(__file__), "characters")
+    _request_character, _character_error = context_scope.resolve_request_character(
+        data.get("character"), _characters_dir)
+    if _character_error:
+        status = 400 if _character_error in ("No character specified", "Invalid character name") else 404
+        return jsonify({"error": _character_error, "code": "character_invalid"}), status
+    data["character"] = _request_character
+    _ownership_problem = context_scope.chat_ownership_problem(
+        data.get("current_chat_filename") or "", _request_character, _characters_dir)
+    if _ownership_problem:
+        print(f"🛡️ /chat req#{_my_req_id} refused: {_ownership_problem}", flush=True)
+        return jsonify({"error": _ownership_problem, "code": "chat_character_mismatch"}), 409
     _generation_kind = str(data.get("generation_kind") or "normal").strip().lower()
     if _generation_kind not in ("normal", "regeneration", "retry", "continuation", "automatic_checkin"):
         _generation_kind = "normal"
@@ -16718,10 +18328,12 @@ def chat():
         # A re-send of the same user turn (empty-reply retry, Regenerate) gets
         # the first run's write result back instead of writing again.
         _doc_turn_key, _doc_turn_ttl = _document_turn_key(data.get("character"), active_chat)
-        _local_doc_attached, _local_doc_status_block, _local_doc_result = (
-            _run_document_tool_once(user_input, _doc_turn_key, _doc_turn_ttl,
-                                    _document_standing_instructions(_effective_author_note))
-        )
+        # Implicit memory-file access is limited to this character (context_scope audit).
+        with document_tools.memory_scope(data.get("character"), user_input):
+            _local_doc_attached, _local_doc_status_block, _local_doc_result = (
+                _run_document_tool_once(user_input, _doc_turn_key, _doc_turn_ttl,
+                                        _document_standing_instructions(_effective_author_note))
+            )
     # Server-built from the real result; "" when this turn wrote nothing.
     _local_doc_confirmation = _document_confirmation(_local_doc_result)
 
@@ -16737,9 +18349,11 @@ def chat():
         # internal markers, so only such a turn is filtered for imitations of
         # them. Without a confirmation, a fallback built from the real result
         # replaces a reply the filter emptied.
-        yield from _document_reply_guard(
-            stream, bool(_local_doc_status_block),
-            "" if _local_doc_confirmation else _document_reply_fallback(_local_doc_result))
+        yield from _document_failure_contradiction_guard(
+            _document_reply_guard(
+                stream, bool(_local_doc_status_block),
+                "" if _local_doc_confirmation else _document_reply_fallback(_local_doc_result)),
+            _local_doc_result)
     def _finish_response(stream, intent="", governor=""):
         """The one response pipeline for this turn (see response_pipeline.py)."""
         return ResponsePipeline(
@@ -16795,7 +18409,7 @@ def chat():
             "", user_input, flags=re.DOTALL
         ).strip()
         print(f"📄 Attached document detected — retrieval/intent query cleaned "
-              f"to typed text only: {user_input[:120]!r}")
+              f"to typed text only: {_redact(user_input)}")
 
     clean_input = re.sub(r"<\|.*?\|>", "", user_input).strip()
 
@@ -16813,7 +18427,7 @@ def chat():
             preview = [p.get("type","?") + (":" + p.get("text","")[:60] if p.get("type")=="text" else "") for p in last["content"]]
             print(f"🔍 DEBUG: Last message: role={last.get('role')} content=[{', '.join(preview)}]")
         else:
-            print(f"🔍 DEBUG: Last message: role={last.get('role')} content={str(last.get('content',''))[:200]}")
+            print(f"🔍 DEBUG: Last message: role={last.get('role')} content={_redact(str(last.get('content','')), 200)}")
 
     print(f"📜 Received {len(active_chat)} messages from frontend")
 
@@ -16910,6 +18524,7 @@ def chat():
         user_input, _attached_doc_present, _user_documents, user_display_name,
         _global_document_monitor_provenance,
         automatic_event=automatic_event,
+        allow_global_documents=context_scope.card_uses_global_documents(char_data),
     )
     _user_document_context = "\n\n".join(_user_documents)
 
@@ -16968,6 +18583,11 @@ def chat():
             _req_settings.get("llama_models_dir", ""),
         )
     )
+    # Gemma 4 on its native template (not per-model "Force ChatML", which puts
+    # it on the legacy packet path). Its Response Intent combines the character
+    # and this-chat notes like the other architectures; see the
+    # _GEMMA4_INTENT_PREFILL_CONTENT note for how it is delivered.
+    _gemma4_intent_path = _is_gemma4_native and not _legacy_local_chatml
     if _req_settings.get("backend_mode", "local") == "local":
         _model_profile_shadow()   # Stage 1 shadow log only; routing below is unchanged
     _nemo_intent = ""
@@ -17016,6 +18636,9 @@ def chat():
     # already stripped. `user_input` itself keeps the status block, because the
     # model still has to be told what the document tool did.
     _search_route_text = user_input
+    if _local_doc_result is not None:
+        # A document turn: dictated text and the noun "web search" are not search requests.
+        _search_route_text = _document_turn_search_route_text(user_input)
     if _local_doc_status_block:
         user_input = (str(user_input or "").rstrip() + "\n\n" + _local_doc_status_block)
 
@@ -17036,6 +18659,19 @@ def chat():
     # sent to the model. Before trimming, so they cost no budget, and before
     # every provider path below.
     active_chat = _exclude_flagged_history(active_chat)
+    # HWUI's own search display text (the "Searching..." marker, source-link
+    # anchors, search notices) stays in the chat file and on the page, but is
+    # not sent back to the model: an earlier reply's links read as citations
+    # the character produced itself, and the notices as lines to imitate.
+    active_chat = search_grounding.strip_search_ui_from_history(active_chat)
+    # Earlier turns (not this one) for a search request that names no topic of
+    # its own ("Do you want to look that up?").
+    _search_history = (active_chat[:-1] if active_chat and active_chat[-1].get("role") == "user"
+                       else list(active_chat))
+    # The character's and the user's names are never a search topic ("Hey Sol,
+    # can you look it up?" searched "Sol" in the corpus).
+    _search_names = tuple(n for n in {character_name, str(char_data.get("name") or ""), user_name,
+                                      user_display_name} if n)
 
     # Do not apply a fixed message-count cap here. The token-aware trimmer below
     # keeps local prompts inside the llama.cpp budget and lets cloud backends use
@@ -17135,6 +18771,54 @@ def chat():
         char_data,
         _allow_automatic_example_fallback,
     )
+    # 🧭 Context manifest — which sources this request drew on and their scope
+    # (names and sizes only, never text). Logged, and kept for GET /context_manifest.
+    try:
+        from project_routes import get_active_project as _manifest_project
+        _manifest_family = (
+            _req_settings.get("backend_mode", "local") if _req_settings.get("backend_mode", "local") != "local"
+            else "qwen35" if _is_qwen35_model else "gemma4" if _is_gemma4_native
+            else "ministral" if _is_ministral_for_examples else "legacy_chatml" if _legacy_local_chatml
+            else "chat_completions")
+        _manifest = context_scope.ContextManifest(
+            _my_req_id, character_name, current_chat_filename, _manifest_project(), _manifest_family)
+        _sp_file, _, _phi_file = resolve_character_prompt_files(char_data)
+        _cs = context_scope
+        (_manifest
+         .add("character_card", _cs.SCOPE_CHARACTER, True, owner=character_name)
+         .add("system_prompt", _cs.SCOPE_CHARACTER, True, detail=_cs.safe_detail(_sp_file))
+         .add("post_history", _cs.SCOPE_CHARACTER, True, detail=_cs.safe_detail(_phi_file))
+         .add_text("author_note_character", _cs.SCOPE_CHARACTER, _author_note_sources.get("persistent"),
+                   owner=character_name)
+         .add_text("author_note_chat", _cs.SCOPE_TURN if _author_note_sources.get("request_override")
+                   else _cs.SCOPE_CHAT, _author_note_sources.get("temporary"))
+         .add("example_dialogue", _cs.SCOPE_GLOBAL if _example_dialogue_source == "global"
+              else _cs.SCOPE_CHARACTER, bool(_char_ex_pre), len(_char_ex_pre or ""),
+              detail=_cs.safe_detail(_example_dialogue_source))
+         .add("chat_history", _cs.SCOPE_CHAT, bool(active_chat),
+              detail=f"{len(active_chat)} messages")
+         .add_text("session_summary", _cs.SCOPE_CHARACTER, _recent_session_summary, owner=character_name)
+         .add_text("retrieved_memory", _cs.SCOPE_CHARACTER, memory, owner=character_name,
+                   detail=("personal" if char_data.get("use_personal_memory", True) is not False else "")
+                   + ("+global" if char_data.get("use_global_memory") else ""))
+         .add_text("project_instructions", _cs.SCOPE_PROJECT, project_instructions)
+         .add_text("project_documents", _cs.SCOPE_PROJECT, project_documents)
+         .add("global_documents", _cs.SCOPE_GLOBAL, bool(global_documents), len(global_documents or ""),
+              detail="opted in" if _cs.card_uses_global_documents(char_data) else "opted out")
+         .add_text("user_persona", _cs.SCOPE_USER, user_bio)
+         .add("current_situation", _cs.SCOPE_GLOBAL, bool(char_data.get("use_current_situation")))
+         .add("document_tool", _cs.SCOPE_TURN, _local_doc_result is not None,
+              detail=_cs.safe_detail((_local_doc_result or {}).get("action") if isinstance(
+                  _local_doc_result, dict) else ""))
+         .add("chat_search", _cs.SCOPE_CHARACTER if _cs.chat_search_scope(char_data) == "character"
+              else _cs.SCOPE_PROJECT if _cs.chat_search_scope(char_data) == "project" else _cs.SCOPE_GLOBAL,
+              True, detail="on request; scope " + _cs.chat_search_scope(char_data))
+         .add("web_search", _cs.SCOPE_TURN, bool(char_data.get("use_web_search")),
+              detail="explicit or current-topic" if search_grounding.card_auto_searches(char_data)
+              else "explicit request only"))
+        _manifest.publish()
+    except Exception as _manifest_exc:   # diagnostics must never affect the reply
+        print(f"⚠️ Context manifest unavailable: {_manifest_exc!r}", flush=True)
     if _example_dialogue_source.startswith("paired:"):
         print(
             f"📐 Pre-calc: found {_example_dialogue_source.split(':', 1)[1]} "
@@ -17165,7 +18849,8 @@ def chat():
     _ph_pre = char_data.get("post_history", "").strip()
     if _ph_pre:
         _reply_packet_overhead += rough_token_count(_ph_pre) + 10
-    _an_pre = _response_intent_note if _nemo_intent else (_qwen35_author_note if _is_qwen35_model else _effective_author_note)
+    _an_pre = (_response_intent_note if (_nemo_intent or _gemma4_intent_path)
+               else (_qwen35_author_note if _is_qwen35_model else _effective_author_note))
     if _an_pre:
         _reply_packet_overhead += rough_token_count(_an_pre) + 20  # +20 for [OOC: Author note — …] wrapper
     _cn_pre = char_data.get("character_note", "").strip()
@@ -17520,20 +19205,32 @@ def chat():
             # to a depth-N user-turn injection just before the prompt flatten
             # (see "CHARACTER NOTE — depth-N injection" below). author_note stays
             # in the system block, unchanged. (The comment block above is stale and
-            # is rewritten in Stage 5.)
-            _an_sys = _effective_author_note
-            if _an_sys and not _legacy_local_chatml:
-                _an_sys = re.sub(r'<\|im_start\|>\w*', '', _an_sys)
-                _an_sys = re.sub(r'<\|im_end\|>', '', _an_sys).strip()
-                _an_sys = substitute_placeholders(_an_sys, _char_label, _user_label)
-                if _an_sys:
-                    messages[0]["content"] += f"\n\n[OOC: Author note — {_an_sys}]"
-                    _gemma4_system_extras.append(f"[OOC: Author note — {_an_sys}]")
-                    print(f"✅ Author's Note appended to system block ({len(_an_sys)} chars)")
+            # is rewritten in Stage 5.) The Author's Note itself is appended just
+            # below, outside this example-dialogue block.
+            pass
 
             # Example dialogue is NOT appended here. It is parsed above and
             # appended later as a delimited <STYLE_EXAMPLES> block at the
             # system tail, after time/session anchors.
+
+    # ✅ Author's Note in the system block — for every card, with or without example
+    # dialogue. ⚠️ Traced 2026-10-24 (isolation audit): this append sat inside the
+    # example-dialogue block above, so on the generic chat-completions path (Gemma 3,
+    # Llama/Mistral templates, unlisted own-template models) and for cloud providers a
+    # card without example dialogue sent NO Author's Note — a context source that
+    # depended on the model family and an unrelated card field. Legacy ChatML has its
+    # own reply-packet note and Gemma 4 its own system-tail note below; Ministral
+    # subtracts this packet from its assembled text, so no family gets it twice.
+    if messages and messages[0].get("role") == "system":
+        _an_sys = _effective_author_note
+        if _an_sys and not _legacy_local_chatml and not _gemma4_intent_path:
+            _an_sys = re.sub(r'<\|im_start\|>\w*', '', _an_sys)
+            _an_sys = re.sub(r'<\|im_end\|>', '', _an_sys).strip()
+            _an_sys = substitute_placeholders(_an_sys, _char_label, _user_label)
+            if _an_sys:
+                messages[0]["content"] += f"\n\n[OOC: Author note — {_an_sys}]"
+                _gemma4_system_extras.append(f"[OOC: Author note — {_an_sys}]")
+                print(f"✅ Author's Note appended to system block ({len(_an_sys)} chars)")
 
     # 🕐 CURRENT LOCAL TIME — injected near the end of the system block so the
     # current-time signal sits close to the conversation turns. Date-only at the
@@ -17547,6 +19244,22 @@ def chat():
     # time into the date-only prefix in utils/session_handler.py.
     # Fake example-dialogue turns are inserted into messages[] right after
     # this block (NOT appended to the system message).
+    # Gemma 4 Response Intent: both stored notes (character, then this chat) or
+    # the one-turn override, for every card — with or without example dialogue.
+    # Recorded in the system tail like the Author's Note above; when the
+    # thought-channel prefill applies (decided below with the reasoning state)
+    # the transports send it there instead and leave this copy out.
+    _gemma4_intent = ""
+    _gemma4_intent_extra = ""
+    if _gemma4_intent_path and messages and messages[0].get("role") == "system":
+        _gemma4_intent = _gemma4_response_intent_text(
+            substitute_placeholders(_response_intent_note, _char_label, _user_label))
+        if _gemma4_intent:
+            _gemma4_intent_extra = f"[OOC: Author note — {_gemma4_intent}]"
+            messages[0]["content"] += "\n\n" + _gemma4_intent_extra
+            _gemma4_system_extras.append(_gemma4_intent_extra)
+            print(f"✅ Gemma 4 Response Intent recorded ({len(_gemma4_intent)} chars)", flush=True)
+
     _time_base = messages[0]["content"] if messages and messages[0].get("role") == "system" else None
     _append_current_time(messages)
     if _time_base is not None:
@@ -18215,7 +19928,7 @@ def chat():
     if _suspect_msgs:
         print(f"⚠️ {len(_suspect_msgs)} message(s) contain embedded ChatML/role markers:", flush=True)
         for idx, role, needle, preview in _suspect_msgs[:6]:
-            print(f"   msg #{idx} ({role}) has {repr(needle)}: {repr(preview)}", flush=True)
+            print(f"   msg #{idx} ({role}) has {repr(needle)}: {_redact(preview)}", flush=True)
 
     if _diag_verbose:
         print("\n" + "="*60, flush=True)
@@ -18427,7 +20140,7 @@ def chat():
             )
         if _qwen35_intent_prompt is not None:
             prompt = _qwen35_intent_prompt
-            print(f"🧭 Qwen3.5 Response Intent render tail: {prompt[-(len(_qwen35_intent) + 60):]!r}", flush=True)
+            print(f"🧭 Qwen3.5 Response Intent render tail: {_redact(prompt[-(len(_qwen35_intent) + 60):], None)}", flush=True)
         else:
             prompt, _qwen35_render_source = _render_qwen35_prompt(_qwen35_messages, enable_thinking=False)
         if continue_prefix:
@@ -18480,7 +20193,8 @@ def chat():
               "the chat-completions request is logged as GEMMA4_FINAL_REQUEST) =====")
     else:
         print("\n===== FINAL PROMPT SENT TO MODEL =====")
-    print(prompt[:1500])  # print first 1500 chars for sanity check
+    # First 1500 chars for a sanity check, with verbose diagnostics only (log_privacy).
+    print(prompt[:1500] if _log_privacy.content_logging_enabled() else f"<{len(prompt)} chars>")
     print("======================================\n")
 
     def _project_instruction_packet():
@@ -18532,6 +20246,29 @@ def chat():
     sampling = load_sampling_settings()
     _show_extended_thinking = bool(sampling.get("anthropic_thinking", False))
     _local_reasoning_enabled = _llama_reasoning_enabled(sampling.get("llama_args", {}))
+
+    # Gemma 4 Response Intent delivery for this turn, shared by the text and image
+    # transports: the thought-channel prefill, or (when it cannot apply) the copy
+    # already in the system tail. Never both.
+    _gemma4_intent_applied = ""
+    if _gemma4_intent:
+        _gemma4_intent_skip = _gemma4_response_intent_skip_reason(
+            _gemma4_intent, continue_prefix, _local_reasoning_enabled,
+            _req_settings.get("gemma4_response_intent", True), (CURRENT_MODEL,),
+        )
+        if _gemma4_intent_skip:
+            print(f"🧭 Gemma 4 Response Intent: NOT APPLIED ({_gemma4_intent_skip}) "
+                  "— the note stays in the system message", flush=True)
+        else:
+            _gemma4_intent_applied = _gemma4_intent
+            print(f"🧭 Gemma 4 Response Intent: APPLIED ({len(_gemma4_intent)} chars) — "
+                  "this turn's closed thought (assistant prefill), not system text", flush=True)
+    # The system-tail additions each Gemma 4 transport re-attaches: without the
+    # note when the prefill carries it.
+    _gemma4_extras_for_turn = [
+        _e for _e in _gemma4_system_extras
+        if not (_gemma4_intent_applied and _e == _gemma4_intent_extra)
+    ]
 
     # Keep a hash-only source inventory request-local. The actual content is
     # recorded only by the opt-in final-POST capture; these entries explain
@@ -18731,7 +20468,7 @@ def chat():
         _sys_content = _nuke_chatml_vision(system_text + ("\n" + memory if memory else ""))
         _vision_system = _gemma4_system_with_style_examples(
             _gemma4_system_with_extras(
-                _sys_content, [_nuke_chatml_vision(_e) for _e in _gemma4_system_extras]),
+                _sys_content, [_nuke_chatml_vision(_e) for _e in _gemma4_extras_for_turn]),
             _nuke_chatml_vision(_style_examples_system_block))
         _final_chat = _apply_system_role_policy(_vision_system, _final_chat, "image turn")
         # Step 4: the text request's [OOC] packet (Global PHI, Character PHI, Character
@@ -18739,11 +20476,14 @@ def chat():
         # style reminder, per-turn directives), ahead of the user's words in the final turn.
         _vision_packet = _nuke_chatml_vision("\n\n".join(_reply_instr_items).strip())
         _final_chat = _prepend_to_last_user_message(_final_chat, _vision_packet, "image turn [OOC]")
+        if _gemma4_intent_applied:
+            # Gemma 4 Response Intent: the closed thought after the image turn.
+            _final_chat = _final_chat + [_gemma4_response_intent_prefill(_gemma4_intent_applied)]
         print("✅ VISION ROLES AFTER CLEANUP:", [m["role"] for m in _final_chat], flush=True)
         if _is_gemma4_native:
             print(_gemma4_request_summary(
                 _final_chat, _nuke_chatml_vision(_style_examples_system_block),
-                [_nuke_chatml_vision(_e) for _e in _gemma4_system_extras]), flush=True)
+                [_nuke_chatml_vision(_e) for _e in _gemma4_extras_for_turn]), flush=True)
             _gemma4_log_packet_budget(_vision_packet, _gemma4_packet_reserve)
         vision_messages = _final_chat
         if _qwen35_messages is not None:
@@ -18783,6 +20523,10 @@ def chat():
             _vision_reasoning_for_turn,
             ministral_native=_vision_is_ministral,
         )
+        if _gemma4_intent_applied:
+            # The server echoes a prefilled thought back; split mode keeps it in
+            # delta.reasoning_content (hidden) instead of the visible reply.
+            vision_payload = dict(vision_payload, reasoning_format="deepseek")
 
         print("\n🧩 VISION PAYLOAD SENDING TO MODEL:", flush=True)
         print(f"  Messages count: {len(vision_messages)}", flush=True)
@@ -18796,14 +20540,30 @@ def chat():
                 _has_vs = any(p.get('type')=='text' and 'vision_start' in p.get('text','') for p in _dc)
                 print(f"  [{_di}] {_dm['role']}: parts={_part_types} vision_start={_has_vs}", flush=True)
             else:
-                print(f"  [{_di}] {_dm['role']}: {str(_dc)[:80]}", flush=True)
+                print(f"  [{_di}] {_dm['role']}: {_redact(str(_dc), 80)}", flush=True)
+
+        # Token Monitor: this transport published nothing, so an image turn kept
+        # showing the previous turn's prompt and documents. Counted text-only
+        # (image tokens are encoded server-side); the reply length is unchanged.
+        try:
+            _publish_prompt_token_stats(
+                _native_messages_prompt_token_count(
+                    dict(vision_payload, messages=_messages_without_media(vision_messages))),
+                _ctx_size_req, vision_payload.get("max_tokens"),
+                _temp_convo_posttrim, max(0, _temp_convo_pretrim - _temp_convo_posttrim),
+                vision_payload, provenance=_global_document_monitor_provenance,
+                context_sources=_monitor_context_sources(locals().get("_manifest")),
+                image_tokens_excluded=True,
+            )
+        except Exception as _vision_monitor_exc:
+            print(f"WARNING: Vision token monitor update failed: {_vision_monitor_exc!r}", flush=True)
 
         try:
             return Response(
                 stream_with_context(_finish_response(stream_vision_response(
                     vision_payload,
                     show_thinking=_show_extended_thinking,
-                ))),
+                ), intent=_gemma4_intent_applied)),
                 content_type="text/event-stream; charset=utf-8",
             )
         except Exception as e:
@@ -18933,7 +20693,7 @@ def chat():
             # independent and the local-path read is intentionally left alone.
             _oai_use_web_search = (
                 char_data.get("use_web_search", False)
-                and not automatic_event and not _mellum_diag_active
+                and not automatic_event
             )
 
             try:
@@ -18952,6 +20712,11 @@ def chat():
                             presence_penalty  = sampling.get("presence_penalty", 0.0),
                             user_input        = user_input,
                             stream_fn         = _oai_stream_fn,
+                            search_route_text = _search_route_text,
+                            search_names      = _search_names,
+                            search_history    = _search_history,
+                            auto_search       = bool(search_grounding.card_auto_searches(char_data)
+                                                     and not project_rp_mode and _local_doc_result is None),
                         ))),
                         content_type="text/event-stream; charset=utf-8",
                     )
@@ -18990,7 +20755,9 @@ def chat():
                         presence_penalty  = sampling.get("presence_penalty", 0.0),
                     ):
                         _rolling += _chunk
-                        _ti = _rolling.find(_TAG)
+                        # A tag in code, quotes or generated training material is data.
+                        _tm = search_grounding.find_search_tag(_rolling)
+                        _ti = _tm.start() if _tm else -1
                         if _ti != -1:
                             # Full tag present — emit any prose before it that hasn't
                             # been yielded yet, then strip the tag + everything after,
@@ -19095,7 +20862,7 @@ def chat():
 
             _ant_use_web_search = (
                 char_data.get("use_web_search", False)
-                and not automatic_event and not _mellum_diag_active
+                and not automatic_event
             )
             try:
                 if _ant_use_web_search:
@@ -19113,6 +20880,11 @@ def chat():
                             system      = _ant_system,
                             thinking        = _ant_thinking,
                             thinking_budget = _ant_think_budget,
+                            search_route_text = _search_route_text,
+                            search_names      = _search_names,
+                            search_history    = _search_history,
+                            auto_search       = bool(search_grounding.card_auto_searches(char_data)
+                                                     and not project_rp_mode and _local_doc_result is None),
                         ))),
                         content_type="text/event-stream; charset=utf-8",
                     )
@@ -19149,7 +20921,9 @@ def chat():
                         thinking_budget = _ant_think_budget,
                     ):
                         _rolling += _chunk
-                        _ti = _rolling.find(_TAG)
+                        # A tag in code, quotes or generated training material is data.
+                        _tm = search_grounding.find_search_tag(_rolling)
+                        _ti = _tm.start() if _tm else -1
                         if _ti != -1:
                             if _ti > _yielded:
                                 yield _rolling[_yielded:_ti]
@@ -19226,7 +21000,14 @@ def chat():
         _ministral_prompt_mode = _ministral_prompt_mode_setting(_st)
         use_web_search = (
             char_data.get("use_web_search", False)
-            and not automatic_event and not _mellum_diag_active
+            and not automatic_event
+        )
+        # Automatic current-topic search (search_grounding.card_auto_searches:
+        # on for search-enabled cards unless switched off). Never on roleplay
+        # projects or on a turn the document tool handled.
+        _auto_search_this_turn = bool(
+            use_web_search and search_grounding.card_auto_searches(char_data)
+            and not project_rp_mode and _local_doc_result is None
         )
         _use_messages_api = (
             _chat_template in ('jinja', 'qwen')
@@ -19262,6 +21043,10 @@ def chat():
         if _use_messages_api:
             # ── Messages array path (Gemma 4 / jinja models) ──
             print("🔀 TEXT via /v1/chat/completions (jinja/non-ChatML model)", flush=True)
+            # The shared search stream also serves non-Ministral messages-API
+            # models. Their rebuilt search turn starts from the typed input;
+            # native Ministral replaces this below with its normalized copy.
+            _ministral_provider_current_text = user_input
 
             import re as _cr
             def _nuke_chatml(text):
@@ -19868,7 +21653,7 @@ def chat():
                 _text_messages = _compose_template_messages(
                     _gemma4_system_with_style_examples(
                         _gemma4_system_with_extras(
-                            _sys_content, [_nuke_chatml(_e) for _e in _gemma4_system_extras]),
+                            _sys_content, [_nuke_chatml(_e) for _e in _gemma4_extras_for_turn]),
                         _nuke_chatml(_style_examples_system_block)),
                     _text_messages, "text turn",
                 )
@@ -19886,13 +21671,17 @@ def chat():
                 _text_messages = _text_messages + continuation_turns(
                     continue_head, continue_prefix, neutralize_chatml_tokens)
                 _hwui_g._continue_by_messages_prefix = data.get("continue_prefix", "")
+            if _gemma4_intent_applied:
+                # Gemma 4 Response Intent: this turn's closed thought, after the
+                # reply packet and the user's words — always the LAST message.
+                _text_messages = _text_messages + [_gemma4_response_intent_prefill(_gemma4_intent_applied)]
             print(f"🧹 ChatML nuked from {len(_text_messages)} messages", flush=True)
             if _is_gemma4_native:
                 # What is actually sent (the ChatML dump above is an intermediate
                 # assembly on this transport), and the example budget check: the
                 # history trim reserved _ex_overhead_examples for the block.
                 _gemma4_style_block = _nuke_chatml(_style_examples_system_block)
-                _gemma4_extras_sent = [_nuke_chatml(_e) for _e in _gemma4_system_extras]
+                _gemma4_extras_sent = [_nuke_chatml(_e) for _e in _gemma4_extras_for_turn]
                 print(_gemma4_request_summary(_text_messages, _gemma4_style_block, _gemma4_extras_sent), flush=True)
                 _gemma4_system_sent = next(
                     (str(_m.get("content", "")) for _m in _text_messages if _m.get("role") == "system"), "")
@@ -19976,7 +21765,7 @@ def chat():
                 ministral_native=_is_ministral_model,
                 native_guidance_tail="\n\n".join(
                     part for part in (_character_note_packet, _active_native_governor) if part
-                ) if _is_ministral_model and not _mellum_diag_active else "",
+                ) if _is_ministral_model else "",
             )
             if _ministral_intent_applied:
                 # The server reports a prefilled assistant's reasoning back in
@@ -19986,27 +21775,38 @@ def chat():
                 # server's launch default. (Reasoning is off on every turn that
                 # gets here, so there is no real reasoning to split.)
                 payload["reasoning_format"] = "deepseek"
-            if _is_ministral_model and not _native_ministral_image_turn:
-                _native_prompt_tokens = _native_messages_prompt_token_count(payload)
+            if _gemma4_intent_applied:
+                # Same for the Gemma 4 prefilled thought (thinking is off here too).
+                payload["reasoning_format"] = "deepseek"
+            # One accounting step for every /v1/chat/completions family (Gemma 4,
+            # Ministral, Qwen3.5 messages, own-template jinja): count the rendered
+            # prompt, keep prompt + reply inside the slot, publish the monitor.
+            # Before 2026-10-24 this ran for Ministral only, so every other family
+            # sent its full max_tokens whatever the prompt size and left the Token
+            # Monitor at "----". Image turns are counted text-only (image tokens are
+            # not known before the server encodes them) and keep their requested
+            # reply length, as before.
+            _native_count_payload = (
+                dict(payload, messages=_messages_without_media(payload.get("messages")))
+                if _native_ministral_image_turn else payload
+            )
+            _native_prompt_tokens = _native_messages_prompt_token_count(_native_count_payload)
+            if not _native_ministral_image_turn:
                 payload = _cap_native_messages_max_tokens(
                     payload,
                     _ctx_size_req,
                     prompt_tokens=_native_prompt_tokens,
                 )
-                try:
-                    _LAST_TOKEN_STATS.update({
-                        "prompt_tokens": _native_prompt_tokens,
-                        "ctx_size": _ctx_size_req,
-                        "n_predict": payload["max_tokens"],
-                        "convo_kept": _temp_convo_posttrim,
-                        "convo_dropped": max(0, _temp_convo_pretrim - _temp_convo_posttrim),
-                        "model": CURRENT_MODEL,
-                        "last_gen": None,
-                        "last_eval": None,
-                        "stop_reason": None,
-                    })
-                except Exception as exc:
-                    print(f"WARNING: Native token monitor update failed: {exc!r}", flush=True)
+            try:
+                _publish_prompt_token_stats(
+                    _native_prompt_tokens, _ctx_size_req, payload.get("max_tokens"),
+                    _temp_convo_posttrim, max(0, _temp_convo_pretrim - _temp_convo_posttrim),
+                    payload, provenance=_global_document_monitor_provenance,
+                    context_sources=_monitor_context_sources(locals().get("_manifest")),
+                    image_tokens_excluded=bool(_native_ministral_image_turn),
+                )
+            except Exception as exc:
+                print(f"WARNING: Native token monitor update failed: {exc!r}", flush=True)
             if _is_ministral_model:
                 try:
                     _ministral_payload_path = os.path.join(
@@ -20026,12 +21826,8 @@ def chat():
                 except Exception as _xpe:
                     print(f"Could not write exact Ministral payload: {_xpe!r}", flush=True)
             # Native/local Messages API requests return before the raw-prompt
-            # monitor snapshot below. Publish document state from the literal
-            # provider-facing payload here so Ministral/Jinja turns do not show
-            # a stale or empty Injected Documents panel.
-            _update_injected_documents_monitor(
-                payload, provenance=_global_document_monitor_provenance
-            )
+            # monitor snapshot below; their snapshot (documents included) was
+            # published from the literal provider-facing payload above.
             if _is_ministral_model and locals().get("_ministral_st_transport"):
                 # Dev A/B LEAN_ST: the payload is complete and identical to LEAN.
                 # The marker routes it (and the post-search rebuild, which copies
@@ -20072,13 +21868,17 @@ def chat():
                     )
                     else None
                 )
-                if _is_ministral_model and use_web_search and not _native_ministral_image_turn:
+                if use_web_search and not locals().get("_native_ministral_image_turn", False):
                     _messages_stream = (
                         stream_ministral_web_search_response(
                             payload,
                             user_input,
                             search_route_text=_search_route_text,
                             provider_user_text=_ministral_provider_current_text,
+                            auto_search=_auto_search_this_turn,
+                            search_history=_search_history,
+                            ctx_size=_ctx_size_req,
+                            search_names=_search_names,
                             raw_capture_path=_raw_ministral_capture_path,
                             show_thinking=_show_extended_thinking,
                             request_id=_my_req_id,
@@ -20091,6 +21891,10 @@ def chat():
                                 user_input,
                                 search_route_text=_search_route_text,
                                 provider_user_text=_ministral_provider_current_text,
+                                auto_search=_auto_search_this_turn,
+                                search_history=_search_history,
+                                ctx_size=_ctx_size_req,
+                                search_names=_search_names,
                                 show_thinking=True,
                                 request_id=_my_req_id,
                                 trace_context=_llama_trace_context,
@@ -20101,6 +21905,10 @@ def chat():
                                 user_input,
                                 search_route_text=_search_route_text,
                                 provider_user_text=_ministral_provider_current_text,
+                                auto_search=_auto_search_this_turn,
+                                search_history=_search_history,
+                                ctx_size=_ctx_size_req,
+                                search_names=_search_names,
                                 request_id=_my_req_id,
                                 trace_context=_llama_trace_context,
                             )
@@ -20162,7 +21970,7 @@ def chat():
                 _messages_response = Response(
                     stream_with_context(_finish_response(
                         _messages_stream,
-                        intent=_ministral_intent_applied,
+                        intent=_ministral_intent_applied or _gemma4_intent_applied,
                         governor=_active_native_governor,
                     )),
                     content_type="text/event-stream; charset=utf-8",
@@ -20206,26 +22014,12 @@ def chat():
         # the post-trim history counts. Reply-side fields (last_gen) are filled
         # in later by stream_model_response. Best-effort, never fatal.
         try:
-            _mon_kept = _temp_convo_posttrim
-            _mon_dropped = max(0, _temp_convo_pretrim - _temp_convo_posttrim)
-            _mon_documents = _update_injected_documents_monitor(
-                prompt, provenance=_global_document_monitor_provenance
+            _publish_prompt_token_stats(
+                _prompt_real_est, _ctx_size_live, _n_predict,
+                _temp_convo_posttrim, max(0, _temp_convo_pretrim - _temp_convo_posttrim),
+                prompt, provenance=_global_document_monitor_provenance,
+                context_sources=_monitor_context_sources(locals().get("_manifest")),
             )
-            _LAST_TOKEN_STATS.update({
-                "prompt_tokens": _prompt_real_est,
-                "ctx_size": _ctx_size_live,
-                "n_predict": _n_predict,
-                "convo_kept": _mon_kept,
-                "convo_dropped": _mon_dropped,
-                "injected_documents": _mon_documents,
-                "model": CURRENT_MODEL,
-                "ts": time.time(),
-                # reply-side fields cleared so a fresh turn doesn't show the
-                # previous turn's generated count until this turn completes.
-                "last_gen": None,
-                "last_eval": None,
-                "stop_reason": None,
-            })
         except Exception:
             pass
 
@@ -20375,7 +22169,14 @@ def chat():
         )
         print(f"🩺 PAYLOAD → llama.cpp: {json.dumps(_log_payload)}", flush=True)
 
-        use_web_search = char_data.get("use_web_search", False) and not automatic_event and not _mellum_diag_active
+        use_web_search = char_data.get("use_web_search", False) and not automatic_event
+        # Automatic current-topic search (search_grounding.card_auto_searches:
+        # on for search-enabled cards unless switched off). Never on roleplay
+        # projects or on a turn the document tool handled.
+        _auto_search_this_turn = bool(
+            use_web_search and search_grounding.card_auto_searches(char_data)
+            and not project_rp_mode and _local_doc_result is None
+        )
 
         # --------------------------------------------------
         # CHAT HISTORY SEARCH — intent-based, always-on
@@ -20404,7 +22205,7 @@ def chat():
         _web_intent_bypass = bool(_WEB_INTENT_RE.search(_cs_user_msg))
         if _web_intent_bypass:
             print(f"🌐 Web-intent bypass — skipping chat-search classifier for: "
-                  f"{repr(_cs_user_msg[:80])}", flush=True)
+                  f"{_redact(_cs_user_msg, 80)}", flush=True)
 
         # Chat history search — only fires when an EXPLICIT search verb is present.
         # Uses _classify_chat_search_intent (defined near do_chat_search) so the
@@ -20415,7 +22216,7 @@ def chat():
         # suppresses — the passive session summary in the system block handles it.
         # ⚠️ Do not revert to the old recall-verb-as-trigger logic. (changes.md.)
         # When the web-intent bypass fired, force-skip the classifier (web wins).
-        if automatic_event or _mellum_diag_active:
+        if automatic_event:
             _should_chat_search, _recall_suppressed_search = False, False
         elif _web_intent_bypass:
             _should_chat_search, _recall_suppressed_search = False, False
@@ -20429,7 +22230,7 @@ def chat():
             )
 
         if _should_chat_search:
-            print(f"🗂️ Chat search intent detected: {repr(_cs_user_msg[:80])}", flush=True)
+            print(f"🗂️ Chat search intent detected: {_redact(_cs_user_msg, 80)}", flush=True)
 
             # Extract a clean search query from the user message
             # Strip the recall preamble — keep the actual topic
@@ -20447,9 +22248,11 @@ def chat():
             if len(_cs_query) < 4:
                 _cs_query = _cs_user_msg
 
-            print(f"🗂️ Chat search query: {repr(_cs_query)}", flush=True)
+            print(f"🗂️ Chat search query: {_redact(_cs_query)}", flush=True)
 
-            _cs_results, _cs_err = do_chat_search(_cs_query, current_filename=data.get("current_chat_filename", "") or None)
+            _cs_results, _cs_err = do_chat_search(_cs_query, current_filename=data.get("current_chat_filename", "") or None,
+                                                  character=character_name,
+                                                  scope=context_scope.chat_search_scope(char_data))
 
             def _chat_search_intent_stream():
                 import re as _csre2
@@ -20602,37 +22405,39 @@ def chat():
         # scope here. (changes.md — Option A explicit-tag fallback.)
         def _run_search_and_reprompt(query):
             import re as _re
-            print(f"\U0001f50d Web search triggered: {query}", flush=True)
+            print(f"\U0001f50d Web search triggered: {_redact(query)}", flush=True)
             yield "\n\n\U0001f50d *Searching...*\n\n"
 
             res = do_search(query)
+            _provider_res = res
+            # A failed search is not "nothing found": the zero-results note
+            # below told the model the topic had no information (messages
+            # path parity, 25 Oct).
+            if not isinstance(res, dict) or res.get("error"):
+                print("❌ Search provider failed; no verified results will be shown", flush=True)
+                yield "⚠️ Web search failed. No verified results are available; please try again later."
+                return
+            res, _relevant = search_grounding.filter_relevant(query, res)
+            if not _relevant:
+                print("\U0001f50d Search results did not match the query; not passed to the model", flush=True)
+                yield search_grounding.IRRELEVANT_NOTICE
+                return
             results_block = format_search_results(query, res)
-            has_results = bool(res.get("summary") or res.get("top_text") or res.get("pages"))
+            # Snippets alone are evidence too (pages can fail to fetch).
+            has_results = bool(res.get("summary") or res.get("top_text") or res.get("pages") or res.get("results"))
             print(f"\U0001f50d Search done. has_results={has_results}", flush=True)
-            print(f"   summary={repr(res['summary'][:120])}", flush=True)
+            print(f"   summary={_redact(res['summary'])}", flush=True)
             print(f"   top_url={res['top_url']}", flush=True)
             print(f"   top_text_len={len(res['top_text'])}", flush=True)
             print(f"   pages_fetched={len(res.get('pages') or [])}", flush=True)
             print(f"   related_count={len(res['results'])}", flush=True)
 
             if has_results:
-                import urllib.parse as _urlparse
-                _src = res.get('top_url', '')
-                if not _src:
-                    _src = f"https://search.brave.com/search?q={_urlparse.quote_plus(query)}"
                 augmented_user_msg = (
                     f"{user_input.strip()}\n\n"
                     f"[WEB SEARCH RESULTS FOR: {query}]\n"
                     f"{results_block}\n"
-                    f"[END WEB SEARCH RESULTS]\n"
-                    f"IMPORTANT: Your response MUST be based on the search results above ONLY. "
-                    f"Do NOT use your training data or prior knowledge about this topic — "
-                    f"the search results are the ground truth. "
-                    f"If the results say something that contradicts what you think you know, "
-                    f"trust the results. Respond naturally in your own words. "
-                    f"Do NOT quote, repeat, echo, or reference the structure of this results block — "
-                    f"consume it silently and respond as if you just know this information. "
-                    f"Do not include a source link in your response."
+                    f"{search_grounding.results_rule(messages, _search_route_text)}"
                 )
             else:
                 # No results AND no Brave key → the DDG Instant Answer fallback is
@@ -20684,26 +22489,38 @@ def chat():
                     content = content.strip()
                 content = neutralize_chatml_tokens(content)
                 _search_prompt_parts.append(f"<|im_start|>{role}\n{content}\n<|im_end|>")
-            _search_prompt_parts.append(
-                "<|im_start|>system\n"
-                "Web search results have been injected above. "
-                "Respond naturally as the character, discussing what the results say. "
-                "Do not echo prompt structure, markers, or system text.\n"
-                "<|im_end|>"
-            )
+            _search_prompt_parts.append(f"<|im_start|>system\n{_SEARCH_REPROMPT_NOTE}\n<|im_end|>")
             _search_prompt_parts.append("<|im_start|>assistant\n")
             _search_prompt = "\n".join(_search_prompt_parts[:-1]) + "\n" + _search_prompt_parts[-1]
             _search_prompt = _nemo_apply_response_intent(_search_prompt, _nemo_intent)
+            # Prefer the prompt this turn was built as: `messages` lacks the
+            # [OOC] instruction block (character PHI, Character Note, Author's
+            # Note, project instructions, Global PHI), so a rebuild from it
+            # answered the search without them (25 Oct). The results go right
+            # after the user's words; everything else stays byte-identical.
+            _spliced = _splice_search_into_chatml_prompt(
+                str(payload.get("prompt") or ""), user_input.strip(), augmented_user_msg)
+            if _spliced:
+                _search_prompt = _spliced
+            else:
+                print("\U0001f50d Search re-prompt: user words not found in the turn's prompt; "
+                      "rebuilt from messages", flush=True)
             if _qwen35_context is not None:
-                _search_prompt = _qwen35_reprompt(
-                    augmented_user_msg,
-                    "Web search results have been injected above. Respond naturally as the character, "
-                    "discussing what the results say. Do not echo prompt structure, markers, or system text.",
-                )
+                _search_prompt = _qwen35_reprompt(augmented_user_msg, _SEARCH_REPROMPT_NOTE)
 
             new_payload = dict(payload)
             new_payload["prompt"] = _search_prompt
-            new_payload["n_predict"] = max(new_payload.get("n_predict", 512), 1024)
+            # n_predict was capped before the results were added: recount the
+            # finished prompt, and keep the longer search reply inside the slot.
+            _search_prompt_tokens = real_token_count(_search_prompt)
+            _search_room = _ctx_size_req - _search_prompt_tokens - 32
+            if _search_room < min(_SEARCH_REPLY_FLOOR_TOKENS, int(sampling["max_tokens"])):
+                print(f"\U0001f50d Search prompt does not fit: {_search_prompt_tokens} tokens / "
+                      f"{_ctx_size_req} ctx; results not passed to the model", flush=True)
+                yield search_grounding.CONTEXT_FULL_NOTICE
+                return
+            new_payload["n_predict"] = min(max(new_payload.get("n_predict", 512), 1024), _search_room)
+            _search_reply_sampling(new_payload)
             _np = new_payload.get("n_predict", "?")
             print(f"\U0001f50d Search prompt length: ~{len(_search_prompt)//4} tokens, n_predict: {_np}", flush=True)
 
@@ -20749,16 +22566,7 @@ def chat():
                     yield _clean_line(_line_buf)
                 if has_results:
                     _full_response = "".join(_response_chunks)
-                    _pages = res.get("pages") or []
-                    _src_list = []
-                    if _pages:
-                        for p in _pages[:3]:
-                            u = p.get("url") or ""
-                            t = (p.get("title") or u).strip() or u
-                            if u and u not in _full_response:
-                                _src_list.append((u, t))
-                    elif _src and _src not in _full_response:
-                        _src_list.append((_src, _src))
+                    _src_list = search_grounding.source_links(res, _full_response)
 
                     if _src_list:
                         yield "\n\n"
@@ -20794,10 +22602,10 @@ def chat():
                 ).strip()
                 # Also strip the IMPORTANT instruction block if present
                 _user_msg = _re.sub(
-                    r'IMPORTANT: Your response MUST be based.*',
+                    r'(?:IMPORTANT: Your response MUST be based|These are real results returned by HWUI).*',
                     '', _user_msg, flags=_re.DOTALL
                 ).strip()
-                print(f"🔍 Search trigger check on: {repr(_user_msg[:100])}", flush=True)
+                print(f"🔍 Search trigger check on: {_redact(_user_msg, 100)}", flush=True)
 
                 # ── Search-trigger detection — three precision tiers ────────
                 # EXPLICIT triggers are unambiguous imperatives ("search for X",
@@ -20859,7 +22667,16 @@ def chat():
                 _explicit_pat = _WEB_SEARCH_EXPLICIT_RE
                 _factual_pat = r'(?!)'
                 _ambiguous_pat = r'(?!)'
-                _explicit_matches = list(_re.finditer(_explicit_pat, _user_msg, _re.IGNORECASE))
+                # Code, quoted tags and pasted training material are not the
+                # request (blanked in place, so match positions still index _user_msg).
+                _explicit_matches = list(_re.finditer(_explicit_pat, search_grounding.request_text(_user_msg),
+                                                      _re.IGNORECASE))
+                # "I don't think you want to look that up": nothing searches
+                # this turn, the model's own request included.
+                _declined = search_grounding.declined_lookup(_user_msg)
+                if _declined:
+                    _explicit_matches = []
+                    print("💬 Lookup declined by the user — no search this turn", flush=True)
                 _factual_matches = list(_re.finditer(_factual_pat, _user_msg, _re.IGNORECASE))
                 _ambiguous_matches = list(_re.finditer(_ambiguous_pat, _user_msg, _re.IGNORECASE))
 
@@ -20952,12 +22769,21 @@ def chat():
                 _should_search = False
                 _firing_trigger = None
                 _gate_query = None  # set when the intent gate supplies the query
+                _model_supplies_query = False  # a pronoun lookup that names nothing
 
                 # 1. EXPLICIT imperative (not self-referential) → search now.
                 for _m in _explicit_matches:
                     if not _is_self_ref_at(_user_msg, _m.start()):
                         _should_search = True
                         _firing_trigger = _m.group(0)
+                        # One query extractor for every local path: the topic
+                        # may come before the request ("… season two, episode
+                        # nine. Do you want to look that up"), or from an
+                        # earlier turn ("Search online then"). With none, the
+                        # model's own tag supplies the query instead of the
+                        # leftover words of the message.
+                        _gate_query = _ministral_runtime_search_query(_user_msg, _search_history, _search_names)
+                        _model_supplies_query = not _gate_query
                         break
                 if _should_search:
                     print(f"🔍 Explicit search request: {repr(_firing_trigger)}", flush=True)
@@ -20968,7 +22794,7 @@ def chat():
                         if _is_self_ref_at(_user_msg, _m.start()):
                             continue
                         if not _is_clause_start(_user_msg, _m.start()):
-                            print(f"💬 Factual pattern at non-clause-start (relative clause?), suppressed: {repr(_m.group(0))} in context {repr(_user_msg[max(0,_m.start()-25):_m.start()+25])}", flush=True)
+                            print(f"💬 Factual pattern at non-clause-start (relative clause?), suppressed: {repr(_m.group(0))} in context {_redact(_user_msg[max(0,_m.start()-25):_m.start()+25])}", flush=True)
                             continue
                         _should_search = True
                         _firing_trigger = _m.group(0)
@@ -20990,13 +22816,27 @@ def chat():
                         if _gate_ok:
                             _should_search = True
                             _gate_query = _gate_q
-                            print(f"🔍 Intent gate → SEARCH: {repr(_gate_q)}", flush=True)
+                            print(f"🔍 Intent gate → SEARCH: {_redact(_gate_q)}", flush=True)
                         else:
                             print(f"💬 Intent gate → NO_SEARCH "
-                                  f"({repr(_user_msg[:80])})", flush=True)
+                                  f"({_redact(_user_msg, 80)})", flush=True)
                     elif _explicit_matches or _ambiguous_matches:
                         print(f"💬 Self-referential context around trigger "
                               f"phrase(s) — suppressing search", flush=True)
+
+                # 1.6 Automatic current-topic search (per card). The regex
+                # pre-filter screens the message without a model call; only a
+                # candidate reaches the intent gate, which fails closed.
+                if not _should_search and _auto_search_this_turn and not _explicit_matches and not _declined:
+                    _auto_q = _auto_search_query(_user_msg)
+                    if _auto_q:
+                        _should_search = True
+                        _gate_query = _auto_q
+                # The same per-turn decision the native and cloud paths use for
+                # a search the model asks for itself.
+                _search_turn = search_grounding.SearchTurn(
+                    _user_msg, explicit=any(not _is_self_ref_at(_user_msg, _m.start()) for _m in _explicit_matches),
+                    automatic=_auto_search_this_turn, history=_search_history, names=_search_names)
 
                 # --- Local knowledge pre-check ---
                 _local_doc_hint = False  # set True when a doc match suppresses the search
@@ -21008,7 +22848,7 @@ def chat():
                 )
                 _EXPLICIT_ONLINE_RE = _WEB_SEARCH_EXPLICIT_RE
                 _explicit_online = _should_search and bool(
-                    _re.search(_EXPLICIT_ONLINE_RE, _user_msg, _re.IGNORECASE)
+                    _re.search(_EXPLICIT_ONLINE_RE, search_grounding.request_text(_user_msg), _re.IGNORECASE)
                 )
                 if _explicit_online:
                     print(f"🌐 Explicit online search phrase — skipping local knowledge check", flush=True)
@@ -21187,28 +23027,44 @@ def chat():
 
                     for chunk in stream_model_response(_run_payload, request_id=_my_req_id):
                         _ws_rolling += chunk
-                        _wsm = _re.search(r"\[WEB SEARCH:\s*(.+?)\]", _ws_rolling, _re.IGNORECASE)
+                        # A tag in code, quotes or generated training material is
+                        # data: it streams through untouched (never excised).
+                        _wsm = search_grounding.find_closed_search_tag(_ws_rolling)
                         if _wsm:
-                            # Gate already said NO this turn (we are inside
-                            # `if not _should_search`). A model-emitted search
-                            # tag here is a hallucinated tool call — suppress,
-                            # never honour. Excise from every buffer so the tag
-                            # can't leak and the detector can't re-fire, then
-                            # keep streaming the rest of the reply.
-                            _supp_query = _wsm.group(1).strip()
-                            print(
-                                "\n========================================================="
-                                "\n\U0001f6ab [WEB SEARCH:] TAG SUPPRESSED (gate said no)"
-                                f"\nUser message: {_user_msg[:200]!r}"
-                                f"\nModel wanted to search for: {_supp_query!r}"
-                                "\n=========================================================",
-                                flush=True,
-                            )
-                            _ws_rolling   = _re.sub(r"\[WEB SEARCH:\s*.+?\]", "", _ws_rolling, count=1, flags=_re.IGNORECASE)
-                            _post         = _re.sub(r"\[WEB SEARCH:\s*.+?\]", "", _post, flags=_re.IGNORECASE)
-                            _post         = _re.sub(r"\[WEB SEARCH:[^\]]*$", "", _post, flags=_re.IGNORECASE)
-                            _ooc_holdback = _re.sub(r"\[WEB SEARCH:\s*.+?\]", "", _ooc_holdback, flags=_re.IGNORECASE)
-                            _ooc_holdback = _re.sub(r"\[WEB SEARCH:[^\]]*$", "", _ooc_holdback, flags=_re.IGNORECASE)
+                            # HWUI planned no search this turn (we are inside
+                            # `if not _should_search`). The model's tag is a
+                            # proposal, decided by the same per-turn rule as the
+                            # native and cloud paths: it runs only on an explicit
+                            # or current-topic turn and when its query is about
+                            # this request. Otherwise it is suppressed: excised
+                            # from every buffer so it can't leak and the detector
+                            # can't re-fire, and the rest of the reply streams on.
+                            _supp_query = _wsm[1]
+                            _allowed, _why = _search_turn.authorise(_supp_query)
+                            if not _allowed:
+                                print(
+                                    "\n========================================================="
+                                    f"\n\U0001f6ab [WEB SEARCH:] TAG SUPPRESSED ({_why})"
+                                    f"\nUser message: {_redact(_user_msg, 200)}"
+                                    f"\nModel wanted to search for: {_redact(_supp_query)}"
+                                    "\n=========================================================",
+                                    flush=True,
+                                )
+                            # Remove this tag only; data tags elsewhere stay.
+                            _tag_text = _ws_rolling[_wsm[0]:_wsm[2]]
+                            _ws_rolling = _ws_rolling[:_wsm[0]] + _ws_rolling[_wsm[2]:]
+
+                            def _drop_live_tag(buf):
+                                buf = buf.replace(_tag_text, "", 1)
+                                _open = search_grounding.find_search_tag(buf)
+                                if _open and "]" not in buf[_open.start():]:
+                                    buf = buf[:_open.start()]   # its "]" was in this chunk
+                                return buf
+                            _post = _drop_live_tag(_post)
+                            _ooc_holdback = _drop_live_tag(_ooc_holdback)
+                            if _allowed:
+                                _ws_query = _supp_query
+                                break
                             continue
                         _emit = None
                         if _ooc_guard_active:
@@ -21225,7 +23081,7 @@ def chat():
                                 _block = _lead[:_close + 1]
                                 if _re.match(r'^\[\s*OOC\b', _block, _re.IGNORECASE):
                                     _rem = _lead[_close + 1:].lstrip('\r\n')
-                                    print(f"✂️ [_web_search_stream] Dropped leading OOC block: {_block[:80]!r}", flush=True)
+                                    print(f"✂️ [_web_search_stream] Dropped leading OOC block: {_redact(_block, 80)}", flush=True)
                                     _ooc_holdback = ""; _ooc_guard_active = False
                                     _emit = _rem if _rem else None
                                 else:
@@ -21241,6 +23097,10 @@ def chat():
                                 yield _post[:_safe]
                                 _post = _post[_safe:]
                     if _ws_query:
+                        # What the model wrote before its request, then the search.
+                        _pending = (_ooc_holdback if _ooc_guard_active else "") + _post
+                        if _pending.strip():
+                            yield _pending.rstrip()
                         yield from _run_search_and_reprompt(_ws_query)
                         return
                     if _ooc_guard_active and _ooc_holdback:
@@ -21307,9 +23167,14 @@ def chat():
                     else:
                         _q = _q[:120].rsplit(' ', 1)[0]
 
+                # Time words the cleaning dropped travel with the query so the
+                # provider's freshness filter still sees them.
+                _q = search_grounding.carry_time_words(_q, _user_msg)
                 # Brave rejects queries over ~400 chars (HTTP 422) — cap at 200
                 if len(_q) > 200:
                     _q = _q[:200].rsplit(' ', 1)[0]
+                if _model_supplies_query:
+                    _q = ""
 
                 if len(_q) > 2:
                     # Gate/heuristic produced a usable query — search directly via
@@ -21320,7 +23185,7 @@ def chat():
                     # "🔍 Explicit search request:" earlier, so only the true
                     # gate path is annotated here to avoid a misleading label.
                     if _gate_query:
-                        print(f"\U0001f50e Web search honoured (gate agreed): {_gate_query!r}", flush=True)
+                        print(f"\U0001f50e Web search honoured (gate agreed): {_redact(_gate_query)}", flush=True)
                     yield from _run_search_and_reprompt(_q)
                     return
 
@@ -21333,19 +23198,33 @@ def chat():
                     for chunk in stream_model_response(payload, request_id=_my_req_id):
                         _streamed.append(chunk)
                         _rolling = "".join(_streamed)
+                        # Tags in code, quotes or generated training material are data.
                         _match = (
-                            _re.search(r"\[WEB SEARCH:\s*(.+?)\]", _rolling, _re.IGNORECASE)
-                            if _re.search(_WEB_SEARCH_EXPLICIT_RE, _user_msg, _re.IGNORECASE)
-                            else None
+                            search_grounding.find_closed_search_tag(_rolling)
+                            if _search_turn.may_propose else None
                         )
                         if _match:
+                            # Before retrieval: the model's query must be about
+                            # this request (or the turns it refers back to).
+                            _allowed, _why = _search_turn.authorise(_match[1])
+                            if not _allowed:
+                                print(f"🔍 Model web-search request withheld ({_why}): {_redact(_match[1])}",
+                                      flush=True)
+                                _already = len("".join(_streamed[:-1]))   # this chunk was not yielded yet
+                                if _match[0] > _already:
+                                    yield _rolling[_already:_match[0]]
+                                yield search_grounding.PROPOSAL_WITHHELD_NOTICE
+                                return
                             _tag_found = True
-                            _search_query = _match.group(1).strip()
+                            _search_query = _match[1]
                             break  # stop streaming, go do the search
-                        _artifact = _re.search(
-                            r"\[\s*WEB\s+SEARCH(?:\s+(?:RESULT|RESULTS|QUERY))?\b",
-                            _rolling,
-                            _re.IGNORECASE,
+                        _artifact = next(
+                            (m for m in _re.finditer(
+                                r"\[\s*WEB\s+SEARCH(?:\s+(?:RESULT|RESULTS|QUERY))?\b",
+                                _rolling,
+                                _re.IGNORECASE,
+                            ) if not search_grounding.tag_is_data(_rolling, m.start())),
+                            None,
                         )
                         if _artifact:
                             safe = _rolling[:_artifact.start()].rstrip()
@@ -21439,9 +23318,13 @@ def chat():
                         # the tag. The forming-tag prefix is held in _tail by the
                         # normal path's _TAIL_LEN holdback, so it can't leak before
                         # this fires.
-                        if (not automatic_event and not _halted[0]
-                                and _re3_inner.search(r'\[\s*WEB\s+SEARCH\b', _rolling, _re3_inner.IGNORECASE)):
-                            _ws_tag_match = _re3_inner.search(r'\[\s*WEB\s+SEARCH\b', _rolling, _re3_inner.IGNORECASE)
+                        # A tag in code, quotes or generated training material is data.
+                        _ws_tag_match = None if (automatic_event or _halted[0]) else next(
+                            (m for m in _re3_inner.finditer(r'\[\s*WEB\s+SEARCH\b', _rolling, _re3_inner.IGNORECASE)
+                             if not search_grounding.tag_is_data(_rolling, m.start())),
+                            None,
+                        )
+                        if _ws_tag_match:
                             if _ws_tag_match:
                                 # Real prose before the tag. The client has already
                                 # received the whole stream EXCEPT the _TAIL_LEN
@@ -21490,7 +23373,7 @@ def chat():
                                 if _re3_inner.match(r'^\[\s*OOC\b', _lead_block, _re3_inner.IGNORECASE):
                                     # Confirmed OOC stage direction — drop block + trailing newline(s).
                                     _remainder = _stripped_lead[_close + 1:].lstrip('\r\n')
-                                    print(f"✂️ [_filtered_stream] Dropped leading OOC block: {_lead_block[:80]!r}", flush=True)
+                                    print(f"✂️ [_filtered_stream] Dropped leading OOC block: {_redact(_lead_block, 80)}", flush=True)
                                     _ooc_holdback[0] = ""
                                     _ooc_guard_active[0] = False
                                     if not _remainder:
@@ -21566,9 +23449,11 @@ def chat():
 
                     # Model emitted [CHAT SEARCH: ...] — do the search and re-prompt
                     if _cs_tag_query and not automatic_event:
-                        print(f"🗂️ Model-triggered chat search: {_cs_tag_query}", flush=True)
+                        print(f"🗂️ Model-triggered chat search: {_redact(_cs_tag_query)}", flush=True)
                         yield "\n\n🗂️ *Searching chat history...*\n\n"
-                        _cs_res, _cs_err = do_chat_search(_cs_tag_query, current_filename=current_chat_filename or None)
+                        _cs_res, _cs_err = do_chat_search(_cs_tag_query, current_filename=current_chat_filename or None,
+                                                          character=character_name,
+                                                          scope=context_scope.chat_search_scope(char_data))
                         if _cs_res:
                             _aug = (
                                 f"{user_input.strip()}\n\n{_cs_res}\n"
@@ -21665,7 +23550,7 @@ def chat():
                                     _lead_block2 = _stripped_lead2[:_close2 + 1]
                                     if _re3_inner.match(r'^\[\s*OOC\b', _lead_block2, _re3_inner.IGNORECASE):
                                         _remainder2 = _stripped_lead2[_close2 + 1:].lstrip('\r\n')
-                                        print(f"✂️ [_filtered_stream/re-prompt] Dropped leading OOC block: {_lead_block2[:80]!r}", flush=True)
+                                        print(f"✂️ [_filtered_stream/re-prompt] Dropped leading OOC block: {_redact(_lead_block2, 80)}", flush=True)
                                         _ooc_holdback2[0] = ""
                                         _ooc_guard_active2[0] = False
                                         if not _remainder2:
@@ -21809,6 +23694,8 @@ def token_stats():
         "convo_kept": stats.get('convo_kept'),
         "convo_dropped": stats.get('convo_dropped'),
         "injected_documents": stats.get('injected_documents') or [],
+        "context_sources": stats.get('context_sources') or [],
+        "image_tokens_excluded": bool(stats.get('image_tokens_excluded')),
         "model": stats.get('model') or model_seed,
         "gpu_layers": gpu_layers,
     })
@@ -21831,7 +23718,7 @@ def save_chat():
         print(f"\n🔍 SAVING MESSAGE:")
         print(f"   Filename: {filename}")
         print(f"   Newlines in model_msg: {newline_count}")
-        print(f"   First 100 chars: {model_msg[:100]}...")
+        print(f"   First 100 chars: {_redact(model_msg, 100)}")
         print()
 
         if not filename:
@@ -22319,17 +24206,9 @@ def _launch_llama_model_for_restore(model_ref, cfg, mmproj_path, lora_path):
 
 
 def _wait_for_llama_shutdown(timeout=10, port=None):
-    """Confirm llama-server has exited and, when requested, released its port."""
+    """Confirm this build's server released its port, or all servers stopped if unscoped."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        running = []
-        for proc in psutil.process_iter(['name']):
-            try:
-                if 'llama-server' in str(proc.info.get('name') or '').lower():
-                    running.append(proc)
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-        port_in_use = False
         if port is not None:
             try:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
@@ -22337,10 +24216,23 @@ def _wait_for_llama_shutdown(timeout=10, port=None):
                     port_in_use = probe.connect_ex(("127.0.0.1", int(port))) == 0
             except (OSError, ValueError, TypeError):
                 port_in_use = True
-        if not running and not port_in_use:
-            return
+            # Other HWUI builds may have their own llama-server on another
+            # port. A model swap only owns the configured port and must not
+            # wait for those unrelated processes to exit.
+            if not port_in_use:
+                return
+        else:
+            running = []
+            for proc in psutil.process_iter(['name']):
+                try:
+                    if 'llama-server' in str(proc.info.get('name') or '').lower():
+                        running.append(proc)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            if not running:
+                return
         time.sleep(0.25)
-    if port is not None and port_in_use:
+    if port is not None:
         raise RuntimeError(
             f"llama-server did not fully stop or release port {port}, so the model swap was cancelled."
         )
@@ -22631,7 +24523,7 @@ def image_generation_action():
                 "image_action",
             )
         if response.status_code != 200:
-            print(f"Image action decision returned HTTP {response.status_code}: {response.text[:500]}", flush=True)
+            print(f"Image action decision returned HTTP {response.status_code}: {_redact(response.text, 500)}", flush=True)
             return jsonify({"status": "ok", "action": None})
         content = str(response.json().get('choices', [{}])[0].get('message', {}).get('content', '')).strip()
         action = _parse_image_action_content(content)
@@ -24103,7 +25995,9 @@ def add_character_memory():
         path = os.path.join(mem_dir, f"{character.lower()}_memory.txt")
 
     needs_sep = os.path.exists(path) and os.path.getsize(path) > 0
-    entry = f"# Memory: {title}\nKeywords: {keywords}\n\n{body}"
+    kind = str(data.get("kind") or "").strip().lower()
+    kind_line = f"Kind: {_MEMORY_KIND_LESSON}\n" if kind == _MEMORY_KIND_LESSON else ""
+    entry = f"# Memory: {title}\n{kind_line}Keywords: {keywords}\n\n{body}"
     with open(path, "a", encoding="utf-8") as f:
         if needs_sep:
             f.write("\n\n")
@@ -24112,15 +26006,67 @@ def add_character_memory():
     return "OK", 200
 
 
+@app.route("/move_character_memory", methods=["POST"])
+def move_character_memory():
+    """Move one memory entry between a character's file and global_memory.txt.
+
+    The entry moves verbatim (title, Kind, Keywords, body), so a lesson stays a
+    lesson in either scope. `from` is "character" (default: to global) or
+    "global" (to the named character). Same files, same block format and the
+    same index scheme as /get_character_memory and /delete_character_memory.
+    """
+    data = request.get_json(silent=True) or {}
+    character = str(data.get("character") or "").strip()
+    source = str(data.get("from") or "character").strip().lower()
+    try:
+        index = int(data.get("index", -1))
+    except (TypeError, ValueError):
+        index = -1
+    from character_routes import valid_character_key
+    if source not in ("character", "global") or index < 0 \
+            or not character or character.lower() == "global" or not valid_character_key(character):
+        return "Invalid request", 400
+
+    mem_dir = os.path.join(os.path.dirname(__file__), "memories")
+    os.makedirs(mem_dir, exist_ok=True)
+    character_path = os.path.join(mem_dir, f"{character.lower()}_memory.txt")
+    global_path = os.path.join(mem_dir, "global_memory.txt")
+    src, dst = (character_path, global_path) if source == "character" else (global_path, character_path)
+
+    with _AUTO_MEMORY_LOCK:
+        if not os.path.exists(src):
+            return "No memory file", 404
+        with open(src, "r", encoding="utf-8") as f:
+            blocks = [b for b in f.read().split("# Memory:") if b.strip()]
+        if not (0 <= index < len(blocks)):
+            return "Index out of range", 400
+        moved = f"# Memory: {blocks.pop(index).strip()}"
+        existing = ""
+        if os.path.exists(dst):
+            with open(dst, "r", encoding="utf-8") as f:
+                existing = f.read().strip()
+        # Write the destination first: a failure between the two writes leaves
+        # the entry in both files rather than in neither.
+        with open(dst, "w", encoding="utf-8") as f:
+            f.write(f"{existing}\n\n{moved}" if existing else moved)
+        with open(src, "w", encoding="utf-8") as f:
+            f.write("\n\n".join(f"# Memory: {b.strip()}" for b in blocks))
+    return jsonify({"status": "moved", "to": "global" if source == "character" else "character"})
+
+
 def _active_project_is_roleplay():
     """Return True when the currently active project has RP mode enabled."""
     try:
         projects_dir = os.path.join(os.path.dirname(__file__), "projects")
-        state_path = os.path.join(projects_dir, "_active_project.json")
-        if not os.path.exists(state_path):
-            return False
-        with open(state_path, "r", encoding="utf-8") as f:
-            active_project = (json.load(f) or {}).get("active_project")
+        from project_routes import request_project_bound, get_active_project
+        if request_project_bound():
+            active_project = get_active_project()   # the request's own project
+        else:
+            state_path = os.path.join(projects_dir, "_active_project.json")
+            if not os.path.exists(state_path):
+                return False
+            with open(state_path, "r", encoding="utf-8") as f:
+                active_project = (json.load(f) or {}).get("active_project")
         if not active_project or re.search(r"[\\/]", active_project):
             return False
         config_path = os.path.join(
@@ -24140,11 +26086,15 @@ def _active_project_is_roleplay():
 def _auto_memory_capture_turn(character, user_text, assistant_text, recent_messages=None, user_name=None, force_save=False):
     """Capture one turn without depending on a second browser request."""
     character = str(character or "").strip()
-    user_name = re.sub(r"[\r\n|]+", " ", str(user_name or "Chris")).strip()[:80] or "Chris"
+    user_name = re.sub(r"[\r\n|]+", " ", str(user_name or "User")).strip()[:80] or "User"
     user_text = str(user_text or "").strip()[:4000]
-    assistant_text = str(assistant_text or "").strip()[:6000]
-    recent_messages = recent_messages or []
-    if not character or not user_text or re.search(r"[\\/]", character):
+    # Search display text is not part of what was said (see chat()).
+    assistant_text = search_grounding.strip_search_ui(str(assistant_text or "")).strip()[:6000]
+    recent_messages = search_grounding.strip_search_ui_from_history(
+        recent_messages if isinstance(recent_messages, list) else [])
+    from character_routes import valid_character_key
+    if not character or not user_text or re.search(r"[\\/]", character) \
+            or not valid_character_key(character):
         return {"status": "skipped", "reason": "invalid_request"}, 400
 
     # Diagnosing the two laundering incidents meant replaying the turn against
@@ -24189,7 +26139,25 @@ def _auto_memory_capture_turn(character, user_text, assistant_text, recent_messa
     if not explicit and not _AUTO_MEMORY_CANDIDATE_RE.search(user_text):
         return _skip("no_candidate", message=user_text[:120])
 
-    candidate = _auto_memory_legacy_tag(assistant_text) if explicit and not force_save else None
+    # A lesson is distilled from the user's own words by one short local call
+    # and validated; see _MEMORY_KIND_LESSON and _auto_memory_distil_lesson.
+    # Only an explicit request can make one. A message the model judges to be
+    # about the user's own life continues down the ordinary memory path.
+    candidate = None
+    if explicit and _auto_memory_is_lesson_request(user_text):
+        lesson, delimited = _auto_memory_lesson_source(user_text, recent_messages)
+        if not lesson:
+            return _skip("no_lesson_content", message=user_text[:120])
+        candidate, lesson_how = _auto_memory_distil_lesson(lesson, delimited, [user_name, character])
+        if lesson_how == "unclear":
+            _trace("skipped", "lesson_unclear", message=user_text[:120])
+            return {"status": "skipped", "reason": "lesson_unclear",
+                    "error": "I couldn't tell which lesson to keep, so nothing was saved. "
+                             "Try \"remember this lesson:\" followed by the lesson."}, 200
+        if lesson_how == "fallback":
+            _trace("note", "lesson kept as written (distillation unavailable)")
+    if candidate is None and explicit and not force_save:
+        candidate = _auto_memory_legacy_tag(assistant_text)
     if candidate is None:
         history_lines = []
         if isinstance(recent_messages, list):
@@ -24205,9 +26173,25 @@ def _auto_memory_capture_turn(character, user_text, assistant_text, recent_messa
                     )
                 history_lines.append(f"{role}: {str(content)[:1800]}")
         if force_save:
-            context_to_summarize = assistant_text or "\n".join(history_lines)
-            if user_text and user_text not in context_to_summarize:
-                context_to_summarize = f"{context_to_summarize}\n{user_name}: {user_text}".strip()
+            # What the user asked to keep, not the conversation around it. The
+            # pages send the last eight messages as assistant_text; summarising
+            # that turned "remember that my sister moved to Leeds" into a
+            # summary of whatever else had been discussed. The command's own
+            # content is the memory; a bare "remember this" means the most
+            # recent exchange only.
+            stated = _AUTO_MEMORY_COMMAND_PREFIX_RE.sub("", user_text).strip()
+            if len(re.findall(r"[A-Za-z0-9']+", stated)) >= 3:
+                context_to_summarize = f"{user_name}: {stated}"
+                if history_lines[:-1]:
+                    context_to_summarize += (
+                        "\n\nEarlier messages, only to understand words such as 'it' or 'that' "
+                        "above (do not save anything else from them):\n"
+                        + "\n".join(history_lines[:-1][-2:])
+                    )
+            else:
+                context_to_summarize = "\n".join(history_lines[-4:]) or assistant_text
+                if user_text and user_text not in context_to_summarize:
+                    context_to_summarize = f"{context_to_summarize}\n{user_name}: {user_text}".strip()
             classifier_prompt = (
                 "Write one saved memory for a private chat application.\n"
                 "Use the trained memory object format exactly. Do not use JSON. Do not use markdown.\n"
@@ -24268,7 +26252,10 @@ def _auto_memory_capture_turn(character, user_text, assistant_text, recent_messa
         candidate = _auto_memory_force_fallback_candidate(recent_messages, assistant_text, user_text, user_name)
         title = (_clean_auto_memory_title(candidate.get("title") or "Memory") or "Memory")[:80]
         summary = _clean_auto_memory_field(candidate.get("summary") or "")[:700]
-    summary = re.sub(r"^(?:the\s+user|user)\b", user_name, summary, flags=re.IGNORECASE)
+    # Facts name the user; a lesson keeps "the user" (a fallback lesson is
+    # stored as 'The user taught me: "…"', and distilled lessons carry no names).
+    if candidate.get("kind") != _MEMORY_KIND_LESSON:
+        summary = re.sub(r"^(?:the\s+user|user)\b", user_name, summary, flags=re.IGNORECASE)
     keywords_value = candidate.get("keywords") or []
     if isinstance(keywords_value, str):
         keywords_value = keywords_value.split(",")
@@ -24309,7 +26296,9 @@ def _auto_memory_capture_turn(character, user_text, assistant_text, recent_messa
     mem_dir = os.path.join(os.path.dirname(__file__), "memories")
     os.makedirs(mem_dir, exist_ok=True)
     path = os.path.join(mem_dir, f"{character.lower()}_memory.txt")
-    entry = f"# Memory: {title}\nKeywords: {', '.join(keywords)}\n\n{summary}"
+    kind = _MEMORY_KIND_LESSON if candidate.get("kind") == _MEMORY_KIND_LESSON else ""
+    entry = (f"# Memory: {title}\n" + (f"Kind: {kind}\n" if kind else "")
+             + f"Keywords: {', '.join(keywords)}\n\n{summary}")
     import hashlib
     undo_token = hashlib.sha256(entry.encode("utf-8")).hexdigest()
 
@@ -24332,8 +26321,9 @@ def _auto_memory_capture_turn(character, user_text, assistant_text, recent_messa
                 f.write("\n\n")
             f.write(entry)
 
-    _trace("saved", "passed the floor", **_verdict)
-    return {"status": "saved", "title": title, "undo_token": undo_token}, 200
+    _trace("saved", "passed the floor", kind=kind, **_verdict)
+    return {"status": "saved", "title": title, "undo_token": undo_token,
+            **({"kind": kind} if kind else {})}, 200
 
 
 @app.route("/auto_memory/capture", methods=["POST"])
@@ -24417,17 +26407,24 @@ def edit_character_memory():
     lines = new_content.splitlines()
     title_line = ""
     keywords_line = ""
+    kind_line = ""
     body_lines = []
     for i, line in enumerate(lines):
         if i == 0 and not line.lower().startswith("keywords:"):
-            title_line = line.strip()
+            # The edit box is pre-filled with "# Memory: <entry>"; without this
+            # every edit saved "# Memory: # Memory: <title>".
+            title_line = re.sub(r"^#\s*Memory:\s*", "", line.strip(), flags=re.IGNORECASE)
         elif line.lower().startswith("keywords:"):
             keywords_line = line.strip()
+        elif re.match(r"\s*kind\s*:", line, re.IGNORECASE):
+            kind_line = line.strip()   # "Kind: lesson" stays in the header
         else:
             body_lines.append(line)
 
     # Rebuild the block cleanly
     rebuilt = f" {title_line}\n"
+    if kind_line:
+        rebuilt += f"{kind_line}\n"
     if keywords_line:
         rebuilt += f"{keywords_line}\n"
     rebuilt += "\n" + "\n".join(body_lines).strip()
@@ -24592,12 +26589,13 @@ if __name__ == '__main__':
             print(" ", rule.rule)
         print("-" * 50)
 
-    _base = os.path.dirname(os.path.abspath(__file__))
-    ssl_cert = os.path.join(_base, 'music.tail39b776.ts.net.crt')
-    ssl_key  = os.path.join(_base, 'music.tail39b776.ts.net.key')
-    if os.path.isfile(ssl_cert) and os.path.isfile(ssl_key):
-        print('🔒 SSL certs found — running HTTPS (Tailscale mode)')
-        ssl_context = (ssl_cert, ssl_key)
+    # settings.json tls_cert_file/tls_key_file, else a "<host>.ts.net" cert pair
+    # in this folder (as written by `tailscale cert`); no hostname built in.
+    from app_runtime_helpers import find_tls_cert_pair
+    _cert_pair = find_tls_cert_pair()
+    if _cert_pair:
+        print(f'🔒 SSL certs found ({os.path.basename(_cert_pair[0])}) — running HTTPS (Tailscale mode)')
+        ssl_context = _cert_pair
     else:
         print('🌐 No SSL certs — running HTTP (local mode)')
         ssl_context = None
@@ -24608,7 +26606,15 @@ if __name__ == '__main__':
         tailscale_serve.start_background_claim(FLASK_PORT, ssl_context is not None)
     except Exception as _ts_exc:
         print(f"[tailscale-serve] background claim unavailable: {_ts_exc!r}", flush=True)
-    app.run(debug=False, use_reloader=False, host='0.0.0.0', port=FLASK_PORT,
+    # Voice input loads its model in the background rather than at import, so a
+    # build without the Whisper stack still starts (whisper_routes.get_model).
+    import whisper_routes
+    whisper_routes.prewarm()
+    # Loopback unless TLS certs are installed or server_bind_host says otherwise;
+    # non-local clients must be paired either way (request_security).
+    _bind_host = request_security.bind_host(settings, ssl_context is not None)
+    print(f"🔒 Listening on {_bind_host}:{FLASK_PORT}", flush=True)
+    app.run(debug=False, use_reloader=False, host=_bind_host, port=FLASK_PORT,
             ssl_context=ssl_context)
 
 # --------------------------------------------------

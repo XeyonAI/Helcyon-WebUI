@@ -1,5 +1,6 @@
 # project_routes.py
 import os
+import path_safety
 import re
 import json
 import requests
@@ -24,8 +25,95 @@ def ensure_projects_dir():
         os.makedirs(PROJECTS_DIR)
         print(f"📁 Created projects directory: {PROJECTS_DIR}")
 
+# ── Request-scoped project (2026-10-24 isolation work) ─────────────────────────
+# _active_project.json is ONE value shared by every browser tab and the phone: a
+# switch on the desktop silently moved the phone's open chat, its saves, project
+# instructions and documents to the other project. A client now names the
+# project each request belongs to (header, or "hwui_project" in a beacon body);
+# get_active_project() returns that for the whole request, so every existing
+# caller (chats folder, instructions, documents, metadata, saves) is scoped
+# without being changed. A request that names no project (an older client)
+# keeps the shared file, exactly as before. The file stays the default for a
+# newly opened tab and is still written by every switch.
+REQUEST_PROJECT_HEADER = "X-HWUI-Project"
+ANNOUNCED_PROJECT_HEADER = "X-HWUI-Project-Active"
+PROJECT_ERROR_HEADER = "X-HWUI-Project-Error"
+_UNBOUND = object()
+
+
+def project_name_is_valid(name):
+    """True when `name` is an existing project folder (never a path or a state file)."""
+    if not isinstance(name, str) or not name or name != name.strip() or len(name) > 200:
+        return False
+    if name in (".", "..") or name.startswith(("_", ".")) or any(c in name for c in '/\\:\0'):
+        return False
+    path = os.path.realpath(os.path.join(PROJECTS_DIR, name))
+    # Same rule as /projects/switch: an existing folder directly under projects/.
+    return os.path.dirname(path) == os.path.realpath(PROJECTS_DIR) and os.path.isdir(path)
+
+
+def _request_project_binding():
+    try:
+        from flask import g, has_request_context
+        if has_request_context():
+            return getattr(g, "_hwui_request_project", _UNBOUND)
+    except Exception:
+        pass
+    return _UNBOUND
+
+
+def request_project_bound():
+    """True when this request named its own project (see bind_request_project)."""
+    return _request_project_binding() is not _UNBOUND
+
+
+@project_bp.before_app_request
+def bind_request_project():
+    """Bind the project the client named for this request, or refuse an unknown one."""
+    from flask import g
+    from urllib.parse import unquote
+    raw = request.headers.get(REQUEST_PROJECT_HEADER)
+    if raw is None and request.method == "POST":
+        body = request.get_json(silent=True)
+        if isinstance(body, dict) and isinstance(body.get("hwui_project"), (str, type(None))) \
+                and "hwui_project" in body:
+            raw = body.get("hwui_project") or ""
+    if raw is None:
+        return None                      # older client: the shared file, as before
+    name = unquote(str(raw)).strip()
+    if not name:
+        g._hwui_request_project = None   # explicitly "no project" (legacy chats folder)
+        return None
+    if not project_name_is_valid(name):
+        print(f"⚠️ Request named project {name!r}, which does not exist — refused", flush=True)
+        response = jsonify({"error": f"Project '{name}' is no longer available.",
+                            "code": "project_unavailable"})
+        response.headers[PROJECT_ERROR_HEADER] = "unavailable"
+        return response, 409
+    g._hwui_request_project = name
+    return None
+
+
+@project_bp.after_app_request
+def announce_request_project(response):
+    """Tell the client which project its tab is now in, after a switch/create/delete
+    or a project listing, so the tab keeps naming the right one."""
+    from flask import g
+    from urllib.parse import quote
+    announce = getattr(g, "_hwui_announce_project", _UNBOUND)
+    if announce is _UNBOUND and request.path == "/projects/list":
+        announce = get_active_project()
+    if announce is not _UNBOUND:
+        response.headers[ANNOUNCED_PROJECT_HEADER] = quote(announce or "", safe="")
+    return response
+
+
 def get_active_project():
-    """Get the currently active project name from state file."""
+    """The project this request belongs to (see bind_request_project), else the
+    shared default from the state file."""
+    bound = _request_project_binding()
+    if bound is not _UNBOUND:
+        return bound
     state_file = os.path.join(PROJECTS_DIR, "_active_project.json")
     if os.path.exists(state_file):
         try:
@@ -44,6 +132,14 @@ def set_active_project(project_name):
         with open(state_file, "w", encoding="utf-8") as f:
             json.dump({"active_project": project_name}, f, indent=2)
         print(f"✅ Active project set to: {project_name}")
+        try:
+            from flask import g, has_request_context
+            if has_request_context():
+                # This tab moves to the new project; other tabs keep naming their own.
+                g._hwui_request_project = project_name or None
+                g._hwui_announce_project = project_name or None
+        except Exception:
+            pass
         return True
     except Exception as e:
         print(f"❌ Failed to set active project: {e}")
@@ -511,14 +607,20 @@ def get_sticky_docs(project_name):
 @project_bp.route("/projects/set-sticky-doc/<project_name>", methods=["POST"])
 def set_sticky_doc(project_name):
     """Save which document got pinned by sticky mode."""
+    if not project_name_is_valid(project_name):
+        return jsonify({"error": "Project not found"}), 404
     config_path = os.path.join(PROJECTS_DIR, project_name, "config.json")
-    
+
     if not os.path.exists(config_path):
         return jsonify({"error": "Project not found"}), 404
-    
-    data = request.json
+
+    data = request.get_json(silent=True) or {}
     filename = data.get("filename")
-    
+    # A bare document name or null (unpin). The chat path later reads this file
+    # into the prompt, so a path here would be an arbitrary-file read.
+    if filename is not None and not path_safety.is_plain_component(filename):
+        return jsonify({"error": "Invalid document name"}), 400
+
     with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
     

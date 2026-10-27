@@ -412,7 +412,14 @@ def save_character(n):
                 existing = json.load(f)
             #   • persistent_author_note — owned by /character_author_note.
             preserved_keys = ["tts_voice", "system_prompt", "preferred_model_id", "sentinel_integration",
-                              PERSISTENT_AUTHOR_NOTE_FIELD]
+                              PERSISTENT_AUTHOR_NOTE_FIELD,
+                              # Per-character context scope; an editor tab opened before these
+                              # controls existed omits them and must not reset them.
+                              "use_global_documents", "use_global_example_dialogue", "chat_search_scope",
+                              "auto_search_current_topics",
+                              # Absent = follow the global reactions setting; the editor only
+                              # sends it once the switch is changed for this character.
+                              "message_reactions_enabled"]
             for key in preserved_keys:
                 if key in existing and key not in data:
                     data[key] = existing[key]

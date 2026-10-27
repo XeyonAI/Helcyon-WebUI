@@ -13,7 +13,19 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parent
-BENCH_ROOT = REPO_ROOT / "helcyon-bench"
+
+
+def _bench_root(repo_root: Path) -> Path:
+    """The bundled benchmark folder. Packages name it helcyon-bench; a source
+    checkout may spell it Helcyon-Bench, which only matters on case-sensitive
+    filesystems (Linux CI). The packaged spelling wins when both exist."""
+    for name in ("helcyon-bench", "Helcyon-Bench"):
+        if (repo_root / name).is_dir():
+            return repo_root / name
+    return repo_root / "helcyon-bench"
+
+
+BENCH_ROOT = _bench_root(REPO_ROOT)
 PROMPT_PACK_DIR = BENCH_ROOT / "prompt_packs"
 BENCHMARK_DIR = BENCH_ROOT / "benchmarks"
 ALIASES_PATH = BENCH_ROOT / "dashboard_model_aliases.json"

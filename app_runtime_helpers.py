@@ -21,6 +21,38 @@ def _read_settings():
         return {}
 
 
+def find_tls_cert_pair(base_dir=_BASE_DIR, settings=None):
+    """(cert, key) paths for HTTPS, or None.
+
+    settings.json "tls_cert_file" + "tls_key_file" (absolute, or relative to
+    the install folder) win; otherwise the first "<name>.ts.net.crt" in the
+    install folder that has a matching "<name>.ts.net.key" (what
+    "tailscale cert" writes). No machine's hostname is built in. Shared by
+    app.py, tailscale_serve.py and (mirrored) HWUI-Launcher/main.js.
+    """
+    if settings is None:
+        try:
+            with open(os.path.join(base_dir, "settings.json"), "r", encoding="utf-8") as handle:
+                settings = json.load(handle) or {}
+        except Exception:
+            settings = {}
+    cert = str(settings.get("tls_cert_file") or "").strip()
+    key = str(settings.get("tls_key_file") or "").strip()
+    if cert and key:
+        cert, key = (p if os.path.isabs(p) else os.path.join(base_dir, p) for p in (cert, key))
+        return (cert, key) if os.path.isfile(cert) and os.path.isfile(key) else None
+    try:
+        names = sorted(os.listdir(base_dir))
+    except OSError:
+        return None
+    for name in names:
+        if name.endswith(".ts.net.crt"):
+            key_path = os.path.join(base_dir, name[:-4] + ".key")
+            if os.path.isfile(key_path):
+                return os.path.join(base_dir, name), key_path
+    return None
+
+
 def get_api_url():
     settings = _read_settings()
     port = settings.get("llama_args", {}).get("port", 8080)

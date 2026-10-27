@@ -1,5 +1,6 @@
 import os, json, requests
 from flask import Blueprint, request, jsonify
+import secrets_store
 
 cloud_api_bp = Blueprint('cloud_api', __name__)
 
@@ -156,9 +157,9 @@ def get_brave_api_key_route():
     try:
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
             s = json.load(f)
-        return jsonify({"brave_api_key": s.get("brave_api_key", "")})
+        return jsonify({"has_key": bool(str(s.get("brave_api_key") or "").strip())})
     except Exception as e:
-        return jsonify({"brave_api_key": "", "error": str(e)})
+        return jsonify({"error": str(e)}), 500
 
 @cloud_api_bp.route("/save_brave_api_key", methods=["POST"])
 def save_brave_api_key_route():
@@ -173,11 +174,25 @@ def save_brave_api_key_route():
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(s, f, indent=2)
         shutil.move(tmp, SETTINGS_FILE)
-        print(f"✅ Brave API key saved ({len(key)} chars)")
-        return jsonify({"status": "ok"})
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        saved_key = str(saved.get("brave_api_key") or "").strip()
+        if saved_key != key:
+            print("❌ Brave API key read-back mismatch — value not persisted")
+            return jsonify({"status": "error", "error": "verification failed — value not persisted"}), 500
+        has_key = bool(saved_key)
+        print(f"✅ Brave API key saved (configured={has_key})")
+        return jsonify({"status": "ok", "has_key": has_key})
     except Exception as e:
         print(f"❌ save_brave_api_key failed: {e}")
         return jsonify({"status": "error", "error": str(e)}), 500
+
+
+def _incoming_secret(value):
+    """A key typed into a settings form, or "" when the form sent back the
+    masked preview from a GET (that means "keep the saved key")."""
+    value = str(value or "").strip()
+    return "" if "\u2022" in value else value
 
 
 # --------------------------------------------------
@@ -193,7 +208,11 @@ def get_openai_settings_route():
         # load even when the field is missing from older settings.json files.
         return jsonify({
             "backend_mode":    s.get("backend_mode", "local"),
-            "openai_api_key":  s.get("openai_api_key", ""),
+            # Never the key itself: a masked preview (the UI's "has a key"
+            # checks keep working) plus an explicit flag. Saving the preview
+            # back is treated as "unchanged" (_incoming_secret).
+            "openai_api_key":  secrets_store.mask(s.get("openai_api_key", "")),
+            "has_openai_api_key": bool((s.get("openai_api_key", "") or "").strip()),
             "openai_model":    s.get("openai_model", "gpt-4o"),
             "openai_base_url": (s.get("openai_base_url", "") or "").strip() or get_openai_base_url(),
             "cloud_api_enabled": bool(s.get("cloud_api_enabled", False)),
@@ -226,7 +245,7 @@ def save_openai_settings_route():
         # get_openai_settings read failure repopulated the field with ""), which
         # would otherwise persist "" and wipe the key. To intentionally clear a
         # key, delete the field from settings.json directly. (changes.md.)
-        _incoming_key = (data.get("openai_api_key", "") or "").strip()
+        _incoming_key = _incoming_secret(data.get("openai_api_key", ""))
         if _incoming_key:
             s["openai_api_key"] = _incoming_key
         elif "openai_api_key" not in s:
@@ -331,7 +350,8 @@ def get_anthropic_settings_route():
             s = json.load(f)
         return jsonify({
             "backend_mode":       s.get("backend_mode", "local"),
-            "anthropic_api_key":  s.get("anthropic_api_key", ""),
+            "anthropic_api_key":  secrets_store.mask(s.get("anthropic_api_key", "")),
+            "has_anthropic_api_key": bool((s.get("anthropic_api_key", "") or "").strip()),
             "anthropic_model":    s.get("anthropic_model", ""),
             "anthropic_base_url": (s.get("anthropic_base_url", "") or "").strip() or get_anthropic_base_url(),
             "cloud_api_enabled":  bool(s.get("cloud_api_enabled", False)),
@@ -364,7 +384,7 @@ def save_anthropic_settings_route():
         # ⚠️ Preserve-on-empty — see save_openai_settings_route. An empty incoming
         # key never overwrites a stored one (guards against blank-field saves /
         # intermittent read failures wiping the key). (changes.md.)
-        _incoming_key = (data.get("anthropic_api_key", "") or "").strip()
+        _incoming_key = _incoming_secret(data.get("anthropic_api_key", ""))
         if _incoming_key:
             s["anthropic_api_key"] = _incoming_key
         elif "anthropic_api_key" not in s:

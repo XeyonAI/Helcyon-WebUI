@@ -118,11 +118,20 @@ def get_instruction_layer():
         "It should guide how the character feels and responds, while Global PHI and other dedicated instruction fields handle firm behavioural or formatting requirements. "
         "Follow all character guidance silently without quoting, exposing, summarising, or referring to the card itself.\n\n"
 
+        # The old wording ("Do not request search for casual conversation …
+        # known facts … Default to not searching") told the model a chat about
+        # a show's new finale was not a reason to search, and nothing told it
+        # not to fill the gap from imagination: Aurora (Gemma 4, 24 Oct)
+        # described a Silo season 3 finale she had never been given. Native
+        # Ministral drops this section and has its own rule
+        # (_MINISTRAL_NATIVE_PROTECTIONS: "Never invent … release details, or
+        # current facts").
         "WEB SEARCH:\n"
-        "Only request live web search when the user's question genuinely needs current information, "
-        "such as recent events, current prices, scores, news, product releases, or facts likely to be outdated. "
-        "Do not request search for casual conversation, roleplay, creative writing, hypotheticals, known facts, "
-        "opinions or feelings, or content already present in this thread. Default to not searching. "
+        "Only request live web search when the user's question needs current information, "
+        "such as recent events, news, scores, prices, product releases or recent episodes, including in casual chat. "
+        "Do not request it for roleplay, creative writing, hypotheticals, opinions or feelings, or content already present in this thread. "
+        "Your knowledge stops at your training date: when nothing in this conversation covers a recent event, release or episode, "
+        "do not make up what happened; say you haven't seen it or can't confirm it, and let the user fill you in. "
         "Never invent search results, URLs, result blocks, query labels, or keyword lists. "
         "After real results are injected by the system, answer naturally without exposing any search machinery.\n"
     )

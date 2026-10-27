@@ -24,8 +24,9 @@
  * spawned console (Flask / F5-TTS / llama-server). Tray Quit does the same.
  */
 
-const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, dialog, session, Notification } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, nativeImage, dialog, session, Notification, shell } = require('electron');
 const { createCheckinNotifier, registerWindowsToastIdentity } = require('./checkin-notifications');
+const { installLinkPolicy } = require('./external-links');
 const path  = require('path');
 const fs    = require('fs');
 const os    = require('os');
@@ -50,10 +51,22 @@ const F5_PORT          = 8003;
 const QWEN_FAST_PORT   = 8767;
 const QWENTTS_CPP_PORT = 8768;
 const OMNIVOICE_PORT   = 8001;
-const OMNIVOICE_ROOT   = 'I:\\OmniVoice';
-const OMNIVOICE_DEMO   = path.join(OMNIVOICE_ROOT, 'omnivoice_venv', 'Scripts', 'omnivoice-demo.exe');
-const OMNIVOICE_REPO   = path.join(OMNIVOICE_ROOT, 'OmniVoice');
-const OMNIVOICE_CACHE  = path.join(OMNIVOICE_ROOT, 'hf_cache');
+// OmniVoice is a separate installation; its folder comes from the build's
+// settings.json ("omnivoice_root") or HWUI_OMNIVOICE_ROOT. No machine path is
+// built in.
+function omnivoicePaths(buildSettings) {
+  const root = String((buildSettings && buildSettings.omnivoice_root) || process.env.HWUI_OMNIVOICE_ROOT || '').trim();
+  if (!root) {
+    throw new Error('OmniVoice is the selected TTS engine but its folder is not configured. '
+      + 'Add "omnivoice_root" to this build\'s settings.json (or set HWUI_OMNIVOICE_ROOT).');
+  }
+  return {
+    root,
+    demo: path.join(root, 'omnivoice_venv', 'Scripts', 'omnivoice-demo.exe'),
+    repo: path.join(root, 'OmniVoice'),
+    cache: path.join(root, 'hf_cache'),
+  };
+}
 const READY_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 300;
 const TRAY_ICON_PATH   = path.join(__dirname, 'assets', 'icon.png');
@@ -76,6 +89,7 @@ let tray          = null;
 let isQuitting    = false;
 let selectedBuild = null;
 let selectedFlaskPort = null;
+let appOrigin     = null;   // live Flask origin once the main window loads it
 
 let currentZoom    = 0;     // applied zoom level for the live main window
 let _saveZoomTimer = null;  // debounce handle for persisting zoom to builds.json
@@ -136,10 +150,19 @@ function validateBuildPath(p) {
 // --------------------------------------------------------------------------
 // HTTPS vs HTTP — mirror the cert check in app.py
 // --------------------------------------------------------------------------
-function detectScheme(buildPath) {
-  const cert = path.join(buildPath, 'music.tail39b776.ts.net.crt');
-  const key  = path.join(buildPath, 'music.tail39b776.ts.net.key');
-  return (fs.existsSync(cert) && fs.existsSync(key)) ? 'https' : 'http';
+// Same rule as app_runtime_helpers.find_tls_cert_pair: settings.json
+// tls_cert_file + tls_key_file, else the first <name>.ts.net.crt with a
+// matching .key in the build folder. No hostname is built in.
+function detectScheme(buildPath, buildSettings) {
+  const resolve = (value) => (path.isAbsolute(value) ? value : path.join(buildPath, value));
+  const cert = String((buildSettings && buildSettings.tls_cert_file) || '').trim();
+  const key  = String((buildSettings && buildSettings.tls_key_file) || '').trim();
+  if (cert && key) return (fs.existsSync(resolve(cert)) && fs.existsSync(resolve(key))) ? 'https' : 'http';
+  let names = [];
+  try { names = fs.readdirSync(buildPath); } catch (e) { return 'http'; }
+  const pair = names.filter((name) => name.endsWith('.ts.net.crt')).sort()
+    .find((name) => names.includes(name.slice(0, -4) + '.key'));
+  return pair ? 'https' : 'http';
 }
 
 // Ask the selected build's own resolver for its installation-local web port.
@@ -243,7 +266,9 @@ function spawnExternalPythonService(name, scriptPath) {
 
 // OmniVoice is deliberately launched from its own installation and cache;
 // it must never inherit or reuse a HWUI/Qwen/F5 environment.
-function spawnOmniVoiceService() {
+function spawnOmniVoiceService(buildSettings) {
+  const { root: OMNIVOICE_ROOT, demo: OMNIVOICE_DEMO, repo: OMNIVOICE_REPO, cache: OMNIVOICE_CACHE } =
+    omnivoicePaths(buildSettings);
   if (!fs.existsSync(OMNIVOICE_DEMO)) throw new Error(`OmniVoice demo not found at ${OMNIVOICE_DEMO}`);
   if (!fs.existsSync(OMNIVOICE_REPO)) throw new Error(`OmniVoice repo not found at ${OMNIVOICE_REPO}`);
   const args = ['--ip', '127.0.0.1', '--port', String(OMNIVOICE_PORT), '--no-asr'];
@@ -626,7 +651,7 @@ function showZoomOverlay() {
     var id='__hwui_zoom_toast__',el=document.getElementById(id);
     if(!el){
       el=document.createElement('div');el.id=id;
-      el.style.cssText='position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:2147483647;background:rgba(20,24,30,0.92);color:#e8e8e8;font:600 14px/1 system-ui,-apple-system,sans-serif;padding:8px 14px;border-radius:8px;border:1px solid #2d394b;pointer-events:none;transition:opacity .25s ease;box-shadow:0 2px 10px rgba(0,0,0,.45)';
+      el.style.cssText='position:fixed;top:14px;right:72px;z-index:2147483647;background:rgba(20,24,30,0.92);color:#e8e8e8;font:600 14px/1 system-ui,-apple-system,sans-serif;padding:8px 14px;border-radius:8px;border:1px solid #2d394b;pointer-events:none;transition:opacity .25s ease;box-shadow:0 2px 10px rgba(0,0,0,.45)';
       document.body.appendChild(el);
     }
     el.textContent='Zoom ${percent}%';
@@ -936,6 +961,18 @@ function quitApp() {
 app.on('before-quit',        () => { isQuitting = true; killAllSubprocesses(); killKnownPortsSync(); });
 app.on('window-all-closed',  (e) => { if (!isQuitting) e.preventDefault(); });
 
+// Web links open in the user's default browser, never in a bare Electron
+// window; HWUI's own pages stay in the app (see external-links.js). Applied to
+// every window, including pop-outs of HWUI pages.
+app.on('web-contents-created', (_e, contents) => {
+  installLinkPolicy(contents, {
+    getAppOrigin: () => appOrigin,
+    launcherDir: __dirname,
+    openExternal: (url) => shell.openExternal(url),
+    logLine,
+  });
+});
+
 // --------------------------------------------------------------------------
 // Single-instance lock — only ONE launcher may run at a time. Re-running
 // START_HWUI-Launcher.bat used to spawn a whole new Electron + cmd console each
@@ -1058,7 +1095,7 @@ app.whenReady().then(async () => {
   const services = Array.isArray(selectedBuild.services) ? selectedBuild.services : [];
   if (selectedTTSEngine === 'omnivoice') {
     try {
-      spawnOmniVoiceService();
+      spawnOmniVoiceService(buildSettings);
       logLine(`Polling OmniVoice on http://127.0.0.1:${OMNIVOICE_PORT}/ ...`);
       waitForLocalHealth(OMNIVOICE_PORT, '/').then((ready) => {
         logLine(ready
@@ -1105,7 +1142,7 @@ app.whenReady().then(async () => {
     logLine('whisper is in-process with Flask — no subprocess spawn');
   }
 
-  const scheme = detectScheme(selectedBuild.path);
+  const scheme = detectScheme(selectedBuild.path, buildSettings);
   logLine(`Polling ${scheme}://127.0.0.1:${selectedFlaskPort}/ ...`);
   const ready = await waitForFlask(scheme, selectedFlaskPort);
   if (!ready) {
@@ -1141,7 +1178,8 @@ app.whenReady().then(async () => {
       forceFocusMain();
       setTimeout(forceFocusMain, 300);
     });
-    mainWindow.loadURL(`${scheme}://127.0.0.1:${selectedFlaskPort}/`);
+    appOrigin = `${scheme}://127.0.0.1:${selectedFlaskPort}`;
+    mainWindow.loadURL(`${appOrigin}/`);
   }
 });
 }  // end single-instance-lock else

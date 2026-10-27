@@ -1191,6 +1191,84 @@
     };
   }
 
+  // ── Request-scoped project (2026-10-24) ─────────────────────────────────
+  // The server's active project is one shared value; a switch in another tab
+  // or on the phone used to move this tab's open chat, its saves and its
+  // project context. This tab now names its own project on every same-origin
+  // request. It learns the project from the server (the project listing, and
+  // every switch/create/delete this tab makes), so pages need no other change.
+  // Until it has learned one it sends nothing and the server uses its shared
+  // default, exactly as older pages do.
+  const PROJECT_HEADER = 'X-HWUI-Project';
+  const PROJECT_ANNOUNCE_HEADER = 'X-HWUI-Project-Active';
+  const PROJECT_ERROR_HEADER = 'X-HWUI-Project-Error';
+  const projectScope = { known: false, name: null };
+  const AUTH_HEADER = 'X-HWUI-Auth';   // request_security: 'pair-required' on 401
+
+  function isSameOrigin(url) {
+    try {
+      const base = root.location && root.location.href;
+      return new URL(url, base).origin === new URL(base).origin;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  // The project this tab belongs to: a name, null for "no project", or
+  // undefined when not learned yet.
+  function currentProject() {
+    return projectScope.known ? projectScope.name : undefined;
+  }
+
+  function adoptProject(name) {
+    projectScope.known = true;
+    projectScope.name = name || null;
+  }
+
+  function installProjectScope(win) {
+    if (!win || typeof win.fetch !== 'function' || win.__hwuiProjectScopeInstalled) return;
+    const originalFetch = win.fetch.bind(win);
+    win.fetch = async function (input, init) {
+      const url = typeof input === 'string' ? input : (input && input.url) || String(input);
+      const scoped = projectScope.known && isSameOrigin(url);
+      if (scoped) {
+        init = Object.assign({}, init || {});
+        const headers = new Headers(init.headers || (typeof Request !== 'undefined' && input instanceof Request
+          ? input.headers : undefined));
+        if (!headers.has(PROJECT_HEADER)) headers.set(PROJECT_HEADER, encodeURIComponent(projectScope.name || ''));
+        init.headers = headers;
+      }
+      const response = await originalFetch(input, init);
+      try {
+        const announced = response.headers.get(PROJECT_ANNOUNCE_HEADER);
+        if (announced !== null) adoptProject(decodeURIComponent(announced));
+        if (scoped && response.status === 409 && response.headers.get(PROJECT_ERROR_HEADER)) {
+          // This tab's project was deleted or renamed elsewhere: forget it, and
+          // let the page re-sync from the server's default.
+          projectScope.known = false;
+          projectScope.name = null;
+          if (typeof win.onHwuiProjectUnavailable === 'function') win.onHwuiProjectUnavailable();
+        }
+        // The server no longer recognises this device (it was removed in Config ->
+        // Remote Devices): go to the pairing page instead of failing every call.
+        if (response.status === 401 && response.headers.get(AUTH_HEADER) === 'pair-required'
+            && isSameOrigin(url) && win.location && !String(win.location.pathname).startsWith('/pair')) {
+          win.location.assign('/pair?next=' + encodeURIComponent(win.location.pathname + win.location.search));
+        }
+      } catch (error) { /* a response without readable headers changes nothing */ }
+      return response;
+    };
+    win.__hwuiProjectScopeInstalled = true;
+  }
+
+  // For bodies sent without fetch (navigator.sendBeacon cannot set headers).
+  function withProject(body) {
+    const project = currentProject();
+    return project === undefined ? body : Object.assign({}, body, { hwui_project: project || '' });
+  }
+
+  if (root.window === root) installProjectScope(root);
+
   const api = {
     startReadinessStatus,
     CONTINUE_PREFIX_CHARS,
@@ -1210,6 +1288,10 @@
     finalizeContinuedText,
     buildChatRequestBody,
     buildAssistantMessage,
+    currentProject,
+    adoptProject,
+    installProjectScope,
+    withProject,
     REACTION_EMOJIS,
     normalizeReaction,
     parseAssistantReaction,

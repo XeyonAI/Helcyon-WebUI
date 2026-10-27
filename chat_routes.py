@@ -19,6 +19,8 @@ from chat_message_metadata import (
     verified_role_snapshot,
 )
 from character_routes import character_display_name, chat_owner_key, known_character_keys
+from context_scope import chat_filename_is_plain
+import path_safety
 
 print("✅ chat_routes blueprint loaded")
 
@@ -109,7 +111,15 @@ CHATS_DIR = os.path.join(os.getcwd(), "chats")  # Legacy global chats
 PROJECTS_DIR = os.path.join(os.getcwd(), "projects")
 
 def get_active_project():
-    """Get the currently active project name."""
+    """The project this request belongs to.
+
+    A request that named its own project (project_routes.bind_request_project)
+    gets that one, so the chats folder never follows a switch made in another
+    tab or on the phone. Otherwise (older clients) the shared state file, as before.
+    """
+    from project_routes import request_project_bound, get_active_project as _request_project
+    if request_project_bound():
+        return _request_project()
     state_file = os.path.join(PROJECTS_DIR, "_active_project.json")
     if os.path.exists(state_file):
         try:
@@ -159,6 +169,27 @@ def _project_chats_dir(project_name):
     chats_dir = os.path.join(project_path, "chats")
     os.makedirs(chats_dir, exist_ok=True)
     return chats_dir
+
+
+def _request_chat_path(chats_dir, filename):
+    """Path of the chat file a request named, inside ``chats_dir``; None if unsafe.
+
+    Every chat route that takes a file name from a request resolves it here:
+    a bare ``.txt`` name (context_scope.chat_filename_is_plain) whose resolved
+    path is still inside the chats folder (path_safety.safe_join). Before
+    24 Oct 2026 several routes joined the name directly, so "../x" or an
+    absolute path wrote outside the chats folder.
+    """
+    if not chat_filename_is_plain(filename):
+        return None
+    try:
+        return path_safety.safe_join(chats_dir, filename)
+    except path_safety.UnsafePathError:
+        return None
+
+
+def _invalid_chat_name():
+    return jsonify({"error": "Invalid chat file name"}), 400
 
 
 def _chat_pins_path(chats_dir=None):
@@ -265,9 +296,8 @@ def pin_chat():
 
     if (
         not filename
-        or os.path.basename(filename) != filename
-        or not filename.endswith(".txt")
-        or not os.path.exists(os.path.join(get_chats_dir(), filename))
+        or _request_chat_path(get_chats_dir(), filename) is None
+        or not os.path.exists(_request_chat_path(get_chats_dir(), filename))
     ):
         return jsonify({"error": "Chat not found"}), 404
 
@@ -300,8 +330,11 @@ def check_chat_exists():
     filename = data.get("filename", "")
     if not filename:
         return jsonify({"error": "No filename provided"}), 400
+    if not chat_filename_is_plain(filename):
+        return _invalid_chat_name()
     for chats_dir in chat_directories(os.getcwd()):
-        if os.path.exists(os.path.join(chats_dir, filename)):
+        candidate = _request_chat_path(chats_dir, filename)
+        if candidate and os.path.exists(candidate):
             return jsonify({"status": "ok", "filename": filename})
     return jsonify({"error": "Chat not found"}), 404
 
@@ -609,7 +642,9 @@ def _dedupe_adjacent_duplicate_messages(messages):
 @chat_bp.route("/chats/open/<filename>")
 def open_chat(filename):
     chats_dir = get_chats_dir()
-    filepath = os.path.join(chats_dir, filename)
+    filepath = _request_chat_path(chats_dir, filename)
+    if filepath is None:
+        return _invalid_chat_name()
 
     if not os.path.exists(filepath):
         return jsonify({"error": "Chat not found"}), 404
@@ -655,8 +690,8 @@ def _author_note_chat_path(filename):
     if "/" in filename or "\\" in filename or not filename.lower().endswith(".txt"):
         return None
     chats_dir = get_chats_dir()
-    filepath = os.path.join(chats_dir, filename)
-    if not os.path.isfile(filepath):
+    filepath = _request_chat_path(chats_dir, filename)
+    if filepath is None or not os.path.isfile(filepath):
         return None
     return chats_dir, filepath
 
@@ -739,8 +774,10 @@ def rename_chat():
         return jsonify({"error": "Missing filename or new name"}), 400
     
     chats_dir = get_chats_dir()
-    old_path = os.path.join(chats_dir, old_filename)
-    
+    old_path = _request_chat_path(chats_dir, old_filename)
+    if old_path is None:
+        return _invalid_chat_name()
+
     if not os.path.exists(old_path):
         return jsonify({"error": "Original chat not found"}), 404
     
@@ -753,7 +790,9 @@ def rename_chat():
     
     # Build new filename
     new_filename = f"{safe_name}.txt"
-    new_path = os.path.join(chats_dir, new_filename)
+    new_path = _request_chat_path(chats_dir, new_filename)
+    if new_path is None:
+        return _invalid_chat_name()
     
     if os.path.exists(new_path) and old_path != new_path:
         return jsonify({"error": "A chat with that name already exists"}), 409
@@ -790,11 +829,13 @@ def new_chat():
     # Check if file exists, add counter if needed
     counter = 1
     filename = f"{char_name} - New Chat - {date_str}.txt"
-    filepath = os.path.join(chats_dir, filename)
-    
+    filepath = _request_chat_path(chats_dir, filename)
+    if filepath is None:
+        return _invalid_chat_name()
+
     while os.path.exists(filepath):
         filename = f"{char_name} - New Chat ({counter}) - {date_str}.txt"
-        filepath = os.path.join(chats_dir, filename)
+        filepath = _request_chat_path(chats_dir, filename)
         counter += 1
     
     # Create empty file
@@ -827,7 +868,9 @@ def auto_name_chat():
         return jsonify({"error": "Missing filename or first_message"}), 400
 
     chats_dir = get_chats_dir()
-    old_path = os.path.join(chats_dir, old_filename)
+    old_path = _request_chat_path(chats_dir, old_filename)
+    if old_path is None:
+        return _invalid_chat_name()
 
     if not os.path.exists(old_path):
         return jsonify({"error": "Chat not found"}), 404
@@ -904,7 +947,9 @@ def auto_name_chat():
 @chat_bp.route("/chats/delete/<filename>", methods=["DELETE"])
 def delete_chat(filename):
     chats_dir = get_chats_dir()
-    filepath = os.path.join(chats_dir, filename)
+    filepath = _request_chat_path(chats_dir, filename)
+    if filepath is None:
+        return _invalid_chat_name()
     
     if not os.path.exists(filepath):
         return jsonify({"error": "Chat not found"}), 404
@@ -934,15 +979,10 @@ def move_chat():
     filename = data.get("filename")
     target_project = data.get("target_project") or None
 
-    if (
-        not filename
-        or os.path.basename(filename) != filename
-        or not filename.endswith(".txt")
-    ):
-        return jsonify({"error": "Invalid filename"}), 400
-
     source_dir = get_chats_dir()
-    source_path = os.path.join(source_dir, filename)
+    source_path = _request_chat_path(source_dir, filename) if filename else None
+    if source_path is None:
+        return jsonify({"error": "Invalid filename"}), 400
     if not os.path.exists(source_path):
         return jsonify({"error": "Chat not found"}), 404
 
@@ -1008,7 +1048,9 @@ def save_chat_messages():
         if messages is None:
             return jsonify({"error": "No messages provided"}), 400
         chats_dir = get_chats_dir()
-        filepath = os.path.join(chats_dir, filename)
+        filepath = _request_chat_path(chats_dir, filename)
+        if filepath is None:
+            return _invalid_chat_name()
 
         if os.path.exists(filepath):
             try:
@@ -1112,8 +1154,10 @@ def append_chat_turn():
             return jsonify({"error": "No filename provided"}), 400
         
         chats_dir = get_chats_dir()
-        filepath = os.path.join(chats_dir, filename)
-        
+        filepath = _request_chat_path(chats_dir, filename)
+        if filepath is None:
+            return _invalid_chat_name()
+
         # Load verified existing roles before changing the transcript hash.
         existing = []
         if os.path.exists(filepath):
@@ -1157,7 +1201,9 @@ def update_chat():
             return jsonify({"error": "Missing data"}), 400
 
         chats_dir = get_chats_dir()
-        filepath = os.path.join(chats_dir, filename)
+        filepath = _request_chat_path(chats_dir, filename)
+        if filepath is None:
+            return _invalid_chat_name()
 
         if os.path.exists(filepath):
             try:
@@ -1211,8 +1257,10 @@ def copy_chat():
             return jsonify({"error": "No source file"}), 400
         
         chats_dir = get_chats_dir()
-        source_path = os.path.join(chats_dir, source_filename)
-        
+        source_path = _request_chat_path(chats_dir, source_filename)
+        if source_path is None:
+            return _invalid_chat_name()
+
         if not os.path.exists(source_path):
             return jsonify({"error": "Source not found"}), 404
         
@@ -1285,7 +1333,9 @@ def branch_chat():
             return jsonify({"error": "message_index must be >= 1"}), 400
 
         chats_dir = get_chats_dir()
-        source_path = os.path.join(chats_dir, source_filename)
+        source_path = _request_chat_path(chats_dir, source_filename)
+        if source_path is None:
+            return _invalid_chat_name()
         if not os.path.exists(source_path):
             return jsonify({"error": "Source not found"}), 404
 

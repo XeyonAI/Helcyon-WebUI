@@ -741,6 +741,9 @@ let currentAudio = null;
 // Bumped by stopAllAudio(). A processQueue run that sees a different value than the one it
 // started with is stale (its audio was stopped or replaced) and must not play anything.
 let ttsRunId = 0;
+let ttsFetchControllers = new Set();
+let ttsObjectUrls = new Set();
+let ttsNavigationCleanupPending = false;
 let ttsVoice = localStorage.getItem('tts-voice') || 'af_heart';
 let ttsEngine = 'f5';
 
@@ -841,6 +844,8 @@ function stopAllAudio() {
     replayTimeout = null;
   }
   ttsRunId++;
+  ttsFetchControllers.forEach(controller => controller.abort());
+  ttsFetchControllers.clear();
   if (currentAudio) {
     const stopping = currentAudio;
     currentAudio = null;
@@ -848,6 +853,8 @@ function stopAllAudio() {
     // A paused element never fires 'ended', so release the waiting playback promise by hand.
     if (typeof stopping.onended === 'function') stopping.onended();
   }
+  ttsObjectUrls.forEach(url => URL.revokeObjectURL(url));
+  ttsObjectUrls.clear();
   ttsQueue = [];
   ttsProcessing = false;
   isPlayingAudio = false;
@@ -866,6 +873,25 @@ function stopAllAudio() {
     replayBtn.style.background = '';
     replayBtn.style.borderColor = '';
   }
+}
+
+// Conversation entry points can nest (for example, a character switch then an
+// openChat). One cleanup is enough until new speech starts or a new reply begins.
+function stopTTSForConversationChange() {
+  if (ttsNavigationCleanupPending) return false;
+  ttsNavigationCleanupPending = true;
+  stopAllAudio();
+  return true;
+}
+
+function createTTSObjectURL(blob) {
+  const url = URL.createObjectURL(blob);
+  ttsObjectUrls.add(url);
+  return url;
+}
+
+function revokeTTSObjectURL(url) {
+  if (ttsObjectUrls.delete(url)) URL.revokeObjectURL(url);
 }
 
 
@@ -1420,6 +1446,7 @@ function flushTTSBuffer() {
 async function processQueue() {
   if (ttsProcessing) return;
   ttsProcessing = true;
+  ttsNavigationCleanupPending = false;
 
   const runId = ttsRunId;
   const isStale = () => runId !== ttsRunId;
@@ -1433,23 +1460,31 @@ async function processQueue() {
     const sentence = typeof item === 'string' ? item : item.text;
     const meta = typeof item === 'string' ? undefined : item.meta;
     for (let attempt = 0; attempt < 3; attempt++) {
+      if (isStale()) return null;
+      const controller = new AbortController();
+      ttsFetchControllers.add(controller);
       try {
         const response = await fetch('/api/tts/generate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: sentence, voice: ttsVoice, first_chunk: firstChunk, meta })
+          body: JSON.stringify({ text: sentence, voice: ttsVoice, first_chunk: firstChunk, meta }),
+          signal: controller.signal
         });
         if (response.ok) {
           const blob = await response.blob();
+          if (isStale()) return null;
           // A header-only WAV is a 200 that carries no speech; playing it would skip the
           // sentence without a trace, so it counts as a failed attempt.
-          if (blob.size > TTS_MIN_AUDIO_BYTES) return URL.createObjectURL(blob);
+          if (blob.size > TTS_MIN_AUDIO_BYTES) return createTTSObjectURL(blob);
           console.warn(`⚠️ TTS returned empty audio (attempt ${attempt + 1}): "${sentence.substring(0, 40)}"`);
         } else {
           console.warn(`⚠️ TTS fetch ${response.status} (attempt ${attempt + 1}): "${sentence.substring(0, 40)}"`);
         }
       } catch (err) {
+        if (err.name === 'AbortError' || isStale()) return null;
         console.warn(`⚠️ TTS fetch error (attempt ${attempt + 1}):`, err);
+      } finally {
+        ttsFetchControllers.delete(controller);
       }
       if (attempt < 2) await new Promise(r => setTimeout(r, 200));
     }
@@ -1489,7 +1524,7 @@ async function processQueue() {
 
     // Stopped or restarted while this fetch was in flight: a newer run owns playback now.
     if (isStale()) {
-      if (audioUrl) URL.revokeObjectURL(audioUrl);
+      if (audioUrl) revokeTTSObjectURL(audioUrl);
       return;
     }
 
@@ -1518,7 +1553,7 @@ async function processQueue() {
         // Handlers only touch shared state if this element is still the current one.
         const release = () => {
           clearInterval(prefetchInterval);
-          URL.revokeObjectURL(audioUrl);
+      revokeTTSObjectURL(audioUrl);
           if (currentAudio === thisAudio) {
             isPlayingAudio = false;
             currentAudio = null;
@@ -1885,6 +1920,7 @@ function replayLastAudio() {
   }
 
   stopAllAudio();
+  ttsNavigationCleanupPending = false;
 
   const replayBtn = document.querySelector('.replay-btn');
   if (replayBtn) {

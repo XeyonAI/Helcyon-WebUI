@@ -2,7 +2,7 @@
 
 ## The complete ecosystem for local AI.
 
-**Current version: 3.41** — see [What's new in 3.41](#-whats-new-in-341) below.
+**Current version: 3.43.2** — see [What's new in 3.43.2](#-whats-new-in-3432) below.
 
 Helcyon-WebUI is an integrated workspace for chatting with, managing, organising, and evaluating local AI models.
 
@@ -47,7 +47,12 @@ The Benchmark workspace here is the **integrated Helcyon-Bench experience built 
 
 ---
 
-## 🆕 What's new in 3.41
+## 🆕 What's new in 3.43.2
+
+- **Per-character reactions:** choose in each character's Interaction settings whether that character may react. Existing characters keep their previous behaviour until you change the setting.
+- **More reliable web search:** requests and follow-ups stay on the topic you raised, and replies use the relevant search results conversationally with matching source links.
+
+## What's new in 3.41 (previous release)
 
 Version 3.40 was skipped, so 3.41 follows 3.38 and includes everything since. Highlights available in this Free edition:
 

@@ -16,6 +16,35 @@ session_summaries/
 memories/
 chats/
 logs/
+benchmark_runs/
+benchmark_sessions/
+global_documents/
+document uploads/
+tts_paths.local.json
+
+# Ship only the Free seed records; keep generated user records local.
+users/*.json
+!users/Default.json
+!users/index.json
+characters/*.json
+!characters/Helcyon.json
+!characters/index.json
+!characters/_active_character.json
+!characters/_character_groups.json
+opening_lines/*.json
+!opening_lines/Helcyon.json
+system_prompts/*.txt
+!system_prompts/default.txt
+projects/*
+!projects/_active_project.json
+!projects/.gitkeep
+
+# Local secrets and certificates
+*.key
+*.pem
+*.crt
+*.p12
+.env.*
 
 # Python
 __pycache__/

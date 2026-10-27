@@ -1,4 +1,5 @@
 import os, json, re
+from log_privacy import redact  # summary text stays out of logs unless diagnostics are on
 import requests
 from flask import Blueprint, request, jsonify
 from truncation import rough_token_count
@@ -269,8 +270,12 @@ def generate_session_summary():
         if not messages:
             return jsonify({"status": "error", "error": "No messages to summarise"}), 400
 
-        # Load character card
+        # Load character card — the name is checked as a card key before it is
+        # used in any path (context_scope / character_routes.valid_character_key).
         char_dir = os.path.join(os.path.dirname(__file__), "characters")
+        from character_routes import valid_character_key
+        if not valid_character_key(character_name):
+            return jsonify({"status": "error", "error": "Invalid character name"}), 400
         char_path = os.path.join(char_dir, f"{character_name}.json")
         if not os.path.exists(char_path):
             return jsonify({"status": "error", "error": f"Character not found: {character_name}"}), 404
@@ -580,7 +585,7 @@ def generate_session_summary():
         entry = f"[{timestamp}]\nLast time {user_name} and I talked, {summary_text}"
         save_session_summary(character_name, entry)
 
-        print(f"🧠 Session summary generated for {character_name}: {summary_text[:80]}...")
+        print(f"🧠 Session summary generated for {character_name}: {redact(summary_text, 80)}")
         return jsonify({"status": "ok", "summary": summary_text})
 
     except Exception as e:
