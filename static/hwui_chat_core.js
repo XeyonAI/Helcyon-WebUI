@@ -1269,6 +1269,72 @@
 
   if (root.window === root) installProjectScope(root);
 
+  // ── Streaming scroll follow ─────────────────────────────────────────────
+  // A streamed reply follows the newest text only while the reader stays at
+  // the bottom. Scrolling up (wheel, touch, keys, scrollbar drag) releases
+  // it so earlier messages can be read mid-stream; scrolling back to the
+  // bottom resumes following. Only user input decides: scroll events from the
+  // follower itself or from re-rendering the bubble never release it.
+  // getRoot() returns the element that currently owns vertical scrolling
+  // (desktop switches between #chat and the document).
+  const STREAM_FOLLOW_SLACK_PX = 48;
+  const STREAM_FOLLOW_INPUT_MS = 800;
+  const STREAM_FOLLOW_UP_KEYS = new Set(['ArrowUp', 'PageUp', 'Home']);
+  const STREAM_FOLLOW_NAV_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
+
+  function createStreamScrollFollower(getRoot) {
+    const doc = root.document && root.document.addEventListener ? root.document : null;
+    let following = true;
+    let pointerHeld = false;
+    let lastInputAt = 0;
+    const now = () => Date.now();
+    const distanceFromBottom = (el) => el.scrollHeight - el.clientHeight - el.scrollTop;
+    const isEditable = (target) => !!(target && (target.isContentEditable
+      || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName || '')));
+
+    const onWheel = (event) => {
+      lastInputAt = now();
+      if (event.deltaY < 0) following = false;
+    };
+    const onInput = () => { lastInputAt = now(); };
+    const onPointerDown = () => { pointerHeld = true; lastInputAt = now(); };
+    const onPointerUp = () => { pointerHeld = false; lastInputAt = now(); };
+    const onKeyDown = (event) => {
+      if (isEditable(event.target) || !STREAM_FOLLOW_NAV_KEYS.has(event.key)) return;
+      lastInputAt = now();
+      if (STREAM_FOLLOW_UP_KEYS.has(event.key)) following = false;
+    };
+    const onScroll = (event) => {
+      if (!pointerHeld && now() - lastInputAt > STREAM_FOLLOW_INPUT_MS) return;
+      const scrollRoot = getRoot();
+      if (!scrollRoot) return;
+      const isDocumentRoot = scrollRoot === doc.scrollingElement || scrollRoot === doc.documentElement;
+      if (event.target !== scrollRoot && !(isDocumentRoot && event.target === doc)) return;
+      following = distanceFromBottom(scrollRoot) <= STREAM_FOLLOW_SLACK_PX;
+    };
+
+    const listeners = [
+      ['wheel', onWheel], ['touchstart', onInput], ['touchmove', onInput],
+      ['touchend', onInput], ['pointerdown', onPointerDown], ['pointerup', onPointerUp],
+      ['pointercancel', onPointerUp], ['keydown', onKeyDown], ['scroll', onScroll],
+    ];
+    const options = { capture: true, passive: true };
+    if (doc) listeners.forEach(([type, fn]) => doc.addEventListener(type, fn, options));
+
+    return {
+      // Keep the newest text in view unless the user has scrolled away.
+      follow() {
+        if (!following) return;
+        const scrollRoot = getRoot();
+        if (scrollRoot) scrollRoot.scrollTop = scrollRoot.scrollHeight;
+      },
+      isFollowing: () => following,
+      dispose() {
+        if (doc) listeners.forEach(([type, fn]) => doc.removeEventListener(type, fn, options));
+      },
+    };
+  }
+
   const api = {
     startReadinessStatus,
     CONTINUE_PREFIX_CHARS,
@@ -1306,6 +1372,7 @@
     renderStreamingAssistantText,
     finishStreamingAssistantText,
     waitForReactionPaint,
+    createStreamScrollFollower,
   };
 
   root.HwuiChatCore = api;

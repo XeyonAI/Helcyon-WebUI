@@ -116,7 +116,7 @@
   <!-- Shared desktop/mobile chat core: request, history and reply-cleaning
        rules used by BOTH pages (mobile.html loads the same file). Not deferred —
        page scripts below call HwuiChatCore during load. -->
-  <script src="/static/hwui_chat_core.js?v=4"></script>
+  <script src="/static/hwui_chat_core.js?v=5"></script>
   <!-- JS Utils -->
   <script src="/utils/utils.js" defer></script>
   <script>
@@ -6221,6 +6221,7 @@ async function sendPrompt() {
     let generationStartedAt = null;
     let responseReader = null;
     let replyReadiness = null;
+    let streamScroll = null;
     let postStreamActionSetup = null;
     let releasePostStreamActionSetup = null;
     const automaticCheckin = Boolean(options.automaticCheckin);
@@ -6605,6 +6606,13 @@ async function sendPrompt() {
       modelWrapper.style.display = 'none'; // reveal only after ruling out an internal action prefix
       chat.appendChild(modelWrapper);
       chat.scrollTop = chat.scrollHeight;
+      // On desktop #chat grows with the page; it is often not the scrolling
+      // element. Follow the latest streamed text on whichever element owns
+      // vertical scrolling, leaving the fixed composer in view — but only
+      // while the user stays at the bottom (scrolling up releases it).
+      streamScroll = HwuiChatCore.createStreamScrollFollower(() =>
+        chat.scrollHeight > chat.clientHeight + 1
+          ? chat : (document.scrollingElement || document.documentElement));
 
       const streamEl = spanText;
 
@@ -6684,12 +6692,7 @@ async function sendPrompt() {
         // keep the empty assistant bubble collapsed until the first visible
         // answer slice has actually been rendered.
         if (slice.trim()) revealStreamingMessage();
-        // On desktop #chat grows with the page; it is often not the scrolling
-        // element. Follow the latest streamed text on whichever element owns
-        // vertical scrolling, leaving the fixed composer in view.
-        const scrollRoot = chat.scrollHeight > chat.clientHeight + 1
-          ? chat : (document.scrollingElement || document.documentElement);
-        scrollRoot.scrollTop = scrollRoot.scrollHeight;
+        streamScroll.follow();
       }
 
       // Hidden pages (minimized/covered window) get NO animation frames, so the
@@ -7150,6 +7153,7 @@ async function sendPrompt() {
       }
     } finally {
       replyReadiness?.stop();
+      streamScroll?.dispose();
       const readinessEl = document.getElementById('reply-readiness');
       if (readinessEl) readinessEl.hidden = true;
       // Hide stop button when done
@@ -7394,6 +7398,10 @@ async function sendPrompt() {
     const replyReadiness = readinessEl ? HwuiChatCore.startReadinessStatus(text => { readinessEl.textContent = text; }, 'Preparing continuation') : null;
     const stopBtn = document.getElementById('stop-btn');
     if (stopBtn) stopBtn.style.display = 'inline-block';
+    // Follow the continued text only while the user stays at the bottom.
+    const streamScroll = HwuiChatCore.createStreamScrollFollower(() =>
+      chat.scrollHeight > chat.clientHeight + 1
+        ? chat : (document.scrollingElement || document.documentElement));
 
     try {
       // Same body builder as mobile.html; sampling is sourced server-side and
@@ -7487,7 +7495,7 @@ async function sendPrompt() {
 
         if (cleaned.length > (retainedHead + continuePrefix).length) replyReadiness?.setPhase('Generating reply');
         HwuiChatCore.renderStreamingAssistantText(streamEl, cleaned);
-        chat.scrollTop = chat.scrollHeight;
+        streamScroll.follow();
       }
       // Preserve any final multibyte character held by the stateful decoder.
       const decoderTail = decoder.decode();
@@ -7542,6 +7550,7 @@ async function sendPrompt() {
         window.loadedChat.splice(Math.min(continueRequest.lastAssistantIdx, window.loadedChat.length), 0, removedReply);
       }
       replyReadiness?.stop();
+      streamScroll.dispose();
       if (readinessEl) readinessEl.hidden = true;
       window.isSending = false;
       if (stopBtn) stopBtn.style.display = 'none';

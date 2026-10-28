@@ -1,6 +1,6 @@
 # Helcyon-WebUI + Benchmark (Free Edition)
 
-Version 3.43.2
+Version 3.43.11
 
 A modern local AI workspace: chat, characters, memory, documents, web
 search, voice, and an integrated model-benchmarking workspace. See

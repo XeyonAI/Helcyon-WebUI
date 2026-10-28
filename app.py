@@ -6,7 +6,7 @@ from message_reactions import (
     REACTION_DECISION_SCHEMA, RECENT_CONTEXT_MESSAGES, strip_reaction_markers,
     reaction_cooldown_active, reactions_enabled,
 )
-from response_sanitiser import strip_trailing_empty_marker, strip_trailing_empty_marker_stream
+from response_sanitiser import strip_trailing_empty_marker, strip_trailing_empty_marker_stream, strip_instruction_tail_stream
 from continue_reply import continuation_turns, trim_continuation_echo
 from response_pipeline import ResponsePipeline
 from urllib.parse import urlparse
@@ -6073,8 +6073,12 @@ def _pronoun_lookup_topic(text, match, history=None, names=()):
     if object_after:
         after = after[object_after.end():]
     before = _blank_names(text[:match.start()], names)
-    topic = _swapped_history_topic(before, history, names)
-    topic = topic or search_grounding.instalment_topic(before) or _query_topic_phrase(before, named=True)
+    # The show this turn names outranks anything built from earlier turns:
+    # "How about we, … I watched the latest episode of Dark Matter … season
+    # two, episode nine. Do you want to look that up" was searched as "latest
+    # we app" from the previous turn's "OpenAI app" (28 Oct, Personal).
+    topic = search_grounding.instalment_topic(before) or _swapped_history_topic(before, history, names)
+    topic = topic or _query_topic_phrase(before, named=True)
     if not topic:
         topic = _history_topic(history, names)
         if topic:
@@ -6099,6 +6103,13 @@ def _pronoun_lookup_topic(text, match, history=None, names=()):
 # invented a US figure (26 Oct, live). The new subject replaces the earlier
 # topic's name and keeps what was being asked about it.
 _WHAT_ABOUT_RE = re.compile(r"\b(?:what|how)\s+about\s+(?:the\s+)?([A-Za-z0-9][^.?!,;\n]*)", re.IGNORECASE)
+# "How about we …", "what about you?", "how about doing …": a suggestion or a
+# question about the people talking, not a new subject for the earlier topic.
+_NOT_A_SWAP_SUBJECT = frozenset({
+    "i", "i'm", "i've", "i'd", "i'll", "me", "my", "myself", "we", "we're", "we've", "we'd", "we'll",
+    "us", "our", "ourselves", "you", "you're", "you've", "you'd", "you'll", "your", "yourself",
+    "if", "when", "now", "then", "instead", "doing", "going", "getting", "trying", "having", "making",
+})
 
 
 def _swapped_history_topic(before, history, names=()):
@@ -6110,6 +6121,9 @@ def _swapped_history_topic(before, history, names=()):
     first = subject.split()[0].lower().replace("’", "'")
     if first in _QUERY_ANAPHORA or search_grounding.instalment_words(subject):
         return ""  # "what about it?" leans on the earlier topic itself
+    raw_first = subject.split()[0]
+    if first in _NOT_A_SWAP_SUBJECT and not (len(raw_first) > 1 and raw_first.isupper()):
+        return ""  # "US" is a subject, "us" is not
     prior = _history_topic(history, names)
     if not prior or subject.lower() in prior.lower():
         return ""
@@ -6205,6 +6219,18 @@ def _ministral_runtime_search_query(user_msg, history=None, names=()):
         query = re.sub(r"(?<=\S)[\s,]+(?:and|then)\s+(?:give|tell|show|let)\s+me\b.*$", "", query,
                        flags=re.IGNORECASE)
         query = query.strip().rstrip("?.!,")
+        resolved_lookup_detail = False
+        # "Look up the details" refers to the question in this turn, not a
+        # production-wide search for the literal word "details".
+        if re.fullmatch(r"(?:(?:the|those|these|more|some)\s+)?(?:details|information|info|specifics)",
+                        query, re.IGNORECASE):
+            subject = _restore_query_subject("", _blank_names(text[:explicit.start()], names))
+            if subject:
+                resolved_lookup_detail = True
+                query = subject
+                event = re.search(r"\b(?:after|before|during)\s+[^.!?\n]{1,100}", text, re.IGNORECASE)
+                if event and event.group(0).lower() not in query.lower():
+                    query += " " + event.group(0).strip()
         # The topic may live BEFORE the opt-in phrase; the slice above drops it.
         query = _restore_query_subject(query, _blank_names(text[:explicit.start()], names))
         # An instalment with no show ("can you look up when season 3 comes out?")
@@ -6212,12 +6238,14 @@ def _ministral_runtime_search_query(user_msg, history=None, names=()):
         # searched alone, it came back as Wednesday season 3 in a chat about
         # Silo (26 Oct, live).
         words = search_grounding.instalment_words(query)
-        if words and not search_grounding.instalment_topic(query):
+        if words and not resolved_lookup_detail and not search_grounding.instalment_topic(query):
             for source in (lambda: _query_topic_phrase(_blank_names(text[:explicit.start()], names), named=True),
                            lambda: _history_topic(history, names)):
                 title = source()
                 title = title.replace(search_grounding.instalment_words(title), "").strip() if title else ""
-                if title:
+                # "I meant the 2015 series. Can you look up season two …": the
+                # year says which production, not which show.
+                if title and not search_grounding.production_phrase_only(title):
                     query = f"{title} {words}"
                     break
         # Only filler left ("search online then", "check online now"): the
@@ -10432,6 +10460,16 @@ _MEMORY_CORROBORATION_STOPWORDS = frozenset({
 })
 
 
+# A stored keyword that is a function word identifies nothing: "Keywords:
+# three, to, six" scored "to" as a unique keyword, so a memory about a new base
+# model was injected into a question about Dark Matter, and the reply said
+# "the user's claim that you knew about the new Melon base model…" (28 Oct).
+_MEMORY_KEYWORD_FUNCTION_WORDS = _MEMORY_CORROBORATION_STOPWORDS | frozenset({
+    "a", "an", "as", "at", "be", "by", "do", "i", "if", "in", "is", "it", "me", "my", "no", "of", "on",
+    "or", "so", "to", "up", "us", "we",
+})
+
+
 def _memory_corroboration(query_text, block, matched_keywords):
     """Count query content words (beyond the matched keywords) that also occur in the block.
 
@@ -12471,7 +12509,7 @@ def stream_ministral_web_search_response(
             print(f"🔍 Model web-search request withheld ({why}): {_redact(str(query))}", flush=True)
             yield search_grounding.PROPOSAL_WITHHELD_NOTICE
             return
-    query = search_grounding.carry_time_words(str(query).strip(), route_text)[:200]
+    query = search_grounding.carry_time_words(str(query).strip(), route_text, search_history)[:200]
     if not query:
         return
     print(f"🔍 Native Ministral web search triggered: {_redact(query)}", flush=True)
@@ -12485,6 +12523,8 @@ def stream_ministral_web_search_response(
         if isinstance(res, dict) and not res.get("error"):
             res, relevant = search_grounding.filter_relevant(query, res)
         results_block = format_search_results(query, res)
+        if relevant:
+            search_grounding.remember_evidence(route_text, query, results_block)
     except Exception as exc:
         print(f"❌ Native Ministral search failed: {exc}", flush=True)
         yield "⚠️ Web search failed. No verified results are available; please try again later."
@@ -12629,7 +12669,7 @@ def stream_ministral_web_search_response(
     if not has_results:
         return
     full_response = "".join(response_chunks)
-    source_links = search_grounding.source_links(res, full_response)
+    source_links = search_grounding.source_links(res, full_response, query=query)
     if source_links:
         yield "\n\n"
         for index, (url, title) in enumerate(source_links):
@@ -12767,7 +12807,7 @@ def _cloud_pre_search_query(route_text, messages, names=(), auto_search=False, h
     query = _ministral_runtime_search_query(route_text, history, names)
     if not query and auto_search:
         query = search_grounding.instalment_query(search_grounding.request_text(route_text)) or None
-    return search_grounding.carry_time_words(query, route_text)[:200] if query else None
+    return search_grounding.carry_time_words(query, route_text, history)[:200] if query else None
 
 
 def _cloud_search_history(messages):
@@ -12932,6 +12972,9 @@ def _web_search_stream_openai(messages, api_key, model, temperature, max_tokens,
             return
     else:
         pass
+    query = search_grounding.carry_time_words(
+        query, _route_text,
+        search_history if search_history is not None else _cloud_search_history(messages))[:200]
     print(f"☁️🔍 [OpenAI] Web search triggered by model tag: {_redact(query)}", flush=True)
     yield "\n\n🔍 *Searching...*\n\n"
 
@@ -12951,6 +12994,7 @@ def _web_search_stream_openai(messages, api_key, model, temperature, max_tokens,
             yield search_grounding.IRRELEVANT_NOTICE
             return
         results_block = format_search_results(query, res)
+        search_grounding.remember_evidence(user_input, query, results_block)
         # Snippets alone are evidence too (pages can fail to fetch).
         has_results = bool(res.get("summary") or res.get("top_text") or res.get("pages") or res.get("results"))
         print(f"☁️🔍 [OpenAI] Search done. has_results={has_results}", flush=True)
@@ -13026,7 +13070,7 @@ def _web_search_stream_openai(messages, api_key, model, temperature, max_tokens,
         _full_response = "".join(_response_chunks)
         # A provider error is not an answer: no sources under it (25 Oct live run).
         if has_results and not search_grounding.provider_error_reply(_full_response):
-            _src_list = search_grounding.source_links(res, _full_response)
+            _src_list = search_grounding.source_links(res, _full_response, query=query)
 
             if _src_list:
                 yield "\n\n"
@@ -13573,6 +13617,9 @@ def _web_search_stream_anthropic(messages, api_key, model, temperature, max_toke
             return
     else:
         pass
+    query = search_grounding.carry_time_words(
+        query, _route_text,
+        search_history if search_history is not None else _cloud_search_history(messages))[:200]
     print(f"☁️🔍 [Anthropic] Web search triggered by model tag: {_redact(query)}", flush=True)
     yield "\n\n🔍 *Searching...*\n\n"
 
@@ -13592,6 +13639,7 @@ def _web_search_stream_anthropic(messages, api_key, model, temperature, max_toke
             yield search_grounding.IRRELEVANT_NOTICE
             return
         results_block = format_search_results(query, res)
+        search_grounding.remember_evidence(user_input, query, results_block)
         # Snippets alone are evidence too (pages can fail to fetch).
         has_results = bool(res.get("summary") or res.get("top_text") or res.get("pages") or res.get("results"))
         print(f"☁️🔍 [Anthropic] Search done. has_results={has_results}", flush=True)
@@ -13668,7 +13716,7 @@ def _web_search_stream_anthropic(messages, api_key, model, temperature, max_toke
         _full_response = "".join(_response_chunks)
         # A provider error is not an answer: no sources under it (25 Oct live run).
         if has_results and not search_grounding.provider_error_reply(_full_response):
-            _src_list = search_grounding.source_links(res, _full_response)
+            _src_list = search_grounding.source_links(res, _full_response, query=query)
 
             if _src_list:
                 yield "\n\n"
@@ -14254,6 +14302,8 @@ def _retrieve_memory(char_data, character_name, user_input, project_rp_mode, _di
                     if kw in seen:  # don't double-count overlapping kw entries
                         continue
                     seen.add(kw)
+                    if kw in _MEMORY_KEYWORD_FUNCTION_WORDS:
+                        continue
                     if _kw_match(kw, query_lower):
                         # 1 point if keyword appears in 2+ blocks (low signal,
                         # can't differentiate); 3 points if unique to this block.
@@ -18360,7 +18410,7 @@ def chat():
             intent_echo=(lambda s: _strip_response_intent_echo_stream(s, intent)) if intent else None,
             governor_echo=(lambda s: _strip_governor_echo_stream(s, governor))
             if str(governor or "").strip() else None,
-            ooc=_strip_ooc_stream,
+            ooc=lambda s: strip_instruction_tail_stream(_strip_ooc_stream(s), user_input),
             document_guard=_guard_document_reply,
         ).wrap(stream)
 
@@ -18668,6 +18718,12 @@ def chat():
     # its own ("Do you want to look that up?").
     _search_history = (active_chat[:-1] if active_chat and active_chat[-1].get("role") == "user"
                        else list(active_chat))
+    # A follow-up gets a bounded digest of the evidence the earlier search was
+    # given (it is otherwise only in the request that searched). Added after
+    # _search_history so routing and query checks read the plain turns.
+    _carry_tail = active_chat[-1:] if active_chat and active_chat[-1].get("role") == "user" else []
+    active_chat = (search_grounding.carry_evidence(active_chat[:len(active_chat) - len(_carry_tail)])
+                   + list(_carry_tail))
     # The character's and the user's names are never a search topic ("Hey Sol,
     # can you look it up?" searched "Sol" in the corpus).
     _search_names = tuple(n for n in {character_name, str(char_data.get("name") or ""), user_name,
@@ -22405,6 +22461,9 @@ def chat():
         # scope here. (changes.md — Option A explicit-tag fallback.)
         def _run_search_and_reprompt(query):
             import re as _re
+            # The model's own request gets the same time words and production
+            # year as HWUI's queries (idempotent for those).
+            query = search_grounding.carry_time_words(query, _search_route_text, _search_history)[:200]
             print(f"\U0001f50d Web search triggered: {_redact(query)}", flush=True)
             yield "\n\n\U0001f50d *Searching...*\n\n"
 
@@ -22423,6 +22482,7 @@ def chat():
                 yield search_grounding.IRRELEVANT_NOTICE
                 return
             results_block = format_search_results(query, res)
+            search_grounding.remember_evidence(_search_route_text, query, results_block)
             # Snippets alone are evidence too (pages can fail to fetch).
             has_results = bool(res.get("summary") or res.get("top_text") or res.get("pages") or res.get("results"))
             print(f"\U0001f50d Search done. has_results={has_results}", flush=True)
@@ -22566,7 +22626,7 @@ def chat():
                     yield _clean_line(_line_buf)
                 if has_results:
                     _full_response = "".join(_response_chunks)
-                    _src_list = search_grounding.source_links(res, _full_response)
+                    _src_list = search_grounding.source_links(res, _full_response, query=query)
 
                     if _src_list:
                         yield "\n\n"
@@ -23169,7 +23229,7 @@ def chat():
 
                 # Time words the cleaning dropped travel with the query so the
                 # provider's freshness filter still sees them.
-                _q = search_grounding.carry_time_words(_q, _user_msg)
+                _q = search_grounding.carry_time_words(_q, _user_msg, _search_history)
                 # Brave rejects queries over ~400 chars (HTTP 422) — cap at 200
                 if len(_q) > 200:
                     _q = _q[:200].rsplit(' ', 1)[0]

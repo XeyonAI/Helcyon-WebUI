@@ -25,6 +25,65 @@ from functools import wraps
 from response_pipeline import reasoning_isolated
 
 _MARKER = "<>"
+
+# This is visible-answer containment, not reasoning-channel detection. A
+# generated paragraph that describes the governing prompt AND tells the
+# assistant how to speak is a response plan, not the conversational answer.
+_INSTRUCTION_TAIL = re.compile(
+    r"^\s*(?:The|Your)\s+(?:character card|system prompt|developer instructions|post-history instructions)"
+    r"\s+(?:says?|states?|requires?|instructs?)\b[^\n]{0,800}"
+    r"\b(?:your voice should|you (?:should|must|need to))\b", re.IGNORECASE)
+_PROMPT_DISCUSSION = re.compile(
+    r"\b(?:prompt|instructions?|character card|training|shards?|verbatim|quote|rewrite|edit)\b",
+    re.IGNORECASE)
+INSTRUCTION_TAIL_NOTICE = "\n\n*The reply was stopped because it began generating response instructions.*"
+
+
+def strip_instruction_tail_stream(source, request=""):
+    """Stop an unsolicited instruction tail, preserving prose, quotes and code.
+
+    Hold only a candidate paragraph prefix; ordinary paragraphs stream as
+    soon as they cannot match. Reasoning isolation belongs to ResponsePipeline.
+    A prompt-editing/discussion request bypasses this narrow guard entirely.
+    """
+    if _PROMPT_DISCUSSION.search(str(request or "")):
+        yield from source
+        return
+    pending, at_start, fenced, line_prefix = "", True, False, ""
+    prefixes = ("the character card", "your character card", "the system prompt", "your system prompt",
+                "the developer instructions", "your developer instructions",
+                "the post-history instructions", "your post-history instructions")
+    try:
+        for chunk in source:
+            for char in chunk:
+                pending += char
+                if len(line_prefix) < 16:
+                    line_prefix += char
+                if at_start:
+                    stripped = pending.lstrip().lower()
+                    candidate = not fenced and any(p.startswith(stripped) or stripped.startswith(p)
+                                                   for p in prefixes)
+                    if candidate and _INSTRUCTION_TAIL.search(pending):
+                        yield INSTRUCTION_TAIL_NOTICE
+                        return
+                    if candidate and len(pending) <= 1000 and not pending.endswith("\n\n"):
+                        continue
+                    at_start = False
+                if char == '\n':
+                    if line_prefix.lstrip().startswith(('```', '~~~')):
+                        fenced = not fenced
+                    yield pending
+                    pending, at_start = "", True
+                    line_prefix = ""
+            if not at_start and pending:
+                yield pending
+                pending = ""
+        if pending:
+            yield pending
+    finally:
+        close = getattr(source, 'close', None)
+        if close:
+            close()
 _TRAILING_MARKER_RE = re.compile(r"(?:\s*\n|^)[ \t]*<>\s*$")
 _ORPHAN = ">"
 # Characters a stray `>` may follow; anything else (`-`, `=`, `<`, `>`, `:`, ...) means

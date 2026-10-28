@@ -2,7 +2,7 @@
 
 ## The complete ecosystem for local AI.
 
-**Current version: 3.43.2** — see [What's new in 3.43.2](#-whats-new-in-3432) below.
+**Current version: 3.43.11** — see [What's new in 3.43.11](#-whats-new-in-34311) below.
 
 Helcyon-WebUI is an integrated workspace for chatting with, managing, organising, and evaluating local AI models.
 
@@ -47,7 +47,20 @@ The Benchmark workspace here is the **integrated Helcyon-Bench experience built 
 
 ---
 
-## 🆕 What's new in 3.43.2
+## 🆕 What's new in 3.43.11
+
+This release is mainly a **web search reliability update**, plus a smoother chat while a reply is streaming. It also includes everything since 3.43.2.
+
+- **Search looks up what you just asked about:** asking a character to look up something you have just mentioned searches for that, instead of picking up an unrelated topic from earlier in the chat. Regenerating no longer repeats the mistake.
+- **Searches keep the right show, film or version:** when you name a title, season, episode or year ("the 2024 series", "season two, episode nine"), results about a similar-sounding or older title are left out. Follow-ups such as "what happened to him in the finale?" and "look up the details" keep that subject instead of broadening to a general overview, and searching for the final episode of a season keeps both wordings.
+- **Follow-up questions keep their evidence:** after a search, follow-up questions carry a small, fixed-size set of the excerpts the answer was based on instead of continuing with none. (Held in memory, so they are cleared when HWUI restarts.)
+- **Source links follow the reply:** the links under a searched reply point to the pages the answer actually drew on, most relevant first, and unrelated links are no longer shown.
+- **Better conversational replies after a search:** shorter search instructions keep the answer on the topic while letting the character keep their usual voice. A reply that starts describing its own instructions instead of answering is now stopped with a visible notice.
+- **Scroll up while a reply is streaming:** you can read earlier messages mid-reply. The chat stops following new text when you scroll up and follows again when you return to the bottom (desktop, mobile and Continue).
+
+Restart HWUI after updating so the search changes take effect, and refresh the page for the scrolling change.
+
+## What's new in 3.43.2 (previous release)
 
 - **Per-character reactions:** choose in each character's Interaction settings whether that character may react. Existing characters keep their previous behaviour until you change the setting.
 - **More reliable web search:** requests and follow-ups stay on the topic you raised, and replies use the relevant search results conversationally with matching source links.

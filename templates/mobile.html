@@ -9,7 +9,7 @@
   <!-- Shared desktop/mobile chat core (same file index.html loads): request,
        history and reply-cleaning rules, so identical chat state produces the
        same model input from either page. -->
-  <script src="/static/hwui_chat_core.js?v=4"></script>
+  <script src="/static/hwui_chat_core.js?v=5"></script>
   <script src="/static/text_scale.js" defer></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -1085,8 +1085,13 @@ function _mobSplit(raw){
 // continued (replaced only on success) and options.seedText is its head +
 // continue_prefix, which the streamed tokens extend (same as desktop).
 // Returns true once the reply has been appended to chatHistory.
+// Follows the streamed reply only while the user stays at the bottom; scrolling
+// up releases it so earlier messages can be read mid-stream (shared core).
+let mobileStreamScroll=null;
 async function handleStream(res,requestId=null,options={}){
   stopAllAudio();
+  mobileStreamScroll?.dispose();
+  const streamScroll=mobileStreamScroll=HwuiChatCore.createStreamScrollFollower(()=>document.getElementById('chat'));
   const reactionDiagnosticId=res.headers.get('X-HWUI-Reaction-Diagnostic');
   const reactionsOff=res.headers.get('X-HWUI-Reactions')==='off';  // reactions switched off (Config): leave stored ones alone
   let reactionDiagnosticParserLogged=false;
@@ -1172,7 +1177,7 @@ async function handleStream(res,requestId=null,options={}){
     const speakable=HwuiChatCore.ttsSpeakableDelta(reactionAnswer.text,ttsSpokenLen,{charName:characterName,userName:userName});
     ttsSpokenLen=speakable.spokenLength;
     if(ttsEnabled&&responseRun===mobileTTSRun&&speakable.text)bufferTextForTTS(speakable.text);
-    scrollToBottom();
+    streamScroll.follow();
   }
   while(true){
     if(requestId&&!mobileRequestIsActive(requestId)){console.warn('📱 Mobile stale stream ignored',{request_id:requestId,active_request_id:mobileActiveRequest?.id||null});await reader.cancel();return abandonStream();}
@@ -1296,7 +1301,7 @@ async function handleStream(res,requestId=null,options={}){
     }
     flushTTSBuffer();
   }
-  setStatus('Ready');scrollToBottom();
+  setStatus('Ready');streamScroll.follow();
   return true;
 }
 
