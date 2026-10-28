@@ -138,7 +138,7 @@ def _query_year(query):
 # ── The work a query is about ───────────────────────────────────────────────
 # Shared words are not the same work: "Dark Winds season 2 episode 9" shared
 # "dark" with a Dark Matter request and passed both the proposal check and the
-# result filter (v3.43.7 audit). A query's entity is the title in front of its
+# result filter (Oct 2026 audit). A query's entity is the title in front of its
 # instalment words, or else its capitalised name ("Pixel 10 Pro"); a result is
 # about it only when it names the whole phrase.
 _ENTITY_WORD_RE = re.compile(r"[A-Za-z0-9]+(?:['’][A-Za-z0-9]+)*")
@@ -227,7 +227,7 @@ def names_entity(pattern, *texts):
 # The year a user gives ("the 2024 series") names a production; a page's date
 # says when it was written. They are different evidence: a 2026 article about
 # "Dark Matter (2015)" is still the wrong show, and a 2020 trailer for a 2021
-# film is still the right one (v3.43.7 audit).
+# film is still the right one (Oct 2026 audit).
 _PRODUCTION_MARKER_RES = (
     # "(2015)", "(2024 TV series)", "Dark_Matter_(2024_TV_series)"
     re.compile(r"\(\s*((?:19|20)\d{2})(?:\s+(?:tv\s+|american\s+|british\s+)?"
@@ -411,7 +411,7 @@ def filter_relevant(query, res):
 
 # A link is shown under a reply as a source for what it says. Retrieval order
 # is not support: the first three pages were linked whatever the reply used,
-# so a soundtrack page could "source" a plot answer (v3.43.7 audit).
+# so a soundtrack page could "source" a plot answer (Oct 2026 audit).
 _SUPPORT_TERMS_NEEDED = 2
 _NUMBER_RE = re.compile(r"(?<![A-Za-z])\d+(?:[.,]\d+)?")
 
@@ -1005,7 +1005,7 @@ def _production_year(query, text, history=()):
     user turn that established its work.
 
     "I'm watching Dark Matter, the 2024 series" then "Can you look up season
-    two episode nine?" searched without the year (v3.43.7 audit). A year is
+    two episode nine?" searched without the year (Oct 2026 audit). A year is
     carried from history only for the same work, so a change of topic carries
     nothing, and a year in this message wins.
     """
@@ -1521,7 +1521,7 @@ def query_alignment(query, request, history=(), names=()):
     request = request_text(request)
     request_terms = _terms(request, query=False) - name_terms
     # A named work must be named whole: "Dark Winds" shares only "dark" with a
-    # Dark Matter request (v3.43.7 audit). A new version number ("Ministral 3"
+    # Dark Matter request (Oct 2026 audit). A new version number ("Ministral 3"
     # for "the new Ministral") is allowed; a new word of the name is not.
     entity_words = {w.lower() for w in _ENTITY_WORD_RE.findall(query_entity(query))
                     if not w.isdigit() and w.lower() not in _STOPWORDS}

@@ -2,7 +2,7 @@
 
 ## The complete ecosystem for local AI.
 
-**Current version: 3.43.11** — see [What's new in 3.43.11](#-whats-new-in-34311) below.
+**Current version: 3.43.3** — see [What's new in 3.43.3](#-whats-new-in-3433) below.
 
 Helcyon-WebUI is an integrated workspace for chatting with, managing, organising, and evaluating local AI models.
 
@@ -47,7 +47,9 @@ The Benchmark workspace here is the **integrated Helcyon-Bench experience built 
 
 ---
 
-## 🆕 What's new in 3.43.11
+## 🆕 What's new in 3.43.3
+
+> **Numbering correction.** This release was first published on GitHub as "3.43.11". That number came from an internal development counter and was published by mistake. It is the same code, now correctly numbered **3.43.3**, the next release after 3.43.2. There was never a public 3.43.4 to 3.43.11, so if you installed "3.43.11" you already have this release and nothing needs to be redone.
 
 This release is mainly a **web search reliability update**, plus a smoother chat while a reply is streaming. It also includes everything since 3.43.2.
 
